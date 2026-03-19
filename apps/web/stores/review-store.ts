@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { Asset, AssetVersion } from '@/types'
 
-type DrawingTool = 'pen' | 'rectangle' | 'arrow' | 'text'
+type DrawingTool = 'pen' | 'rectangle' | 'arrow' | 'text' | 'eraser'
 
 interface ReviewState {
   currentAsset: Asset | null
