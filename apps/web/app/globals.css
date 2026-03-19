@@ -3,34 +3,34 @@
 @tailwind utilities;
 
 :root {
-  /* Background — near-black with a cool neutral undertone */
-  --bg-primary: oklch(0.13 0.005 250);
-  --bg-secondary: oklch(0.16 0.006 250);
-  --bg-tertiary: oklch(0.19 0.008 250);
-  --bg-elevated: oklch(0.21 0.009 250);
-  --bg-hover: oklch(0.23 0.01 250);
+  /* Background — dark theme */
+  --bg-primary: #0d0d10;
+  --bg-secondary: #16161a;
+  --bg-tertiary: #1e1e24;
+  --bg-elevated: #24242c;
+  --bg-hover: #2a2a34;
 
   /* Borders */
-  --border-primary: oklch(0.28 0.008 250);
-  --border-secondary: oklch(0.22 0.006 250);
-  --border-focus: oklch(0.62 0.16 240);
+  --border-primary: #2e2e3a;
+  --border-secondary: #222230;
+  --border-focus: #5b8def;
 
   /* Text */
-  --text-primary: oklch(0.93 0.005 250);
-  --text-secondary: oklch(0.65 0.008 250);
-  --text-tertiary: oklch(0.48 0.008 250);
-  --text-inverse: oklch(0.13 0.005 250);
+  --text-primary: #eaeaed;
+  --text-secondary: #94949e;
+  --text-tertiary: #5e5e6e;
+  --text-inverse: #0d0d10;
 
   /* Accent — blue */
-  --accent: oklch(0.62 0.16 240);
-  --accent-hover: oklch(0.68 0.18 240);
-  --accent-muted: oklch(0.35 0.08 240);
+  --accent: #5b8def;
+  --accent-hover: #7aa3f5;
+  --accent-muted: #253556;
 
   /* Status */
-  --status-success: oklch(0.72 0.17 152);
-  --status-warning: oklch(0.78 0.16 70);
-  --status-error: oklch(0.63 0.2 25);
-  --status-info: oklch(0.7 0.15 230);
+  --status-success: #34d399;
+  --status-warning: #fbbf24;
+  --status-error: #f87171;
+  --status-info: #60a5fa;
 
   /* Fonts */
   --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
@@ -56,7 +56,6 @@
     color: var(--text-primary);
     font-family: var(--font-sans);
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-    font-variation-settings: normal;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -78,7 +77,7 @@
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--border-secondary);
+    background: var(--text-tertiary);
   }
 
   /* Selection */
@@ -99,7 +98,7 @@
 
   /* Glass card effect */
   .glass-card {
-    @apply rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/60 backdrop-blur-md shadow-lg;
+    @apply rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] backdrop-blur-md shadow-lg;
   }
 
   /* Skeleton shimmer gradient */

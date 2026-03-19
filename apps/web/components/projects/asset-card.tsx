@@ -1,10 +1,9 @@
 'use client'
 
 import * as React from 'react'
-import { Film, Music, Image as ImageIcon, Images, GitBranch, AlertCircle, Clock } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal, Check, Clock } from 'lucide-react'
+import { cn, formatRelativeTime } from '@/lib/utils'
 import { Badge } from '@/components/shared/badge'
-import { Avatar } from '@/components/shared/avatar'
 import type { Asset, AssetType, User } from '@/types'
 
 const assetTypeIcons: Record<AssetType, React.ElementType> = {
@@ -14,30 +13,30 @@ const assetTypeIcons: Record<AssetType, React.ElementType> = {
   image_carousel: Images,
 }
 
-const assetTypeLabels: Record<AssetType, string> = {
-  video: 'Video',
-  audio: 'Audio',
-  image: 'Image',
-  image_carousel: 'Carousel',
-}
-
 interface AssetCardProps {
   asset: Asset
   projectId: string
   versionCount?: number
   assignee?: User | null
+  authorName?: string
   thumbnailUrl?: string | null
+  commentCount?: number
+  duration?: number | null
+  selected?: boolean
+  onSelect?: (e: React.MouseEvent) => void
+  onContextMenu?: (e: React.MouseEvent) => void
   className?: string
 }
 
-function getDueDateState(dueDate: string | null): 'overdue' | 'soon' | 'normal' | null {
-  if (!dueDate) return null
-  const due = new Date(dueDate).getTime()
-  const now = Date.now()
-  const diffDays = (due - now) / (1000 * 60 * 60 * 24)
-  if (diffDays < 0) return 'overdue'
-  if (diffDays <= 3) return 'soon'
-  return 'normal'
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  if (m >= 60) {
+    const h = Math.floor(m / 60)
+    const rm = m % 60
+    return `${h}:${String(rm).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
 export function AssetCard({
@@ -45,82 +44,99 @@ export function AssetCard({
   projectId,
   versionCount = 1,
   assignee,
+  authorName,
   thumbnailUrl,
+  commentCount,
+  duration,
+  selected = false,
+  onSelect,
+  onContextMenu,
   className,
 }: AssetCardProps) {
   const TypeIcon = assetTypeIcons[asset.asset_type]
-  const dueDateState = getDueDateState(asset.due_date)
 
   return (
     <div
       className={cn(
-        'group flex flex-col gap-2 rounded-xl border border-border bg-bg-secondary w-full',
-        'hover:border-border-focus hover:bg-bg-tertiary transition-all duration-200 hover:shadow-lg hover:shadow-black/10 overflow-hidden',
+        'group flex flex-col rounded-lg overflow-hidden transition-all duration-150 cursor-pointer',
+        'border-2',
+        selected
+          ? 'border-accent bg-accent/5 shadow-lg shadow-accent/10'
+          : 'border-transparent hover:border-border-focus',
         className,
       )}
     >
-      {/* Thumbnail */}
-      <div className="relative aspect-video w-full bg-bg-tertiary overflow-hidden flex items-center justify-center group-hover:brightness-110 transition-all duration-200">
+      {/* Thumbnail area — taller like Frame.io */}
+      <div className="relative aspect-[4/3] w-full bg-bg-tertiary overflow-hidden flex items-center justify-center">
         {thumbnailUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={thumbnailUrl}
             alt={asset.name}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
           />
         ) : (
-          <TypeIcon className="h-8 w-8 text-text-tertiary" />
+          <TypeIcon className="h-12 w-12 text-text-tertiary/50" />
         )}
-        {/* Asset type pill */}
-        <span className="absolute bottom-1.5 left-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium bg-bg-primary/80 text-text-secondary backdrop-blur-sm">
-          <TypeIcon className="h-3 w-3" />
-          {assetTypeLabels[asset.asset_type]}
-        </span>
-      </div>
 
-      {/* Info */}
-      <div className="flex flex-col gap-1.5 p-3 pt-0">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-sm font-medium text-text-primary line-clamp-1 group-hover:text-accent transition-colors">
-            {asset.name}
-          </p>
-          <Badge status={asset.status} />
-        </div>
-
-        {/* Version count + assignee row */}
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1 text-2xs text-text-tertiary">
-            <GitBranch className="h-3 w-3" />
-            v{versionCount}
-          </span>
-
-          {assignee && (
-            <Avatar src={assignee.avatar_url} name={assignee.name} size="sm" />
-          )}
-        </div>
-
-        {/* Due date */}
-        {dueDateState && (
-          <div
+        {/* Selection checkbox — top-left */}
+        {onSelect && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onSelect(e) }}
             className={cn(
-              'mt-1 flex items-center gap-1 text-2xs font-medium',
-              dueDateState === 'overdue' ? 'text-status-error' : 'text-status-warning',
+              'absolute top-2 left-2 h-5 w-5 rounded flex items-center justify-center transition-all',
+              selected
+                ? 'bg-accent text-white'
+                : 'bg-black/40 text-transparent group-hover:text-white/60 backdrop-blur-sm',
             )}
           >
-            {dueDateState === 'overdue' ? (
-              <AlertCircle className="h-3 w-3" />
-            ) : (
-              <Clock className="h-3 w-3" />
-            )}
-            {dueDateState === 'overdue' ? 'Overdue' : 'Due soon'}
-          </div>
+            <Check className="h-3.5 w-3.5" />
+          </button>
         )}
-        {asset.due_date && dueDateState === 'normal' && (
-          <div className="flex items-center gap-1 text-2xs text-text-tertiary">
-            <Clock className="h-3 w-3" />
-            Due {new Date(asset.due_date).toLocaleDateString()}
-          </div>
+
+        {/* Duration badge — bottom-right (for video/audio) */}
+        {duration != null && duration > 0 && (
+          <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white tabular-nums backdrop-blur-sm">
+            {formatDuration(duration)}
+          </span>
         )}
+
+        {/* Comment count badge — bottom-left */}
+        {commentCount != null && commentCount > 0 && (
+          <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white backdrop-blur-sm">
+            <MessageSquare className="h-3 w-3" />
+            {commentCount}
+          </span>
+        )}
+      </div>
+
+      {/* Info section */}
+      <div className="flex flex-col gap-1 px-2 pt-2 pb-1.5">
+        {/* Title + context menu */}
+        <div className="flex items-start justify-between gap-1">
+          <p className="text-sm font-medium text-text-primary line-clamp-1 leading-tight">
+            {asset.name}
+          </p>
+          <button
+            onClick={(e) => { e.stopPropagation(); onContextMenu?.(e) }}
+            className="shrink-0 h-5 w-5 flex items-center justify-center rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:bg-bg-hover hover:text-text-primary transition-all"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        {/* Author + date row */}
+        <p className="text-2xs text-text-tertiary line-clamp-1">
+          {authorName && <span>{authorName} &bull; </span>}
+          {formatRelativeTime(asset.created_at)}
+        </p>
+      </div>
+
+      {/* Status field — bottom of card like Frame.io */}
+      <div className="px-2 pb-2 mt-auto">
+        <div className="flex items-center gap-1.5 rounded border border-border bg-bg-tertiary/50 px-2 py-1">
+          <Badge status={asset.status} />
+        </div>
       </div>
     </div>
   )

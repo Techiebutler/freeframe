@@ -1,7 +1,6 @@
 'use client'
 
 import * as React from 'react'
-import { use } from 'react'
 import {
   Lock,
   AlertTriangle,
@@ -471,9 +470,9 @@ function GuestApprovalActions({ token, asset }: GuestApprovalActionsProps) {
 export default function SharePage({
   params,
 }: {
-  params: Promise<{ token: string }>
+  params: { token: string }
 }) {
-  const { token } = use(params)
+  const { token } = params
 
   type PageState =
     | { stage: 'loading' }

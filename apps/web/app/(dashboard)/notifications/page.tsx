@@ -47,10 +47,10 @@ function NotificationItem({ notification }: { notification: Notification }) {
         className={cn(
           'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
           notification.type === 'mention' && 'bg-accent-muted text-accent',
-          notification.type === 'approval' && 'bg-[oklch(0.35_0.12_152/0.25)] text-status-success',
+          notification.type === 'approval' && 'bg-status-success/15 text-status-success',
           notification.type === 'comment' && 'bg-bg-tertiary text-text-secondary',
           (notification.type === 'assignment' || notification.type === 'due_soon') &&
-            'bg-[oklch(0.35_0.12_70/0.25)] text-status-warning',
+            'bg-status-warning/15 text-status-warning',
         )}
       >
         <Icon className="h-4 w-4" />

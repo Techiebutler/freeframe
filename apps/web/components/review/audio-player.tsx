@@ -163,9 +163,9 @@ export function AudioPlayer({ asset, version, comments = [], className }: AudioP
     const ws = WaveSurfer.create({
       container: waveformRef.current,
       height: 128,
-      waveColor: 'oklch(0.48 0.008 250)',    // --text-tertiary
-      progressColor: 'oklch(0.62 0.16 240)', // --accent
-      cursorColor: 'oklch(0.62 0.16 240)',
+      waveColor: '#5e5e6e',
+      progressColor: '#5b8def',
+      cursorColor: '#5b8def',
       cursorWidth: 2,
       barWidth: 2,
       barGap: 1,

@@ -11,7 +11,7 @@ import React, {
 } from 'react'
 import { api } from '@/lib/api'
 import { useReviewStore } from '@/stores/review-store'
-import type { Asset, AssetVersion, Comment } from '@/types'
+import type { AssetResponse, AssetVersion, Comment } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ interface CreateCommentPayload {
 
 interface ReviewContextValue {
   assetId: string
-  asset: Asset | null
+  asset: AssetResponse | null
   versions: AssetVersion[]
   comments: Comment[]
   isLoading: boolean
@@ -48,13 +48,8 @@ interface ReviewProviderProps {
   children: React.ReactNode
 }
 
-interface AssetDetailResponse {
-  asset: Asset
-  versions: AssetVersion[]
-}
-
 export function ReviewProvider({ assetId, children }: ReviewProviderProps) {
-  const [asset, setAsset] = useState<Asset | null>(null)
+  const [asset, setAsset] = useState<AssetResponse | null>(null)
   const [versions, setVersions] = useState<AssetVersion[]>([])
   const [comments, setComments] = useState<Comment[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -73,17 +68,27 @@ export function ReviewProvider({ assetId, children }: ReviewProviderProps) {
 
   const fetchAsset = useCallback(async () => {
     try {
-      const data = await api.get<AssetDetailResponse>(`/assets/${assetId}`)
+      // Backend returns flat AssetResponse with latest_version embedded
+      const data = await api.get<AssetResponse>(`/assets/${assetId}`)
       if (!mountedRef.current) return
-      setAsset(data.asset)
-      setVersions(data.versions ?? [])
-      setCurrentAsset(data.asset)
+
+      setAsset(data)
+      setCurrentAsset(data)
+
+      // Fetch all versions for the version switcher
+      const allVersions = await api.get<AssetVersion[]>(`/assets/${assetId}/versions`)
+      if (!mountedRef.current) return
+      setVersions(allVersions ?? [])
+
       // Set the latest ready version as current
-      const readyVersion = [...(data.versions ?? [])]
+      const readyVersion = (allVersions ?? [])
         .sort((a, b) => b.version_number - a.version_number)
-        .find((v) => v.status === 'ready')
+        .find((v) => v.processing_status === 'ready')
       if (readyVersion) {
         setCurrentVersion(readyVersion)
+      } else if (data.latest_version) {
+        // Fallback to latest version even if not ready (shows processing state)
+        setCurrentVersion(data.latest_version)
       }
     } catch (err) {
       if (!mountedRef.current) return

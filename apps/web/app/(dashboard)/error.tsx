@@ -12,7 +12,7 @@ export default function DashboardError({ error, reset }: ErrorProps) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-16 text-center">
       {/* Icon */}
-      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[oklch(0.35_0.1_25/0.15)]">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-status-error/10">
         <AlertTriangle className="h-8 w-8 text-status-error" />
       </div>
 

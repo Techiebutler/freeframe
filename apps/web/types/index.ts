@@ -6,6 +6,8 @@ export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "arc
 
 export type AssetVersionStatus = "uploading" | "processing" | "ready" | "failed";
 
+export type OrgRole = "owner" | "admin" | "member";
+
 export type TeamRole = "lead" | "member";
 
 export type ProjectRole = "owner" | "editor" | "reviewer" | "viewer";
@@ -116,10 +118,17 @@ export interface AssetVersion {
   id: string;
   asset_id: string;
   version_number: number;
-  status: AssetVersionStatus;
+  processing_status: AssetVersionStatus;
   created_by: string;
   created_at: string;
   deleted_at: string | null;
+  files?: MediaFile[];
+}
+
+/** Backend returns AssetResponse with latest_version embedded */
+export interface AssetResponse extends Asset {
+  latest_version: AssetVersion | null;
+  thumbnail_url: string | null;
 }
 
 export interface MediaFile {

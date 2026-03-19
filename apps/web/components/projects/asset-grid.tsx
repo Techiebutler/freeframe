@@ -1,35 +1,18 @@
 'use client'
 
 import * as React from 'react'
-import { LayoutGrid, List, ArrowUpDown } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { LayoutGrid, List, ArrowUpDown, Search, Plus, X, Copy, Download, MoreHorizontal } from 'lucide-react'
+import { cn, formatRelativeTime } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/shared/badge'
 import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { AssetCard } from './asset-card'
 import type { Asset, AssetStatus, AssetType, User } from '@/types'
-import { Layers, Film, Music, Image, Images } from 'lucide-react'
+import { Layers } from 'lucide-react'
 
 type SortKey = 'date' | 'name' | 'status'
 type ViewMode = 'grid' | 'list'
-
-const ALL_STATUSES: AssetStatus[] = ['draft', 'in_review', 'approved', 'rejected', 'archived']
-const ALL_TYPES: AssetType[] = ['video', 'audio', 'image', 'image_carousel']
-
-const typeLabels: Record<AssetType, string> = {
-  video: 'Video',
-  audio: 'Audio',
-  image: 'Image',
-  image_carousel: 'Carousel',
-}
-
-const typeIcons: Record<AssetType, React.ElementType> = {
-  video: Film,
-  audio: Music,
-  image: Image,
-  image_carousel: Images,
-}
 
 const statusOrder: Record<AssetStatus, number> = {
   in_review: 0,
@@ -46,8 +29,10 @@ interface AssetGridProps {
   assignees?: Record<string, User>
   thumbnails?: Record<string, string>
   versionCounts?: Record<string, number>
+  authorNames?: Record<string, string>
   onUpload?: () => void
   onAssetSelect?: (asset: Asset) => void
+  onAssetClick?: (asset: Asset) => void
 }
 
 export function AssetGrid({
@@ -57,26 +42,17 @@ export function AssetGrid({
   assignees = {},
   thumbnails = {},
   versionCounts = {},
+  authorNames = {},
   onUpload,
   onAssetSelect,
+  onAssetClick,
 }: AssetGridProps) {
   const [viewMode, setViewMode] = React.useState<ViewMode>('grid')
   const [sortKey, setSortKey] = React.useState<SortKey>('date')
   const [sortAsc, setSortAsc] = React.useState(false)
-  const [statusFilters, setStatusFilters] = React.useState<AssetStatus[]>([])
-  const [typeFilters, setTypeFilters] = React.useState<AssetType[]>([])
-
-  const toggleStatus = (s: AssetStatus) => {
-    setStatusFilters((prev) =>
-      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s],
-    )
-  }
-
-  const toggleType = (t: AssetType) => {
-    setTypeFilters((prev) =>
-      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t],
-    )
-  }
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [showSearch, setShowSearch] = React.useState(false)
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -87,14 +63,24 @@ export function AssetGrid({
     }
   }
 
+  const toggleSelect = (assetId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(assetId)) next.delete(assetId)
+      else next.add(assetId)
+      return next
+    })
+  }
+
+  const clearSelection = () => setSelectedIds(new Set())
+
   const filtered = React.useMemo(() => {
     let result = [...assets]
 
-    if (statusFilters.length > 0) {
-      result = result.filter((a) => statusFilters.includes(a.status))
-    }
-    if (typeFilters.length > 0) {
-      result = result.filter((a) => typeFilters.includes(a.asset_type))
+    // Search filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      result = result.filter((a) => a.name.toLowerCase().includes(q))
     }
 
     result.sort((a, b) => {
@@ -110,83 +96,38 @@ export function AssetGrid({
     })
 
     return result
-  }, [assets, statusFilters, typeFilters, sortKey, sortAsc])
+  }, [assets, searchQuery, sortKey, sortAsc])
 
   if (isLoading) {
     return (
-      <div className="space-y-4">
-        <div className="flex gap-2">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-7 w-20 animate-pulse rounded bg-bg-tertiary" />
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="aspect-video animate-pulse rounded-lg bg-bg-tertiary" />
-          ))}
-        </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="flex flex-col gap-2">
+            <div className="aspect-[4/3] animate-pulse rounded-lg bg-bg-tertiary" />
+            <div className="h-4 w-3/4 animate-pulse rounded bg-bg-tertiary" />
+            <div className="h-3 w-1/2 animate-pulse rounded bg-bg-tertiary" />
+          </div>
+        ))}
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Status filter chips */}
-        <div className="flex flex-wrap items-center gap-1">
-          {ALL_STATUSES.map((s) => (
-            <button
-              key={s}
-              onClick={() => toggleStatus(s)}
-              className={cn(
-                'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors border',
-                statusFilters.includes(s)
-                  ? 'bg-accent text-text-inverse border-accent'
-                  : 'bg-bg-secondary text-text-secondary border-border hover:bg-bg-hover',
-              )}
-            >
-              <Badge status={s} className="pointer-events-none" />
-            </button>
-          ))}
-        </div>
-
-        {/* Type filter chips */}
-        <div className="flex flex-wrap items-center gap-1">
-          {ALL_TYPES.map((t) => {
-            const TypeIcon = typeIcons[t]
-            return (
-              <button
-                key={t}
-                onClick={() => toggleType(t)}
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors border',
-                  typeFilters.includes(t)
-                    ? 'bg-accent text-text-inverse border-accent'
-                    : 'bg-bg-secondary text-text-secondary border-border hover:bg-bg-hover',
-                )}
-              >
-                <TypeIcon className="h-3 w-3" />
-                {typeLabels[t]}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Spacer */}
-        <div className="flex-1" />
-
-        {/* Sort controls */}
-        <div className="flex items-center gap-1">
+    <div className="flex flex-col gap-3">
+      {/* Toolbar — clean, Frame.io-style */}
+      <div className="flex items-center gap-2">
+        {/* Sort dropdown */}
+        <div className="flex items-center gap-1 rounded-md border border-border bg-bg-secondary px-2 py-1">
+          <span className="text-2xs text-text-tertiary">Sorted by</span>
           {(['date', 'name', 'status'] as SortKey[]).map((key) => (
             <button
               key={key}
               onClick={() => toggleSort(key)}
               className={cn(
-                'inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors',
+                'inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs transition-colors',
                 sortKey === key
-                  ? 'bg-accent-muted text-accent'
-                  : 'text-text-secondary hover:bg-bg-hover',
+                  ? 'text-text-primary font-medium'
+                  : 'text-text-tertiary hover:text-text-secondary',
               )}
             >
               {key.charAt(0).toUpperCase() + key.slice(1)}
@@ -197,128 +138,159 @@ export function AssetGrid({
           ))}
         </div>
 
+        <div className="flex-1" />
+
+        {/* Search */}
+        {showSearch ? (
+          <div className="flex items-center gap-1 rounded-md border border-border bg-bg-secondary px-2 py-1">
+            <Search className="h-3.5 w-3.5 text-text-tertiary" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter assets..."
+              className="bg-transparent text-sm text-text-primary placeholder:text-text-tertiary outline-none w-40"
+              autoFocus
+            />
+            <button
+              onClick={() => { setShowSearch(false); setSearchQuery('') }}
+              className="text-text-tertiary hover:text-text-primary"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowSearch(true)}
+            className="h-7 w-7 flex items-center justify-center rounded text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-colors"
+          >
+            <Search className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Add button */}
+        {onUpload && (
+          <button
+            onClick={onUpload}
+            className="h-7 w-7 flex items-center justify-center rounded text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        )}
+
         {/* View toggle */}
-        <div className="flex items-center rounded-md border border-border overflow-hidden">
+        <div className="flex items-center rounded border border-border overflow-hidden">
           <button
             onClick={() => setViewMode('grid')}
             className={cn(
-              'p-1.5 transition-colors',
-              viewMode === 'grid'
-                ? 'bg-accent-muted text-accent'
-                : 'text-text-secondary hover:bg-bg-hover',
+              'p-1 transition-colors',
+              viewMode === 'grid' ? 'bg-bg-hover text-text-primary' : 'text-text-tertiary hover:text-text-secondary',
             )}
-            aria-label="Grid view"
           >
-            <LayoutGrid className="h-4 w-4" />
+            <LayoutGrid className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => setViewMode('list')}
             className={cn(
-              'p-1.5 transition-colors',
-              viewMode === 'list'
-                ? 'bg-accent-muted text-accent'
-                : 'text-text-secondary hover:bg-bg-hover',
+              'p-1 transition-colors',
+              viewMode === 'list' ? 'bg-bg-hover text-text-primary' : 'text-text-tertiary hover:text-text-secondary',
             )}
-            aria-label="List view"
           >
-            <List className="h-4 w-4" />
+            <List className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Empty state */}
+      {/* Grid / List */}
       {filtered.length === 0 ? (
         <div className="rounded-lg border border-border bg-bg-secondary">
           <EmptyState
             icon={Layers}
             title="No assets"
-            description={
-              statusFilters.length > 0 || typeFilters.length > 0
-                ? 'No assets match the current filters.'
-                : 'Upload your first asset to get started.'
-            }
-            action={
-              !statusFilters.length && !typeFilters.length && onUpload
-                ? { label: 'Upload', onClick: onUpload }
-                : undefined
-            }
+            description={searchQuery ? 'No assets match your search.' : 'Upload your first asset to get started.'}
+            action={!searchQuery && onUpload ? { label: 'Upload', onClick: onUpload } : undefined}
           />
         </div>
       ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((asset) => (
-            <div key={asset.id} onClick={() => onAssetSelect?.(asset)} className="cursor-pointer">
+            <div
+              key={asset.id}
+              onClick={() => onAssetSelect?.(asset)}
+            >
               <AssetCard
                 asset={asset}
                 projectId={projectId}
                 versionCount={versionCounts[asset.id]}
                 assignee={asset.assignee_id ? assignees[asset.assignee_id] : null}
+                authorName={authorNames[asset.created_by]}
                 thumbnailUrl={thumbnails[asset.id]}
+                selected={selectedIds.has(asset.id)}
+                onSelect={() => toggleSelect(asset.id)}
               />
             </div>
           ))}
         </div>
       ) : (
+        /* List view */
         <div className="rounded-lg border border-border overflow-hidden">
-          {/* List header */}
-          <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-3 px-4 py-2 bg-bg-tertiary border-b border-border">
-            <span className="text-xs font-medium text-text-secondary">Name</span>
-            <span className="text-xs font-medium text-text-secondary">Status</span>
-            <span className="text-xs font-medium text-text-secondary">Type</span>
-            <span className="text-xs font-medium text-text-secondary">Version</span>
-            <span className="text-xs font-medium text-text-secondary">Assignee</span>
-          </div>
           {filtered.map((asset, i) => {
-            const TypeIcon = typeIcons[asset.asset_type]
-            const assignee = asset.assignee_id ? assignees[asset.assignee_id] : null
             const thumb = thumbnails[asset.id]
+            const assignee = asset.assignee_id ? assignees[asset.assignee_id] : null
             return (
               <div
                 key={asset.id}
                 onClick={() => onAssetSelect?.(asset)}
                 className={cn(
-                  'grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-3 items-center px-4 py-3 transition-colors hover:bg-bg-hover cursor-pointer',
+                  'flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-bg-hover cursor-pointer',
                   i !== filtered.length - 1 && 'border-b border-border',
+                  selectedIds.has(asset.id) && 'bg-accent/5',
                 )}
               >
-                {/* Name + thumbnail */}
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-8 w-14 shrink-0 rounded bg-bg-tertiary overflow-hidden flex items-center justify-center">
-                    {thumb ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={thumb} alt={asset.name} className="h-full w-full object-cover" />
-                    ) : (
-                      <TypeIcon className="h-4 w-4 text-text-tertiary" />
-                    )}
-                  </div>
-                  <span className="text-sm font-medium text-text-primary line-clamp-1">
-                    {asset.name}
-                  </span>
-                </div>
-                {/* Status */}
-                <div>
-                  <Badge status={asset.status} />
-                </div>
-                {/* Type */}
-                <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  <TypeIcon className="h-3.5 w-3.5" />
-                  {typeLabels[asset.asset_type]}
-                </span>
-                {/* Version */}
-                <span className="text-xs text-text-tertiary">
-                  v{versionCounts[asset.id] ?? 1}
-                </span>
-                {/* Assignee */}
-                <div>
-                  {assignee ? (
-                    <Avatar src={assignee.avatar_url} name={assignee.name} size="sm" />
+                {/* Thumbnail */}
+                <div className="h-10 w-16 shrink-0 rounded bg-bg-tertiary overflow-hidden flex items-center justify-center">
+                  {thumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={thumb} alt={asset.name} className="h-full w-full object-cover" />
                   ) : (
-                    <span className="text-xs text-text-tertiary">—</span>
+                    <span className="text-2xs text-text-tertiary uppercase font-bold">{asset.asset_type}</span>
                   )}
                 </div>
+                {/* Name + meta */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-text-primary truncate">{asset.name}</p>
+                  <p className="text-2xs text-text-tertiary">
+                    {authorNames[asset.created_by] && <>{authorNames[asset.created_by]} &bull; </>}
+                    {formatRelativeTime(asset.created_at)}
+                  </p>
+                </div>
+                <Badge status={asset.status} />
+                {assignee && <Avatar src={assignee.avatar_url} name={assignee.name} size="sm" />}
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Bottom selection bar */}
+      {selectedIds.size > 0 && (
+        <div className="sticky bottom-0 z-20 flex items-center gap-3 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 shadow-xl">
+          <button onClick={clearSelection} className="text-text-tertiary hover:text-text-primary transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+          <span className="text-sm text-text-primary font-medium">
+            {selectedIds.size} asset{selectedIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <div className="flex-1" />
+          <Button variant="ghost" size="sm" className="gap-1.5">
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="sm" className="gap-1.5">
+            <Copy className="h-4 w-4" /> Copy to
+          </Button>
+          <Button variant="ghost" size="sm" className="gap-1.5">
+            <Download className="h-4 w-4" /> Download
+          </Button>
         </div>
       )}
     </div>

@@ -43,7 +43,7 @@ export default function DashboardLayout({
       <main
         className={cn(
           'flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-spring',
-          sidebarCollapsed ? 'ml-14' : 'ml-60',
+          sidebarCollapsed ? 'ml-[52px]' : 'ml-[220px]',
         )}
       >
         <Header onSearchOpen={() => setCommandOpen(true)} />

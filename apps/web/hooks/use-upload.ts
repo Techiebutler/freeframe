@@ -90,7 +90,7 @@ export function useUpload(): UploadState {
 
           // 2. Upload chunks
           const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-          const parts: Array<{ part_number: number; etag: string }> = []
+          const parts: Array<{ PartNumber: number; ETag: string }> = []
 
           for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
             if (controller.signal.aborted) {
@@ -120,7 +120,7 @@ export function useUpload(): UploadState {
             }
 
             const etag = putResponse.headers.get('ETag') ?? ''
-            parts.push({ part_number: partNumber, etag })
+            parts.push({ PartNumber: partNumber, ETag: etag })
 
             const progress = Math.round((partNumber / totalChunks) * 95)
             updateFile(id, { progress })

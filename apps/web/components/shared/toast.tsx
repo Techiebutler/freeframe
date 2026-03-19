@@ -95,17 +95,17 @@ const TOAST_CONFIG: Record<
 > = {
   success: {
     icon: CheckCircle,
-    containerClass: 'border-[oklch(0.55_0.18_145/0.35)] bg-[oklch(0.22_0.06_145)]',
+    containerClass: 'border-status-success/30 bg-status-success/10',
     iconClass: 'text-status-success',
   },
   error: {
     icon: XCircle,
-    containerClass: 'border-[oklch(0.55_0.2_25/0.35)] bg-[oklch(0.22_0.06_25)]',
+    containerClass: 'border-status-error/30 bg-status-error/10',
     iconClass: 'text-status-error',
   },
   warning: {
     icon: AlertCircle,
-    containerClass: 'border-[oklch(0.6_0.18_75/0.35)] bg-[oklch(0.22_0.06_75)]',
+    containerClass: 'border-status-warning/30 bg-status-warning/10',
     iconClass: 'text-status-warning',
   },
   info: {

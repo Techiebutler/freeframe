@@ -7,26 +7,36 @@ interface BadgeProps {
   className?: string
 }
 
-const statusConfig: Record<AssetStatus, { label: string; className: string }> = {
+const statusConfig: Record<AssetStatus, { label: string; dot: string; bg: string; text: string }> = {
   draft: {
     label: 'Draft',
-    className: 'bg-bg-tertiary text-text-secondary border border-border',
+    dot: 'bg-text-tertiary',
+    bg: 'bg-bg-tertiary',
+    text: 'text-text-secondary',
   },
   in_review: {
     label: 'In Review',
-    className: 'bg-[oklch(0.35_0.12_70/0.25)] text-status-warning border border-[oklch(0.78_0.16_70/0.3)]',
+    dot: 'bg-status-warning',
+    bg: 'bg-status-warning/10',
+    text: 'text-status-warning',
   },
   approved: {
     label: 'Approved',
-    className: 'bg-[oklch(0.35_0.12_152/0.25)] text-status-success border border-[oklch(0.72_0.17_152/0.3)]',
+    dot: 'bg-status-success',
+    bg: 'bg-status-success/10',
+    text: 'text-status-success',
   },
   rejected: {
     label: 'Rejected',
-    className: 'bg-[oklch(0.35_0.1_25/0.25)] text-status-error border border-[oklch(0.63_0.2_25/0.3)]',
+    dot: 'bg-status-error',
+    bg: 'bg-status-error/10',
+    text: 'text-status-error',
   },
   archived: {
     label: 'Archived',
-    className: 'bg-bg-secondary text-text-tertiary border border-border-secondary',
+    dot: 'bg-text-tertiary',
+    bg: 'bg-bg-secondary',
+    text: 'text-text-tertiary',
   },
 }
 
@@ -35,11 +45,13 @@ export function Badge({ status, className }: BadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-2xs font-medium',
-        config.className,
+        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-medium',
+        config.bg,
+        config.text,
         className,
       )}
     >
+      <span className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
       {config.label}
     </span>
   )

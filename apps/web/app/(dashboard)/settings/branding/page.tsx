@@ -31,7 +31,7 @@ export default function BrandingPage() {
             </div>
             <div>
               <h3 className="text-sm font-medium text-text-primary">Name</h3>
-              <p className="text-sm text-text-secondary mt-0.5">{user?.name}'s Account</p>
+              <p className="text-sm text-text-secondary mt-0.5">{user?.name}&apos;s Account</p>
             </div>
           </div>
         </div>

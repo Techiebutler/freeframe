@@ -102,9 +102,9 @@ function BulkInviteDialog() {
 
 function userStatusBadge(status: UserStatus) {
   const map: Record<UserStatus, { label: string; className: string }> = {
-    active: { label: 'Active', className: 'bg-[oklch(0.35_0.12_152/0.25)] text-status-success' },
-    deactivated: { label: 'Deactivated', className: 'bg-[oklch(0.35_0.1_25/0.25)] text-status-error' },
-    pending_invite: { label: 'Pending', className: 'bg-[oklch(0.35_0.12_70/0.25)] text-status-warning' },
+    active: { label: 'Active', className: 'bg-status-success/15 text-status-success' },
+    deactivated: { label: 'Deactivated', className: 'bg-status-error/15 text-status-error' },
+    pending_invite: { label: 'Pending', className: 'bg-status-warning/15 text-status-warning' },
     pending_verification: { label: 'Unverified', className: 'bg-bg-tertiary text-text-secondary' },
   }
   const cfg = map[status] ?? map.active

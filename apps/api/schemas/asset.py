@@ -47,6 +47,7 @@ class AssetResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_version: Optional[AssetVersionResponse] = None
+    thumbnail_url: Optional[str] = None
     model_config = {"from_attributes": True}
 
 class AssetUpdate(BaseModel):

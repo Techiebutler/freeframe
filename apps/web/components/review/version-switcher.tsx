@@ -101,7 +101,7 @@ export function VersionSwitcher({
       <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
         {sorted.map((version) => {
           const isActive = currentVersion?.id === version.id
-          const statusCfg = versionStatusConfig[version.status]
+          const statusCfg = versionStatusConfig[version.processing_status]
 
           return (
             <button
@@ -111,15 +111,15 @@ export function VersionSwitcher({
                 isActive
                   ? 'bg-accent text-text-inverse'
                   : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
-                version.status === 'failed' && !isActive && 'text-status-error',
-                version.status === 'processing' && !isActive && 'text-status-warning',
+                version.processing_status === 'failed' && !isActive && 'text-status-error',
+                version.processing_status === 'processing' && !isActive && 'text-status-warning',
               )}
               onClick={() => setCurrentVersion(version)}
-              disabled={version.status === 'uploading' || version.status === 'processing'}
+              disabled={version.processing_status === 'uploading' || version.processing_status === 'processing'}
               title={`Version ${version.version_number} — ${statusCfg.label}`}
             >
               <span>v{version.version_number}</span>
-              <VersionStatusDot status={version.status} />
+              <VersionStatusDot status={version.processing_status} />
             </button>
           )
         })}

@@ -28,9 +28,8 @@ interface StreamResponse {
   url: string
 }
 
-interface VersionWithFiles extends AssetVersion {
-  media_files?: MediaFile[]
-}
+// AssetVersion already has files?: MediaFile[]
+type VersionWithFiles = AssetVersion
 
 // ─── Zoom Controls ────────────────────────────────────────────────────────────
 
@@ -148,8 +147,8 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
 
   // Sorted carousel media files
   const mediaFiles = React.useMemo<MediaFile[]>(() => {
-    if (!version?.media_files) return []
-    return [...version.media_files].sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0))
+    if (!version?.files) return []
+    return [...version.files].sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0))
   }, [version])
 
   const isCarousel = asset.asset_type === 'image_carousel'

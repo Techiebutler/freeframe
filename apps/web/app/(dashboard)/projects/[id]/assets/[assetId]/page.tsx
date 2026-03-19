@@ -1,6 +1,6 @@
 'use client'
 
-import { use, useState } from 'react'
+import { useState } from 'react'
 import { ReviewProvider, useReview } from '@/components/review/review-provider'
 import { VideoPlayer } from '@/components/review/video-player'
 import { AudioPlayer } from '@/components/review/audio-player'
@@ -236,9 +236,9 @@ function ReviewScreenInner() {
 export default function ReviewPage({
   params,
 }: {
-  params: Promise<{ id: string; assetId: string }>
+  params: { id: string; assetId: string }
 }) {
-  const { assetId } = use(params)
+  const { assetId } = params
 
   return (
     <ReviewProvider assetId={assetId}>
