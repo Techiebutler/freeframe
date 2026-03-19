@@ -3,28 +3,28 @@
 @tailwind utilities;
 
 :root {
-  /* Background — near-black with a cool blue-violet undertone */
-  --bg-primary: oklch(0.13 0.01 270);
-  --bg-secondary: oklch(0.16 0.012 270);
-  --bg-tertiary: oklch(0.19 0.014 270);
-  --bg-elevated: oklch(0.21 0.016 270);
-  --bg-hover: oklch(0.23 0.018 270);
+  /* Background — near-black with a cool neutral undertone */
+  --bg-primary: oklch(0.13 0.005 250);
+  --bg-secondary: oklch(0.16 0.006 250);
+  --bg-tertiary: oklch(0.19 0.008 250);
+  --bg-elevated: oklch(0.21 0.009 250);
+  --bg-hover: oklch(0.23 0.01 250);
 
   /* Borders */
-  --border-primary: oklch(0.28 0.015 270);
-  --border-secondary: oklch(0.22 0.012 270);
-  --border-focus: oklch(0.62 0.18 280);
+  --border-primary: oklch(0.28 0.008 250);
+  --border-secondary: oklch(0.22 0.006 250);
+  --border-focus: oklch(0.62 0.16 240);
 
   /* Text */
-  --text-primary: oklch(0.93 0.01 270);
-  --text-secondary: oklch(0.65 0.015 270);
-  --text-tertiary: oklch(0.48 0.015 270);
-  --text-inverse: oklch(0.13 0.01 270);
+  --text-primary: oklch(0.93 0.005 250);
+  --text-secondary: oklch(0.65 0.008 250);
+  --text-tertiary: oklch(0.48 0.008 250);
+  --text-inverse: oklch(0.13 0.005 250);
 
-  /* Accent — violet */
-  --accent: oklch(0.62 0.18 280);
-  --accent-hover: oklch(0.68 0.2 280);
-  --accent-muted: oklch(0.35 0.1 280);
+  /* Accent — blue */
+  --accent: oklch(0.62 0.16 240);
+  --accent-hover: oklch(0.68 0.18 240);
+  --accent-muted: oklch(0.35 0.08 240);
 
   /* Status */
   --status-success: oklch(0.72 0.17 152);

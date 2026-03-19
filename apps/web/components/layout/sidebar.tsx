@@ -56,13 +56,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           collapsed ? 'justify-center' : 'gap-2',
         )}
       >
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-text-inverse font-bold text-sm">
-          F
-        </div>
-        {!collapsed && (
-          <span className="text-sm font-semibold text-text-primary tracking-tight">
-            FreeFrame
-          </span>
+        {collapsed ? (
+          <img src="/logo.png" alt="FreeFrame" width={28} height={28} className="h-7 w-7 shrink-0" />
+        ) : (
+          <img src="/logo-full.png" alt="FreeFrame" width={140} height={28} className="h-7 w-auto" />
         )}
       </div>
 

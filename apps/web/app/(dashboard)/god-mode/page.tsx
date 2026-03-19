@@ -127,8 +127,12 @@ function BulkInviteDialog() {
     setError('')
     setSuccess('')
     try {
-      await api.post('/users/bulk-invite', { emails: emailList })
-      setSuccess(`${emailList.length} invite(s) sent successfully.`)
+      let sent = 0
+      for (const email of emailList) {
+        await api.post('/auth/send-magic-code', { email })
+        sent++
+      }
+      setSuccess(`${sent} invite(s) sent successfully.`)
       setEmails('')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to send invites')

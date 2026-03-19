@@ -35,7 +35,7 @@ export function useAuth(): UseAuthReturn {
 
     // Redirect based on role
     if (me.is_superadmin) {
-      router.push('/admin')
+      router.push('/god-mode')
     } else {
       router.push('/')
     }

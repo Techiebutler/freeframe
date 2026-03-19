@@ -11,24 +11,15 @@ export default function AuthLayout({
 }) {
   return (
     <div className="min-h-screen bg-bg-primary flex flex-col items-center justify-center px-4">
-      {/* Wordmark */}
-      <div className="mb-10 flex items-center gap-2.5">
-        <div className="h-7 w-7 rounded-md bg-accent flex items-center justify-center">
-          <svg
-            viewBox="0 0 16 16"
-            fill="none"
-            className="h-4 w-4 text-white"
-            aria-hidden="true"
-          >
-            <rect x="2" y="2" width="5" height="5" rx="1" fill="currentColor" opacity="0.9" />
-            <rect x="9" y="2" width="5" height="5" rx="1" fill="currentColor" opacity="0.6" />
-            <rect x="2" y="9" width="5" height="5" rx="1" fill="currentColor" opacity="0.6" />
-            <rect x="9" y="9" width="5" height="5" rx="1" fill="currentColor" opacity="0.3" />
-          </svg>
-        </div>
-        <span className="text-lg font-semibold tracking-tight text-text-primary">
-          FreeFrame
-        </span>
+      {/* Logo */}
+      <div className="mb-10">
+        <img
+          src="/logo-full.png"
+          alt="FreeFrame"
+          width={180}
+          height={40}
+          className="h-10 w-auto"
+        />
       </div>
 
       {/* Page content */}

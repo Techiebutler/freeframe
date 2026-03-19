@@ -125,7 +125,8 @@ export function LoginForm() {
       } else {
         setTokens(res.access_token, res.refresh_token)
         await useAuthStore.getState().fetchUser()
-        router.replace('/')
+        const user = useAuthStore.getState().user
+        router.replace(user?.is_superadmin ? '/god-mode' : '/')
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -179,7 +180,8 @@ export function LoginForm() {
       })
       setTokens(res.access_token, res.refresh_token)
       await useAuthStore.getState().fetchUser()
-      router.replace('/')
+      const u = useAuthStore.getState().user
+      router.replace(u?.is_superadmin ? '/god-mode' : '/')
     } catch (err) {
       if (err instanceof ApiError) {
         setGeneralError(err.detail)
@@ -210,7 +212,8 @@ export function LoginForm() {
       })
       setTokens(res.access_token, res.refresh_token)
       await useAuthStore.getState().fetchUser()
-      router.replace('/')
+      const u = useAuthStore.getState().user
+      router.replace(u?.is_superadmin ? '/god-mode' : '/')
     } catch (err) {
       if (err instanceof ApiError) {
         setClassicError(err.detail)
