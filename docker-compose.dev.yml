@@ -91,7 +91,7 @@ services:
     volumes:
       - ./apps/api:/workspace/apps/api
       - ./packages/transcoder:/workspace/packages/transcoder
-    command: celery -A apps.api.tasks.celery_app worker -Q transcoding -c 2 --loglevel=info
+    command: celery -A apps.api.tasks.celery_app worker -Q transcoding -c ${TRANSCODING_CONCURRENCY:-2} --loglevel=info
 
   email_worker:
     build:
@@ -108,7 +108,7 @@ services:
     volumes:
       - ./apps/api:/workspace/apps/api
       - ./packages/transcoder:/workspace/packages/transcoder
-    command: celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c 2 --loglevel=info
+    command: celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c ${EMAIL_CONCURRENCY:-2} --loglevel=info
 
 volumes:
   pgdata:

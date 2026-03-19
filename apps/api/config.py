@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     transcoder_engine: str = "ffmpeg"
     
+    # Worker concurrency settings
+    transcoding_concurrency: int = 2  # Number of concurrent video transcoding jobs
+    email_concurrency: int = 2  # Number of concurrent email sending jobs
+    
     # Email settings - supports AWS SES or any SMTP server
     # If mail_provider is "ses", uses AWS SES with aws_mail_* credentials
     # If mail_provider is "smtp", uses standard SMTP with smtp_* settings
