@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
-from .routers import auth, users, organizations, teams, projects, upload, events
+from .routers import auth, users, organizations, teams, projects, upload, events, assets, me
 from .services.s3_service import ensure_bucket_exists
 
 @asynccontextmanager
@@ -32,6 +32,8 @@ app.include_router(teams.router)
 app.include_router(projects.router)
 app.include_router(upload.router)
 app.include_router(events.router)
+app.include_router(assets.router)
+app.include_router(me.router)
 
 @app.get("/health")
 def health():
