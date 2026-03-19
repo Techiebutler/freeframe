@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Upload, Film, Music, Image } from 'lucide-react'
+import { CloudUpload, Film, Music, Image as ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface UploadZoneProps {
@@ -75,45 +75,25 @@ export function UploadZone({ onFilesSelected, className }: UploadZoneProps) {
         onChange={(e) => handleFiles(e.target.files)}
       />
 
-      {/* Icon cluster */}
-      <div className="relative flex items-center justify-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent-muted text-accent">
-          <Upload className="h-6 w-6" />
-        </div>
-        <div className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-bg-secondary border border-border text-text-tertiary">
-          <Film className="h-3 w-3" />
-        </div>
-        <div className="absolute -bottom-1 -left-1 flex h-6 w-6 items-center justify-center rounded-full bg-bg-secondary border border-border text-text-tertiary">
-          <Music className="h-3 w-3" />
+      {/* Frame.io-style cloud icon */}
+      <div className="flex flex-col items-center justify-center">
+        <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-bg-tertiary text-text-tertiary">
+          <CloudUpload className="h-10 w-10" />
         </div>
       </div>
 
       {/* Text */}
-      <div className="flex flex-col items-center gap-1 text-center">
-        <p className="text-sm font-medium text-text-primary">
-          Drop files here or <span className="text-accent">click to browse</span>
+      <div className="flex flex-col items-center gap-2 text-center">
+        <p className="text-sm text-text-secondary">
+          Drag files and folders to upload.
         </p>
-        <p className="text-xs text-text-tertiary">
-          Video, audio, and image files — up to 10 GB
-        </p>
-      </div>
-
-      {/* Supported types */}
-      <div className="flex items-center gap-3 text-xs text-text-tertiary">
-        <span className="flex items-center gap-1">
-          <Film className="h-3.5 w-3.5" />
-          MP4, MOV, MKV
-        </span>
-        <span className="text-border">·</span>
-        <span className="flex items-center gap-1">
-          <Music className="h-3.5 w-3.5" />
-          MP3, WAV, FLAC
-        </span>
-        <span className="text-border">·</span>
-        <span className="flex items-center gap-1">
-          <Image className="h-3.5 w-3.5" />
-          JPG, PNG, WebP
-        </span>
+        <button
+          type="button"
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors"
+          onClick={(e) => { e.stopPropagation(); inputRef.current?.click() }}
+        >
+          Upload
+        </button>
       </div>
     </div>
   )

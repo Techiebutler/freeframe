@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
@@ -30,7 +31,6 @@ const navItems: NavItem[] = [
   { href: '/assets', label: 'My Assets', icon: FolderOpen },
   { href: '/projects', label: 'Projects', icon: Layers },
   { href: '/notifications', label: 'Notifications', icon: Bell },
-  { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 interface SidebarProps {
@@ -45,7 +45,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        'fixed left-0 top-0 z-30 flex h-screen flex-col bg-bg-secondary border-r border-border transition-all duration-200 ease-in-out',
+        'fixed left-0 top-0 z-30 flex h-screen flex-col bg-bg-secondary border-r border-border transition-[width] duration-200 ease-spring',
         collapsed ? 'w-14' : 'w-60',
       )}
     >
@@ -57,9 +57,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         )}
       >
         {collapsed ? (
-          <img src="/logo.png" alt="FreeFrame" width={28} height={28} className="h-7 w-7 shrink-0" />
+          <Image src="/logo.png" alt="FreeFrame" width={28} height={28} className="h-7 w-7" />
         ) : (
-          <img src="/logo-full.png" alt="FreeFrame" width={140} height={28} className="h-7 w-auto" />
+          <Image src="/logo-full.png" alt="FreeFrame" width={140} height={36} className="h-8 w-auto" />
         )}
       </div>
 
@@ -74,17 +74,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               key={item.href}
               href={item.href}
               className={cn(
-                'group relative flex items-center gap-2.5 rounded-md px-2 py-2 text-sm transition-colors',
+                'group relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-all duration-150',
                 collapsed ? 'justify-center' : '',
                 isActive
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+                  ? 'bg-bg-hover text-text-primary font-medium'
+                  : 'text-text-secondary hover:bg-bg-hover/70 hover:text-text-primary',
               )}
               title={collapsed ? item.label : undefined}
             >
               {/* Active left border indicator */}
               {isActive && (
-                <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r bg-accent" />
+                <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r bg-accent transition-all duration-200" />
               )}
               <Icon className="h-4 w-4 shrink-0" />
               {!collapsed && <span>{item.label}</span>}
@@ -108,7 +108,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               <Avatar
                 src={user?.avatar_url}
                 name={user?.name}
-                size="sm"
+                size="md"
               />
               {!collapsed && (
                 <div className="flex flex-col items-start overflow-hidden">
@@ -132,7 +132,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             >
               <DropdownMenu.Item asChild>
                 <Link
-                  href="/settings"
+                  href="/settings/profile"
                   className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary focus:outline-none"
                 >
                   <User className="h-4 w-4" />

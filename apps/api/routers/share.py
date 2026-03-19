@@ -2,9 +2,9 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
+import bcrypt
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -26,7 +26,6 @@ from ..tasks.email_tasks import send_share_email
 from ..config import settings
 
 router = APIRouter(tags=["sharing"])
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
@@ -49,7 +48,12 @@ def create_share_link(
     require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
 
     token = secrets.token_urlsafe(32)
-    password_hash = pwd_context.hash(body.password) if body.password else None
+    if body.password:
+        pwd_bytes = body.password[:72].encode('utf-8')
+        salt = bcrypt.gensalt()
+        password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
+    else:
+        password_hash = None
 
     link = ShareLink(
         asset_id=asset_id,
@@ -98,7 +102,12 @@ def validate_share_link_endpoint(
                 allow_download=link.allow_download,
                 requires_password=True,
             )
-        if not pwd_context.verify(password, link.password_hash):
+        try:
+            plain_bytes = password[:72].encode('utf-8')
+            hashed_bytes = link.password_hash.encode('utf-8')
+            if not bcrypt.checkpw(plain_bytes, hashed_bytes):
+                raise HTTPException(status_code=403, detail="Incorrect password")
+        except ValueError:
             raise HTTPException(status_code=403, detail="Incorrect password")
 
     return ShareLinkValidateResponse(

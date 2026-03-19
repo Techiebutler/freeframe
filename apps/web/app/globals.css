@@ -33,7 +33,7 @@
   --status-info: oklch(0.7 0.15 230);
 
   /* Fonts */
-  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
   /* Spacing rhythm */
@@ -55,8 +55,11 @@
     background-color: var(--bg-primary);
     color: var(--text-primary);
     font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    font-variation-settings: normal;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 
   /* Scrollbar styling */
@@ -82,6 +85,32 @@
   ::selection {
     background-color: var(--accent-muted);
     color: var(--text-primary);
+  }
+}
+
+@layer components {
+  /* Smooth focus ring for interactive elements */
+  .focus-ring {
+    @apply outline-none ring-0 transition-shadow duration-150;
+  }
+  .focus-ring:focus-visible {
+    @apply ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--bg-primary)];
+  }
+
+  /* Glass card effect */
+  .glass-card {
+    @apply rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/60 backdrop-blur-md shadow-lg;
+  }
+
+  /* Skeleton shimmer gradient */
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--bg-secondary) 0%,
+      var(--bg-tertiary) 50%,
+      var(--bg-secondary) 100%
+    );
+    background-size: 200% 100%;
   }
 }
 

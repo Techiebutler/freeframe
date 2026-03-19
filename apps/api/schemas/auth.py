@@ -60,3 +60,9 @@ class InviteInfoResponse(BaseModel):
     name: str
     org_name: str | None = None
 
+class UpdateUserRoleRequest(BaseModel):
+    is_admin: bool
+
+class DeactivateUserRequest(BaseModel):
+    user_id: uuid.UUID
+

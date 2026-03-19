@@ -7,8 +7,6 @@ class ProjectCreate(BaseModel):
     name: str
     description: str | None = None
     project_type: ProjectType = ProjectType.personal
-    team_id: uuid.UUID | None = None
-    org_id: uuid.UUID
 
 class ProjectUpdate(BaseModel):
     name: str | None = None
@@ -16,8 +14,6 @@ class ProjectUpdate(BaseModel):
 
 class ProjectResponse(BaseModel):
     id: uuid.UUID
-    org_id: uuid.UUID
-    team_id: uuid.UUID | None
     name: str
     description: str | None
     project_type: ProjectType

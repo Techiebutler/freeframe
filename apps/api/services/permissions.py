@@ -2,32 +2,9 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 import uuid
 from ..models.user import User
-from ..models.organization import OrgMember, OrgRole
-from ..models.team import TeamMember
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.asset import Asset
 from ..models.share import AssetShare, ShareLink, SharePermission
-
-
-# ── Org-level ─────────────────────────────────────────────────────────────────
-
-def require_org_admin(db: Session, org_id: uuid.UUID, user: User) -> OrgMember:
-    member = db.query(OrgMember).filter(
-        OrgMember.org_id == org_id,
-        OrgMember.user_id == user.id,
-        OrgMember.deleted_at.is_(None),
-    ).first()
-    if not member or member.role not in (OrgRole.owner, OrgRole.admin):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Org admin access required")
-    return member
-
-
-def get_org_member(db: Session, org_id: uuid.UUID, user_id: uuid.UUID) -> OrgMember | None:
-    return db.query(OrgMember).filter(
-        OrgMember.org_id == org_id,
-        OrgMember.user_id == user_id,
-        OrgMember.deleted_at.is_(None),
-    ).first()
 
 
 # ── Project-level ──────────────────────────────────────────────────────────────
@@ -88,26 +65,6 @@ def can_access_asset(db: Session, asset: Asset, user: User) -> bool:
     if direct:
         return True
 
-    # 4. AssetShare with user's team
-    user_team_ids = db.query(TeamMember.team_id).filter(
-        TeamMember.user_id == user.id,
-        TeamMember.deleted_at.is_(None),
-    ).subquery()
-    team_share = db.query(AssetShare).filter(
-        AssetShare.asset_id == asset.id,
-        AssetShare.shared_with_team_id.in_(user_team_ids),
-        AssetShare.deleted_at.is_(None),
-    ).first()
-    if team_share:
-        return True
-
-    # 5. Org admin
-    project = db.query(Project).filter(Project.id == asset.project_id).first()
-    if project:
-        org_member = get_org_member(db, project.org_id, user.id)
-        if org_member and org_member.role in (OrgRole.owner, OrgRole.admin):
-            return True
-
     return False
 
 
@@ -134,20 +91,6 @@ def get_asset_share_permission(db: Session, asset: Asset, user: User) -> SharePe
     ).first()
     if direct and PERM_RANK[direct.permission] > PERM_RANK[best]:
         best = direct.permission
-
-    # Team shares
-    user_team_ids = db.query(TeamMember.team_id).filter(
-        TeamMember.user_id == user.id,
-        TeamMember.deleted_at.is_(None),
-    ).subquery()
-    team_shares = db.query(AssetShare).filter(
-        AssetShare.asset_id == asset.id,
-        AssetShare.shared_with_team_id.in_(user_team_ids),
-        AssetShare.deleted_at.is_(None),
-    ).all()
-    for ts in team_shares:
-        if PERM_RANK[ts.permission] > PERM_RANK[best]:
-            best = ts.permission
 
     return best
 

@@ -110,7 +110,30 @@ services:
       - ./packages/transcoder:/workspace/packages/transcoder
     command: celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c ${EMAIL_CONCURRENCY:-2} --loglevel=info
 
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NODE_ENV=development
+      - HOSTNAME=0.0.0.0
+    volumes:
+      - ./apps/web:/app
+      - frontend_node_modules:/app/node_modules
+    command: sh -c "corepack enable && corepack prepare pnpm@latest --activate && pnpm install && pnpm dev --hostname 0.0.0.0"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
 volumes:
   pgdata:
   miniodata:
   redisdata:
+  frontend_node_modules:

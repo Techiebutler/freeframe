@@ -1,227 +1,111 @@
-"""Org admin dashboard endpoints."""
+"""Admin endpoints for user management."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
-from pydantic import BaseModel
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
-from ..models.user import User
-from ..models.organization import Organization, OrgMember, OrgRole
-from ..models.project import Project, ProjectMember
-from ..models.asset import Asset, AssetVersion, MediaFile
-from ..models.activity import ActivityLog
-from ..schemas.activity import ActivityLogResponse
-from ..services.permissions import require_org_admin
+from ..models.user import User, UserStatus
+from ..schemas.auth import UserResponse, UpdateUserRoleRequest
 
-router = APIRouter(tags=["admin"])
-
-
-# ── Schemas ────────────────────────────────────────────────────────────────────
-
-class OrgDashboardResponse(BaseModel):
-    member_count: int
-    project_count: int
-    asset_count: int
-    storage_used_bytes: int
-    recent_activity: list[ActivityLogResponse]
-
-    model_config = {"from_attributes": True}
-
-
-class OrgMemberAdminResponse(BaseModel):
-    user_id: uuid.UUID
-    name: Optional[str]
-    email: str
-    role: OrgRole
-    joined_at: Optional[datetime]
-
-    model_config = {"from_attributes": True}
-
-
-class UpdateMemberRoleRequest(BaseModel):
-    role: OrgRole
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _get_org(db: Session, org_id: uuid.UUID) -> Organization:
-    org = db.query(Organization).filter(
-        Organization.id == org_id,
-        Organization.deleted_at.is_(None),
-    ).first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    return org
-
-
-def _require_org_owner(db: Session, org_id: uuid.UUID, user: User) -> OrgMember:
-    member = db.query(OrgMember).filter(
-        OrgMember.org_id == org_id,
-        OrgMember.user_id == user.id,
-        OrgMember.deleted_at.is_(None),
-    ).first()
-    if not member or member.role != OrgRole.owner:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Org owner access required")
-    return member
+router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
-@router.get("/organizations/{org_id}/admin/dashboard", response_model=OrgDashboardResponse)
-def org_admin_dashboard(
-    org_id: uuid.UUID,
+@router.get("/users", response_model=list[UserResponse])
+def list_all_users(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return aggregate org stats. Requires org admin or owner."""
-    _get_org(db, org_id)
-    require_org_admin(db, org_id, current_user)
-
-    member_count = db.query(func.count(OrgMember.id)).filter(
-        OrgMember.org_id == org_id,
-        OrgMember.deleted_at.is_(None),
-    ).scalar() or 0
-
-    # Active projects in org
-    project_ids_subquery = (
-        db.query(Project.id)
-        .filter(Project.org_id == org_id, Project.deleted_at.is_(None))
-        .subquery()
-    )
-
-    project_count = db.query(func.count(Project.id)).filter(
-        Project.org_id == org_id,
-        Project.deleted_at.is_(None),
-    ).scalar() or 0
-
-    # Active assets across all org projects
-    asset_count = db.query(func.count(Asset.id)).filter(
-        Asset.project_id.in_(project_ids_subquery),
-        Asset.deleted_at.is_(None),
-    ).scalar() or 0
-
-    # Storage: sum of MediaFile.file_size_bytes for all versions of all assets in org
-    asset_ids_subquery = (
-        db.query(Asset.id)
-        .filter(Asset.project_id.in_(project_ids_subquery), Asset.deleted_at.is_(None))
-        .subquery()
-    )
-    version_ids_subquery = (
-        db.query(AssetVersion.id)
-        .filter(
-            AssetVersion.asset_id.in_(asset_ids_subquery),
-            AssetVersion.deleted_at.is_(None),
+    """List all users in the system. Only accessible by admins."""
+    if not current_user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can access this endpoint"
         )
-        .subquery()
-    )
-    storage_used_bytes = db.query(func.coalesce(func.sum(MediaFile.file_size_bytes), 0)).filter(
-        MediaFile.version_id.in_(version_ids_subquery),
-    ).scalar() or 0
+    
+    users = db.query(User).filter(User.deleted_at.is_(None)).all()
+    return users
 
-    # Recent 10 activity entries for org
-    recent_activity = (
-        db.query(ActivityLog)
-        .filter(ActivityLog.org_id == org_id)
-        .order_by(ActivityLog.created_at.desc())
-        .limit(10)
-        .all()
-    )
-
-    return OrgDashboardResponse(
-        member_count=member_count,
-        project_count=project_count,
-        asset_count=asset_count,
-        storage_used_bytes=int(storage_used_bytes),
-        recent_activity=recent_activity,
-    )
-
-
-@router.get("/organizations/{org_id}/admin/members", response_model=list[OrgMemberAdminResponse])
-def list_org_admin_members(
-    org_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """List org members with user details. Requires org admin or owner."""
-    _get_org(db, org_id)
-    require_org_admin(db, org_id, current_user)
-
-    rows = (
-        db.query(OrgMember, User)
-        .join(User, User.id == OrgMember.user_id)
-        .filter(
-            OrgMember.org_id == org_id,
-            OrgMember.deleted_at.is_(None),
-        )
-        .all()
-    )
-
-    result = []
-    for membership, user in rows:
-        result.append(
-            OrgMemberAdminResponse(
-                user_id=membership.user_id,
-                name=user.name,
-                email=user.email,
-                role=membership.role,
-                joined_at=membership.joined_at,
-            )
-        )
-    return result
-
-
-@router.patch("/organizations/{org_id}/admin/members/{user_id}/role")
-def update_member_role(
-    org_id: uuid.UUID,
-    user_id: uuid.UUID,
-    body: UpdateMemberRoleRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Update a member's org role. Requires org owner only."""
-    _get_org(db, org_id)
-    _require_org_owner(db, org_id, current_user)
-
-    member = db.query(OrgMember).filter(
-        OrgMember.org_id == org_id,
-        OrgMember.user_id == user_id,
-        OrgMember.deleted_at.is_(None),
-    ).first()
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-
-    member.role = body.role
-    db.commit()
-    return {"updated": True}
-
-
-@router.delete("/organizations/{org_id}/admin/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_org_member_admin(
-    org_id: uuid.UUID,
+@router.patch("/users/{user_id}/deactivate", response_model=UserResponse)
+def deactivate_user(
     user_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Remove a member from the org. Requires org admin or owner. Cannot remove yourself."""
-    _get_org(db, org_id)
-    require_org_admin(db, org_id, current_user)
-
+    """Deactivate a user. Admins cannot deactivate themselves."""
+    if not current_user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can deactivate users"
+        )
+    
+    # Prevent admin from deactivating themselves
     if user_id == current_user.id:
-        raise HTTPException(status_code=400, detail="Cannot remove yourself from the org")
-
-    member = db.query(OrgMember).filter(
-        OrgMember.org_id == org_id,
-        OrgMember.user_id == user_id,
-        OrgMember.deleted_at.is_(None),
-    ).first()
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-
-    # Hard delete — membership is not soft-deleted by convention in admin ops
-    db.delete(member)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot deactivate yourself"
+        )
+    
+    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.status = UserStatus.deactivated
     db.commit()
+    db.refresh(user)
+    return user
+
+@router.patch("/users/{user_id}/reactivate", response_model=UserResponse)
+def reactivate_user(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Reactivate a deactivated user. Only accessible by admins."""
+    if not current_user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can reactivate users"
+        )
+    
+    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.status = UserStatus.active
+    db.commit()
+    db.refresh(user)
+    return user
+
+@router.patch("/users/{user_id}/role", response_model=UserResponse)
+def update_user_role(
+    user_id: uuid.UUID,
+    body: UpdateUserRoleRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Promote or demote a user to/from admin role. Only accessible by admins."""
+    if not current_user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can change user roles"
+        )
+    
+    # Prevent admin from removing their own admin role
+    if user_id == current_user.id and not body.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot remove your own admin role"
+        )
+    
+    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.is_superadmin = body.is_admin
+    db.commit()
+    db.refresh(user)
+    return user

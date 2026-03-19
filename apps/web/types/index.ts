@@ -6,8 +6,6 @@ export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "arc
 
 export type AssetVersionStatus = "uploading" | "processing" | "ready" | "failed";
 
-export type OrgRole = "owner" | "admin" | "member";
-
 export type TeamRole = "lead" | "member";
 
 export type ProjectRole = "owner" | "editor" | "reviewer" | "viewer";
@@ -52,26 +50,6 @@ export interface User {
   is_superadmin: boolean;
   email_verified: boolean;
   created_at: string;
-  deleted_at: string | null;
-}
-
-export interface Organization {
-  id: string;
-  name: string;
-  slug: string;
-  logo_url: string | null;
-  created_at: string;
-  deleted_at: string | null;
-}
-
-export interface OrgMember {
-  id: string;
-  org_id: string;
-  user_id: string;
-  role: OrgRole;
-  invited_by: string | null;
-  invited_at: string | null;
-  joined_at: string | null;
   deleted_at: string | null;
 }
 

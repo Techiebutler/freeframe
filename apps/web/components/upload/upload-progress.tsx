@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { X, CheckCircle, AlertCircle, Loader2, Film, Music, Image } from 'lucide-react'
+import { X, CheckCircle, AlertCircle, Loader2, Film, Music, Image as ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { formatBytes } from '@/lib/utils'
@@ -11,7 +11,7 @@ function fileTypeIcon(file: File): React.ReactElement {
   const type = file.type
   if (type.startsWith('video/')) return <Film className="h-4 w-4" />
   if (type.startsWith('audio/')) return <Music className="h-4 w-4" />
-  return <Image className="h-4 w-4" />
+  return <ImageIcon className="h-4 w-4" />
 }
 
 interface UploadItemProps {

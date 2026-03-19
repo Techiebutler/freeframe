@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
-from ..models.organization import OrgMember
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectMemberResponse, AddProjectMemberRequest, UpdateProjectMemberRequest
 from ..tasks.email_tasks import send_project_added_email
@@ -32,8 +31,6 @@ def _require_project_owner(db: Session, project_id: uuid.UUID, user: User) -> Pr
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(body: ProjectCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     project = Project(
-        org_id=body.org_id,
-        team_id=body.team_id,
         name=body.name,
         description=body.description,
         project_type=body.project_type,

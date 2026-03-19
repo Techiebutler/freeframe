@@ -47,6 +47,7 @@ interface AssetGridProps {
   thumbnails?: Record<string, string>
   versionCounts?: Record<string, number>
   onUpload?: () => void
+  onAssetSelect?: (asset: Asset) => void
 }
 
 export function AssetGrid({
@@ -57,6 +58,7 @@ export function AssetGrid({
   thumbnails = {},
   versionCounts = {},
   onUpload,
+  onAssetSelect,
 }: AssetGridProps) {
   const [viewMode, setViewMode] = React.useState<ViewMode>('grid')
   const [sortKey, setSortKey] = React.useState<SortKey>('date')
@@ -245,14 +247,15 @@ export function AssetGrid({
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {filtered.map((asset) => (
-            <AssetCard
-              key={asset.id}
-              asset={asset}
-              projectId={projectId}
-              versionCount={versionCounts[asset.id]}
-              assignee={asset.assignee_id ? assignees[asset.assignee_id] : null}
-              thumbnailUrl={thumbnails[asset.id]}
-            />
+            <div key={asset.id} onClick={() => onAssetSelect?.(asset)} className="cursor-pointer">
+              <AssetCard
+                asset={asset}
+                projectId={projectId}
+                versionCount={versionCounts[asset.id]}
+                assignee={asset.assignee_id ? assignees[asset.assignee_id] : null}
+                thumbnailUrl={thumbnails[asset.id]}
+              />
+            </div>
           ))}
         </div>
       ) : (
@@ -270,11 +273,11 @@ export function AssetGrid({
             const assignee = asset.assignee_id ? assignees[asset.assignee_id] : null
             const thumb = thumbnails[asset.id]
             return (
-              <a
+              <div
                 key={asset.id}
-                href={`/projects/${projectId}/assets/${asset.id}`}
+                onClick={() => onAssetSelect?.(asset)}
                 className={cn(
-                  'grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-3 items-center px-4 py-3 transition-colors hover:bg-bg-hover',
+                  'grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-3 items-center px-4 py-3 transition-colors hover:bg-bg-hover cursor-pointer',
                   i !== filtered.length - 1 && 'border-b border-border',
                 )}
               >
@@ -313,7 +316,7 @@ export function AssetGrid({
                     <span className="text-xs text-text-tertiary">—</span>
                   )}
                 </div>
-              </a>
+              </div>
             )
           })}
         </div>

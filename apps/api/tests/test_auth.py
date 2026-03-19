@@ -49,6 +49,8 @@ def test_register_success(client, mock_db):
         obj.deleted_at = None
         obj.avatar_url = None
         obj.status = UserStatus.active
+        obj.is_superadmin = False
+        obj.email_verified = False
 
     mock_db.refresh.side_effect = _refresh_side_effect
 

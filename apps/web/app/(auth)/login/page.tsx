@@ -23,9 +23,9 @@ export default function LoginPage() {
       }
     }
 
-    // If already authenticated, redirect home
+    // If already authenticated, redirect to dashboard
     if (getAccessToken()) {
-      router.replace('/')
+      router.replace('/projects')
       return
     }
 

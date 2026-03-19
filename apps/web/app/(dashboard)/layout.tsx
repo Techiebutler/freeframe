@@ -42,7 +42,7 @@ export default function DashboardLayout({
       {/* Main content area */}
       <main
         className={cn(
-          'flex flex-1 flex-col overflow-hidden transition-all duration-200 ease-in-out',
+          'flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-spring',
           sidebarCollapsed ? 'ml-14' : 'ml-60',
         )}
       >

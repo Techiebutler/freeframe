@@ -147,7 +147,7 @@ function CommentItem({
         comment.resolved && 'opacity-60',
       )}
     >
-      <div className="flex gap-3 py-3">
+      <div className="flex gap-3 py-3 animate-fade-in">
         {/* Avatar */}
         <Avatar src={authorAvatar} name={authorName} size="sm" className="mt-0.5 shrink-0" />
 
@@ -229,7 +229,7 @@ function CommentItem({
                 <Smile className="h-3.5 w-3.5" />
               </button>
               {showEmojiPicker && (
-                <div className="absolute bottom-full left-0 mb-1 z-50 flex gap-1 rounded-lg border border-border bg-bg-elevated p-1.5 shadow-lg">
+                <div className="absolute bottom-full left-0 mb-1 z-50 flex gap-1 rounded-lg border border-border bg-bg-elevated p-1.5 shadow-lg animate-scale-in">
                   {QUICK_EMOJIS.map((e) => (
                     <button
                       key={e}
@@ -389,8 +389,10 @@ export function CommentPanel({
         )}
 
         {!isLoading && sorted.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-center px-6">
-            <MessageSquare className="h-8 w-8 text-text-tertiary mb-2" />
+          <div className="flex flex-col items-center justify-center py-12 text-center px-6 animate-fade-in">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-bg-tertiary text-text-tertiary mb-3">
+              <MessageSquare className="h-6 w-6" />
+            </div>
             <p className="text-sm text-text-secondary font-medium">No comments yet</p>
             <p className="text-xs text-text-tertiary mt-1">
               Add a comment below to start the review

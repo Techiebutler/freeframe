@@ -9,6 +9,9 @@ import {
   ChevronDown,
   X,
   Loader2,
+  Globe,
+  Send,
+  Smile,
 } from 'lucide-react'
 import { cn, formatTime } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -229,13 +232,13 @@ export function CommentInput({
   ]
 
   return (
-    <div className={cn('border-t border-border bg-bg-primary px-4 py-3', className)}>
+    <div className={cn('border-t border-border bg-bg-secondary/50 px-4 py-3', className)}>
       {/* Reply indicator */}
       {replyToId && (
-        <div className="mb-2 flex items-center justify-between rounded bg-bg-secondary px-2 py-1.5 text-xs text-text-secondary">
+        <div className="mb-2 flex items-center justify-between rounded-lg bg-bg-tertiary px-3 py-2 text-xs text-text-secondary">
           <span>Replying to comment…</span>
           <button
-            className="text-text-tertiary hover:text-text-secondary transition-colors"
+            className="text-text-tertiary hover:text-text-primary transition-colors"
             onClick={onCancelReply}
           >
             <X className="h-3.5 w-3.5" />
@@ -245,94 +248,69 @@ export function CommentInput({
 
       {/* Annotation indicator */}
       {annotationData && Object.keys(annotationData).length > 0 && (
-        <div className="mb-2 flex items-center gap-1.5 rounded bg-accent-muted px-2 py-1.5 text-xs text-accent">
+        <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-accent/10 border border-accent/20 px-3 py-2 text-xs text-accent">
           <Pencil className="h-3 w-3" />
           Annotation attached
         </div>
       )}
 
-      {/* Mode selector */}
-      <div className="mb-2 flex items-center gap-1">
-        {modeOptions.map((opt) => (
-          <button
-            key={opt.value}
-            className={cn(
-              'inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors',
-              mode === opt.value
-                ? 'bg-accent-muted text-accent'
-                : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary',
-            )}
-            onClick={() => setMode(opt.value)}
-          >
-            {opt.icon}
-            {opt.label}
-            {opt.value === 'timecode' && mode === 'timecode' && (
-              <span className="ml-1 font-mono text-2xs">
-                @ {formatTime(playheadTime)}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Range inputs */}
-      {mode === 'range' && (
-        <div className="mb-2 flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <span className="text-2xs text-text-tertiary">From</span>
+      {/* Frame.io-style timecode badge + input row */}
+      <div className="flex items-start gap-2">
+        {/* Timecode badge (Frame.io style) */}
+        {mode === 'timecode' && (
+          <div className="shrink-0 rounded bg-amber-500/90 px-2 py-1.5 font-mono text-xs font-medium text-black">
+            {formatTime(playheadTime)}
+          </div>
+        )}
+        {mode === 'range' && (
+          <div className="shrink-0 flex items-center gap-1 rounded bg-amber-500/90 px-2 py-1.5 font-mono text-xs font-medium text-black">
             <input
-              type="number"
-              min="0"
-              step="0.1"
-              placeholder="0.0"
+              type="text"
+              placeholder="0:00"
               value={rangeStart}
               onChange={(e) => setRangeStart(e.target.value)}
-              className="w-20 rounded border border-border bg-bg-secondary px-2 py-1 text-xs font-mono text-text-primary focus:outline-none focus:border-border-focus"
+              className="w-10 bg-transparent text-center placeholder:text-black/50 focus:outline-none"
             />
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="text-2xs text-text-tertiary">To</span>
+            <span>—</span>
             <input
-              type="number"
-              min="0"
-              step="0.1"
-              placeholder="0.0"
+              type="text"
+              placeholder="0:00"
               value={rangeEnd}
               onChange={(e) => setRangeEnd(e.target.value)}
-              className="w-20 rounded border border-border bg-bg-secondary px-2 py-1 text-xs font-mono text-text-primary focus:outline-none focus:border-border-focus"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Textarea */}
-      <div className="relative">
-        <textarea
-          ref={textareaRef}
-          className="w-full resize-none rounded-md border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-focus focus:ring-1 focus:ring-border-focus min-h-[80px]"
-          placeholder={replyToId ? 'Write a reply… (⌘+Enter to submit)' : 'Add a comment… (⌘+Enter to submit)'}
-          value={body}
-          onChange={handleTextChange}
-          onKeyDown={handleKeyDown}
-          rows={3}
-        />
-
-        {/* Mention dropdown */}
-        {mentionQuery !== null && (
-          <div className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-lg border border-border bg-bg-elevated shadow-lg max-h-48 overflow-y-auto">
-            <MentionDropdown
-              query={mentionQuery}
-              projectId={projectId}
-              onSelect={handleMentionSelect}
-              onClose={() => setMentionQuery(null)}
+              className="w-10 bg-transparent text-center placeholder:text-black/50 focus:outline-none"
             />
           </div>
         )}
+
+        {/* Textarea - grows to fill */}
+        <div className="relative flex-1">
+          <textarea
+            ref={textareaRef}
+            className="w-full resize-none rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 min-h-[44px]"
+            placeholder={replyToId ? 'Write a reply…' : 'Leave your comment...'}
+            value={body}
+            onChange={handleTextChange}
+            onKeyDown={handleKeyDown}
+            rows={1}
+          />
+
+          {/* Mention dropdown */}
+          {mentionQuery !== null && (
+            <div className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-lg border border-border bg-bg-elevated shadow-lg max-h-48 overflow-y-auto animate-scale-in">
+              <MentionDropdown
+                query={mentionQuery}
+                projectId={projectId}
+                onSelect={handleMentionSelect}
+                onClose={() => setMentionQuery(null)}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Attachment file preview */}
       {attachmentFile && (
-        <div className="mt-2 flex items-center gap-2 rounded border border-border bg-bg-secondary px-2 py-1.5 text-xs text-text-secondary">
+        <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-xs text-text-secondary">
           <Paperclip className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate flex-1">{attachmentFile.name}</span>
           <button
@@ -349,34 +327,41 @@ export function CommentInput({
 
       {/* Error */}
       {error && (
-        <p className="mt-1.5 text-xs text-status-error">{error}</p>
+        <p className="mt-2 text-xs text-status-error">{error}</p>
       )}
 
-      {/* Bottom toolbar */}
-      <div className="mt-2 flex items-center justify-between">
+      {/* Bottom toolbar - Frame.io style */}
+      <div className="mt-3 flex items-center justify-between">
         <div className="flex items-center gap-1">
+          {/* Emoji */}
+          <button
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors"
+            title="Add emoji"
+          >
+            <Smile className="h-4 w-4" />
+          </button>
+
           {/* Draw toggle */}
           <button
             className={cn(
-              'inline-flex h-7 items-center gap-1.5 rounded px-2 text-xs transition-colors',
+              'inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors',
               isDrawingMode
-                ? 'bg-accent text-text-inverse'
+                ? 'bg-accent text-white'
                 : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary',
             )}
             onClick={toggleDrawingMode}
             title="Toggle drawing mode"
           >
-            <Pencil className="h-3.5 w-3.5" />
-            Draw
+            <Pencil className="h-4 w-4" />
           </button>
 
           {/* Attachment */}
           <button
-            className="inline-flex h-7 items-center gap-1.5 rounded px-2 text-xs text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors"
             onClick={() => fileInputRef.current?.click()}
             title="Attach file"
           >
-            <Paperclip className="h-3.5 w-3.5" />
+            <Paperclip className="h-4 w-4" />
           </button>
           <input
             ref={fileInputRef}
@@ -389,16 +374,47 @@ export function CommentInput({
           />
         </div>
 
-        {/* Submit */}
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={handleSubmit}
-          loading={submitting}
-          disabled={!body.trim() || submitting}
-        >
-          {replyToId ? 'Reply' : 'Comment'}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Visibility toggle - Frame.io style */}
+          <button className="inline-flex items-center gap-1.5 rounded-full border border-border bg-bg-tertiary px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-colors">
+            <Globe className="h-3.5 w-3.5" />
+            Public
+            <ChevronDown className="h-3 w-3" />
+          </button>
+
+          {/* Submit */}
+          <button
+            onClick={handleSubmit}
+            disabled={!body.trim() || submitting}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Send comment"
+          >
+            {submitting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Mode selector - moved to bottom as subtle tabs */}
+      <div className="mt-3 pt-3 border-t border-border flex items-center gap-1">
+        {modeOptions.map((opt) => (
+          <button
+            key={opt.value}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors',
+              mode === opt.value
+                ? 'bg-accent/10 text-accent border border-accent/20'
+                : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary',
+            )}
+            onClick={() => setMode(opt.value)}
+          >
+            {opt.icon}
+            {opt.label}
+          </button>
+        ))}
       </div>
     </div>
   )

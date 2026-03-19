@@ -1,6 +1,4 @@
 from .user import User, GuestUser
-from .organization import Organization, OrgMember
-from .team import Team, TeamMember
 from .project import Project, ProjectMember
 from .asset import Asset, AssetVersion, MediaFile, CarouselItem
 from .comment import Comment, Annotation, CommentAttachment, CommentReaction

@@ -5,14 +5,14 @@ import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Select from '@radix-ui/react-select'
-import { Plus, LayoutGrid, List, FolderOpen, ChevronDown, X, Check } from 'lucide-react'
+import { Plus, LayoutGrid, List, FolderOpen, ChevronDown, X, Check, Filter, ArrowUpDown, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ProjectCard } from '@/components/projects/project-card'
 import { EmptyState } from '@/components/shared/empty-state'
-import type { Project, Team, ProjectType } from '@/types'
+import type { Project, ProjectType } from '@/types'
 
 type ViewMode = 'grid' | 'list'
 
@@ -20,7 +20,6 @@ interface CreateProjectForm {
   name: string
   description: string
   project_type: ProjectType
-  team_id: string
 }
 
 export default function ProjectsPage() {
@@ -34,7 +33,6 @@ export default function ProjectsPage() {
     name: '',
     description: '',
     project_type: 'personal',
-    team_id: '',
   })
 
   const { data: projects, isLoading, mutate } = useSWR<Project[]>(
@@ -42,13 +40,9 @@ export default function ProjectsPage() {
     () => api.get<Project[]>('/projects'),
   )
 
-  const { data: teams } = useSWR<Team[]>(
-    form.project_type === 'team' ? '/teams' : null,
-    () => api.get<Team[]>('/teams'),
-  )
 
   const resetForm = () => {
-    setForm({ name: '', description: '', project_type: 'personal', team_id: '' })
+    setForm({ name: '', description: '', project_type: 'personal' })
     setFormError('')
   }
 
@@ -58,25 +52,16 @@ export default function ProjectsPage() {
       setFormError('Project name is required.')
       return
     }
-    if (form.project_type === 'team' && !form.team_id) {
-      setFormError('Please select a team.')
-      return
-    }
 
     setIsCreating(true)
     setFormError('')
 
     try {
-      const payload: Record<string, unknown> = {
+      const created = await api.post<Project>('/projects', {
         name: form.name.trim(),
         description: form.description.trim() || null,
         project_type: form.project_type,
-      }
-      if (form.project_type === 'team' && form.team_id) {
-        payload.team_id = form.team_id
-      }
-
-      const created = await api.post<Project>('/projects', payload)
+      })
       await mutate()
       setDialogOpen(false)
       resetForm()
@@ -202,48 +187,6 @@ export default function ProjectsPage() {
                     </div>
                   </div>
 
-                  {/* Team selector */}
-                  {form.project_type === 'team' && (
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-sm font-medium text-text-secondary">
-                        Team
-                      </label>
-                      <Select.Root
-                        value={form.team_id}
-                        onValueChange={(val) => setForm((f) => ({ ...f, team_id: val }))}
-                      >
-                        <Select.Trigger className="flex h-9 w-full items-center justify-between rounded-md border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-border-focus data-[placeholder]:text-text-tertiary">
-                          <Select.Value placeholder="Select a team" />
-                          <Select.Icon>
-                            <ChevronDown className="h-4 w-4 text-text-tertiary" />
-                          </Select.Icon>
-                        </Select.Trigger>
-                        <Select.Portal>
-                          <Select.Content className="z-50 min-w-[8rem] overflow-hidden rounded-md border border-border bg-bg-secondary shadow-lg">
-                            <Select.Viewport className="p-1">
-                              {teams?.map((team) => (
-                                <Select.Item
-                                  key={team.id}
-                                  value={team.id}
-                                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-text-primary outline-none hover:bg-bg-hover data-[highlighted]:bg-bg-hover"
-                                >
-                                  <Select.ItemText>{team.name}</Select.ItemText>
-                                  <Select.ItemIndicator className="ml-auto">
-                                    <Check className="h-3.5 w-3.5 text-accent" />
-                                  </Select.ItemIndicator>
-                                </Select.Item>
-                              ))}
-                              {!teams?.length && (
-                                <div className="px-2 py-1.5 text-sm text-text-tertiary">
-                                  No teams found
-                                </div>
-                              )}
-                            </Select.Viewport>
-                          </Select.Content>
-                        </Select.Portal>
-                      </Select.Root>
-                    </div>
-                  )}
 
                   {formError && (
                     <p className="text-sm text-status-error">{formError}</p>
@@ -266,70 +209,110 @@ export default function ProjectsPage() {
         </div>
       </div>
 
+      {/* Filter bar */}
+      <div className="flex items-center gap-3 text-sm">
+        <button className="flex items-center gap-1.5 rounded-md border border-border bg-bg-secondary px-2.5 py-1.5 text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors">
+          <Filter className="h-3.5 w-3.5" />
+          <span>Filtered by</span>
+          <span className="text-accent">Active Projects</span>
+        </button>
+        <button className="flex items-center gap-1.5 rounded-md border border-border bg-bg-secondary px-2.5 py-1.5 text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors">
+          <ArrowUpDown className="h-3.5 w-3.5" />
+          <span>Sorted by</span>
+          <span className="text-text-primary">Name</span>
+        </button>
+      </div>
+
       {/* Content */}
       {isLoading ? (
         <div
           className={cn(
             viewMode === 'grid'
-              ? 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3'
+              ? 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
               : 'flex flex-col gap-2',
           )}
         >
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="h-28 animate-pulse rounded-lg bg-bg-secondary" />
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-44 animate-pulse rounded-xl bg-bg-secondary" />
           ))}
         </div>
       ) : !projects || projects.length === 0 ? (
-        <div className="rounded-lg border border-border bg-bg-secondary">
-          <EmptyState
-            icon={FolderOpen}
-            title="No projects yet"
-            description="Create your first project to start organizing assets."
-            action={{ label: 'New Project', onClick: () => setDialogOpen(true) }}
-          />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {/* New Project card */}
+          <button
+            onClick={() => setDialogOpen(true)}
+            className="group flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-border bg-bg-secondary/50 h-44 hover:border-accent/50 hover:bg-bg-tertiary transition-all duration-200"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-bg-tertiary text-text-tertiary group-hover:bg-accent group-hover:text-white transition-colors">
+              <Plus className="h-5 w-5" />
+            </div>
+            <span className="text-sm text-text-secondary group-hover:text-text-primary transition-colors">New Project</span>
+          </button>
         </div>
       ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {projects.map((project) => (
             <ProjectCard key={project.id} project={project} />
           ))}
+          {/* New Project card at the end */}
+          <button
+            onClick={() => setDialogOpen(true)}
+            className="group flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-border bg-bg-secondary/50 min-h-[176px] hover:border-accent/50 hover:bg-bg-tertiary transition-all duration-200"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-bg-tertiary text-text-tertiary group-hover:bg-accent group-hover:text-white transition-colors">
+              <Plus className="h-5 w-5" />
+            </div>
+            <span className="text-sm text-text-secondary group-hover:text-text-primary transition-colors">New Project</span>
+          </button>
         </div>
       ) : (
-        <div className="rounded-lg border border-border overflow-hidden">
-          {projects.map((project, i) => (
+        /* Frame.io-style table view */
+        <div className="rounded-xl border border-border overflow-hidden bg-bg-secondary">
+          {/* Table header */}
+          <div className="grid grid-cols-[1fr_180px_120px_140px_100px] gap-4 px-4 py-2.5 border-b border-border bg-bg-tertiary/50 text-xs font-medium text-text-secondary">
+            <span className="flex items-center gap-1">Project <ArrowUpDown className="h-3 w-3" /></span>
+            <span>Workspace</span>
+            <span>Storage</span>
+            <span>Creation Date</span>
+            <span>Status</span>
+          </div>
+          {/* Table rows */}
+          {projects.map((project) => (
             <a
               key={project.id}
               href={`/projects/${project.id}`}
-              className={cn(
-                'flex items-center gap-4 px-4 py-3 hover:bg-bg-hover transition-colors',
-                i !== projects.length - 1 && 'border-b border-border',
-              )}
+              className="grid grid-cols-[1fr_180px_120px_140px_100px] gap-4 px-4 py-3 hover:bg-bg-hover transition-colors border-b border-border last:border-b-0 items-center"
             >
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-muted text-accent">
-                <FolderOpen className="h-4 w-4" />
-              </div>
-              <div className="flex flex-1 flex-col min-w-0">
-                <p className="text-sm font-medium text-text-primary line-clamp-1">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-gradient-to-br from-violet-600 to-fuchsia-500">
+                  <FolderOpen className="h-3.5 w-3.5 text-white" />
+                </div>
+                <span className="text-sm font-medium text-text-primary truncate">
                   {project.name}
-                </p>
-                {project.description && (
-                  <p className="text-xs text-text-secondary line-clamp-1">
-                    {project.description}
-                  </p>
-                )}
+                </span>
               </div>
-              <span
-                className={cn(
-                  'shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-2xs font-medium border',
-                  project.project_type === 'team'
-                    ? 'bg-accent-muted text-accent border-accent/20'
-                    : 'bg-bg-tertiary text-text-secondary border-border',
-                )}
-              >
-                {project.project_type === 'team' ? 'Team' : 'Personal'}
+              <span className="text-sm text-text-secondary truncate">
+                {project.org_id ? 'Workspace' : '—'}
+              </span>
+              <span className="text-sm text-text-tertiary">0 B (0 items)</span>
+              <span className="text-sm text-text-tertiary">
+                {new Date(project.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+              </span>
+              <span className="inline-flex items-center rounded-full bg-status-success/10 px-2 py-0.5 text-2xs font-medium text-status-success">
+                Active
               </span>
             </a>
           ))}
+          {/* New Project row */}
+          <button
+            onClick={() => setDialogOpen(true)}
+            className="flex items-center gap-3 px-4 py-3 w-full hover:bg-bg-hover transition-colors text-left"
+          >
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-dashed border-border text-text-tertiary hover:border-accent hover:text-accent transition-colors">
+              <Plus className="h-3.5 w-3.5" />
+            </div>
+            <span className="text-sm text-text-secondary">New Project</span>
+          </button>
         </div>
       )}
     </div>

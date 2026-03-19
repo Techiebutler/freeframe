@@ -3,13 +3,11 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import uuid
-from passlib.context import CryptContext
+import bcrypt
 from apps.api.models.user import User, UserStatus
 from apps.api.models.organization import Organization, OrgMember, OrgRole
 from apps.api.models.project import Project, ProjectMember, ProjectType, ProjectRole
 from apps.api.database import SessionLocal
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def seed():
     db = SessionLocal()
@@ -19,11 +17,28 @@ def seed():
         db.add(org)
         db.flush()
 
+        # Create users
+        pwd_bytes = "password123".encode('utf-8')
+        salt = bcrypt.gensalt()
+        pw_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
+        
+        users = []
+        for i in range(1, 4):
+            user = User(
+                email=f"user{i}@example.com",
+                name=f"Demo User {i}",
+                password_hash=pw_hash,
+                status=UserStatus.active
+            )
+            users.append(user)
+            db.add(user)
+        db.flush()
+
         # Create admin user
         admin = User(
             email="admin@demo.com",
             name="Admin User",
-            password_hash=pwd_context.hash("password123"),
+            password_hash=pw_hash,
             status=UserStatus.active,
         )
         db.add(admin)

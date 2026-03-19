@@ -1,8 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import Link from 'next/link'
-import { Film, Music, Image, Images, GitBranch, AlertCircle, Clock } from 'lucide-react'
+import { Film, Music, Image as ImageIcon, Images, GitBranch, AlertCircle, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/shared/badge'
 import { Avatar } from '@/components/shared/avatar'
@@ -11,7 +10,7 @@ import type { Asset, AssetType, User } from '@/types'
 const assetTypeIcons: Record<AssetType, React.ElementType> = {
   video: Film,
   audio: Music,
-  image: Image,
+  image: ImageIcon,
   image_carousel: Images,
 }
 
@@ -53,16 +52,15 @@ export function AssetCard({
   const dueDateState = getDueDateState(asset.due_date)
 
   return (
-    <Link
-      href={`/projects/${projectId}/assets/${asset.id}`}
+    <div
       className={cn(
-        'group flex flex-col gap-2 rounded-lg border border-border bg-bg-secondary',
-        'hover:border-border-focus hover:bg-bg-tertiary transition-colors overflow-hidden',
+        'group flex flex-col gap-2 rounded-xl border border-border bg-bg-secondary w-full',
+        'hover:border-border-focus hover:bg-bg-tertiary transition-all duration-200 hover:shadow-lg hover:shadow-black/10 overflow-hidden',
         className,
       )}
     >
       {/* Thumbnail */}
-      <div className="relative aspect-video w-full bg-bg-tertiary overflow-hidden flex items-center justify-center">
+      <div className="relative aspect-video w-full bg-bg-tertiary overflow-hidden flex items-center justify-center group-hover:brightness-110 transition-all duration-200">
         {thumbnailUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -102,10 +100,10 @@ export function AssetCard({
         </div>
 
         {/* Due date */}
-        {asset.due_date && dueDateState && dueDateState !== 'normal' && (
+        {dueDateState && (
           <div
             className={cn(
-              'flex items-center gap-1 text-2xs',
+              'mt-1 flex items-center gap-1 text-2xs font-medium',
               dueDateState === 'overdue' ? 'text-status-error' : 'text-status-warning',
             )}
           >
@@ -114,8 +112,7 @@ export function AssetCard({
             ) : (
               <Clock className="h-3 w-3" />
             )}
-            {dueDateState === 'overdue' ? 'Overdue' : 'Due soon'} &mdash;{' '}
-            {new Date(asset.due_date).toLocaleDateString()}
+            {dueDateState === 'overdue' ? 'Overdue' : 'Due soon'}
           </div>
         )}
         {asset.due_date && dueDateState === 'normal' && (
@@ -125,6 +122,6 @@ export function AssetCard({
           </div>
         )}
       </div>
-    </Link>
+    </div>
   )
 }
