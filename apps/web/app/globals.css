@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Background — near-black with a cool blue-violet undertone */
+  --bg-primary: oklch(0.13 0.01 270);
+  --bg-secondary: oklch(0.16 0.012 270);
+  --bg-tertiary: oklch(0.19 0.014 270);
+  --bg-elevated: oklch(0.21 0.016 270);
+  --bg-hover: oklch(0.23 0.018 270);
+
+  /* Borders */
+  --border-primary: oklch(0.28 0.015 270);
+  --border-secondary: oklch(0.22 0.012 270);
+  --border-focus: oklch(0.62 0.18 280);
+
+  /* Text */
+  --text-primary: oklch(0.93 0.01 270);
+  --text-secondary: oklch(0.65 0.015 270);
+  --text-tertiary: oklch(0.48 0.015 270);
+  --text-inverse: oklch(0.13 0.01 270);
+
+  /* Accent — violet */
+  --accent: oklch(0.62 0.18 280);
+  --accent-hover: oklch(0.68 0.2 280);
+  --accent-muted: oklch(0.35 0.1 280);
+
+  /* Status */
+  --status-success: oklch(0.72 0.17 152);
+  --status-warning: oklch(0.78 0.16 70);
+  --status-error: oklch(0.63 0.2 25);
+  --status-info: oklch(0.7 0.15 230);
+
+  /* Fonts */
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  /* Spacing rhythm */
+  --space-unit: 4px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+}
+
+@layer base {
+  * {
+    border-color: var(--border-primary);
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-primary);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-secondary);
+  }
+
+  /* Selection */
+  ::selection {
+    background-color: var(--accent-muted);
+    color: var(--text-primary);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
