@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
-from .routers import auth, users, organizations, teams, projects
+from .routers import auth, users, organizations, teams, projects, upload
+from .services.s3_service import ensure_bucket_exists
 
 app = FastAPI(
     title="FreeFrame API",
@@ -22,6 +23,11 @@ app.include_router(users.router)
 app.include_router(organizations.router)
 app.include_router(teams.router)
 app.include_router(projects.router)
+app.include_router(upload.router)
+
+@app.on_event("startup")
+def startup_event():
+    ensure_bucket_exists()
 
 @app.get("/health")
 def health():
