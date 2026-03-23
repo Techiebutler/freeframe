@@ -119,6 +119,8 @@ def validate_share_link(db: Session, token: str) -> ShareLink:
     ).first()
     if not link:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share link not found")
+    if not link.is_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Share link is disabled")
     if link.expires_at and link.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Share link has expired")
     return link

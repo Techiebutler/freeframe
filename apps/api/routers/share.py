@@ -11,6 +11,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
 from ..models.asset import Asset
+from ..models.folder import Folder
 from ..models.share import AssetShare, ShareLink, SharePermission
 from ..models.activity import ActivityLog, ActivityAction
 from ..schemas.share import (
@@ -33,6 +34,18 @@ def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     return asset
+
+
+def _get_project_id_from_link(db: Session, link: ShareLink) -> uuid.UUID:
+    if link.asset_id:
+        asset = _get_asset(db, link.asset_id)
+        return asset.project_id
+    elif link.folder_id:
+        folder = db.query(Folder).filter(Folder.id == link.folder_id, Folder.deleted_at.is_(None)).first()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Shared folder not found")
+        return folder.project_id
+    raise HTTPException(status_code=400, detail="Invalid share link")
 
 
 # ── Share links ───────────────────────────────────────────────────────────────
@@ -59,10 +72,15 @@ def create_share_link(
         asset_id=asset_id,
         token=token,
         created_by=current_user.id,
+        title=body.title if body.title else asset.name,
+        description=body.description,
         expires_at=body.expires_at,
         password_hash=password_hash,
         permission=body.permission,
         allow_download=body.allow_download,
+        show_versions=body.show_versions,
+        show_watermark=body.show_watermark,
+        appearance=body.appearance.model_dump(),
     )
     db.add(link)
     db.add(ActivityLog(user_id=current_user.id, asset_id=asset_id, action=ActivityAction.shared))
@@ -94,12 +112,26 @@ def validate_share_link_endpoint(
     """Public endpoint — no auth required. Validates token and optional password."""
     link = validate_share_link(db, token)
 
+    # Resolve folder name if this is a folder share
+    folder_name = None
+    if link.folder_id:
+        folder = db.query(Folder).filter(Folder.id == link.folder_id, Folder.deleted_at.is_(None)).first()
+        if folder:
+            folder_name = folder.name
+
     if link.password_hash:
         if not password:
             return ShareLinkValidateResponse(
                 asset_id=link.asset_id,
+                folder_id=link.folder_id,
+                folder_name=folder_name,
+                title=link.title,
+                description=link.description,
                 permission=link.permission,
                 allow_download=link.allow_download,
+                show_versions=link.show_versions,
+                show_watermark=link.show_watermark,
+                appearance=link.appearance,
                 requires_password=True,
             )
         try:
@@ -112,8 +144,15 @@ def validate_share_link_endpoint(
 
     return ShareLinkValidateResponse(
         asset_id=link.asset_id,
+        folder_id=link.folder_id,
+        folder_name=folder_name,
+        title=link.title,
+        description=link.description,
         permission=link.permission,
         allow_download=link.allow_download,
+        show_versions=link.show_versions,
+        show_watermark=link.show_watermark,
+        appearance=link.appearance,
         requires_password=False,
     )
 
@@ -127,8 +166,8 @@ def revoke_share_link(
     link = db.query(ShareLink).filter(ShareLink.token == token, ShareLink.deleted_at.is_(None)).first()
     if not link:
         raise HTTPException(status_code=404, detail="Share link not found")
-    asset = _get_asset(db, link.asset_id)
-    require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
+    project_id = _get_project_id_from_link(db, link)
+    require_project_role(db, project_id, current_user, ProjectRole.editor)
     link.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
