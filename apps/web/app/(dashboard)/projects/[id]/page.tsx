@@ -30,6 +30,7 @@ import { FolderTree } from '@/components/projects/folder-tree'
 import { ShareLinksTable } from '@/components/projects/share-links-table'
 import { ShareLinkDetail } from '@/components/projects/share-link-detail'
 import { NameDialog } from '@/components/projects/name-dialog'
+import { ShareCreateDialog } from '@/components/projects/share-create-dialog'
 import type { Project, AssetResponse, ProjectMember, User, Collection, Folder } from '@/types'
 
 // ─── Collection icon colors (Frame.io style) ──────────────────────────────────
@@ -72,6 +73,7 @@ export default function ProjectDetailPage() {
   const [selectedShareLink, setSelectedShareLink] = React.useState<string | null>(null)
   const [folderDialogOpen, setFolderDialogOpen] = React.useState(false)
   const [folderDialogParentId, setFolderDialogParentId] = React.useState<string | null>(null)
+  const [shareDialogOpen, setShareDialogOpen] = React.useState(false)
 
   const { files: uploadFiles, startUpload } = useUploadStore()
   const { user } = useAuthStore()
@@ -493,11 +495,7 @@ export default function ProjectDetailPage() {
               }}
               actions={
                 <>
-                  <Button variant="secondary" size="sm" onClick={() => {
-                    setShowShareLinks(true)
-                    setSelectedShareLink(null)
-                    setShowTrash(false)
-                  }}>
+                  <Button variant="secondary" size="sm" onClick={() => setShareDialogOpen(true)}>
                     <Share2 className="h-4 w-4" />
                     Share
                   </Button>
@@ -707,6 +705,17 @@ export default function ProjectDetailPage() {
           await createFolder(name, folderDialogParentId)
           mutateAssets()
         }}
+      />
+
+      {/* Share create dialog */}
+      <ShareCreateDialog
+        open={shareDialogOpen}
+        onOpenChange={setShareDialogOpen}
+        projectId={projectId}
+        currentFolderId={currentFolderId}
+        assets={assets ?? []}
+        folders={subfolders ?? []}
+        onShareCreated={() => mutateShareLinks()}
       />
     </div>
   )
