@@ -222,7 +222,7 @@ function GuestCommentList({ token }: GuestCommentListProps) {
 
 interface ShareViewerProps {
   token: string
-  asset: Asset
+  asset: Asset & { thumbnail_url?: string; stream_url?: string }
   permission: SharePermission
   allowDownload: boolean
   branding: ProjectBranding | null
@@ -663,7 +663,7 @@ export default function SharePage({
     | { stage: 'invalid' }
     | {
         stage: 'ready'
-        asset: Asset
+        asset: Asset & { thumbnail_url?: string; stream_url?: string }
         permission: SharePermission
         allowDownload: boolean
         showVersions: boolean
