@@ -243,15 +243,31 @@ export interface Approval {
   deleted_at: string | null;
 }
 
+export interface ShareLinkAppearance {
+  layout: "grid" | "list"
+  theme: "dark" | "light"
+  accent_color: string | null
+  open_in_viewer: boolean
+  sort_by: "name" | "created_at" | "file_size"
+}
+
 export interface ShareLink {
   id: string;
-  asset_id: string;
+  asset_id: string | null;
+  folder_id: string | null;
   token: string;
+  title: string;
+  description: string | null;
   created_by: string;
   expires_at: string | null;
-  password_hash: string | null;
   permission: SharePermission;
   allow_download: boolean;
+  is_enabled: boolean;
+  show_versions: boolean;
+  show_watermark: boolean;
+  appearance: ShareLinkAppearance | null;
+  view_count: number;
+  last_viewed_at: string | null;
   created_at: string;
   deleted_at: string | null;
 }
@@ -265,6 +281,55 @@ export interface AssetShare {
   shared_by: string;
   created_at: string;
   deleted_at: string | null;
+}
+
+export interface ShareLinkListItem {
+  id: string
+  token: string
+  title: string
+  description: string | null
+  is_enabled: boolean
+  permission: SharePermission
+  share_type: "asset" | "folder"
+  target_name: string
+  view_count: number
+  last_viewed_at: string | null
+}
+
+export type ShareActivityAction = "opened" | "viewed_asset" | "commented" | "approved" | "rejected" | "downloaded"
+
+export interface ShareLinkActivity {
+  id: string
+  share_link_id: string
+  action: ShareActivityAction
+  actor_email: string
+  actor_name: string | null
+  asset_id: string | null
+  asset_name: string | null
+  created_at: string
+}
+
+export interface FolderShareAssetItem {
+  id: string
+  name: string
+  asset_type: string
+  thumbnail_url: string | null
+  file_size: number | null
+  created_at: string
+}
+
+export interface FolderShareSubfolder {
+  id: string
+  name: string
+  item_count: number
+}
+
+export interface FolderShareAssetsResponse {
+  assets: FolderShareAssetItem[]
+  subfolders: FolderShareSubfolder[]
+  total: number
+  page: number
+  per_page: number
 }
 
 // ─── Metadata & Collections ───────────────────────────────────────────────────
