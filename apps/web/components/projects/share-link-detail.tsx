@@ -291,12 +291,6 @@ export function ShareLinkDetail({ token, projectId, onBack, frontendUrl }: Share
                 <p className="text-sm font-medium text-zinc-300 capitalize">
                   {shareType} Share
                 </p>
-                <p className="text-xs text-zinc-500 mt-1">
-                  {shareLink.view_count} view{shareLink.view_count !== 1 ? 's' : ''}
-                  {shareLink.last_viewed_at && (
-                    <> &middot; Last viewed {new Date(shareLink.last_viewed_at).toLocaleDateString()}</>
-                  )}
-                </p>
               </div>
             </div>
           </div>

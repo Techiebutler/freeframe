@@ -21,7 +21,6 @@ import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } fro
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ShareValidateResponse {
-  valid: boolean
   asset?: Asset
   asset_id?: string | null
   folder_id?: string | null
@@ -33,7 +32,7 @@ interface ShareValidateResponse {
   show_versions?: boolean
   show_watermark?: boolean
   appearance?: ShareLinkAppearance | null
-  password_required?: boolean
+  requires_password?: boolean
   expired?: boolean
   branding?: ProjectBranding | null
 }
@@ -70,9 +69,9 @@ async function fetchShareInfo(
 
   const response = await fetch(url, { method, headers, body })
   if (!response.ok) {
-    if (response.status === 401) return { valid: false, password_required: true }
-    if (response.status === 410) return { valid: false, expired: true }
-    return { valid: false }
+    if (response.status === 401) return { requires_password: true }
+    if (response.status === 410) return { expired: true }
+    return {}
   }
   return response.json()
 }
@@ -687,7 +686,7 @@ export default function SharePage({
     try {
       const isFirstLoad = !password
       const data = await fetchShareInfo(token, password, isFirstLoad)
-      if (data.password_required && !password) {
+      if (data.requires_password && !password) {
         setState({ stage: 'password_required' })
         return
       }
@@ -695,7 +694,7 @@ export default function SharePage({
         setState({ stage: 'expired' })
         return
       }
-      if (!data.valid || !data.permission) {
+      if (!data.permission) {
         setState({ stage: 'invalid' })
         return
       }

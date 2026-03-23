@@ -266,8 +266,6 @@ export interface ShareLink {
   show_versions: boolean;
   show_watermark: boolean;
   appearance: ShareLinkAppearance | null;
-  view_count: number;
-  last_viewed_at: string | null;
   created_at: string;
   deleted_at: string | null;
 }

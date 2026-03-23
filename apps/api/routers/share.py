@@ -38,6 +38,11 @@ from ..config import settings
 router = APIRouter(tags=["sharing"])
 
 
+def _escape_like(s: str) -> str:
+    """Escape special LIKE pattern characters to prevent injection."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
     if not asset:
@@ -73,16 +78,19 @@ def _log_share_activity(
     asset_id: Optional[uuid.UUID] = None,
     asset_name: Optional[str] = None,
 ):
-    activity = ShareLinkActivity(
-        share_link_id=share_link_id,
-        action=action,
-        actor_email=actor_email,
-        actor_name=actor_name,
-        asset_id=asset_id,
-        asset_name=asset_name,
-    )
-    db.add(activity)
-    db.commit()
+    try:
+        activity = ShareLinkActivity(
+            share_link_id=share_link_id,
+            action=action,
+            actor_email=actor_email,
+            actor_name=actor_name,
+            asset_id=asset_id,
+            asset_name=asset_name,
+        )
+        db.add(activity)
+        db.commit()
+    except Exception:
+        db.rollback()
 
 
 def _is_descendant_of(db: Session, folder_id: uuid.UUID, ancestor_id: uuid.UUID) -> bool:
@@ -281,7 +289,7 @@ def create_folder_share_link(
     folder = _get_folder(db, folder_id)
     require_project_role(db, folder.project_id, current_user, ProjectRole.editor)
 
-    token = secrets.token_urlsafe(24)
+    token = secrets.token_urlsafe(32)
     if body.password:
         pwd_bytes = body.password[:72].encode('utf-8')
         salt = bcrypt.gensalt()
@@ -598,8 +606,9 @@ def list_project_share_links(
     )
 
     if search:
-        asset_query = asset_query.filter(ShareLink.title.ilike(f"%{search}%"))
-        folder_query = folder_query.filter(ShareLink.title.ilike(f"%{search}%"))
+        escaped = _escape_like(search)
+        asset_query = asset_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
+        folder_query = folder_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
 
     results = asset_query.union_all(folder_query).all()
 
