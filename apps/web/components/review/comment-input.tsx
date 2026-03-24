@@ -40,6 +40,7 @@ interface CommentInputProps {
     annotationData?: Record<string, unknown>,
     parentId?: string,
     visibility?: string,
+    mentionUserIds?: string[],
   ) => Promise<void>
   onCancelReply?: () => void
   className?: string
@@ -168,6 +169,7 @@ export function CommentInput({
   const { clear, undo, getJSON } = useDrawing()
 
   const [body, setBody] = React.useState('')
+  const [mentionUserIds, setMentionUserIds] = React.useState<string[]>([])
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [commentVisibility, setCommentVisibility] = React.useState<'public' | 'internal'>('public')
@@ -243,8 +245,8 @@ export function CommentInput({
   function handleMentionSelect(user: User) {
     const before = body.slice(0, mentionStart)
     const after = body.slice(mentionStart + 1 + (mentionQuery?.length ?? 0))
-    // Insert @email so backend can parse mentions, display shows name
-    setBody(`${before}@${user.email} ${after}`)
+    setBody(`${before}@${user.name} ${after}`)
+    setMentionUserIds((prev) => prev.includes(user.id) ? prev : [...prev, user.id])
     setMentionQuery(null)
     textareaRef.current?.focus()
   }
@@ -305,9 +307,11 @@ export function CommentInput({
         finalAnnotation,
         replyToId ?? undefined,
         commentVisibility,
+        mentionUserIds.length > 0 ? mentionUserIds : undefined,
       )
 
       setBody('')
+      setMentionUserIds([])
       setPendingAnnotation(null)
       if (replyToId && onCancelReply) onCancelReply()
     } catch (err) {

@@ -108,6 +108,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     annotation?: Record<string, unknown>,
     parentId?: string,
     visibility?: string,
+    mentionUserIds?: string[],
   ) => {
     await createComment(
       body,
@@ -116,6 +117,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       annotation || annotationData || undefined,
       parentId,
       visibility,
+      mentionUserIds,
     )
     setAnnotationData(null)
     refetchComments()

@@ -147,34 +147,47 @@ def _parse_mentions(body: str) -> list[str]:
     return re.findall(r"@([\w.+-]+@[\w.-]+\.\w+)", body)
 
 
-def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, author_name: str) -> None:
-    """Parse @mentions, create Mention + Notification records, and send emails."""
+def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, author_name: str, mention_user_ids: list | None = None) -> None:
+    """Create Mention + Notification records and send emails.
+    Uses explicit mention_user_ids if provided, else falls back to parsing @email from body."""
     from ..services.auth_service import get_user_by_email
     from ..config import settings
-    
-    emails = _parse_mentions(body)
-    for email in set(emails):
-        user = get_user_by_email(db, email)
-        if user and user.id != comment.author_id:
-            mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
-            db.add(mention)
-            notif = Notification(
-                user_id=user.id,
-                type=NotificationType.mention,
-                asset_id=asset.id,
-                comment_id=comment.id,
-            )
-            db.add(notif)
-            
-            # Send mention email
-            asset_link = f"{settings.frontend_url}/assets/{asset.id}"
-            send_task_safe(send_mention_email,
-                to_email=user.email,
-                mentioner_name=author_name,
-                asset_name=asset.name,
-                comment_preview=body[:200],
-                asset_link=asset_link,
-            )
+
+    mentioned_users = []
+
+    if mention_user_ids:
+        # Use explicit user IDs from frontend
+        for uid in set(mention_user_ids):
+            user = db.query(User).filter(User.id == uid).first()
+            if user and user.id != comment.author_id:
+                mentioned_users.append(user)
+    else:
+        # Fallback: parse @email from body
+        emails = _parse_mentions(body)
+        for email in set(emails):
+            user = get_user_by_email(db, email)
+            if user and user.id != comment.author_id:
+                mentioned_users.append(user)
+
+    for user in mentioned_users:
+        mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
+        db.add(mention)
+        notif = Notification(
+            user_id=user.id,
+            type=NotificationType.mention,
+            asset_id=asset.id,
+            comment_id=comment.id,
+        )
+        db.add(notif)
+
+        asset_link = f"{settings.frontend_url}/projects/{asset.project_id}/assets/{asset.id}"
+        send_task_safe(send_mention_email,
+            to_email=user.email,
+            mentioner_name=author_name,
+            asset_name=asset.name,
+            comment_preview=body[:200],
+            asset_link=asset_link,
+        )
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -232,7 +245,7 @@ def create_comment(
         )
         db.add(annotation)
 
-    _create_mentions(db, comment, asset, body.body, current_user.name)
+    _create_mentions(db, comment, asset, body.body, current_user.name, body.mention_user_ids)
 
     # Notify asset creator about the comment (unless they're the commenter)
     if asset.created_by and asset.created_by != current_user.id:
@@ -276,7 +289,7 @@ def reply_to_comment(
     )
     db.add(reply)
     db.flush()
-    _create_mentions(db, reply, asset, body.body, current_user.name)
+    _create_mentions(db, reply, asset, body.body, current_user.name, body.mention_user_ids)
 
     # Notify parent comment author about the reply (unless they're the replier)
     if parent.author_id and parent.author_id != current_user.id:

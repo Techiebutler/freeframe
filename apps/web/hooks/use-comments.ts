@@ -63,6 +63,7 @@ export function useComments(assetId: string | null, versionId: string | null) {
     annotationData?: Record<string, unknown>,
     parentId?: string,
     visibility?: string,
+    mentionUserIds?: string[],
   ): Promise<CommentWithReplies> {
     if (!assetId) throw new Error('No asset selected')
     if (!versionId) throw new Error('No version selected')
@@ -73,6 +74,7 @@ export function useComments(assetId: string | null, versionId: string | null) {
     if (annotationData) payload.annotation = { drawing_data: annotationData }
     if (parentId) payload.parent_id = parentId
     if (visibility) payload.visibility = visibility
+    if (mentionUserIds?.length) (payload as any).mention_user_ids = mentionUserIds
 
     const endpoint = parentId
       ? `/assets/${assetId}/comments/${parentId}/replies`

@@ -16,6 +16,7 @@ class CommentCreate(BaseModel):
     body: str
     visibility: Optional[str] = "public"  # "public" or "internal"
     annotation: Optional[AnnotationData] = None
+    mention_user_ids: list[uuid.UUID] = []  # Explicit mention IDs from frontend
 
 class GuestCommentCreate(BaseModel):
     version_id: uuid.UUID
