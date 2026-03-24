@@ -36,6 +36,7 @@ interface FolderShareViewerProps {
   folderName: string
   title: string
   description: string | null
+  createdByName?: string | null
   permission: SharePermission
   allowDownload: boolean
   showVersions: boolean
@@ -440,6 +441,7 @@ export function FolderShareViewer({
   folderName,
   title,
   description,
+  createdByName,
   permission,
   allowDownload,
   showVersions: _showVersions,
@@ -635,7 +637,7 @@ export function FolderShareViewer({
             <h1 className="text-lg font-bold text-white leading-tight">{title || folderName}</h1>
             {!loading && (
               <p className="mt-0.5 text-sm text-zinc-500">
-                {description ? `${description} · ` : ''}
+                {createdByName && <>Created by {createdByName} &middot; </>}
                 {summaryText || 'Empty folder'}
               </p>
             )}

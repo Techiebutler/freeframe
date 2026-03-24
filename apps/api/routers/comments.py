@@ -508,16 +508,18 @@ def comment_deep_link(
 @router.get("/share/{token}/comments")
 def list_share_comments(
     token: str,
+    asset_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
 ):
-    """Public endpoint — list comments for a shared asset. No auth required."""
+    """Public endpoint — list comments for a shared asset. No auth required.
+    For folder/project shares, pass asset_id as query param to get comments for a specific asset."""
     link = validate_share_link(db, token)
 
     # Determine the asset_id to list comments for
-    asset_id = link.asset_id
-    if not asset_id:
-        # For folder shares, return empty (comments are per-asset)
+    target_asset_id = link.asset_id or asset_id
+    if not target_asset_id:
         return {"comments": []}
+    asset_id = target_asset_id
 
     # Get top-level comments for this asset
     top_level = db.query(Comment).filter(

@@ -273,6 +273,10 @@ def validate_share_link_endpoint(
                 "custom_footer": branding.custom_footer,
             }
 
+    # Resolve creator name
+    creator = db.query(User).filter(User.id == link.created_by).first()
+    created_by_name = creator.name if creator else None
+
     return ShareLinkValidateResponse(
         asset_id=link.asset_id,
         folder_id=link.folder_id,
@@ -288,6 +292,7 @@ def validate_share_link_endpoint(
         show_watermark=link.show_watermark,
         appearance=link.appearance,
         requires_password=False,
+        created_by_name=created_by_name,
         asset=asset_data,
         branding=branding_data,
     )

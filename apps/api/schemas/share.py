@@ -68,6 +68,7 @@ class ShareLinkValidateResponse(BaseModel):
     visibility: str = "public"
     requires_password: bool
     requires_auth: bool = False  # True when visibility=secure and user not authenticated
+    created_by_name: Optional[str] = None
     asset: Optional[dict] = None  # Full asset details for asset shares
     branding: Optional[dict] = None  # Project branding info
 

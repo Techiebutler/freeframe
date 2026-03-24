@@ -44,6 +44,7 @@ interface ShareValidateResponse {
   requires_password?: boolean
   requires_auth?: boolean
   expired?: boolean
+  created_by_name?: string | null
   branding?: ProjectBranding | null
   error?: string
 }
@@ -881,6 +882,7 @@ export default function SharePage({
         folderName: string
         title: string
         description: string | null
+        createdByName: string | null
         permission: SharePermission
         allowDownload: boolean
         showVersions: boolean
@@ -933,6 +935,7 @@ export default function SharePage({
           folderName,
           title: data.title ?? folderName,
           description: data.description ?? null,
+          createdByName: data.created_by_name ?? null,
           permission: data.permission,
           allowDownload: data.allow_download ?? false,
           showVersions: data.show_versions ?? true,
@@ -1022,6 +1025,7 @@ export default function SharePage({
         folderName={state.folderName}
         title={state.title}
         description={state.description}
+        createdByName={state.createdByName}
         permission={state.permission}
         allowDownload={state.allowDownload}
         showVersions={state.showVersions}
