@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { ProjectCard } from '@/components/projects/project-card'
 import { EmptyState } from '@/components/shared/empty-state'
 import { useAuthStore } from '@/stores/auth-store'
+import { usePageTitle } from '@/hooks/use-page-title'
 import type { Project, ProjectType } from '@/types'
 
 type ViewMode = 'grid' | 'list'
@@ -166,6 +167,7 @@ function ProjectSection({
 }
 
 export default function ProjectsPage() {
+  usePageTitle('Projects')
   const router = useRouter()
   const { user } = useAuthStore()
   const [viewMode, setViewMode] = React.useState<ViewMode>('grid')

@@ -457,6 +457,12 @@ export function FolderShareViewer({
   const [foldersExpanded, setFoldersExpanded] = React.useState(true)
   const [assetsExpanded, setAssetsExpanded] = React.useState(true)
   const [panelOpen, setPanelOpen] = React.useState(true)
+
+  // Set page title
+  React.useEffect(() => {
+    document.title = title ? `${title} – FreeFrame` : 'FreeFrame'
+    return () => { document.title = 'FreeFrame' }
+  }, [title])
   const [selectedAsset, setSelectedAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   const [assets, setAssets] = React.useState<FolderShareAssetItem[]>([])

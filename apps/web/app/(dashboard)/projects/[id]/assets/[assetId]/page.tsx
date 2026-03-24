@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { usePageTitle } from '@/hooks/use-page-title'
 import type { Project, AssetResponse } from '@/types'
 
 function ReviewScreenInner({ projectId }: { projectId: string }) {
@@ -36,6 +37,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const { asset, versions, isLoading, refetchComments } = useReview()
   const { currentVersion, isDrawingMode } = useReviewStore()
   const { user } = useAuthStore()
+  usePageTitle(asset?.name ?? null)
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
   const [activeTab, setActiveTab] = useState<'comments' | 'fields'>('comments')
   const [sidebarOpen, setSidebarOpen] = useState(true)

@@ -9,6 +9,7 @@ import {
   CheckCircle,
 } from 'lucide-react'
 import { useNotificationStore } from '@/stores/notification-store'
+import { usePageTitle } from '@/hooks/use-page-title'
 import { formatRelativeTime } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/shared/empty-state'
@@ -73,6 +74,7 @@ function NotificationItem({ notification }: { notification: Notification }) {
 }
 
 export default function NotificationsPage() {
+  usePageTitle('Notifications')
   const { notifications, isLoading, fetchNotifications, markAllRead, unreadCount } =
     useNotificationStore()
 

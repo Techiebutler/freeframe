@@ -35,6 +35,7 @@ import { NameDialog } from '@/components/projects/name-dialog'
 import { ShareCreateDialog } from '@/components/projects/share-create-dialog'
 import { ProjectMembersDialog } from '@/components/projects/project-members-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { usePageTitle } from '@/hooks/use-page-title'
 import type { Project, AssetResponse, ProjectMember, User, Folder, ShareLink } from '@/types'
 
 export default function ProjectDetailPage() {
@@ -100,7 +101,8 @@ export default function ProjectDetailPage() {
     () => api.get<Project>(`/projects/${projectId}`),
   )
 
-  // Register project name for header breadcrumb
+  // Register project name for header breadcrumb + page title
+  usePageTitle(project?.name ?? null)
   const setLabel = useBreadcrumbStore((s) => s.setLabel)
   React.useEffect(() => {
     if (project?.name) setLabel(projectId, project.name)
