@@ -24,6 +24,7 @@ class ShareLink(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("assets.id"), nullable=True, index=True)
     folder_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id"), nullable=True, index=True)
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True, index=True)
     token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False, server_default="")
@@ -43,8 +44,10 @@ class ShareLink(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "(asset_id IS NOT NULL AND folder_id IS NULL) OR (asset_id IS NULL AND folder_id IS NOT NULL)",
-            name="ck_share_link_asset_or_folder"
+            "(asset_id IS NOT NULL AND folder_id IS NULL AND project_id IS NULL) "
+            "OR (asset_id IS NULL AND folder_id IS NOT NULL AND project_id IS NULL) "
+            "OR (asset_id IS NULL AND folder_id IS NULL AND project_id IS NOT NULL)",
+            name="ck_share_link_asset_or_folder_or_project"
         ),
     )
 

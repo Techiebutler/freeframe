@@ -245,6 +245,7 @@ function ShareInviteInput({ token, shareLink }: { token: string; shareLink: { as
 interface SelectionPhaseProps {
   assets: AssetResponse[]
   folders: Folder[]
+  currentFolderId: string | null
   selectedItems: Map<string, SelectedItem>
   onToggle: (item: SelectedItem) => void
   onCancel: () => void
@@ -255,6 +256,7 @@ interface SelectionPhaseProps {
 function SelectionPhase({
   assets,
   folders,
+  currentFolderId,
   selectedItems,
   onToggle,
   onCancel,
@@ -263,13 +265,14 @@ function SelectionPhase({
 }: SelectionPhaseProps) {
   const hasItems = folders.length > 0 || assets.length > 0
   const hasSelection = selectedItems.size > 0
+  const totalItems = folders.length + assets.length
 
   return (
     <>
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <Dialog.Title className="text-sm font-semibold text-text-primary">
-          Select items to share
+          Create Share Link
         </Dialog.Title>
         <Dialog.Close className="text-text-tertiary hover:text-text-primary transition-colors">
           <X className="h-4 w-4" />
@@ -278,11 +281,18 @@ function SelectionPhase({
 
       {/* Content */}
       <div className="px-5 py-4 max-h-[50vh] overflow-y-auto">
-        {!hasItems ? (
-          <p className="text-sm text-text-tertiary text-center py-8">
-            No assets or folders in the current view.
+        {/* Share all info */}
+        <div className="mb-3 rounded-lg border border-accent/20 bg-accent/5 px-3 py-2.5">
+          <p className="text-sm text-text-primary font-medium">
+            {currentFolderId ? 'Share this folder' : 'Share project'}
           </p>
-        ) : (
+          <p className="text-xs text-text-tertiary mt-0.5">
+            Creates one link with all {totalItems} item{totalItems !== 1 ? 's' : ''} in the current view.
+            {hasItems && ' Or select a specific item below.'}
+          </p>
+        </div>
+
+        {hasItems && (
           <div className="space-y-1">
             {/* Folders */}
             {folders.map((folder) => {
@@ -370,7 +380,9 @@ function SelectionPhase({
       {/* Footer */}
       <div className="flex items-center justify-between border-t border-border px-5 py-3">
         <span className="text-xs text-text-tertiary">
-          {selectedItems.size} item{selectedItems.size !== 1 ? 's' : ''} selected
+          {hasSelection
+            ? `${selectedItems.size} item${selectedItems.size !== 1 ? 's' : ''} selected`
+            : `Sharing all ${totalItems} items`}
         </span>
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" onClick={onCancel}>
@@ -379,7 +391,7 @@ function SelectionPhase({
           <Button
             size="sm"
             onClick={onCreate}
-            disabled={!hasSelection || creating}
+            disabled={creating}
             loading={creating}
           >
             Create Share Link
@@ -836,53 +848,57 @@ export function ShareCreateDialog({
   }
 
   async function handleCreate() {
-    if (selectedItems.size === 0) return
     setCreating(true)
     setError(null)
 
-    const items = Array.from(selectedItems.values())
-    const errors: string[] = []
-    const results: CreatedShareResult[] = []
+    try {
+      let shareLink: ShareLink
+      let itemType: 'asset' | 'folder' = 'folder'
+      let thumbUrl: string | null = null
 
-    // Create a share link for each selected item independently
-    for (const item of items) {
-      try {
-        let shareLink: ShareLink
-        if (item.type === 'folder') {
-          shareLink = await api.post<ShareLink>(`/folders/${item.id}/share`, {
-            title: item.name,
-          })
-        } else {
-          shareLink = await api.post<ShareLink>(`/assets/${item.id}/share`, {
-            title: item.name,
-          })
-        }
-        results.push({
-          token: shareLink.token,
-          title: shareLink.title || item.name,
-          itemType: item.type,
-          thumbnailUrl: item.type === 'asset' ? item.thumbnailUrl : null,
-          assetId: shareLink.asset_id ?? null,
-          folderId: shareLink.folder_id ?? null,
+      // Check if a specific item is selected (single asset or single folder)
+      const items = Array.from(selectedItems.values())
+      const singleItem = items.length === 1 ? items[0] : null
+
+      if (singleItem?.type === 'asset') {
+        // Share a single asset
+        shareLink = await api.post<ShareLink>(`/assets/${singleItem.id}/share`, {
+          title: singleItem.name,
         })
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unknown error'
-        errors.push(`Failed to share "${item.name}": ${msg}`)
+        itemType = 'asset'
+        thumbUrl = singleItem.thumbnailUrl
+      } else if (singleItem?.type === 'folder') {
+        // Share a specific folder
+        shareLink = await api.post<ShareLink>(`/folders/${singleItem.id}/share`, {
+          title: singleItem.name,
+        })
+      } else if (currentFolderId) {
+        // Share the current folder (contains everything visible)
+        const folderName = folders.find(f => f.id === currentFolderId)?.name || 'Shared Folder'
+        shareLink = await api.post<ShareLink>(`/folders/${currentFolderId}/share`, {
+          title: folderName,
+        })
+      } else {
+        // Share project root (all root folders + assets in one link)
+        shareLink = await api.post<ShareLink>(`/projects/${projectId}/share`, {
+          title: 'Shared Project',
+        })
       }
-    }
 
-    if (results.length > 0) {
-      // Show the first result in the detail view
-      setCreatedResult(results[0])
-      setAllCreatedResults(results)
+      setCreatedResult({
+        token: shareLink.token,
+        title: shareLink.title || 'Share Link',
+        itemType,
+        thumbnailUrl: thumbUrl,
+        assetId: shareLink.asset_id ?? null,
+        folderId: shareLink.folder_id ?? null,
+      })
       onShareCreated()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create share link')
+    } finally {
+      setCreating(false)
     }
-
-    if (errors.length > 0) {
-      setError(errors.join('\n'))
-    }
-
-    setCreating(false)
   }
 
   function handleDone() {
@@ -925,6 +941,7 @@ export function ShareCreateDialog({
             <SelectionPhase
               assets={assets}
               folders={folders}
+              currentFolderId={currentFolderId}
               selectedItems={selectedItems}
               onToggle={handleToggle}
               onCancel={() => onOpenChange(false)}

@@ -35,7 +35,7 @@ from ..schemas.share import (
 from ..services.permissions import require_project_role, validate_share_link
 from ..services.s3_service import generate_presigned_get_url
 from ..services.crypto_service import encrypt_password, decrypt_password
-from ..models.project import ProjectRole
+from ..models.project import Project, ProjectRole
 from ..tasks.email_tasks import send_share_email
 from ..config import settings
 
@@ -62,6 +62,8 @@ def _get_folder(db: Session, folder_id: uuid.UUID) -> Folder:
 
 
 def _get_project_id_from_link(db: Session, link: ShareLink) -> uuid.UUID:
+    if link.project_id:
+        return link.project_id
     if link.asset_id:
         asset = _get_asset(db, link.asset_id)
         return asset.project_id
@@ -204,10 +206,15 @@ def validate_share_link_endpoint(
 
     # Resolve folder name if this is a folder share
     folder_name = None
+    project_name = None
     if link.folder_id:
         folder = db.query(Folder).filter(Folder.id == link.folder_id, Folder.deleted_at.is_(None)).first()
         if folder:
             folder_name = folder.name
+    if link.project_id:
+        project = db.query(Project).filter(Project.id == link.project_id, Project.deleted_at.is_(None)).first()
+        if project:
+            project_name = project.name
 
     if link.password_hash:
         if not password:
@@ -268,7 +275,9 @@ def validate_share_link_endpoint(
     return ShareLinkValidateResponse(
         asset_id=link.asset_id,
         folder_id=link.folder_id,
+        project_id=link.project_id,
         folder_name=folder_name,
+        project_name=project_name,
         title=link.title,
         description=link.description,
         permission=link.permission,
@@ -398,6 +407,50 @@ def create_folder_share_link(
         token=token,
         created_by=current_user.id,
         title=body.title if body.title else folder.name,
+        description=body.description,
+        expires_at=body.expires_at,
+        password_hash=password_hash,
+        password_encrypted=password_encrypted,
+        permission=body.permission,
+        allow_download=body.allow_download,
+        show_versions=body.show_versions,
+        show_watermark=body.show_watermark,
+        appearance=body.appearance.model_dump(),
+    )
+    db.add(link)
+    db.commit()
+    db.refresh(link)
+    return link
+
+
+@router.post("/projects/{project_id}/share", response_model=ShareLinkResponse, status_code=status.HTTP_201_CREATED)
+def create_project_share_link(
+    project_id: uuid.UUID,
+    body: ShareLinkCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a share link for the project root (all root-level folders and assets)."""
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    require_project_role(db, project_id, current_user, ProjectRole.editor)
+
+    token = secrets.token_urlsafe(32)
+    if body.password:
+        pwd_bytes = body.password[:72].encode('utf-8')
+        salt = bcrypt.gensalt()
+        password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
+        password_encrypted = encrypt_password(body.password)
+    else:
+        password_hash = None
+        password_encrypted = None
+
+    link = ShareLink(
+        project_id=project_id,
+        token=token,
+        created_by=current_user.id,
+        title=body.title if body.title else project.name,
         description=body.description,
         expires_at=body.expires_at,
         password_hash=password_hash,
@@ -763,12 +816,34 @@ def list_project_share_links(
         )
     )
 
+    # Project root share links
+    project_query = (
+        db.query(
+            ShareLink.id,
+            ShareLink.token,
+            ShareLink.title,
+            ShareLink.description,
+            ShareLink.is_enabled,
+            ShareLink.permission,
+            sqlalchemy.literal("folder").label("share_type"),
+            ShareLink.title.label("target_name"),
+            sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
+            activity_stats.c.last_viewed_at,
+        )
+        .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
+        .filter(
+            ShareLink.project_id == project_id,
+            ShareLink.deleted_at.is_(None),
+        )
+    )
+
     if search:
         escaped = _escape_like(search)
         asset_query = asset_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
         folder_query = folder_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
+        project_query = project_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
 
-    results = asset_query.union_all(folder_query).all()
+    results = asset_query.union_all(folder_query).union_all(project_query).all()
 
     return [
         ShareLinkListItem(
@@ -820,23 +895,37 @@ def get_folder_share_assets(
     per_page: int = 50,
     db: Session = Depends(get_db),
 ):
-    """Public endpoint — no auth required. Returns assets and subfolders for a folder share link."""
+    """Public endpoint — no auth required. Returns assets and subfolders for a folder or project share link."""
     link = validate_share_link(db, token)
 
-    if not link.folder_id:
-        raise HTTPException(status_code=400, detail="This share link is not a folder share")
+    is_project_share = link.project_id is not None
+    if not link.folder_id and not is_project_share:
+        raise HTTPException(status_code=400, detail="This share link is not a folder or project share")
 
     # Determine which folder to list contents from
-    target_folder_id = link.folder_id
+    # For project shares, target_folder_id=None means project root
+    target_folder_id = link.folder_id  # None for project root shares
     if folder_id:
-        # Validate the requested folder is a descendant of the shared folder
-        if folder_id != link.folder_id and not _is_descendant_of(db, folder_id, link.folder_id):
+        if is_project_share:
+            # Project share: validate folder belongs to this project
+            f = db.query(Folder).filter(Folder.id == folder_id, Folder.deleted_at.is_(None)).first()
+            if not f or f.project_id != link.project_id:
+                raise HTTPException(status_code=403, detail="Folder is not within the shared project")
+        elif folder_id != link.folder_id and not _is_descendant_of(db, folder_id, link.folder_id):
             raise HTTPException(status_code=403, detail="Folder is not within the shared folder")
         target_folder_id = folder_id
 
     # Get subfolders
+    if target_folder_id:
+        subfolder_filter = Folder.parent_id == target_folder_id
+    else:
+        # Project root: folders with no parent in this project
+        subfolder_filter = sqlalchemy.and_(
+            Folder.parent_id.is_(None),
+            Folder.project_id == link.project_id,
+        )
     subfolders_query = db.query(Folder).filter(
-        Folder.parent_id == target_folder_id,
+        subfolder_filter,
         Folder.deleted_at.is_(None),
     ).order_by(Folder.name).all()
 
@@ -872,15 +961,23 @@ def get_folder_share_assets(
             thumbnail_urls=thumb_urls,
         ))
 
-    # Get assets in this folder
+    # Get assets in this folder (or project root if target_folder_id is None)
+    if target_folder_id:
+        asset_filter = Asset.folder_id == target_folder_id
+    else:
+        # Project root: assets with no folder in this project
+        asset_filter = sqlalchemy.and_(
+            Asset.folder_id.is_(None),
+            Asset.project_id == link.project_id,
+        )
     total = db.query(sa_func.count(Asset.id)).filter(
-        Asset.folder_id == target_folder_id,
+        asset_filter,
         Asset.deleted_at.is_(None),
     ).scalar() or 0
 
     offset = (page - 1) * per_page
     assets = db.query(Asset).filter(
-        Asset.folder_id == target_folder_id,
+        asset_filter,
         Asset.deleted_at.is_(None),
     ).order_by(Asset.created_at.desc()).offset(offset).limit(per_page).all()
 

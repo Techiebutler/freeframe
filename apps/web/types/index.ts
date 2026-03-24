@@ -259,6 +259,7 @@ export interface ShareLink {
   id: string;
   asset_id: string | null;
   folder_id: string | null;
+  project_id: string | null;
   token: string;
   title: string;
   description: string | null;

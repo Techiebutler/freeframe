@@ -30,7 +30,9 @@ interface ShareValidateResponse {
   asset?: Asset
   asset_id?: string | null
   folder_id?: string | null
+  project_id?: string | null
   folder_name?: string
+  project_name?: string
   title?: string
   description?: string | null
   permission?: SharePermission
@@ -912,8 +914,8 @@ export default function SharePage({
         return
       }
 
-      // Folder share mode: folder_id is present, asset_id is null
-      if (data.folder_id && !data.asset_id) {
+      // Folder share mode OR project root share mode
+      if ((data.folder_id || data.project_id) && !data.asset_id) {
         const defaultAppearance: ShareLinkAppearance = {
           layout: 'grid',
           theme: 'dark',
@@ -925,10 +927,11 @@ export default function SharePage({
           thumbnail_scale: 'fill',
           show_card_info: true,
         }
+        const folderName = data.folder_name ?? data.project_name ?? 'Shared'
         setState({
           stage: 'folder_ready',
-          folderName: data.folder_name ?? 'Shared Folder',
-          title: data.title ?? data.folder_name ?? 'Shared Folder',
+          folderName,
+          title: data.title ?? folderName,
           description: data.description ?? null,
           permission: data.permission,
           allowDownload: data.allow_download ?? false,

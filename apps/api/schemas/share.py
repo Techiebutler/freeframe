@@ -34,6 +34,7 @@ class ShareLinkResponse(BaseModel):
     id: uuid.UUID
     asset_id: Optional[uuid.UUID] = None
     folder_id: Optional[uuid.UUID] = None
+    project_id: Optional[uuid.UUID] = None
     token: str
     title: str
     description: Optional[str] = None
@@ -54,7 +55,9 @@ class ShareLinkResponse(BaseModel):
 class ShareLinkValidateResponse(BaseModel):
     asset_id: Optional[uuid.UUID] = None
     folder_id: Optional[uuid.UUID] = None
+    project_id: Optional[uuid.UUID] = None
     folder_name: Optional[str] = None
+    project_name: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
     permission: SharePermission = SharePermission.view
