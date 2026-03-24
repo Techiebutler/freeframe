@@ -125,9 +125,20 @@ export function VideoPlayer({ assetId, comments = [], overlay, className }: Vide
   const [streamUrl, setStreamUrl] = useState<string | null>(null)
   const [loop, setLoop] = useState(false)
 
-  const { isDrawingMode, timeFormat, setTimeFormat } = useReviewStore()
+  const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime } = useReviewStore()
   const [timeFormatOpen, setTimeFormatOpen] = useState(false)
   const timeFormatRef = useRef<HTMLDivElement>(null)
+
+  // Sync video currentTime to review store so comment input shows same timecode
+  const lastSyncRef = useRef(0)
+  useEffect(() => {
+    // Throttle to avoid excessive store updates — sync every 100ms
+    const now = Date.now()
+    if (now - lastSyncRef.current > 100) {
+      setPlayheadTime(currentTime)
+      lastSyncRef.current = now
+    }
+  }, [currentTime, setPlayheadTime])
 
   // Close time format dropdown on outside click
   useEffect(() => {
