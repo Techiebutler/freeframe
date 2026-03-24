@@ -11,6 +11,10 @@ class ShareLinkAppearance(BaseModel):
     accent_color: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     open_in_viewer: bool = True
     sort_by: Literal["name", "created_at", "file_size"] = "created_at"
+    card_size: Literal["s", "m", "l"] = "m"
+    aspect_ratio: Literal["landscape", "square", "portrait"] = "landscape"
+    thumbnail_scale: Literal["fit", "fill"] = "fill"
+    show_card_info: bool = True
 
 
 class ShareLinkCreate(BaseModel):

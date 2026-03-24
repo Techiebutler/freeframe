@@ -12,6 +12,8 @@ import {
   Calendar,
   Paintbrush,
   Layout,
+  LayoutGrid,
+  LayoutList,
   Eye,
   EyeOff,
   ChevronDown,
@@ -534,51 +536,60 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
 
             {/* Appearance */}
             <Section title="Appearance" icon={<Paintbrush className="h-3.5 w-3.5" />} defaultOpen={false}>
-              {/* Layout toggle */}
+              {/* Layout — Grid / List */}
               <div className="space-y-1.5">
                 <p className="text-xs text-zinc-400">Layout</p>
-                <div className="flex rounded-lg border border-white/[0.08] overflow-hidden">
+                <div className="flex gap-2">
                   {(['grid', 'list'] as const).map((layout) => (
                     <button
                       key={layout}
                       onClick={() => updateAppearance({ layout })}
                       className={cn(
-                        'flex-1 py-1.5 text-xs font-medium capitalize transition-colors',
+                        'flex-1 flex flex-col items-center gap-1.5 rounded-lg border py-3 text-xs font-medium capitalize transition-colors',
                         appearance.layout === layout
-                          ? 'bg-accent text-white'
-                          : 'text-zinc-400 hover:text-zinc-200',
+                          ? 'bg-accent/10 border-accent text-accent'
+                          : 'border-white/[0.08] text-zinc-400 hover:text-zinc-200 hover:border-white/15',
                       )}
                     >
+                      {layout === 'grid' ? <LayoutGrid className="h-4 w-4" /> : <LayoutList className="h-4 w-4" />}
                       {layout}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Theme toggle */}
-              <div className="space-y-1.5">
-                <p className="text-xs text-zinc-400">Theme</p>
+              {/* Open in viewer */}
+              <ToggleRow
+                label="Open in viewer"
+                description="Click assets to open full viewer"
+                checked={appearance.open_in_viewer}
+                onCheckedChange={(checked) => updateAppearance({ open_in_viewer: checked })}
+              />
+
+              {/* Theme — Dark / Light */}
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-zinc-200">Theme</p>
                 <div className="flex rounded-lg border border-white/[0.08] overflow-hidden">
                   {(['dark', 'light'] as const).map((theme) => (
                     <button
                       key={theme}
                       onClick={() => updateAppearance({ theme })}
                       className={cn(
-                        'flex-1 py-1.5 text-xs font-medium capitalize transition-colors',
+                        'px-4 py-1.5 text-xs font-medium capitalize transition-colors',
                         appearance.theme === theme
                           ? 'bg-accent text-white'
                           : 'text-zinc-400 hover:text-zinc-200',
                       )}
                     >
-                      {theme}
+                      {theme === 'dark' ? '🌙' : '☀️'}
                     </button>
                   ))}
                 </div>
               </div>
 
               {/* Accent color */}
-              <div className="space-y-1.5">
-                <p className="text-xs text-zinc-400">Accent Color</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-zinc-200">Accent Color</p>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-zinc-500">#</span>
                   <input
@@ -591,25 +602,94 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
                         updateAppearance({ accent_color: color })
                       }
                     }}
-                    placeholder="7C3AED"
+                    placeholder="None"
                     maxLength={7}
-                    className="flex-1 rounded border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-xs text-zinc-300 placeholder:text-zinc-600 outline-none focus:border-accent/50 font-mono"
+                    className="w-20 rounded border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-xs text-zinc-300 placeholder:text-zinc-600 outline-none focus:border-accent/50 font-mono"
                   />
-                  {localAccentColor && (
+                  {localAccentColor ? (
                     <div
-                      className="h-5 w-5 rounded border border-white/10"
+                      className="h-5 w-5 rounded-full border border-white/10"
                       style={{ backgroundColor: `#${localAccentColor.replace('#', '')}` }}
                     />
+                  ) : (
+                    <div className="h-5 w-5 rounded-full border border-white/10 bg-white/[0.04]" />
                   )}
                 </div>
               </div>
 
-              {/* Open in viewer */}
+              {/* Card Size — S / M / L */}
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-zinc-200">Card Size</p>
+                <div className="flex rounded-lg border border-white/[0.08] overflow-hidden">
+                  {(['s', 'm', 'l'] as const).map((size) => (
+                    <button
+                      key={size}
+                      onClick={() => updateAppearance({ card_size: size })}
+                      className={cn(
+                        'px-4 py-1.5 text-xs font-medium uppercase transition-colors',
+                        (appearance.card_size || 'm') === size
+                          ? 'bg-accent text-white'
+                          : 'text-zinc-400 hover:text-zinc-200',
+                      )}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Aspect Ratio */}
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-zinc-200">Aspect Ratio</p>
+                <div className="flex rounded-lg border border-white/[0.08] overflow-hidden">
+                  {([
+                    { value: 'landscape' as const, icon: '▭' },
+                    { value: 'square' as const, icon: '□' },
+                    { value: 'portrait' as const, icon: '▯' },
+                  ]).map(({ value, icon }) => (
+                    <button
+                      key={value}
+                      onClick={() => updateAppearance({ aspect_ratio: value })}
+                      className={cn(
+                        'px-4 py-1.5 text-sm transition-colors',
+                        (appearance.aspect_ratio || 'landscape') === value
+                          ? 'bg-accent text-white'
+                          : 'text-zinc-400 hover:text-zinc-200',
+                      )}
+                    >
+                      {icon}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Thumbnail Scale — Fit / Fill */}
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-zinc-200">Thumbnail Scale</p>
+                <div className="flex rounded-lg border border-white/[0.08] overflow-hidden">
+                  {(['fit', 'fill'] as const).map((scale) => (
+                    <button
+                      key={scale}
+                      onClick={() => updateAppearance({ thumbnail_scale: scale })}
+                      className={cn(
+                        'px-4 py-1.5 text-xs font-medium capitalize transition-colors',
+                        (appearance.thumbnail_scale || 'fill') === scale
+                          ? 'bg-accent text-white'
+                          : 'text-zinc-400 hover:text-zinc-200',
+                      )}
+                    >
+                      {scale}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Show Card Info */}
               <ToggleRow
-                label="Open in viewer"
-                description="Auto-open first asset in viewer"
-                checked={appearance.open_in_viewer}
-                onCheckedChange={(checked) => updateAppearance({ open_in_viewer: checked })}
+                label="Show Card Info"
+                description="Display name, type, and size below thumbnail"
+                checked={appearance.show_card_info !== false}
+                onCheckedChange={(checked) => updateAppearance({ show_card_info: checked })}
               />
             </Section>
 

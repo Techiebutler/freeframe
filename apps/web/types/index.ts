@@ -249,6 +249,10 @@ export interface ShareLinkAppearance {
   accent_color: string | null
   open_in_viewer: boolean
   sort_by: "name" | "created_at" | "file_size"
+  card_size: "s" | "m" | "l"
+  aspect_ratio: "landscape" | "square" | "portrait"
+  thumbnail_scale: "fit" | "fill"
+  show_card_info: boolean
 }
 
 export interface ShareLink {

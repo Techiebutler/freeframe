@@ -165,11 +165,17 @@ interface AssetGridCardProps {
   token: string
   openInViewer: boolean
   onAssetClick?: (assetId: string) => void
+  aspectRatio?: 'landscape' | 'square' | 'portrait'
+  thumbnailScale?: 'fit' | 'fill'
+  showCardInfo?: boolean
 }
 
 function AssetGridCard({
   asset,
   isDark,
+  aspectRatio = 'landscape',
+  thumbnailScale = 'fill',
+  showCardInfo = true,
   accentColor,
   allowDownload,
   token,
@@ -198,7 +204,10 @@ function AssetGridCard({
       {/* Thumbnail */}
       <div
         className={cn(
-          'aspect-[16/10] w-full flex items-center justify-center relative',
+          'w-full flex items-center justify-center relative',
+          aspectRatio === 'landscape' && 'aspect-[16/10]',
+          aspectRatio === 'square' && 'aspect-square',
+          aspectRatio === 'portrait' && 'aspect-[3/4]',
           isDark ? 'bg-zinc-900' : 'bg-zinc-100',
         )}
       >
@@ -207,7 +216,10 @@ function AssetGridCard({
           <img
             src={asset.thumbnail_url}
             alt={asset.name}
-            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+            className={cn(
+              'h-full w-full transition-transform duration-200 group-hover:scale-[1.02]',
+              thumbnailScale === 'fill' ? 'object-cover' : 'object-contain',
+            )}
             onError={(e) => {
               ;(e.target as HTMLImageElement).style.display = 'none'
             }}
@@ -235,8 +247,8 @@ function AssetGridCard({
         )}
       </div>
 
-      {/* Info — fixed height for uniform cards */}
-      <div className="px-3 py-2.5 flex flex-col gap-1 min-h-[60px]">
+      {/* Info */}
+      {showCardInfo && <div className="px-3 py-2.5 flex flex-col gap-1 min-h-[60px]">
         <p
           className={cn(
             'text-sm font-medium line-clamp-1',
@@ -259,7 +271,7 @@ function AssetGridCard({
             {formatFileSize(asset.file_size)}
           </span>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -705,7 +717,11 @@ export function FolderShareViewer({
                 )}
 
                 {appearance.layout === 'grid' ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                  <div className={cn('grid gap-3', {
+                    'grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7': appearance.card_size === 's',
+                    'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5': !appearance.card_size || appearance.card_size === 'm',
+                    'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4': appearance.card_size === 'l',
+                  })}>
                     {filteredAssets.map((asset) => (
                       <AssetGridCard
                         key={asset.id}
@@ -716,6 +732,9 @@ export function FolderShareViewer({
                         token={token}
                         openInViewer={appearance.open_in_viewer}
                         onAssetClick={onAssetClick}
+                        aspectRatio={appearance.aspect_ratio || 'landscape'}
+                        thumbnailScale={appearance.thumbnail_scale || 'fill'}
+                        showCardInfo={appearance.show_card_info !== false}
                       />
                     ))}
                   </div>
