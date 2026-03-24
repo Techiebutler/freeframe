@@ -39,6 +39,8 @@ interface ShareCreateDialogProps {
   assets: AssetResponse[]
   folders: Folder[]
   preselectedItem?: { type: 'folder' | 'asset'; id: string; name: string } | null
+  /** Open dialog directly in result phase with a pre-created share link */
+  initialResult?: CreatedShareResult | null
   onShareCreated: () => void
   onAdvancedSettings?: (token: string) => void
 }
@@ -733,6 +735,7 @@ export function ShareCreateDialog({
   assets,
   folders,
   preselectedItem,
+  initialResult,
   onShareCreated,
   onAdvancedSettings,
 }: ShareCreateDialogProps) {
@@ -764,8 +767,8 @@ export function ShareCreateDialog({
       setSelectedItems(initial)
       setCreating(false)
       setError(null)
-      setCreatedResult(null)
-      setAllCreatedResults([])
+      setCreatedResult(initialResult ?? null)
+      setAllCreatedResults(initialResult ? [initialResult] : [])
     }
   }, [open, preselectedItem, assets])
 

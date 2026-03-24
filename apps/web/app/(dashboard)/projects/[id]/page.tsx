@@ -35,7 +35,7 @@ import { NameDialog } from '@/components/projects/name-dialog'
 import { ShareCreateDialog } from '@/components/projects/share-create-dialog'
 import { ProjectMembersDialog } from '@/components/projects/project-members-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import type { Project, AssetResponse, ProjectMember, User, Folder } from '@/types'
+import type { Project, AssetResponse, ProjectMember, User, Folder, ShareLink } from '@/types'
 
 export default function ProjectDetailPage() {
   const params = useParams()
@@ -61,6 +61,7 @@ export default function ProjectDetailPage() {
   const [folderDialogParentId, setFolderDialogParentId] = React.useState<string | null>(null)
   const [shareDialogOpen, setShareDialogOpen] = React.useState(false)
   const [shareDialogPreselect, setShareDialogPreselect] = React.useState<{ type: 'folder' | 'asset'; id: string; name: string } | null>(null)
+  const [shareDialogResult, setShareDialogResult] = React.useState<{ token: string; title: string; itemType: 'asset' | 'folder'; thumbnailUrl: string | null; assetId?: string | null; folderId?: string | null; projectId?: string | null } | null>(null)
   const [shareMode, setShareMode] = React.useState(false)
   const [membersDialogOpen, setMembersDialogOpen] = React.useState(false)
   const [pendingBulkDelete, setPendingBulkDelete] = React.useState<{ assetIds: string[]; folderIds: string[] } | null>(null)
@@ -501,26 +502,42 @@ export default function ProjectDetailPage() {
               onShareModeChange={setShareMode}
               onCreateShareLink={async (assetIds, folderIds) => {
                 try {
-                  let result
+                  let result: ShareLink
+                  let title = ''
+                  let itemType: 'asset' | 'folder' = 'folder'
+                  let thumbUrl: string | null = null
+
                   if (folderIds.length === 1 && assetIds.length === 0) {
                     const folder = subfolders?.find(f => f.id === folderIds[0])
-                    result = await api.post<{ token: string }>(`/folders/${folderIds[0]}/share`, { title: folder?.name || 'Shared Folder' })
+                    title = folder?.name || 'Shared Folder'
+                    result = await api.post<ShareLink>(`/folders/${folderIds[0]}/share`, { title })
                   } else if (assetIds.length === 1 && folderIds.length === 0) {
                     const asset = assets?.find(a => a.id === assetIds[0])
-                    result = await api.post<{ token: string }>(`/assets/${assetIds[0]}/share`, { title: asset?.name || 'Shared Asset' })
+                    title = asset?.name || 'Shared Asset'
+                    itemType = 'asset'
+                    thumbUrl = asset?.thumbnail_url ?? null
+                    result = await api.post<ShareLink>(`/assets/${assetIds[0]}/share`, { title })
                   } else if (currentFolderId) {
                     const folder = subfolders?.find(f => f.id === currentFolderId)
-                    result = await api.post<{ token: string }>(`/folders/${currentFolderId}/share`, { title: folder?.name || 'Shared Folder' })
+                    title = folder?.name || 'Shared Folder'
+                    result = await api.post<ShareLink>(`/folders/${currentFolderId}/share`, { title })
                   } else {
-                    result = await api.post<{ token: string }>(`/projects/${projectId}/share`, { title: project?.name || 'Shared Project' })
+                    title = project?.name || 'Shared Project'
+                    result = await api.post<ShareLink>(`/projects/${projectId}/share`, { title })
                   }
                   mutateShareLinks()
-                  // Navigate to the created share link
-                  if (result?.token) {
-                    setShowShareLinks(true)
-                    setSelectedShareLink(result.token)
-                    setShowTrash(false)
-                  }
+                  // Open dialog with the created share link
+                  setShareDialogPreselect(null)
+                  setShareDialogResult({
+                    token: result.token,
+                    title: result.title || title,
+                    itemType,
+                    thumbnailUrl: thumbUrl,
+                    assetId: result.asset_id ?? null,
+                    folderId: result.folder_id ?? null,
+                    projectId: result.project_id ?? null,
+                  })
+                  setShareDialogOpen(true)
                 } catch {}
               }}
               onBulkDelete={(assetIds, folderIds) => {
@@ -772,13 +789,17 @@ export default function ProjectDetailPage() {
         open={shareDialogOpen}
         onOpenChange={(open) => {
           setShareDialogOpen(open)
-          if (!open) setShareDialogPreselect(null)
+          if (!open) {
+            setShareDialogPreselect(null)
+            setShareDialogResult(null)
+          }
         }}
         projectId={projectId}
         currentFolderId={currentFolderId}
         assets={assets ?? []}
         folders={subfolders ?? []}
         preselectedItem={shareDialogPreselect}
+        initialResult={shareDialogResult}
         onShareCreated={() => mutateShareLinks()}
         onAdvancedSettings={(token) => {
           setShowShareLinks(true)
