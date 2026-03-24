@@ -394,11 +394,13 @@ function SelectionPhase({
 
 interface LinkCreatedPhaseProps {
   result: CreatedShareResult
+  allResults?: CreatedShareResult[]
+  onSelectResult?: (result: CreatedShareResult) => void
   onDone: () => void
   onAdvancedSettings?: (token: string) => void
 }
 
-function LinkCreatedPhase({ result, onDone, onAdvancedSettings }: LinkCreatedPhaseProps) {
+function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvancedSettings }: LinkCreatedPhaseProps) {
   const [title, setTitle] = React.useState(result.title)
   const [editingTitle, setEditingTitle] = React.useState(false)
   const [savingTitle, setSavingTitle] = React.useState(false)
@@ -411,6 +413,13 @@ function LinkCreatedPhase({ result, onDone, onAdvancedSettings }: LinkCreatedPha
   const [showPassphraseInput, setShowPassphraseInput] = React.useState(false)
   const [watermark, setWatermark] = React.useState(false)
   const [expiresAt, setExpiresAt] = React.useState<string>('')
+
+  // Sync title when switching between results
+  React.useEffect(() => {
+    setTitle(result.title)
+    setEditingTitle(false)
+    setShowSettings(false)
+  }, [result.token, result.title])
   const [layout, setLayout] = React.useState<'grid' | 'list'>('grid')
   const titleInputRef = React.useRef<HTMLInputElement>(null)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -519,6 +528,32 @@ function LinkCreatedPhase({ result, onDone, onAdvancedSettings }: LinkCreatedPha
 
       {/* Content */}
       <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+        {/* Multiple share links switcher */}
+        {allResults && allResults.length > 1 && (
+          <div className="space-y-1">
+            <p className="text-2xs font-medium text-text-tertiary uppercase tracking-wider">
+              {allResults.length} share links created
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {allResults.map((r) => (
+                <button
+                  key={r.token}
+                  onClick={() => onSelectResult?.(r)}
+                  className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors border',
+                    r.token === result.token
+                      ? 'bg-accent/10 border-accent/30 text-accent font-medium'
+                      : 'bg-bg-tertiary border-border text-text-secondary hover:bg-bg-hover',
+                  )}
+                >
+                  {r.itemType === 'folder' ? <FolderIcon className="h-3 w-3" /> : <Image className="h-3 w-3" />}
+                  <span className="truncate max-w-[120px]">{r.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Share URL + Visibility */}
         <div className="flex items-center gap-2 rounded-md border border-border bg-bg-tertiary px-3 py-2">
           <span className="flex-1 truncate font-mono text-xs text-text-primary">{shareUrl}</span>
@@ -758,6 +793,7 @@ export function ShareCreateDialog({
   const [creating, setCreating] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [createdResult, setCreatedResult] = React.useState<CreatedShareResult | null>(null)
+  const [allCreatedResults, setAllCreatedResults] = React.useState<CreatedShareResult[]>([])
 
   // Reset state when dialog opens/closes
   React.useEffect(() => {
@@ -782,6 +818,7 @@ export function ShareCreateDialog({
       setCreating(false)
       setError(null)
       setCreatedResult(null)
+      setAllCreatedResults([])
     }
   }, [open, preselectedItem, assets])
 
@@ -805,8 +842,7 @@ export function ShareCreateDialog({
 
     const items = Array.from(selectedItems.values())
     const errors: string[] = []
-    let lastShareLink: ShareLink | null = null
-    let lastItem: SelectedItem | null = null
+    const results: CreatedShareResult[] = []
 
     // Create a share link for each selected item independently
     for (const item of items) {
@@ -821,23 +857,24 @@ export function ShareCreateDialog({
             title: item.name,
           })
         }
-        lastShareLink = shareLink
-        lastItem = item
+        results.push({
+          token: shareLink.token,
+          title: shareLink.title || item.name,
+          itemType: item.type,
+          thumbnailUrl: item.type === 'asset' ? item.thumbnailUrl : null,
+          assetId: shareLink.asset_id ?? null,
+          folderId: shareLink.folder_id ?? null,
+        })
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error'
         errors.push(`Failed to share "${item.name}": ${msg}`)
       }
     }
 
-    if (lastShareLink && lastItem) {
-      setCreatedResult({
-        token: lastShareLink.token,
-        title: lastShareLink.title || lastItem.name,
-        itemType: lastItem.type,
-        thumbnailUrl: lastItem.type === 'asset' ? lastItem.thumbnailUrl : null,
-        assetId: lastShareLink.asset_id,
-        folderId: lastShareLink.folder_id,
-      })
+    if (results.length > 0) {
+      // Show the first result in the detail view
+      setCreatedResult(results[0])
+      setAllCreatedResults(results)
       onShareCreated()
     }
 
@@ -877,7 +914,13 @@ export function ShareCreateDialog({
           )}
 
           {createdResult ? (
-            <LinkCreatedPhase result={createdResult} onDone={handleDone} onAdvancedSettings={onAdvancedSettings} />
+            <LinkCreatedPhase
+              result={createdResult}
+              allResults={allCreatedResults}
+              onSelectResult={(r) => setCreatedResult(r)}
+              onDone={handleDone}
+              onAdvancedSettings={onAdvancedSettings}
+            />
           ) : (
             <SelectionPhase
               assets={assets}
