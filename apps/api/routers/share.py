@@ -233,7 +233,9 @@ def validate_share_link_endpoint(
             raise HTTPException(status_code=403, detail="Incorrect password")
 
     if log_open:
-        _log_share_activity(db, link.id, ShareActivityAction.opened, actor_email="anonymous")
+        actor_email = current_user.email if current_user else "anonymous"
+        actor_name = current_user.name if current_user else None
+        _log_share_activity(db, link.id, ShareActivityAction.opened, actor_email=actor_email, actor_name=actor_name)
 
     # Build asset details for asset shares
     asset_data = None
@@ -293,6 +295,8 @@ def validate_share_link_endpoint(
         appearance=link.appearance,
         requires_password=False,
         created_by_name=created_by_name,
+        viewer_name=current_user.name if current_user else None,
+        viewer_email=current_user.email if current_user else None,
         asset=asset_data,
         branding=branding_data,
     )
@@ -1086,8 +1090,9 @@ def get_share_stream_url(
     token: str,
     asset_id: uuid.UUID,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Public endpoint — no auth required. Returns presigned stream URL for an asset in a share link."""
+    """Public endpoint — optional auth. Returns presigned stream URL for an asset in a share link."""
     link = validate_share_link(db, token)
 
     asset = _get_asset(db, asset_id)
@@ -1118,7 +1123,8 @@ def get_share_stream_url(
     # Log viewed_asset activity
     _log_share_activity(
         db, link.id, ShareActivityAction.viewed_asset,
-        actor_email="anonymous",
+        actor_email=current_user.email if current_user else "anonymous",
+        actor_name=current_user.name if current_user else None,
         asset_id=asset.id,
         asset_name=asset.name,
     )

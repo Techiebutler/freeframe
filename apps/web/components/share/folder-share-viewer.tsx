@@ -37,6 +37,7 @@ interface FolderShareViewerProps {
   title: string
   description: string | null
   createdByName?: string | null
+  viewerName?: string | null
   permission: SharePermission
   allowDownload: boolean
   showVersions: boolean
@@ -442,6 +443,7 @@ export function FolderShareViewer({
   title,
   description,
   createdByName,
+  viewerName,
   permission,
   allowDownload,
   showVersions: _showVersions,
@@ -604,8 +606,11 @@ export function FolderShareViewer({
           <span className="text-[13px] font-medium text-white truncate">{currentTitle}</span>
         </div>
 
-        {/* Right: Download All + panel toggle */}
+        {/* Right: viewer name + Download All + panel toggle */}
         <div className="flex items-center gap-2 shrink-0">
+          {viewerName && (
+            <span className="text-xs text-zinc-400 mr-1">{viewerName}</span>
+          )}
           {allowDownload && (
             <button
               className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
