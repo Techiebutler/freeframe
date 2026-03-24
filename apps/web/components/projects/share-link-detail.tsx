@@ -599,21 +599,29 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
                     onBlur={() => {
                       const color = localAccentColor.trim() || null
                       if (color !== (appearance.accent_color || '')) {
-                        updateAppearance({ accent_color: color })
+                        updateAppearance({ accent_color: color ? `#${color.replace('#', '')}` : null })
                       }
                     }}
                     placeholder="None"
                     maxLength={7}
                     className="w-20 rounded border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-xs text-zinc-300 placeholder:text-zinc-600 outline-none focus:border-accent/50 font-mono"
                   />
-                  {localAccentColor ? (
+                  <label className="relative h-6 w-6 rounded-full border border-white/10 cursor-pointer overflow-hidden shrink-0">
                     <div
-                      className="h-5 w-5 rounded-full border border-white/10"
-                      style={{ backgroundColor: `#${localAccentColor.replace('#', '')}` }}
+                      className="absolute inset-0 rounded-full"
+                      style={{ backgroundColor: localAccentColor ? `#${localAccentColor.replace('#', '')}` : '#6366f1' }}
                     />
-                  ) : (
-                    <div className="h-5 w-5 rounded-full border border-white/10 bg-white/[0.04]" />
-                  )}
+                    <input
+                      type="color"
+                      value={localAccentColor ? `#${localAccentColor.replace('#', '')}` : '#6366f1'}
+                      onChange={(e) => {
+                        const hex = e.target.value.replace('#', '')
+                        setLocalAccentColor(hex)
+                        updateAppearance({ accent_color: `#${hex}` })
+                      }}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                  </label>
                 </div>
               </div>
 
