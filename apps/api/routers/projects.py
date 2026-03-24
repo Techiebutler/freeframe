@@ -10,6 +10,7 @@ from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.asset import Asset, AssetVersion, MediaFile
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectMemberResponse, AddProjectMemberRequest, UpdateProjectMemberRequest
 from ..tasks.email_tasks import send_project_added_email
+from ..tasks.celery_app import send_task_safe
 from ..services.s3_service import put_object, generate_presigned_get_url, delete_object
 from ..config import settings
 
@@ -197,7 +198,7 @@ def add_project_member(project_id: uuid.UUID, body: AddProjectMemberRequest, db:
     added_user = db.query(User).filter(User.id == body.user_id).first()
     if added_user:
         project_link = f"{settings.frontend_url}/projects/{project_id}"
-        send_project_added_email.delay(
+        send_task_safe(send_project_added_email,
             to_email=added_user.email,
             adder_name=current_user.name,
             project_name=project.name,
