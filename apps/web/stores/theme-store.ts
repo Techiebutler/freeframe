@@ -5,11 +5,15 @@ export type Theme = 'dark' | 'light' | 'system'
 
 interface ThemeState {
   theme: Theme
+  /** Apply theme locally only (no server save) — used by initializer */
+  applyTheme: (theme: Theme) => void
+  /** Set theme + save to server — used by settings page */
   setTheme: (theme: Theme) => void
+  /** Sync from server preferences (on login) — only if server has a value */
   syncFromServer: (preferences: Record<string, unknown>) => void
 }
 
-function getResolvedTheme(theme: Theme): 'dark' | 'light' {
+function resolveTheme(theme: Theme): 'dark' | 'light' {
   if (theme === 'system') {
     if (typeof window !== 'undefined') {
       return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -19,10 +23,9 @@ function getResolvedTheme(theme: Theme): 'dark' | 'light' {
   return theme
 }
 
-function applyTheme(theme: Theme) {
+function applyToDOM(theme: Theme) {
   if (typeof document === 'undefined') return
-  const resolved = getResolvedTheme(theme)
-  document.documentElement.setAttribute('data-theme', resolved)
+  document.documentElement.setAttribute('data-theme', resolveTheme(theme))
 }
 
 async function saveToServer(theme: Theme) {
@@ -32,30 +35,32 @@ async function saveToServer(theme: Theme) {
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
     await fetch(`${API_URL}/auth/me/preferences`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ theme }),
     })
-  } catch {
-    // Silent fail — localStorage still has the value
-  }
+  } catch {}
 }
 
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({
       theme: 'dark',
+
+      applyTheme: (theme) => {
+        applyToDOM(theme)
+        set({ theme })
+      },
+
       setTheme: (theme) => {
-        applyTheme(theme)
+        applyToDOM(theme)
         set({ theme })
         saveToServer(theme)
       },
+
       syncFromServer: (preferences) => {
         const serverTheme = preferences?.theme as Theme | undefined
         if (serverTheme && ['dark', 'light', 'system'].includes(serverTheme)) {
-          applyTheme(serverTheme)
+          applyToDOM(serverTheme)
           set({ theme: serverTheme })
         }
       },
@@ -63,7 +68,8 @@ export const useThemeStore = create<ThemeState>()(
     {
       name: 'ff-theme',
       onRehydrateStorage: () => (state) => {
-        if (state) applyTheme(state.theme)
+        // Apply theme as soon as localStorage is loaded (before React renders)
+        if (state) applyToDOM(state.theme)
       },
     },
   ),
