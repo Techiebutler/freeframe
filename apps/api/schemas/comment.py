@@ -19,14 +19,15 @@ class CommentCreate(BaseModel):
     mention_user_ids: list[uuid.UUID] = []  # Explicit mention IDs from frontend
 
 class GuestCommentCreate(BaseModel):
-    version_id: uuid.UUID
+    asset_id: Optional[uuid.UUID] = None  # Required for folder/project shares
+    version_id: Optional[uuid.UUID] = None  # Auto-resolved if not provided
     parent_id: Optional[uuid.UUID] = None
     timecode_start: Optional[float] = None
     timecode_end: Optional[float] = None
     body: str
     annotation: Optional[AnnotationData] = None
-    guest_email: str
-    guest_name: str
+    guest_email: Optional[str] = None  # Not needed if user is logged in
+    guest_name: Optional[str] = None
 
 class CommentUpdate(BaseModel):
     body: str

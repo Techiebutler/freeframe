@@ -323,6 +323,8 @@ interface GuestComment {
 function RightPanel({ selectedAsset, token, permission, allowDownload, onOpenAsset }: RightPanelProps) {
   const [comments, setComments] = React.useState<GuestComment[]>([])
   const [loadingComments, setLoadingComments] = React.useState(false)
+  const [commentRefresh, setCommentRefresh] = React.useState(0)
+  const canComment = permission === 'comment' || permission === 'approve'
 
   React.useEffect(() => {
     if (!selectedAsset) {
@@ -335,7 +337,7 @@ function RightPanel({ selectedAsset, token, permission, allowDownload, onOpenAss
       .then((data) => setComments(data.comments ?? []))
       .catch(() => setComments([]))
       .finally(() => setLoadingComments(false))
-  }, [selectedAsset?.id, token])
+  }, [selectedAsset?.id, token, commentRefresh])
 
   if (!selectedAsset) {
     return (
@@ -455,6 +457,110 @@ function RightPanel({ selectedAsset, token, permission, allowDownload, onOpenAss
           </div>
         )}
       </div>
+
+      {/* Comment input */}
+      {canComment && selectedAsset && (
+        <ShareCommentInput token={token} assetId={selectedAsset.id} onCommentPosted={() => setCommentRefresh(k => k + 1)} />
+      )}
+    </div>
+  )
+}
+
+// ─── Share Comment Input ─────────────────────────────────────────────────────
+
+interface ShareCommentInputProps {
+  token: string
+  assetId: string
+  onCommentPosted: () => void
+}
+
+function ShareCommentInput({ token, assetId, onCommentPosted }: ShareCommentInputProps) {
+  const [body, setBody] = React.useState('')
+  const [guestName, setGuestName] = React.useState('')
+  const [guestEmail, setGuestEmail] = React.useState('')
+  const [submitting, setSubmitting] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  // Check if user is logged in
+  const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
+
+  async function handleSubmit() {
+    if (!body.trim()) return
+    if (!isLoggedIn && (!guestName.trim() || !guestEmail.trim())) {
+      setError('Please enter your name and email')
+      return
+    }
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      const accessToken = localStorage.getItem('ff_access_token')
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+
+      const payload: Record<string, unknown> = { body: body.trim(), asset_id: assetId }
+      if (!isLoggedIn) {
+        payload.guest_name = guestName.trim()
+        payload.guest_email = guestEmail.trim()
+      }
+
+      const res = await fetch(`${API_URL}/share/${token}/comment`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to post comment')
+      }
+      setBody('')
+      onCommentPosted()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to post')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="border-t border-white/[0.06] p-3 shrink-0 space-y-2">
+      {!isLoggedIn && (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={guestName}
+            onChange={(e) => setGuestName(e.target.value)}
+            placeholder="Your name"
+            className="flex-1 h-8 rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 text-xs text-white placeholder:text-zinc-600 outline-none focus:border-accent/50"
+          />
+          <input
+            type="email"
+            value={guestEmail}
+            onChange={(e) => setGuestEmail(e.target.value)}
+            placeholder="Email"
+            className="flex-1 h-8 rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 text-xs text-white placeholder:text-zinc-600 outline-none focus:border-accent/50"
+          />
+        </div>
+      )}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() } }}
+          placeholder="Leave a comment…"
+          disabled={submitting}
+          className="flex-1 h-8 rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-accent/50"
+        />
+        <button
+          onClick={handleSubmit}
+          disabled={submitting || !body.trim()}
+          className="h-8 px-3 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors shrink-0"
+        >
+          {submitting ? '...' : 'Post'}
+        </button>
+      </div>
+      {error && <p className="text-2xs text-red-400">{error}</p>}
     </div>
   )
 }
@@ -630,6 +736,11 @@ function AssetViewer({ token, asset, permission, allowDownload, onBack }: AssetV
                 </div>
               )}
             </div>
+
+            {/* Comment input */}
+            {canComment && (
+              <ShareCommentInput token={token} assetId={asset.id} onCommentPosted={() => setCommentRefresh(k => k + 1)} />
+            )}
           </div>
         )}
       </div>

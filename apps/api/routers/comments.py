@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..middleware.auth import get_current_user
+from ..middleware.auth import get_current_user, get_optional_user
 from ..middleware.share_auth import get_share_link
 from ..models.asset import Asset
 from ..models.project import ProjectMember, ProjectRole
@@ -621,6 +621,7 @@ def guest_comment(
     token: str,
     body: GuestCommentCreate,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
     link = validate_share_link(db, token)
 
@@ -628,21 +629,48 @@ def guest_comment(
     if link.permission == SharePermission.view:
         raise HTTPException(status_code=403, detail="This share link does not allow commenting")
 
-    asset = _get_asset(db, link.asset_id)
+    # Resolve asset_id: from body, link, or error
+    target_asset_id = body.asset_id or link.asset_id
+    if not target_asset_id:
+        raise HTTPException(status_code=400, detail="asset_id is required for folder/project shares")
+    asset = _get_asset(db, target_asset_id)
 
-    # Get or create GuestUser by email
-    guest_email = body.guest_email.lower()
-    guest = db.query(GuestUser).filter(GuestUser.email == guest_email).first()
-    if not guest:
-        guest = GuestUser(email=guest_email, name=body.guest_name)
-        db.add(guest)
-        db.flush()
+    # Resolve version_id: use provided or get latest ready version
+    version_id = body.version_id
+    if not version_id:
+        from ..models.asset import AssetVersion, ProcessingStatus
+        latest = db.query(AssetVersion).filter(
+            AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+            AssetVersion.processing_status == ProcessingStatus.ready,
+        ).order_by(AssetVersion.version_number.desc()).first()
+        if latest:
+            version_id = latest.id
+        else:
+            raise HTTPException(status_code=400, detail="No ready version found for this asset")
+
+    # Determine author: logged-in user or guest
+    author_id = None
+    guest_author_id = None
+    if current_user:
+        author_id = current_user.id
+    else:
+        if not body.guest_email or not body.guest_name:
+            raise HTTPException(status_code=400, detail="guest_email and guest_name required for anonymous comments")
+        guest_email = body.guest_email.lower()
+        guest = db.query(GuestUser).filter(GuestUser.email == guest_email).first()
+        if not guest:
+            guest = GuestUser(email=guest_email, name=body.guest_name)
+            db.add(guest)
+            db.flush()
+        guest_author_id = guest.id
 
     comment = Comment(
         asset_id=asset.id,
-        version_id=body.version_id,
+        version_id=version_id,
         parent_id=body.parent_id,
-        guest_author_id=guest.id,
+        author_id=author_id,
+        guest_author_id=guest_author_id,
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
         body=body.body,
