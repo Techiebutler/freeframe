@@ -233,18 +233,13 @@ function ShareUserSearch({ shareLink }: { shareLink: ShareLink }) {
   async function inviteUser(user: UserSuggestion) {
     setSending(true)
     try {
+      const body = { permission: shareLink.permission || 'view', user_id: user.id, share_token: shareLink.token }
       if (shareLink.folder_id) {
-        await api.post(`/folders/${shareLink.folder_id}/share/user`, {
-          permission: shareLink.permission || 'view',
-          user_id: user.id,
-          share_token: shareLink.token,
-        })
+        await api.post(`/folders/${shareLink.folder_id}/share/user`, body)
       } else if (shareLink.asset_id) {
-        await api.post(`/assets/${shareLink.asset_id}/share/user`, {
-          permission: shareLink.permission || 'view',
-          user_id: user.id,
-          share_token: shareLink.token,
-        })
+        await api.post(`/assets/${shareLink.asset_id}/share/user`, body)
+      } else if ((shareLink as any).project_id) {
+        await api.post(`/projects/${(shareLink as any).project_id}/share/user`, body)
       }
       setSent(user.name || user.email)
       setQuery('')
@@ -262,18 +257,13 @@ function ShareUserSearch({ shareLink }: { shareLink: ShareLink }) {
   async function inviteByEmail(email: string) {
     setSending(true)
     try {
+      const body = { permission: shareLink.permission || 'view', email, share_token: shareLink.token }
       if (shareLink.folder_id) {
-        await api.post(`/folders/${shareLink.folder_id}/share/user`, {
-          permission: shareLink.permission || 'view',
-          email,
-          share_token: shareLink.token,
-        })
+        await api.post(`/folders/${shareLink.folder_id}/share/user`, body)
       } else if (shareLink.asset_id) {
-        await api.post(`/assets/${shareLink.asset_id}/share/user`, {
-          permission: shareLink.permission || 'view',
-          email,
-          share_token: shareLink.token,
-        })
+        await api.post(`/assets/${shareLink.asset_id}/share/user`, body)
+      } else if ((shareLink as any).project_id) {
+        await api.post(`/projects/${(shareLink as any).project_id}/share/user`, body)
       }
       setSent(email)
       setQuery('')

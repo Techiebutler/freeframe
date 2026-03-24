@@ -54,6 +54,7 @@ interface CreatedShareResult {
   thumbnailUrl: string | null
   assetId?: string | null
   folderId?: string | null
+  projectId?: string | null
 }
 
 // ─── Asset type icon helper ──────────────────────────────────────────────────
@@ -108,7 +109,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 
 interface InviteUser { id: string; name: string; email: string }
 
-function ShareInviteInput({ token, shareLink }: { token: string; shareLink: { asset_id: string | null; folder_id: string | null; permission: string } }) {
+function ShareInviteInput({ token, shareLink }: { token: string; shareLink: { asset_id: string | null; folder_id: string | null; project_id?: string | null; permission: string } }) {
   const [query, setQuery] = React.useState('')
   const [suggestions, setSuggestions] = React.useState<InviteUser[]>([])
   const [showDrop, setShowDrop] = React.useState(false)
@@ -151,13 +152,15 @@ function ShareInviteInput({ token, shareLink }: { token: string; shareLink: { as
 
   async function invite(userId?: string, email?: string) {
     try {
-      const body: Record<string, unknown> = { permission: shareLink.permission || 'view' }
+      const body: Record<string, unknown> = { permission: shareLink.permission || 'view', share_token: token }
       if (userId) body.user_id = userId
       if (email) body.email = email
       if (shareLink.folder_id) {
         await api.post(`/folders/${shareLink.folder_id}/share/user`, body)
       } else if (shareLink.asset_id) {
         await api.post(`/assets/${shareLink.asset_id}/share/user`, body)
+      } else if (shareLink.project_id) {
+        await api.post(`/projects/${shareLink.project_id}/share/user`, body)
       }
       const name = suggestions.find(s => s.id === userId)?.name || email || 'user'
       setSent(name)
@@ -524,7 +527,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
         </div>
 
         {/* Send to name or email — with autocomplete */}
-        <ShareInviteInput token={result.token} shareLink={{ asset_id: result.assetId ?? null, folder_id: result.folderId ?? null, permission: 'view' } as any} />
+        <ShareInviteInput token={result.token} shareLink={{ asset_id: result.assetId ?? null, folder_id: result.folderId ?? null, project_id: result.projectId ?? null, permission: 'view' }} />
 
         {/* Preview thumbnail or Settings */}
         {!showSettings ? (
@@ -824,6 +827,7 @@ export function ShareCreateDialog({
         thumbnailUrl: thumbUrl,
         assetId: shareLink.asset_id ?? null,
         folderId: shareLink.folder_id ?? null,
+        projectId: shareLink.project_id ?? null,
       })
       onShareCreated()
     } catch (err) {

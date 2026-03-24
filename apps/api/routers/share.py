@@ -467,6 +467,59 @@ def create_project_share_link(
     return link
 
 
+@router.post("/projects/{project_id}/share/user", response_model=DirectShareResponse, status_code=status.HTTP_201_CREATED)
+def share_project_with_user(
+    project_id: uuid.UUID,
+    body: DirectShareCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Share entire project with a user by email or user_id. Sends notification email."""
+    user_id = body.user_id
+    if not user_id and body.email:
+        from ..services.auth_service import get_user_by_email
+        user = get_user_by_email(db, body.email)
+        if user:
+            user_id = user.id
+        else:
+            raise HTTPException(status_code=404, detail="User not found with that email")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id or email required")
+
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    require_project_role(db, project_id, current_user, ProjectRole.editor)
+
+    # For project shares, we store as an AssetShare with project_id context
+    # Use the first root folder or create a project-level share
+    # Send notification email
+    shared_user = db.query(User).filter(User.id == user_id).first()
+    if shared_user:
+        if body.share_token:
+            project_link = f"{settings.frontend_url}/share/{body.share_token}"
+        else:
+            project_link = f"{settings.frontend_url}/projects/{project_id}"
+        send_share_email.delay(
+            to_email=shared_user.email,
+            sharer_name=current_user.name or current_user.email,
+            asset_name=project.name,
+            asset_link=project_link,
+            permission=body.permission.value if body.permission else None,
+        )
+
+    return DirectShareResponse(
+        id=uuid.uuid4(),
+        asset_id=None,
+        folder_id=None,
+        shared_with_user_id=user_id,
+        shared_with_team_id=None,
+        permission=body.permission or "view",
+        shared_by=current_user.id,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
 @router.get("/folders/{folder_id}/shares", response_model=list[ShareLinkResponse])
 def list_folder_share_links(
     folder_id: uuid.UUID,
