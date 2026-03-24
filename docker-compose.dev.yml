@@ -72,7 +72,8 @@ services:
     environment:
       DATABASE_URL: postgresql://freeframe:freeframe@postgres:5432/freeframe
       REDIS_URL: redis://redis:6379/0
-      # Override S3 to use local MinIO for dev (avoids CORS issues with AWS)
+      # Storage: "minio" for local MinIO (dev), "s3" for AWS S3 (prod)
+      S3_STORAGE: minio
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_ENDPOINT: http://minio:9000
@@ -101,7 +102,7 @@ services:
     environment:
       DATABASE_URL: postgresql://freeframe:freeframe@postgres:5432/freeframe
       REDIS_URL: redis://redis:6379/0
-      # Override S3 to use local MinIO for dev
+      S3_STORAGE: minio
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_ENDPOINT: http://minio:9000
@@ -128,6 +129,7 @@ services:
     environment:
       DATABASE_URL: postgresql://freeframe:freeframe@postgres:5432/freeframe
       REDIS_URL: redis://redis:6379/0
+      S3_STORAGE: minio
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_ENDPOINT: http://minio:9000

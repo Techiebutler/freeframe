@@ -15,9 +15,9 @@ CONTENT_TYPE_MAP = {
     ".png": ("image/png", "max-age=86400"),
 }
 
-def _is_aws_credentials() -> bool:
-    """Check if credentials look like real AWS (start with AKIA) vs MinIO."""
-    return settings.s3_access_key.startswith("AKIA")
+def _is_aws_s3() -> bool:
+    """Check if using AWS S3 (vs MinIO/local). Controlled by S3_STORAGE env var."""
+    return settings.s3_storage.lower() == "s3"
 
 def get_s3_client():
     """
@@ -25,7 +25,7 @@ def get_s3_client():
     - If access_key starts with 'AKIA' -> use AWS S3 (no endpoint_url)
     - Otherwise -> use custom endpoint (MinIO or S3-compatible)
     """
-    if _is_aws_credentials():
+    if _is_aws_s3():
         # Real AWS S3 - don't pass endpoint_url
         return boto3.client(
             "s3",
@@ -49,7 +49,7 @@ def _get_presign_client():
     so presigned URLs are accessible from the browser (e.g. localhost:9000
     instead of minio:9000 in Docker).
     """
-    endpoint = settings.s3_public_endpoint or (None if _is_aws_credentials() else settings.s3_endpoint)
+    endpoint = settings.s3_public_endpoint or (None if _is_aws_s3() else settings.s3_endpoint)
     kwargs = {
         "aws_access_key_id": settings.s3_access_key,
         "aws_secret_access_key": settings.s3_secret_key,
@@ -68,7 +68,7 @@ def ensure_bucket_exists():
         error_code = e.response["Error"]["Code"]
         if error_code in ("404", "NoSuchBucket"):
             # For AWS S3 in non-us-east-1 regions, need LocationConstraint
-            if _is_aws_credentials() and settings.s3_region != "us-east-1":
+            if _is_aws_s3() and settings.s3_region != "us-east-1":
                 s3.create_bucket(
                     Bucket=settings.s3_bucket,
                     CreateBucketConfiguration={"LocationConstraint": settings.s3_region}
@@ -78,7 +78,7 @@ def ensure_bucket_exists():
         elif error_code == "403":
             # Bucket exists but we don't have access, or using wrong credentials
             # For AWS S3, bucket likely already exists - skip creation
-            if _is_aws_credentials():
+            if _is_aws_s3():
                 pass  # Assume bucket exists, will fail on actual operations if not
             else:
                 raise
@@ -86,7 +86,7 @@ def ensure_bucket_exists():
             raise
 
     # Set CORS for browser-based uploads (presigned PUT)
-    if not _is_aws_credentials():
+    if not _is_aws_s3():
         try:
             s3.put_bucket_cors(
                 Bucket=settings.s3_bucket,

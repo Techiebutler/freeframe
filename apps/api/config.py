@@ -26,10 +26,11 @@ class Settings(BaseSettings):
 
     database_url: str
     redis_url: str
-    s3_bucket: str
-    s3_endpoint: str
-    s3_access_key: str
-    s3_secret_key: str
+    s3_storage: str = "minio"  # "s3" for AWS S3, "minio" for local MinIO
+    s3_bucket: str = "freeframe"
+    s3_endpoint: str = "http://minio:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
     s3_region: str = "us-east-1"
     s3_public_endpoint: str | None = None  # External URL for presigned URLs (e.g. http://localhost:9000 when S3_ENDPOINT is http://minio:9000)
     jwt_secret: str
