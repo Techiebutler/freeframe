@@ -596,18 +596,28 @@ export function FolderShareViewer({
                 <div className="px-3 py-2 border-b border-white/[0.06]">
                   <p className="text-sm font-medium text-white">{viewerName}</p>
                 </div>
-                <a
-                  href="/"
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-white/5 transition-colors"
+                <button
+                  onClick={() => {
+                    // Ensure cookie is set from localStorage before navigating
+                    if (typeof window !== 'undefined') {
+                      const token = localStorage.getItem('ff_access_token')
+                      if (token) {
+                        document.cookie = `ff_access_token=${token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
+                      }
+                      window.location.href = '/'
+                    }
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-white/5 transition-colors"
                 >
                   Back to Dashboard
-                </a>
+                </button>
                 <button
                   onClick={() => {
                     if (typeof window !== 'undefined') {
                       localStorage.removeItem('ff_access_token')
                       localStorage.removeItem('ff_refresh_token')
-                      window.location.reload()
+                      document.cookie = 'ff_access_token=; path=/; max-age=0'
+                      window.location.href = '/login'
                     }
                   }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
