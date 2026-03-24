@@ -265,7 +265,29 @@ def validate_share_link_endpoint(
     )
 
 
-# ── Step 1: PATCH share link ─────────────────────────────────────────────────
+# ── Authenticated share link details (for settings panel) ────────────────────
+
+@router.get("/share/{token}/details", response_model=ShareLinkResponse)
+def get_share_link_details(
+    token: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Authenticated endpoint returning full share link details for the settings panel."""
+    link = db.query(ShareLink).filter(
+        ShareLink.token == token,
+        ShareLink.deleted_at.is_(None),
+    ).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    project_id = _get_project_id_from_link(db, link)
+    require_project_role(db, project_id, current_user, ProjectRole.viewer)
+    response = ShareLinkResponse.model_validate(link)
+    response.has_password = link.password_hash is not None and link.password_hash != ''
+    return response
+
+
+# ── PATCH share link ─────────────────────────────────────────────────────────
 
 @router.patch("/share/{token}", response_model=ShareLinkResponse)
 def update_share_link(

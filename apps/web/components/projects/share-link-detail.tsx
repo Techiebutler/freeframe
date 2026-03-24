@@ -30,7 +30,7 @@ import type { ShareLink, ShareLinkAppearance } from '@/types'
 
 function useShareLinkData(token: string) {
   const { data: shareLink, mutate } = useSWR<ShareLink>(
-    `/share/${token}`,
+    `/share/${token}/details`,
     (key: string) => api.get<ShareLink>(key),
   )
 
@@ -355,16 +355,17 @@ export function ShareLinkContent({ token, projectId, onBack, frontendUrl }: Shar
 // ─── ShareLinkSettingsPanel (RIGHT panel) ───────────────────────────────────
 
 export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
-  const { shareLink, immediateUpdate, appearance, updateAppearance } = useShareLinkData(token)
+  const { shareLink, debouncedUpdate, immediateUpdate, appearance, updateAppearance } = useShareLinkData(token)
 
   const [rightTab, setRightTab] = React.useState<'settings' | 'activity'>('settings')
   const [localPassword, setLocalPassword] = React.useState('')
   const [passwordEnabled, setPasswordEnabled] = React.useState(false)
+  const [showPassword, setShowPassword] = React.useState(false)
   const [localAccentColor, setLocalAccentColor] = React.useState('')
 
   React.useEffect(() => {
     if (shareLink) {
-      setPasswordEnabled(false)
+      setPasswordEnabled(shareLink.has_password ?? false)
       setLocalAccentColor(shareLink.appearance?.accent_color || '')
     }
   }, [shareLink])
@@ -455,29 +456,39 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
             <Section title="Security" icon={<Lock className="h-3.5 w-3.5" />}>
               <ToggleRow
                 label="Passphrase"
-                description="Require a password to access"
+                description={passwordEnabled ? 'Password required to access' : 'Require a password to access'}
                 checked={passwordEnabled}
                 onCheckedChange={(checked) => {
                   setPasswordEnabled(checked)
                   if (!checked) {
                     setLocalPassword('')
+                    setShowPassword(false)
                     immediateUpdate({ password: null })
                   }
                 }}
               />
               {passwordEnabled && (
-                <input
-                  type="password"
-                  value={localPassword}
-                  onChange={(e) => setLocalPassword(e.target.value)}
-                  onBlur={() => {
-                    if (localPassword.trim()) {
-                      immediateUpdate({ password: localPassword.trim() })
-                    }
-                  }}
-                  placeholder="Enter passphrase"
-                  className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-accent/50"
-                />
+                <div className="space-y-2">
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={localPassword}
+                      onChange={(e) => {
+                        setLocalPassword(e.target.value)
+                        // Auto-save after debounce
+                        debouncedUpdate({ password: e.target.value.trim() || null })
+                      }}
+                      placeholder={shareLink.has_password ? '••••••••' : 'Enter passphrase'}
+                      className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 pr-16 text-sm text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-accent/50"
+                    />
+                    <button
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      {showPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </div>
               )}
 
               <div className="flex items-center justify-between gap-3">

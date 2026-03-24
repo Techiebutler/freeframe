@@ -40,6 +40,7 @@ class ShareLinkResponse(BaseModel):
     appearance: dict
     expires_at: Optional[datetime] = None
     created_at: datetime
+    has_password: bool = False
     model_config = {"from_attributes": True}
 
 
