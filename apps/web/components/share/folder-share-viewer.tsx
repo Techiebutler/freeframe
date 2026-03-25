@@ -350,57 +350,16 @@ function RightPanel({ selectedAsset, token, permission, allowDownload, onOpenAss
         <div className="h-14 w-14 rounded-full bg-bg-tertiary flex items-center justify-center mb-3">
           <MessageSquare className="h-7 w-7 text-text-tertiary" />
         </div>
-        <p className="text-sm font-medium text-text-primary">Select an asset to view details</p>
+        <p className="text-sm font-medium text-text-primary">Select an asset to view comments</p>
       </div>
     )
   }
 
-  const TypeIcon = getAssetTypeIcon(selectedAsset.asset_type)
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Asset info header */}
-      <div className="px-4 py-4 border-b border-border shrink-0">
-        <div className="flex items-center gap-2 mb-2">
-          <TypeIcon className="h-4 w-4 text-text-secondary shrink-0" />
-          <span className="text-xs text-text-secondary uppercase font-medium">
-            {getAssetTypeBadgeLabel(selectedAsset.asset_type)}
-          </span>
-        </div>
-        <h3 className="text-sm font-semibold text-text-primary leading-snug">{selectedAsset.name}</h3>
-        <div className="mt-2 space-y-1">
-          {selectedAsset.created_by_name && (
-            <p className="text-xs text-text-tertiary">By {selectedAsset.created_by_name}</p>
-          )}
-          <p className="text-xs text-text-tertiary">
-            {formatDate(selectedAsset.created_at)}
-            {selectedAsset.file_size != null && <> &middot; {formatFileSize(selectedAsset.file_size)}</>}
-            {selectedAsset.duration_seconds != null && selectedAsset.duration_seconds > 0 && (
-              <> &middot; {formatDuration(selectedAsset.duration_seconds)}</>
-            )}
-          </p>
-        </div>
-
-        {/* Actions */}
-        <div className="mt-3 flex items-center gap-3">
-          {onOpenAsset && (
-            <button
-              className="flex items-center gap-2 text-xs font-medium text-accent hover:text-accent-hover transition-colors"
-              onClick={() => onOpenAsset(selectedAsset)}
-            >
-              Open
-            </button>
-          )}
-          {allowDownload && (
-            <button
-              className="flex items-center gap-2 text-xs font-medium text-text-primary hover:text-text-primary transition-colors"
-              onClick={() => handleDownload(token, selectedAsset.id, selectedAsset.name)}
-            >
-              <Download className="h-3.5 w-3.5" />
-              Download
-            </button>
-          )}
-        </div>
+      {/* Asset name header — minimal */}
+      <div className="px-4 py-3 border-b border-border shrink-0">
+        <h3 className="text-sm font-semibold text-text-primary truncate">{selectedAsset.name}</h3>
       </div>
 
       {/* Comments section */}
@@ -1128,6 +1087,13 @@ export function FolderShareViewer({
               Download All
             </button>
           )}
+          <button
+            onClick={() => setPanelOpen((v) => !v)}
+            className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+            title={panelOpen ? 'Hide panel' : 'Show panel'}
+          >
+            {panelOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+          </button>
         </div>
       </header>
 
@@ -1301,7 +1267,18 @@ export function FolderShareViewer({
           </footer>
         </div>
 
-        {/* Right panel removed — comments available in asset viewer (double-click) */}
+        {/* ─── Right Panel ───────────────────────────────────────────── */}
+        {panelOpen && (
+          <div className="w-[320px] shrink-0 border-l border-border bg-bg-secondary flex flex-col overflow-hidden">
+            <RightPanel
+              selectedAsset={selectedAsset}
+              token={token}
+              permission={permission}
+              allowDownload={allowDownload}
+              onOpenAsset={setViewingAsset}
+            />
+          </div>
+        )}
       </div>
     </div>
   )
