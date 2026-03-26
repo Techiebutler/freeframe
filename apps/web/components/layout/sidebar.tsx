@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import { useUploadStore } from '@/stores/upload-store'
 import { useNotificationStore } from '@/stores/notification-store'
+import { useBrandingStore } from '@/stores/branding-store'
 import { Avatar } from '@/components/shared/avatar'
 import { NotificationDrawer } from './notification-drawer'
 
@@ -40,6 +41,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, logout } = useAuthStore()
   const { files: uploadFiles, togglePanel, panelOpen } = useUploadStore()
   const { unreadCount, fetchNotifications } = useNotificationStore()
+  const { orgName, orgLogoUrl } = useBrandingStore()
   const [notifOpen, setNotifOpen] = React.useState(false)
   const activeUploads = uploadFiles.filter((f) => f.status === 'uploading' || f.status === 'pending' || f.status === 'processing').length
 
@@ -62,22 +64,33 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           collapsed ? 'justify-center px-0' : 'px-4 gap-2.5',
         )}
       >
-        {/* White logo for dark theme, dark logo for light theme */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/logo-icon.png"
-          alt="FreeFrame"
-          className="h-7 w-7 shrink-0 object-contain logo-dark"
-        />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/logo-icon-dark.png"
-          alt="FreeFrame"
-          className="h-7 w-7 shrink-0 object-contain logo-light"
-        />
+        {/* Logo: custom if set, otherwise default FreeFrame icons */}
+        {orgLogoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={orgLogoUrl}
+            alt={orgName}
+            className="h-7 w-7 shrink-0 object-contain rounded"
+          />
+        ) : (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo-icon.png"
+              alt={orgName}
+              className="h-7 w-7 shrink-0 object-contain logo-dark"
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo-icon-dark.png"
+              alt={orgName}
+              className="h-7 w-7 shrink-0 object-contain logo-light"
+            />
+          </>
+        )}
         {!collapsed && (
           <span className="text-sm font-semibold text-text-primary tracking-tight">
-            FreeFrame
+            {orgName}
           </span>
         )}
       </div>
