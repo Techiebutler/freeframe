@@ -1,4 +1,4 @@
-import { create } from 'zustand'
+import { create, type StateCreator } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '@/lib/api'
 import type { AssetResponse } from '@/types'
@@ -33,6 +33,13 @@ interface InitiateResponse {
   version_id: string
 }
 
+interface VersionInitiateResponse {
+  upload_id: string
+  s3_key: string
+  asset_id: string
+  version_id: string
+}
+
 // AbortControllers for cancellation
 const abortControllers: Record<string, AbortController> = {}
 
@@ -46,6 +53,7 @@ interface UploadStore {
   setPanelOpen: (open: boolean) => void
   togglePanel: () => void
   startUpload: (file: File, projectId: string, assetName: string, projectName?: string, folderId?: string | null) => string
+  startVersionUpload: (file: File, assetId: string, assetName: string, projectId: string) => string
   cancelUpload: (fileId: string) => void
   removeFile: (fileId: string) => void
   clearCompleted: () => void
@@ -104,9 +112,7 @@ function mergeHistoryAssets(existing: UploadFile[], assets: AssetResponse[]): Up
   return [...existing, ...newFiles]
 }
 
-export const useUploadStore = create<UploadStore>()(
-  persist(
-    (set, get) => ({
+const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = (set, get) => ({
   files: [],
   panelOpen: false,
   historyLoaded: false,
@@ -243,6 +249,85 @@ export const useUploadStore = create<UploadStore>()(
     return id
   },
 
+  startVersionUpload: (file, assetId, assetName, projectId) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const entry: UploadFile = {
+      id,
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      projectId,
+      assetName,
+      progress: 0,
+      processingProgress: 0,
+      status: 'pending',
+      assetId,
+      createdAt: Date.now(),
+    }
+    set((s) => ({ files: [entry, ...s.files], panelOpen: true }))
+
+    const updateFile = (fileId: string, patch: Partial<UploadFile>) => {
+      set((s) => ({ files: s.files.map((f) => (f.id === fileId ? { ...f, ...patch } : f)) }))
+    }
+
+    ;(async () => {
+      const controller = new AbortController()
+      abortControllers[id] = controller
+      let upload_id: string | undefined
+      let s3_key: string | undefined
+      let version_id: string | undefined
+      try {
+        updateFile(id, { status: 'uploading' })
+        const initRes = await api.post<VersionInitiateResponse>(
+          `/assets/${assetId}/versions`,
+          {
+            project_id: projectId,
+            asset_name: assetName,
+            original_filename: file.name,
+            file_size_bytes: file.size,
+            mime_type: file.type,
+          },
+        )
+        upload_id = initRes.upload_id
+        s3_key = initRes.s3_key
+        version_id = initRes.version_id
+        updateFile(id, { uploadId: upload_id, versionId: version_id })
+
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+        const parts: Array<{ PartNumber: number; ETag: string }> = []
+        for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
+          if (controller.signal.aborted) throw new DOMException('Upload cancelled', 'AbortError')
+          const start = (partNumber - 1) * CHUNK_SIZE
+          const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
+          const { presigned_url } = await api.post<{ presigned_url: string }>('/upload/presign-part', {
+            s3_key, upload_id, part_number: partNumber,
+          })
+          const putResponse = await fetch(presigned_url, { method: 'PUT', body: chunk, signal: controller.signal })
+          if (!putResponse.ok) throw new Error(`Part ${partNumber} failed: ${putResponse.statusText}`)
+          parts.push({ PartNumber: partNumber, ETag: putResponse.headers.get('ETag') ?? '' })
+          updateFile(id, { progress: Math.round((partNumber / totalChunks) * 95) })
+        }
+
+        await api.post('/upload/complete', { s3_key, upload_id, asset_id: assetId, version_id, parts })
+        const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
+        updateFile(id, { progress: 100, status: isMedia ? 'processing' : 'complete', processingProgress: 0 })
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          updateFile(id, { status: 'cancelled', progress: 0 })
+        } else {
+          updateFile(id, { status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' })
+        }
+        if (upload_id && s3_key && version_id) {
+          api.post('/upload/abort', { s3_key, upload_id, version_id }).catch(() => {})
+        }
+      } finally {
+        delete abortControllers[id]
+      }
+    })()
+
+    return id
+  },
+
   cancelUpload: (fileId) => {
     abortControllers[fileId]?.abort()
     set((s) => ({
@@ -350,16 +435,17 @@ export const useUploadStore = create<UploadStore>()(
       // SSE is the primary mechanism; ignore poll errors
     }
   },
-}),
-    {
-      name: 'ff-uploads',
-      // Only persist failed/cancelled items — in-progress uploads can't be resumed
-      // and successful ones are fetched from the API history on panel open.
-      partialize: (state) => ({
-        files: state.files.filter(
-          (f) => f.status === 'failed' || f.status === 'cancelled',
-        ),
-      }),
-    },
-  ),
+})
+
+export const useUploadStore = create<UploadStore>()(
+  persist(storeCreator, {
+    name: 'ff-uploads',
+    // Only persist failed/cancelled items — in-progress uploads can't be resumed
+    // and successful ones are fetched from the API history on panel open.
+    partialize: (state: UploadStore) => ({
+      files: state.files.filter(
+        (f: UploadFile) => f.status === 'failed' || f.status === 'cancelled',
+      ),
+    }),
+  }),
 )

@@ -170,7 +170,7 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
           const entries = await Promise.all(
             mediaFiles.map(async (mf) => {
               const data = await api.get<StreamResponse>(
-                `/assets/${asset.id}/stream?media_file_id=${mf.id}`,
+                `/assets/${asset.id}/stream?media_file_id=${mf.id}&version_id=${version.id}`,
               )
               return [mf.id, data.url] as [string, string]
             }),
@@ -179,7 +179,7 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
             setImageUrls(Object.fromEntries(entries))
           }
         } else {
-          const data = await api.get<StreamResponse>(`/assets/${asset.id}/stream`)
+          const data = await api.get<StreamResponse>(`/assets/${asset.id}/stream?version_id=${version.id}`)
           if (!cancelled) {
             setImageUrls({ single: data.url })
           }

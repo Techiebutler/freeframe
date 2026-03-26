@@ -1,12 +1,11 @@
 'use client'
 
 import * as React from 'react'
-import { GitCompare, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { AlertCircle, Loader2, CheckCircle2, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import type { AssetVersion, AssetVersionStatus } from '@/types'
-
-// ─── Version status badge ─────────────────────────────────────────────────────
 
 const versionStatusConfig: Record<
   AssetVersionStatus,
@@ -34,52 +33,15 @@ const versionStatusConfig: Record<
   },
 }
 
-function VersionStatusDot({ status }: { status: AssetVersionStatus }) {
-  const config = versionStatusConfig[status]
-  return (
-    <span
-      className={cn('inline-flex items-center gap-0.5', config.className)}
-      title={config.label}
-    >
-      {config.icon}
-    </span>
-  )
-}
-
-// ─── Props ────────────────────────────────────────────────────────────────────
-
 interface VersionSwitcherProps {
   versions: AssetVersion[]
   className?: string
-  /** Controlled compare mode from parent; if omitted, uses internal state */
-  compareMode?: boolean
-  onCompareModeChange?: (enabled: boolean) => void
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
-export function VersionSwitcher({
-  versions,
-  className,
-  compareMode: externalCompareMode,
-  onCompareModeChange,
-}: VersionSwitcherProps) {
+export function VersionSwitcher({ versions, className }: VersionSwitcherProps) {
   const currentVersion = useReviewStore((s) => s.currentVersion)
   const setCurrentVersion = useReviewStore((s) => s.setCurrentVersion)
 
-  const [internalCompareMode, setInternalCompareMode] = React.useState(false)
-  const compareMode = externalCompareMode !== undefined ? externalCompareMode : internalCompareMode
-
-  function toggleCompare() {
-    const next = !compareMode
-    if (onCompareModeChange) {
-      onCompareModeChange(next)
-    } else {
-      setInternalCompareMode(next)
-    }
-  }
-
-  // Sort versions ascending by version_number
   const sorted = React.useMemo(
     () => [...versions].sort((a, b) => a.version_number - b.version_number),
     [versions],
@@ -88,59 +50,56 @@ export function VersionSwitcher({
   if (sorted.length === 0) return null
 
   return (
-    <div
-      className={cn(
-        'flex items-center gap-1 overflow-x-auto px-4 py-2 border-b border-border bg-bg-secondary',
-        className,
-      )}
-    >
-      {/* Label */}
-      <span className="text-2xs text-text-tertiary shrink-0 mr-1">Version:</span>
-
-      {/* Version tabs */}
-      <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
-        {sorted.map((version) => {
-          const isActive = currentVersion?.id === version.id
-          const statusCfg = versionStatusConfig[version.processing_status]
-
-          return (
-            <button
-              key={version.id}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors shrink-0',
-                isActive
-                  ? 'bg-accent text-text-inverse'
-                  : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
-                version.processing_status === 'failed' && !isActive && 'text-status-error',
-                version.processing_status === 'processing' && !isActive && 'text-status-warning',
-              )}
-              onClick={() => setCurrentVersion(version)}
-              disabled={version.processing_status === 'uploading' || version.processing_status === 'processing'}
-              title={`Version ${version.version_number} — ${statusCfg.label}`}
+    <div className={cn('flex items-center gap-1.5', className)}>
+      <span className="text-xs text-text-tertiary shrink-0">Version:</span>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors outline-none">
+            v{currentVersion?.version_number ?? sorted[sorted.length - 1].version_number}
+            {sorted.length > 1 && <ChevronDown className="h-3 w-3 opacity-70" />}
+          </button>
+        </DropdownMenu.Trigger>
+        {sorted.length > 1 && (
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="end"
+              sideOffset={6}
+              className="z-[100] min-w-[160px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
             >
-              <span>v{version.version_number}</span>
-              <VersionStatusDot status={version.processing_status} />
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Compare toggle */}
-      {sorted.length > 1 && (
-        <button
-          className={cn(
-            'ml-2 inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors shrink-0',
-            compareMode
-              ? 'bg-accent-muted text-accent border border-accent/30'
-              : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary border border-transparent',
-          )}
-          onClick={toggleCompare}
-          title={compareMode ? 'Exit compare mode' : 'Compare versions side by side'}
-        >
-          <GitCompare className="h-3.5 w-3.5" />
-          Compare
-        </button>
-      )}
+              {sorted.map((version) => {
+                const isActive = currentVersion?.id === version.id
+                const statusCfg = versionStatusConfig[version.processing_status]
+                const isDisabled =
+                  version.processing_status === 'uploading' ||
+                  version.processing_status === 'processing'
+                return (
+                  <DropdownMenu.Item
+                    key={version.id}
+                    disabled={isDisabled}
+                    onSelect={() => setCurrentVersion(version)}
+                    className={cn(
+                      'flex items-center justify-between gap-3 mx-1 px-2.5 py-2 rounded-lg text-sm cursor-pointer outline-none transition-colors',
+                      isActive
+                        ? 'bg-accent/10 text-accent font-medium'
+                        : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+                      isDisabled && 'opacity-50 cursor-not-allowed',
+                    )}
+                  >
+                    <span>v{version.version_number}</span>
+                    <span
+                      className={cn('inline-flex items-center gap-1 text-[11px]', statusCfg.className)}
+                      title={statusCfg.label}
+                    >
+                      {statusCfg.icon}
+                      {statusCfg.label}
+                    </span>
+                  </DropdownMenu.Item>
+                )
+              })}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        )}
+      </DropdownMenu.Root>
     </div>
   )
 }

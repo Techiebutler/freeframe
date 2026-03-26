@@ -35,6 +35,7 @@ interface ReviewContextValue {
   resolveComment: (commentId: string) => Promise<void>;
   seekTo: (time: number) => void;
   refetchComments: () => Promise<void>;
+  refetchVersions: () => Promise<void>;
   pauseVideo: () => void;
   registerPauseHandler: (handler: () => void) => void;
 }
@@ -189,6 +190,17 @@ export function ReviewProvider({
     await fetchComments();
   }, [fetchComments]);
 
+  const refetchVersions = useCallback(async () => {
+    if (shareToken) return;
+    try {
+      const allVersions = await api.get<AssetVersion[]>(`/assets/${assetId}/versions`);
+      if (!mountedRef.current) return;
+      setVersions(allVersions ?? []);
+    } catch {
+      // ignore
+    }
+  }, [assetId, shareToken]);
+
   useEffect(() => {
     setIsLoading(true);
     setError(null);
@@ -272,6 +284,7 @@ export function ReviewProvider({
       resolveComment,
       seekTo,
       refetchComments,
+      refetchVersions,
       pauseVideo,
       registerPauseHandler,
     }),
@@ -286,6 +299,7 @@ export function ReviewProvider({
       resolveComment,
       seekTo,
       refetchComments,
+      refetchVersions,
       pauseVideo,
       registerPauseHandler,
     ],

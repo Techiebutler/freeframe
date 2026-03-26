@@ -18,37 +18,88 @@ import { useReviewStore } from '@/stores/review-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
 import { api } from '@/lib/api'
+import { useUploadStore } from '@/stores/upload-store'
+import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  MessageSquare,
   Info,
   Loader2,
   Columns2,
+  Upload,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePageTitle } from '@/hooks/use-page-title'
-import type { Project, AssetResponse, ProjectMember } from '@/types'
+import type { Project, AssetResponse, ProjectMember, FolderTreeNode } from '@/types'
+
+const acceptByType: Record<string, string> = {
+  video: 'video/*',
+  audio: 'audio/*',
+  image: 'image/*',
+  image_carousel: 'image/*',
+}
 
 function ReviewScreenInner({ projectId }: { projectId: string }) {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { asset, versions, isLoading, refetchComments } = useReview()
+  const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
   const { user } = useAuthStore()
+  const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
+  const versionFileInputRef = useRef<HTMLInputElement>(null)
+  const setExtraCrumbs = useBreadcrumbStore((s) => s.setExtraCrumbs)
+  const setLabel = useBreadcrumbStore((s) => s.setLabel)
   usePageTitle(asset?.name ?? null)
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
   const [activeTab, setActiveTab] = useState<'comments' | 'fields'>('comments')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const deepLinkApplied = useRef(false)
 
-  // Fetch project info for breadcrumb
+  // Fetch folder tree to build the folder path for the breadcrumb
+  const { data: folderTree } = useSWR<FolderTreeNode[]>(
+    asset ? `/projects/${projectId}/folder-tree` : null,
+    () => api.get<FolderTreeNode[]>(`/projects/${projectId}/folder-tree`),
+  )
+
+  // Set extra crumbs = [folder path..., asset name]
+  // Don't register asset UUID as a label — use extraCrumbs for correct ordering
+  useEffect(() => {
+    if (!asset?.name) return
+
+    function findPath(
+      nodes: FolderTreeNode[],
+      targetId: string,
+      trail: { id: string; name: string }[],
+    ): { id: string; name: string }[] | null {
+      for (const node of nodes) {
+        const next = [...trail, { id: node.id, name: node.name }]
+        if (node.id === targetId) return next
+        const found = findPath(node.children, targetId, next)
+        if (found) return found
+      }
+      return null
+    }
+
+    const folderPath = asset.folder_id && folderTree
+      ? (findPath(folderTree, asset.folder_id, []) ?? [])
+      : []
+
+    setExtraCrumbs([
+      ...folderPath.map((f) => ({ label: f.name, href: `/projects/${projectId}?folder=${f.id}` })),
+      { label: asset.name }, // asset name — no href (current page)
+    ])
+  }, [asset?.id, asset?.name, asset?.folder_id, folderTree, setExtraCrumbs])
+
+  // Fetch project info for breadcrumb + register project name as label
   const { data: project } = useSWR<Project>(
     `/projects/${projectId}`,
     () => api.get<Project>(`/projects/${projectId}`),
   )
+  useEffect(() => {
+    if (project?.name) setLabel(projectId, project.name)
+  }, [project?.name, projectId, setLabel])
 
   // Role-based permissions
   const { data: members } = useSWR<ProjectMember[]>(
@@ -272,19 +323,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             <ArrowLeft className="h-4 w-4" />
           </Link>
 
-          {/* Breadcrumb: Project / Asset name */}
-          <nav className="flex items-center gap-1 text-[13px] min-w-0">
-            <Link
-              href={`/projects/${asset.project_id}`}
-              className="text-text-tertiary hover:text-text-primary transition-colors shrink-0"
-            >
-              {project?.name ?? 'Project'}
-            </Link>
-            <span className="text-text-quaternary">/</span>
-            <span className="text-text-primary font-medium truncate">
-              {asset.name}
-            </span>
-          </nav>
+          {/* Asset name only */}
+          <span className="text-[13px] text-text-primary font-medium truncate">
+            {asset.name}
+          </span>
         </div>
 
         {/* Center: asset navigation */}
@@ -314,7 +356,30 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 
         {/* Right: version, share, sidebar toggle */}
         <div className="flex items-center gap-2 shrink-0 flex-1 justify-end">
+          {/* Hidden file input for new version upload */}
+          <input
+            ref={versionFileInputRef}
+            type="file"
+            className="hidden"
+            accept={acceptByType[asset.asset_type] ?? '*/*'}
+            onChange={async (e) => {
+              const file = e.target.files?.[0]
+              if (!file || !asset) return
+              startVersionUpload(file, asset.id, asset.name, asset.project_id)
+              e.target.value = ''
+              // Refetch versions after a short delay to show the new uploading version
+              setTimeout(() => refetchVersions(), 800)
+            }}
+          />
           <VersionSwitcher versions={versions} />
+          <button
+            onClick={() => versionFileInputRef.current?.click()}
+            className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+            title="Upload new version"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            New Version
+          </button>
           <ShareDialog assetId={asset.id} assetName={asset.name} />
           <button
             onClick={() => setSidebarOpen((p) => !p)}

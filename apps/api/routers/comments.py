@@ -195,6 +195,7 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
 @router.get("/assets/{asset_id}/comments", response_model=list[CommentResponse])
 def list_comments(
     asset_id: uuid.UUID,
+    version_id: Optional[uuid.UUID] = None,
     visibility: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -207,6 +208,8 @@ def list_comments(
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
     )
+    if version_id:
+        query = query.filter(Comment.version_id == version_id)
     if visibility and visibility in ("public", "internal"):
         query = query.filter(Comment.visibility == visibility)
     top_level = query.order_by(Comment.created_at).all()

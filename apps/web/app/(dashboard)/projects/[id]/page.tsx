@@ -156,9 +156,36 @@ export default function ProjectDetailPage() {
   // Register project name for header breadcrumb + page title
   usePageTitle(project?.name ?? null);
   const setLabel = useBreadcrumbStore((s) => s.setLabel);
+  const setExtraCrumbs = useBreadcrumbStore((s) => s.setExtraCrumbs);
   React.useEffect(() => {
     if (project?.name) setLabel(projectId, project.name);
   }, [project?.name, projectId, setLabel]);
+
+  // Push folder path as extra breadcrumb crumbs when navigating folders
+  React.useEffect(() => {
+    if (!currentFolderId || !tree) {
+      setExtraCrumbs([]);
+      return;
+    }
+    // Walk the tree to collect path nodes (id + name) to currentFolderId
+    function findPath(
+      nodes: typeof tree,
+      targetId: string,
+      trail: { id: string; name: string }[],
+    ): { id: string; name: string }[] | null {
+      for (const node of nodes) {
+        const newTrail = [...trail, { id: node.id, name: node.name }]
+        if (node.id === targetId) return newTrail
+        const found = findPath(node.children, targetId, newTrail)
+        if (found) return found
+      }
+      return null
+    }
+    const path = findPath(tree, currentFolderId, []) ?? []
+    setExtraCrumbs(
+      path.map((f) => ({ label: f.name, href: `/projects/${projectId}?folder=${f.id}` }))
+    );
+  }, [currentFolderId, tree, projectId, setExtraCrumbs]);
 
   const folderParam = currentFolderId
     ? `folder_id=${currentFolderId}`
