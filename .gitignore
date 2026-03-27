@@ -216,5 +216,9 @@ __marimo__/
 .agent/
 skills-lock.json
 
+# Internal dev planning docs
+docs/superpowers/
+CLAUDE.md
+
 .DS_Store
 .worktrees/
