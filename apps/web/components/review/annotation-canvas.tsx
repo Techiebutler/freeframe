@@ -32,8 +32,11 @@ export function AnnotationCanvas({ onSave, className }: AnnotationCanvasProps) {
     if (!container) return
 
     const sync = () => {
-      const { width, height } = container.getBoundingClientRect()
-      resize(Math.floor(width), Math.floor(height))
+      // Use offsetWidth/offsetHeight to get layout dimensions BEFORE CSS transforms
+      // (getBoundingClientRect includes zoom transforms from TransformComponent)
+      const w = container.offsetWidth || Math.floor(container.getBoundingClientRect().width)
+      const h = container.offsetHeight || Math.floor(container.getBoundingClientRect().height)
+      resize(w, h)
     }
 
     sync()

@@ -170,6 +170,8 @@ export function useDrawing(): UseDrawingReturn {
         const rect = new mod.Rect({
           left: pointer.x,
           top: pointer.y,
+          originX: 'left',
+          originY: 'top',
           width: 0,
           height: 0,
           stroke: drawingColor,

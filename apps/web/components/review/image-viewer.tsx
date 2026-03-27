@@ -79,7 +79,7 @@ interface SingleImageProps {
   onImageLoad: (width: number, height: number) => void
 }
 
-function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay }: SingleImageProps & { annotationOverlay?: React.ReactNode }) {
+function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay, isDrawingMode }: SingleImageProps & { annotationOverlay?: React.ReactNode; isDrawingMode?: boolean }) {
   const imgRef = React.useRef<HTMLImageElement>(null)
 
   const handleLoad = () => {
@@ -102,7 +102,10 @@ function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay }:
       />
       {/* Annotation overlay — positioned on top of the image, moves with zoom/pan */}
       {annotationOverlay && (
-        <div className="absolute inset-0 pointer-events-none">
+        <div
+          className="absolute inset-0"
+          style={{ pointerEvents: isDrawingMode ? 'auto' : 'none' }}
+        >
           {annotationOverlay}
         </div>
       )}
@@ -279,6 +282,7 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
                   containerRef={containerRef}
                   onImageLoad={handleImageLoad}
                   annotationOverlay={annotationCanvas}
+                  isDrawingMode={isDrawingMode}
                 />
               </TransformComponent>
 
