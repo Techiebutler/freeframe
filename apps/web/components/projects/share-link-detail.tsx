@@ -604,29 +604,38 @@ export function ShareLinkContent({
         .then((asset) => setPreviewThumbnails([asset]))
         .catch(() => setPreviewThumbnails([]));
       setPreviewFolders([]);
-    } else {
-      // Folder or project root share: fetch assets + folders
-      const folderParam = folderId ? `folder_id=${folderId}` : "folder_id=root";
-      api
-        .get<
-          {
-            id: string;
-            name: string;
-            asset_type: string;
-            thumbnail_url: string | null;
-          }[]
-        >(`/projects/${projectId}/assets?${folderParam}`)
-        .then((assets) => setPreviewThumbnails(assets.slice(0, 4)))
-        .catch(() => setPreviewThumbnails([]));
-
-      // Fetch subfolders
-      const parentParam = folderId || "root";
-      api
-        .get<{ id: string; name: string; item_count: number }[]>(
-          `/projects/${projectId}/folders?parent_id=${parentParam}`,
-        )
-        .then((folders) => setPreviewFolders(folders))
-        .catch(() => setPreviewFolders([]));
+    } else if (folderId || isProjectShare) {
+      // Folder, project root, or multi-share: use the share endpoint
+      // to get only the items actually included in this share link
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const headers: Record<string, string> = {};
+      try {
+        const t = localStorage.getItem('ff_access_token');
+        if (t) headers['Authorization'] = `Bearer ${t}`;
+      } catch {}
+      fetch(`${API_URL}/share/${token}/assets?page=1&per_page=50`, { headers })
+        .then((r) => r.ok ? r.json() : Promise.reject())
+        .then((data) => {
+          setPreviewThumbnails(
+            (data.assets || []).slice(0, 4).map((a: any) => ({
+              id: a.id,
+              name: a.name,
+              asset_type: a.asset_type,
+              thumbnail_url: a.thumbnail_url,
+            }))
+          );
+          setPreviewFolders(
+            (data.subfolders || []).map((f: any) => ({
+              id: f.id,
+              name: f.name,
+              item_count: f.item_count ?? 0,
+            }))
+          );
+        })
+        .catch(() => {
+          setPreviewThumbnails([]);
+          setPreviewFolders([]);
+        });
     }
   }, [shareLink, projectId]);
 
