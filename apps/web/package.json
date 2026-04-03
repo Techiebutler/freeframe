@@ -26,7 +26,7 @@
     "fabric": "^7.2.0",
     "hls.js": "^1.6.15",
     "lucide-react": "^0.511.0",
-    "next": "14.2.29",
+    "next": "16.2.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-zoom-pan-pinch": "^3.7.0",
