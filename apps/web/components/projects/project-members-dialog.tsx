@@ -140,8 +140,11 @@ function AddView({
     timerRef.current = setTimeout(async () => {
       try {
         const users = await api.get<User[]>(`/users/search?q=${encodeURIComponent(query)}`)
-        setSuggestions(users)
-        setShowSuggestions(users.length > 0)
+        // Filter out users already in the project
+        const existingUserIds = new Set(membersList.map((m) => m.user_id))
+        const filtered = users.filter((u) => !existingUserIds.has(u.id))
+        setSuggestions(filtered)
+        setShowSuggestions(filtered.length > 0)
       } catch {
         setSuggestions([])
       }
