@@ -587,17 +587,38 @@ export default function ProjectDetailPage() {
         <div className="flex-1" />
 
         {/* Storage indicator — matches global sidebar bottom section (p-2 + space-y-1) */}
-        <div className="border-t border-border shrink-0 p-2 space-y-1">
-          <div className="flex items-center justify-between px-2.5 h-9">
-            <span className="text-[11px] font-medium text-text-secondary">
-              Storage
-            </span>
-            <span className="text-[10px] tabular-nums text-text-tertiary">
-              {formatBytes(project?.storage_bytes ?? 0)}
-            </span>
-          </div>
-          <div className="h-8" />
-        </div>
+        {(() => {
+          const used = project?.storage_bytes ?? 0;
+          const limit = 10 * 1024 * 1024 * 1024; // 10 GB default limit
+          const pct = limit > 0 ? Math.min((used / limit) * 100, 100) : 0;
+          const isCritical = pct >= 90;
+          const isWarning = pct >= 80;
+          return (
+            <div className="border-t border-border shrink-0 p-2 space-y-1">
+              <div className="flex flex-col gap-1 px-2.5 py-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-text-secondary">Storage</span>
+                  <span className={cn(
+                    "text-[10px] tabular-nums",
+                    isCritical ? "text-status-error font-medium" : isWarning ? "text-amber-400 font-medium" : "text-text-tertiary",
+                  )}>
+                    {formatBytes(used)} / {formatBytes(limit)}
+                  </span>
+                </div>
+                <div className="h-1 w-full rounded-full bg-bg-hover overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-300",
+                      isCritical ? "bg-status-error" : isWarning ? "bg-amber-400" : "bg-accent",
+                    )}
+                    style={{ width: `${Math.max(pct, 1)}%` }}
+                  />
+                </div>
+              </div>
+              <div className="h-5" />
+            </div>
+          );
+        })()}
       </div>
 
       {/* ─── Main Content ───────────────────────────────────────────────── */}
