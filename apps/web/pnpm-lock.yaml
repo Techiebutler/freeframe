@@ -72,8 +72,8 @@ importers:
         specifier: ^3.3.0
         version: 3.5.0
       wavesurfer.js:
-        specifier: ^7.12.4
-        version: 7.12.4
+        specifier: ^7.12.5
+        version: 7.12.5
       zustand:
         specifier: ^5.0.5
         version: 5.0.12(@types/react@18.3.28)(react@18.3.1)(use-sync-external-store@1.6.0(react@18.3.1))
@@ -3147,8 +3147,8 @@ packages:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
     engines: {node: '>=18'}
 
-  wavesurfer.js@7.12.4:
-    resolution: {integrity: sha512-b/+XnWfJejNdvNUmtm4M5QzQepHhUbTo+62wYybwdV1B/Sn9vHhgb1xckRm0rGY2ZefJwLkE7lYcKnLfIia4cQ==}
+  wavesurfer.js@7.12.5:
+    resolution: {integrity: sha512-MSZcA13R9ZlxgYpzfakaSYf8dz5tCdZKYbjtN1qnKbCi+UoyfaTuhvjlXHrITi/fgeO3qWfsH7U3BP1AKnwRNg==}
 
   webidl-conversions@7.0.0:
     resolution: {integrity: sha512-VwddBukDzu71offAQR975unBIGqfKZpM+8ZX6ySk8nYhVoo5CYaZyzt3YBvYtRtO+aoGlqxPg/B87NGVZ/fu6g==}
@@ -6524,7 +6524,7 @@ snapshots:
     dependencies:
       xml-name-validator: 5.0.0
 
-  wavesurfer.js@7.12.4: {}
+  wavesurfer.js@7.12.5: {}
 
   webidl-conversions@7.0.0:
     optional: true
