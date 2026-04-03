@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { usePathname } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
 import { useUploadStore } from "@/stores/upload-store";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -15,10 +16,14 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(true);
   const [commandOpen, setCommandOpen] = React.useState(false);
   const { fetchUser } = useAuthStore();
   const { fetchHistory } = useUploadStore();
+
+  // Hide header on asset viewer pages — the viewer has its own top bar
+  const isAssetViewer = /\/projects\/[^/]+\/assets\/[^/]+/.test(pathname);
 
   React.useEffect(() => {
     fetchUser();
@@ -51,7 +56,7 @@ export default function DashboardLayout({
           sidebarCollapsed ? "ml-[52px]" : "ml-[220px]",
         )}
       >
-        <Header onSearchOpen={() => setCommandOpen(true)} />
+        {!isAssetViewer && <Header onSearchOpen={() => setCommandOpen(true)} />}
 
         <div className="relative flex-1 overflow-y-auto">{children}</div>
       </main>
