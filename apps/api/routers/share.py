@@ -967,6 +967,63 @@ def get_share_link_activity(
     return activities
 
 
+# ── Add asset to existing share link ──────────────────────────────────────────
+
+@router.post("/share/{token}/add-asset/{asset_id}", status_code=status.HTTP_200_OK)
+def add_asset_to_share_link(
+    token: str,
+    asset_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add an asset to an existing share link. Converts single-asset links to project-level."""
+    link = db.query(ShareLink).filter(
+        ShareLink.token == token,
+        ShareLink.deleted_at.is_(None),
+    ).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Share link not found")
+
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    # Determine the share link's project
+    link_project_id = _get_project_id_from_link(db, link)
+
+    # Ensure caller has editor role
+    if link_project_id:
+        require_project_role(db, link_project_id, current_user, ProjectRole.editor)
+
+    # Ensure the asset belongs to the same project
+    if link_project_id and asset.project_id != link_project_id:
+        raise HTTPException(status_code=403, detail="Asset does not belong to this share link's project")
+
+    # Check if asset is already the direct target
+    if link.asset_id == asset_id:
+        return {"detail": "Asset already included in this share link"}
+
+    # If this is a single-asset share link, convert to project-level share
+    if link.asset_id and not link.project_id:
+        link.project_id = link_project_id
+        link.asset_id = None
+        db.flush()
+
+    # If this is a folder-only share, convert to project-level
+    if link.folder_id and not link.project_id:
+        link.project_id = link_project_id
+        link.folder_id = None
+        db.flush()
+
+    # Set project_id if not yet set
+    if not link.project_id:
+        link.project_id = link_project_id or asset.project_id
+        db.flush()
+
+    db.commit()
+    return {"detail": "Asset added to share link"}
+
+
 # ── Folder share public endpoints ─────────────────────────────────────────────
 
 @router.get("/share/{token}/assets", response_model=FolderShareAssetsResponse)

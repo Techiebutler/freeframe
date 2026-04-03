@@ -383,7 +383,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             <Upload className="h-3.5 w-3.5" />
             New Version
           </button>
-          <ShareDialog assetId={asset.id} assetName={asset.name} />
+          <ShareDialog assetId={asset.id} assetName={asset.name} projectId={projectId} asset={asset} />
           <button
             onClick={() => setSidebarOpen((p) => !p)}
             className={cn(
