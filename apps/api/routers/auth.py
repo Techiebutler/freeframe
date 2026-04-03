@@ -24,6 +24,7 @@ from ..tasks.email_tasks import send_magic_code_email, send_invite_email
 from ..tasks.celery_app import send_task_safe
 from ..models.user import User, UserStatus
 from ..middleware.auth import get_current_user
+from ..middleware.rate_limit import rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -35,7 +36,7 @@ def _generate_invite_token() -> str:
     return secrets.token_urlsafe(48)
 
 
-@router.post("/send-magic-code", response_model=SendMagicCodeResponse)
+@router.post("/send-magic-code", response_model=SendMagicCodeResponse, dependencies=[Depends(rate_limit("send_magic_code", 5, 600))])
 def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
     """
     Send magic code to email.
@@ -73,7 +74,7 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/verify-magic-code", response_model=TokenResponse)
+@router.post("/verify-magic-code", response_model=TokenResponse, dependencies=[Depends(rate_limit("verify_magic_code", 10, 600))])
 def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db)):
     """
     Verify magic code and return tokens.

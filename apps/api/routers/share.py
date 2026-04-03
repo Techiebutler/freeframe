@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..middleware.auth import get_current_user, get_optional_user
+from ..middleware.rate_limit import rate_limit
 from ..models.user import User
 from ..models.asset import Asset
 from ..models.folder import Folder
@@ -196,7 +197,7 @@ def list_share_links(
     ).all()
 
 
-@router.get("/share/{token}", response_model=ShareLinkValidateResponse)
+@router.get("/share/{token}", response_model=ShareLinkValidateResponse, dependencies=[Depends(rate_limit("share_validate", 30, 60))])
 def validate_share_link_endpoint(
     token: str,
     password: Optional[str] = None,
