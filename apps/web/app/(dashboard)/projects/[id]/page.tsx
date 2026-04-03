@@ -95,6 +95,9 @@ export default function ProjectDetailPage() {
     id: string;
     name: string;
   } | null>(null);
+  const [shareDialogPreselectedItems, setShareDialogPreselectedItems] = React.useState<
+    { type: "folder" | "asset"; id: string; name: string }[]
+  >([]);
   const [shareDialogResult, setShareDialogResult] = React.useState<{
     token: string;
     title: string;
@@ -300,6 +303,7 @@ export default function ProjectDetailPage() {
         id: folderIds[0],
         name: folder?.name || "Shared Folder",
       });
+      setShareDialogPreselectedItems([]);
     } else if (assetIds.length === 1 && folderIds.length === 0) {
       const asset = assets?.find((a) => a.id === assetIds[0]);
       setShareDialogPreselect({
@@ -307,8 +311,23 @@ export default function ProjectDetailPage() {
         id: assetIds[0],
         name: asset?.name || "Shared Asset",
       });
+      setShareDialogPreselectedItems([]);
+    } else if (assetIds.length > 0 || folderIds.length > 0) {
+      // Multiple items — build preselectedItems array
+      setShareDialogPreselect(null);
+      const items: { type: "folder" | "asset"; id: string; name: string }[] = [];
+      for (const id of assetIds) {
+        const asset = assets?.find((a) => a.id === id);
+        if (asset) items.push({ type: "asset", id, name: asset.name });
+      }
+      for (const id of folderIds) {
+        const folder = subfolders?.find((f) => f.id === id);
+        if (folder) items.push({ type: "folder", id, name: folder.name });
+      }
+      setShareDialogPreselectedItems(items);
     } else {
       setShareDialogPreselect(null);
+      setShareDialogPreselectedItems([]);
     }
     setShareDialogResult(null);
     setShareDialogOpen(true);
@@ -1134,6 +1153,7 @@ export default function ProjectDetailPage() {
           setShareDialogOpen(open);
           if (!open) {
             setShareDialogPreselect(null);
+            setShareDialogPreselectedItems([]);
             setShareDialogResult(null);
           }
         }}
@@ -1142,6 +1162,7 @@ export default function ProjectDetailPage() {
         assets={assets ?? []}
         folders={subfolders ?? []}
         preselectedItem={shareDialogPreselect}
+        preselectedItems={shareDialogPreselectedItems}
         initialResult={shareDialogResult}
         onShareCreated={() => mutateShareLinks()}
         onAdvancedSettings={(token) => {
