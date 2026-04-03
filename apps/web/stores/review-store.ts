@@ -26,6 +26,7 @@ interface ReviewState {
   setActiveAnnotation: (data: Record<string, unknown> | null) => void
   setTimeFormat: (format: TimeFormat) => void
   toggleDrawingMode: () => void
+  setIsDrawingMode: (mode: boolean) => void
   setDrawingTool: (tool: DrawingTool) => void
   setDrawingColor: (color: string) => void
   setBrushSize: (size: number) => void
@@ -51,7 +52,7 @@ export const useReviewStore = create<ReviewState>()((set) => ({
   ...initialState,
 
   setCurrentAsset: (asset: Asset) => {
-    set({ currentAsset: asset })
+    set({ currentAsset: asset, playheadTime: 0, seekTarget: null })
   },
 
   setCurrentVersion: (version: AssetVersion) => {
@@ -84,6 +85,10 @@ export const useReviewStore = create<ReviewState>()((set) => ({
 
   toggleDrawingMode: () => {
     set((state) => ({ isDrawingMode: !state.isDrawingMode }))
+  },
+
+  setIsDrawingMode: (mode: boolean) => {
+    set({ isDrawingMode: mode })
   },
 
   setDrawingTool: (tool: DrawingTool) => {

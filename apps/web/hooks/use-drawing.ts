@@ -50,17 +50,27 @@ export function useDrawing(): UseDrawingReturn {
   }, [isDrawingMode])
 
   // ─── Bootstrap Fabric.js ────────────────────────────────────────────────────
+  // Re-runs when isDrawingMode toggles so late-mounted canvas elements get initialized.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const el = canvasRef.current
     if (!el) return
 
+    // If Fabric is already attached to THIS element, skip re-init
+    if (sharedFabric && (sharedFabric as any).lowerCanvasEl === el) return
+
     let disposed = false
+
+    // Capture parent container dimensions BEFORE Fabric wraps the element
+    const parent = el.parentElement
+    const parentW = parent?.clientWidth ?? 0
+    const parentH = parent?.clientHeight ?? 0
 
     const init = async () => {
       const mod = await import('fabric')
       if (disposed) return
 
+      // Dispose any existing canvas (might be on a stale/detached element)
       if (sharedFabric) {
         try { sharedFabric.dispose() } catch { /* already disposed */ }
         sharedFabric = null
@@ -69,7 +79,7 @@ export function useDrawing(): UseDrawingReturn {
       const canvas = new mod.Canvas(el, {
         selection: false,
         renderOnAddRemove: true,
-        skipTargetFind: true,       // never find/select objects on click
+        skipTargetFind: true,
         hoverCursor: 'crosshair',
         moveCursor: 'crosshair',
         defaultCursor: 'crosshair',
@@ -78,9 +88,21 @@ export function useDrawing(): UseDrawingReturn {
       sharedFabric = canvas
       notifyCanvasReady()
 
-      if (sharedPendingSize) {
-        canvas.setDimensions({ width: sharedPendingSize.w, height: sharedPendingSize.h })
-        sharedPendingSize = null
+      // Use pre-captured parent dimensions, or pending size, or fallback
+      const w = sharedPendingSize?.w ?? parentW
+      const h = sharedPendingSize?.h ?? parentH
+      if (w && h) {
+        canvas.setDimensions({ width: w, height: h })
+      }
+      sharedPendingSize = null
+
+      // Apply initial drawing settings immediately
+      if (isDrawingMode) {
+        canvas.isDrawingMode = true
+        const brush = new mod.PencilBrush(canvas)
+        brush.color = drawingColor
+        brush.width = brushSize
+        canvas.freeDrawingBrush = brush
       }
 
       sharedHistory = [JSON.stringify(canvas.toJSON())]
@@ -103,14 +125,8 @@ export function useDrawing(): UseDrawingReturn {
 
     return () => {
       disposed = true
-      if (sharedFabric) {
-        try { sharedFabric.dispose() } catch { /* ignore */ }
-      }
-      sharedFabric = null
-      sharedHistory = []
-      setCanvasReady(false)
     }
-  }, [])
+  }, [isDrawingMode])
 
   // ─── Sync tool / color / brush size ─────────────────────────────────────────
   useEffect(() => {
@@ -303,7 +319,12 @@ export function useDrawing(): UseDrawingReturn {
 
   const getJSON = useCallback((): Record<string, unknown> => {
     if (!sharedFabric) return {}
-    return sharedFabric.toJSON() as Record<string, unknown>
+    const json = sharedFabric.toJSON() as Record<string, unknown>
+    // Store canvas dimensions so the overlay can scale coordinates
+    // when the container size differs from when the annotation was drawn.
+    json._canvasWidth = sharedFabric.width
+    json._canvasHeight = sharedFabric.height
+    return json
   }, [])
 
   const loadJSON = useCallback((json: Record<string, unknown>) => {

@@ -90,7 +90,7 @@ function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay, i
   }
 
   return (
-    <div ref={containerRef} className="relative inline-flex items-center justify-center">
+    <div ref={containerRef} className="relative flex items-center justify-center w-full h-full">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         ref={imgRef}

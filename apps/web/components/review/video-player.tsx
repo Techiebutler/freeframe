@@ -167,15 +167,26 @@ export function VideoPlayer({
     }
   }
 
-  // Load the stream URL
+  // Load the stream URL — reset immediately on asset change so the old video
+  // doesn't keep playing while the new URL is being fetched.
   useEffect(() => {
+    setStreamUrl(null);
     if (initialStreamUrl) {
-      setStreamUrl(initialStreamUrl);
+      const resolved = initialStreamUrl.startsWith("/")
+        ? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${initialStreamUrl}`
+        : initialStreamUrl;
+      setStreamUrl(resolved);
       return;
     }
     api
       .get<StreamUrlResponse>(`/assets/${assetId}/stream`)
-      .then((data) => setStreamUrl(data.url))
+      .then((data) => {
+        // HLS proxy returns relative paths — prepend API URL
+        const url = data.url.startsWith("/")
+          ? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${data.url}`
+          : data.url;
+        setStreamUrl(url);
+      })
       .catch(() => {
         /* stream URL errors handled by player error state */
       });

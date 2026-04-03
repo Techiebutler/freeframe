@@ -193,9 +193,11 @@ export function CommentInput({
     timeFormat,
     pendingAnnotation,
     toggleDrawingMode,
+    setIsDrawingMode,
     setDrawingTool,
     setDrawingColor,
     setPendingAnnotation,
+    setActiveAnnotation,
   } = useReviewStore();
 
   const { pauseVideo } = useReview();
@@ -262,19 +264,10 @@ export function CommentInput({
     !!(annotationData && Object.keys(annotationData).length > 0) ||
     !!(pendingAnnotation && (pendingAnnotation as any)?.objects?.length > 0);
 
-  // Capture canvas state synchronously before exiting drawing mode
+  // Exit drawing mode and clear all annotation state
   function exitDrawingMode() {
-    if (isDrawingMode) {
-      try {
-        const json = getJSON();
-        const objs = (json as any)?.objects;
-        if (objs && Array.isArray(objs) && objs.length > 0) {
-          setPendingAnnotation(json);
-        }
-      } catch {
-        /* canvas may not be ready */
-      }
-    }
+    setPendingAnnotation(null);
+    clear();
     toggleDrawingMode();
   }
 
@@ -376,6 +369,9 @@ export function CommentInput({
       setBody("");
       setMentionUserIds([]);
       setPendingAnnotation(null);
+      clear(); // Clear Fabric.js canvas so stale annotations don't attach to next comment
+      setIsDrawingMode(false); // Exit drawing mode after submitting annotation
+      setActiveAnnotation(null); // Clear any active annotation overlay
       if (replyToId && onCancelReply) onCancelReply();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to post comment");

@@ -49,8 +49,10 @@ export function AnnotationOverlay() {
 
       try {
         const data = activeAnnotation as Record<string, unknown>
-        const origWidth = (data.width as number) || w
-        const origHeight = (data.height as number) || h
+        // _canvasWidth/_canvasHeight are saved by use-drawing's getJSON().
+        // Fall back to data.width (never set by Fabric) then current size.
+        const origWidth = (data._canvasWidth as number) || (data.width as number) || w
+        const origHeight = (data._canvasHeight as number) || (data.height as number) || h
         const scaleX = w / origWidth
         const scaleY = h / origHeight
 
