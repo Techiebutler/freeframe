@@ -12,7 +12,7 @@ boto3==1.35.30
 celery[redis]==5.4.0
 redis==5.1.0
 httpx==0.27.2
-pytest==8.3.3
+pytest==8.4.2
 pytest-asyncio==0.24.0
 email-validator==2.2.0
 jinja2==3.1.6
