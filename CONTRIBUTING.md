@@ -1,77 +1,33 @@
 # Contributing to FreeFrame
 
-Thanks for your interest in contributing to FreeFrame! This guide will help you get started.
+Thanks for your interest in contributing! See the full guide:
 
-## Getting Started
+- **[Development Setup & Contributing Guide](docs/contributing.md)** — prerequisites, dev environment, coding standards
+- **[Architecture Overview](docs/architecture.md)** — system design, tech stack, data flow
+- **[Deployment Guide](docs/deployment.md)** — production setup, Docker, environment variables
 
-1. **Fork** the repository
-2. **Clone** your fork: `git clone https://github.com/YOUR_USERNAME/freeframe.git`
-3. **Create a branch**: `git checkout -b feat/my-feature`
-4. **Start dev environment**: `docker compose -f docker-compose.dev.yml up -d`
-5. **Run migrations**: `docker compose -f docker-compose.dev.yml exec -w /workspace/apps/api api alembic upgrade head`
-
-## Development Setup
-
-### Prerequisites
-- Docker & Docker Compose
-- Node.js 20+ with pnpm
-- Python 3.11+
-
-### Services
-| Service | Port | Description |
-|---------|------|-------------|
-| web | 3000 | Next.js frontend |
-| api | 8000 | FastAPI backend |
-| postgres | 5432 | PostgreSQL 15 |
-| redis | 6379 | Redis 7 |
-| minio | 9000/9001 | S3-compatible storage |
-
-### Running Tests
+## Quick Start
 
 ```bash
-# Backend tests
-python -m pytest apps/api/tests/ -v
-
-# Frontend build check
-cd apps/web && pnpm install && pnpm build
+git clone https://github.com/YOUR_USERNAME/freeframe.git
+cd freeframe
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up --build
+# Open http://localhost:3000
 ```
 
 ## Pull Request Process
 
-1. **Keep PRs focused** — one feature or fix per PR
-2. **Write tests** for new backend functionality
-3. **Ensure CI passes** — tests + build must be green
-4. **Update documentation** if you change APIs or configuration
-5. **Follow existing patterns** — match the code style of surrounding code
+1. Fork and create a branch: `git checkout -b feat/my-feature`
+2. Make your changes and write tests
+3. Ensure CI passes: `python -m pytest apps/api/tests/ -v` and `pnpm --filter web build`
+4. Open a PR against `main`
 
-### Commit Messages
+## Reporting Issues
 
-Use conventional commits:
-```
-feat: add new share link type
-fix: resolve 403 on password-protected shares
-docs: update API endpoint documentation
-ci: add frontend lint job
-```
-
-## Reporting Bugs
-
-Open an issue with:
-- Steps to reproduce
-- Expected vs actual behavior
-- Browser/OS details
-- Screenshots if applicable
-
-## Feature Requests
-
-Open an issue describing:
-- The problem you're trying to solve
-- Your proposed solution
-- Any alternatives you considered
-
-## Code of Conduct
-
-Be respectful and constructive. See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- **Bugs**: Use the [bug report template](https://github.com/Techiebutler/freeframe/issues/new?template=bug_report.yml)
+- **Features**: Use the [feature request template](https://github.com/Techiebutler/freeframe/issues/new?template=feature_request.yml)
+- **Security**: See [SECURITY.md](SECURITY.md)
 
 ## License
 
