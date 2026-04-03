@@ -196,3 +196,29 @@ jobs:
         run: pnpm lint
         working-directory: apps/web
         continue-on-error: true
+
+  # ─── Docker Build ─────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build API image (dev)
+        run: docker build -t freeframe-api:test -f apps/api/Dockerfile .
+
+      - name: Build API image (prod)
+        run: docker build -t freeframe-api:prod -f apps/api/Dockerfile.prod .
+
+      - name: Build Web image (dev)
+        run: docker build -t freeframe-web:test -f apps/web/Dockerfile .
+
+      - name: Build Web image (prod)
+        run: docker build -t freeframe-web:prod -f apps/web/Dockerfile.prod .
+
+      - name: Verify docker-compose configs are valid
+        run: |
+          docker compose -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.prod.yml config --quiet
+          echo "Both compose files are valid"
