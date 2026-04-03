@@ -4,7 +4,7 @@ sqlalchemy==2.0.35
 alembic==1.13.3
 psycopg2-binary==2.9.11
 pydantic==2.9.2
-pydantic-settings==2.5.2
+pydantic-settings==2.13.1
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.0
 python-multipart==0.0.12
