@@ -105,19 +105,22 @@ function getAssetTypeBadgeLabel(assetType: string): string {
 
 // ─── Download handler ─────────────────────────────────────────────────────────
 
-async function handleDownload(token: string, assetId: string, assetName: string) {
+function triggerIframeDownload(url: string) {
+  const iframe = document.createElement('iframe')
+  iframe.style.display = 'none'
+  iframe.src = url
+  document.body.appendChild(iframe)
+  setTimeout(() => iframe.remove(), 30000)
+}
+
+async function handleDownload(token: string, assetId: string, assetName: string, shareSession?: string | null) {
+  const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
   try {
-    const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}`)
+    const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true${sp}`)
     if (!response.ok) return
     const data = await response.json()
     if (data?.url) {
-      const a = document.createElement('a')
-      a.href = data.url
-      a.download = assetName
-      a.rel = 'noopener noreferrer'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
+      triggerIframeDownload(data.url)
     }
   } catch {
     // silently fail
@@ -209,6 +212,7 @@ interface AssetGridCardProps {
   asset: FolderShareAssetItem
   allowDownload: boolean
   token: string
+  shareSession?: string | null
   isSelected: boolean
   onSelect: (asset: FolderShareAssetItem) => void
   onOpen: (asset: FolderShareAssetItem) => void
@@ -217,7 +221,7 @@ interface AssetGridCardProps {
   showCardInfo?: boolean
 }
 
-function AssetGridCard({ asset, allowDownload, token, isSelected, onSelect, onOpen, aspectClass = 'aspect-[16/10]', thumbnailScale = 'fill', showCardInfo = true }: AssetGridCardProps) {
+function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, onSelect, onOpen, aspectClass = 'aspect-[16/10]', thumbnailScale = 'fill', showCardInfo = true }: AssetGridCardProps) {
   const TypeIcon = getAssetTypeIcon(asset.asset_type)
   const [imgError, setImgError] = React.useState(false)
 
@@ -274,7 +278,7 @@ function AssetGridCard({ asset, allowDownload, token, isSelected, onSelect, onOp
             className="absolute top-2 right-2 flex items-center justify-center h-6 w-6 rounded-md bg-bg-primary/70 hover:bg-bg-primary/90 text-text-primary backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => {
               e.stopPropagation()
-              handleDownload(token, asset.id, asset.name)
+              handleDownload(token, asset.id, asset.name, shareSession)
             }}
             title="Download"
           >
@@ -795,7 +799,7 @@ function ShareReviewInner({
         </div>
         <div className="flex items-center gap-2">
           {allowDownload && (
-            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, assetName)}>
+            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, assetName, shareSession)}>
               <Download className="h-3 w-3" /> Download
             </button>
           )}
@@ -1255,9 +1259,12 @@ export function FolderShareViewer({
           {allowDownload && (
             <button
               className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-white bg-accent hover:bg-accent-hover transition-colors"
-              onClick={() => {
-                // Download all visible assets
-                filteredAssets.forEach((a) => handleDownload(token, a.id, a.name))
+              onClick={async () => {
+                // Download all visible assets sequentially with delay
+                for (const a of filteredAssets) {
+                  await handleDownload(token, a.id, a.name, shareSession)
+                  await new Promise((r) => setTimeout(r, 300))
+                }
               }}
             >
               <Download className="h-3 w-3" />
@@ -1397,6 +1404,7 @@ export function FolderShareViewer({
                                 asset={asset}
                                 allowDownload={allowDownload}
                                 token={token}
+                                shareSession={shareSession}
                                 isSelected={selectedAsset?.id === asset.id}
                                 onSelect={setSelectedAsset}
                                 onOpen={openInViewer ? setViewingAsset : () => {}}
@@ -1451,7 +1459,7 @@ export function FolderShareViewer({
                                   {allowDownload && (
                                     <button
                                       className="w-7 shrink-0 flex items-center justify-center h-7 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-text-primary transition-all"
-                                      onClick={(e) => { e.stopPropagation(); handleDownload(token, asset.id, asset.name) }}
+                                      onClick={(e) => { e.stopPropagation(); handleDownload(token, asset.id, asset.name, shareSession) }}
                                       title="Download"
                                     >
                                       <Download className="h-4 w-4" />

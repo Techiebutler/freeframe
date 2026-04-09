@@ -339,6 +339,8 @@ interface ShareTopBarProps {
   assetName?: string
   allowDownload: boolean
   downloadUrl: string | null
+  token: string
+  assetId: string
   sidebarOpen: boolean
   onToggleSidebar: () => void
   onBack?: () => void
@@ -350,11 +352,34 @@ function ShareTopBar({
   assetName,
   allowDownload,
   downloadUrl,
+  token,
+  assetId,
   sidebarOpen,
   onToggleSidebar,
   onBack,
   branding,
 }: ShareTopBarProps) {
+  const [downloading, setDownloading] = React.useState(false)
+
+  async function handleDownload() {
+    setDownloading(true)
+    try {
+      const res = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data?.url) {
+        const iframe = document.createElement('iframe')
+        iframe.style.display = 'none'
+        iframe.src = data.url
+        document.body.appendChild(iframe)
+        setTimeout(() => iframe.remove(), 30000)
+      }
+    } catch {
+      // silent
+    } finally {
+      setDownloading(false)
+    }
+  }
   const primaryColor = branding?.primary_color ?? '#7c3aed'
 
   return (
@@ -405,15 +430,15 @@ function ShareTopBar({
 
       {/* Right: download + panel toggle */}
       <div className="flex items-center gap-2 shrink-0">
-        {allowDownload && downloadUrl && (
-          <a
-            href={downloadUrl}
-            download
-            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-700 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+        {allowDownload && (
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-700 px-3 py-1.5 text-xs font-medium text-white transition-colors disabled:opacity-60"
           >
-            <Download className="h-3.5 w-3.5" />
+            {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
             Download
-          </a>
+          </button>
         )}
 
         <button
@@ -711,6 +736,8 @@ function ShareViewer({
         assetName={asset.name}
         allowDownload={allowDownload}
         downloadUrl={streamUrl}
+        token={token}
+        assetId={asset.id}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((p) => !p)}
         onBack={onBack}

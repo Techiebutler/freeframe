@@ -231,6 +231,7 @@ def list_asset_versions(
 def get_stream_url(
     asset_id: uuid.UUID,
     version_id: Optional[uuid.UUID] = Query(default=None),
+    download: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -261,13 +262,18 @@ def get_stream_url(
     if not media_file:
         raise HTTPException(status_code=404, detail="Media file not found")
 
-    # For video: return presigned HLS master.m3u8 URL
-    # For audio/image: return presigned direct URL
-    s3_key = media_file.s3_key_processed or media_file.s3_key_raw
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
-        s3_key = f"{media_file.s3_key_processed}/master.m3u8"
+        if download:
+            # For video downloads, use the raw file (original upload) so user gets a single file
+            s3_key = media_file.s3_key_raw or media_file.s3_key_processed
+            url = generate_presigned_get_url(s3_key, download_filename=asset.name)
+        else:
+            s3_key = f"{media_file.s3_key_processed}/master.m3u8"
+            url = generate_presigned_get_url(s3_key)
+    else:
+        s3_key = media_file.s3_key_processed or media_file.s3_key_raw
+        url = generate_presigned_get_url(s3_key, download_filename=asset.name if download else None)
 
-    url = generate_presigned_get_url(s3_key)
     return StreamUrlResponse(url=url, asset_type=asset.asset_type)
 
 
