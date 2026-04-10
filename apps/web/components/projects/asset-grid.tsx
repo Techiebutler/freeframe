@@ -677,7 +677,7 @@ export function AssetGrid({
               <Share2 className="h-4 w-4" /> Share
             </Button>
           )}
-          {selectedAssetIds.size > 0 && (
+          {(selectedAssetIds.size > 0 || selectedFolderIds.size > 0) && (
             <Button
               variant="ghost"
               size="sm"

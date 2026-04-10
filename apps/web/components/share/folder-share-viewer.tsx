@@ -105,25 +105,79 @@ function getAssetTypeBadgeLabel(assetType: string): string {
 
 // ─── Download handler ─────────────────────────────────────────────────────────
 
-function triggerIframeDownload(url: string) {
-  const iframe = document.createElement('iframe')
-  iframe.style.display = 'none'
-  iframe.src = url
-  document.body.appendChild(iframe)
-  setTimeout(() => iframe.remove(), 30000)
+function triggerDownload(url: string, filename: string) {
+  // Use an anchor click — works reliably for cross-origin URLs when the
+  // server sets Content-Disposition: attachment (which our backend does).
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener noreferrer'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => a.remove(), 1000)
 }
 
-async function handleDownload(token: string, assetId: string, assetName: string, shareSession?: string | null) {
+async function fetchDownloadUrl(token: string, assetId: string, shareSession?: string | null): Promise<string | null> {
   const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
   try {
     const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true${sp}`)
-    if (!response.ok) return
+    if (!response.ok) return null
     const data = await response.json()
-    if (data?.url) {
-      triggerIframeDownload(data.url)
-    }
+    return data?.url ?? null
   } catch {
-    // silently fail
+    return null
+  }
+}
+
+async function handleDownload(token: string, assetId: string, assetName: string, shareSession?: string | null) {
+  const url = await fetchDownloadUrl(token, assetId, shareSession)
+  if (url) triggerDownload(url, assetName)
+}
+
+async function collectAllAssetsRecursive(
+  token: string,
+  folderId: string | null,
+  shareSession?: string | null,
+): Promise<{ id: string; name: string }[]> {
+  // Fetch assets + subfolders at this level, then recurse into subfolders.
+  const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+  const folderParam = folderId ? `folder_id=${folderId}&` : ''
+  try {
+    const res = await fetch(`${API_URL}/share/${token}/assets?${folderParam}page=1&per_page=500${sp}`)
+    if (!res.ok) return []
+    const data = await res.json() as { assets?: { id: string; name: string }[]; subfolders?: { id: string }[] }
+    const items: { id: string; name: string }[] = (data.assets ?? []).map((a) => ({ id: a.id, name: a.name }))
+    const subfolders = data.subfolders ?? []
+    for (const sub of subfolders) {
+      const nested = await collectAllAssetsRecursive(token, sub.id, shareSession)
+      items.push(...nested)
+    }
+    return items
+  } catch {
+    return []
+  }
+}
+
+async function handleDownloadAll(
+  token: string,
+  folderId: string | null,
+  shareSession?: string | null,
+) {
+  // Recursively collect all assets (including those in subfolders),
+  // pre-fetch presigned URLs in parallel, then trigger downloads
+  // sequentially with a delay so the browser doesn't block them.
+  const allAssets = await collectAllAssetsRecursive(token, folderId, shareSession)
+  const urls = await Promise.all(
+    allAssets.map(async (a) => ({
+      name: a.name,
+      url: await fetchDownloadUrl(token, a.id, shareSession),
+    })),
+  )
+  for (const { url, name } of urls) {
+    if (!url) continue
+    triggerDownload(url, name)
+    await new Promise((r) => setTimeout(r, 800))
   }
 }
 
@@ -1260,13 +1314,7 @@ export function FolderShareViewer({
           {allowDownload && (
             <button
               className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-white bg-accent hover:bg-accent-hover transition-colors"
-              onClick={async () => {
-                // Download all visible assets sequentially with delay
-                for (const a of filteredAssets) {
-                  await handleDownload(token, a.id, a.name, shareSession)
-                  await new Promise((r) => setTimeout(r, 300))
-                }
-              }}
+              onClick={() => handleDownloadAll(token, currentSubfolderId ?? null, shareSession)}
             >
               <Download className="h-3 w-3" />
               Download All
