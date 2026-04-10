@@ -1346,11 +1346,16 @@ def get_share_stream_url(
     token: str,
     asset_id: uuid.UUID,
     share_session: Optional[str] = Query(None, alias="share_session"),
+    download: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
     """Public endpoint — optional auth. Returns presigned stream URL for an asset in a share link."""
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+
+    # Enforce allow_download when explicit download is requested
+    if download and not link.allow_download:
+        raise HTTPException(status_code=403, detail="Downloads are not allowed for this share link")
 
     asset = _get_asset(db, asset_id)
 
@@ -1361,16 +1366,21 @@ def get_share_stream_url(
     if not media_file:
         raise HTTPException(status_code=404, detail="No ready media file found")
 
-    # Generate presigned URL (same pattern as assets.py stream endpoint)
-    s3_key = media_file.s3_key_processed or media_file.s3_key_raw
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
-        s3_key = f"{media_file.s3_key_processed}/master.m3u8"
+        if download:
+            s3_key = media_file.s3_key_raw or media_file.s3_key_processed
+            url = generate_presigned_get_url(s3_key, download_filename=asset.name)
+        else:
+            s3_key = f"{media_file.s3_key_processed}/master.m3u8"
+            url = generate_presigned_get_url(s3_key)
+    else:
+        s3_key = media_file.s3_key_processed or media_file.s3_key_raw
+        url = generate_presigned_get_url(s3_key, download_filename=asset.name if download else None)
 
-    url = generate_presigned_get_url(s3_key)
-
-    # Log viewed_asset activity
+    # Log activity
+    activity_action = ShareActivityAction.downloaded if download else ShareActivityAction.viewed_asset
     _log_share_activity(
-        db, link.id, ShareActivityAction.viewed_asset,
+        db, link.id, activity_action,
         actor_email=current_user.email if current_user else "anonymous",
         actor_name=current_user.name if current_user else None,
         asset_id=asset.id,

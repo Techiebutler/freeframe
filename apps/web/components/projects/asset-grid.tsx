@@ -57,7 +57,7 @@ interface AssetGridProps {
   /** Bulk actions */
   onBulkDelete?: (assetIds: string[], folderIds: string[]) => void
   onBulkMove?: (assetIds: string[], folderIds: string[], targetFolderId: string | null) => void
-  onBulkDownload?: (assetIds: string[]) => void
+  onBulkDownload?: (assetIds: string[], folderIds: string[]) => void
   projectName?: string
   folderTree?: FolderTreeNode[]
   onAssetShare?: (asset: Asset) => void
@@ -677,12 +677,12 @@ export function AssetGrid({
               <Share2 className="h-4 w-4" /> Share
             </Button>
           )}
-          {selectedAssetIds.size > 0 && (
+          {(selectedAssetIds.size > 0 || selectedFolderIds.size > 0) && (
             <Button
               variant="ghost"
               size="sm"
               className="gap-1.5"
-              onClick={() => onBulkDownload?.(Array.from(selectedAssetIds))}
+              onClick={() => onBulkDownload?.(Array.from(selectedAssetIds), Array.from(selectedFolderIds))}
             >
               <Download className="h-4 w-4" /> Download
             </Button>

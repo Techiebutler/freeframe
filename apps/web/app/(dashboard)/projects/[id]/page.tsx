@@ -777,15 +777,14 @@ export default function ProjectDetailPage() {
               onAssetDownload={async (asset) => {
                 try {
                   const data = await api.get<{ url: string }>(
-                    `/assets/${asset.id}/stream`,
+                    `/assets/${asset.id}/stream?download=true`,
                   );
                   if (data?.url) {
-                    const a = document.createElement("a");
-                    a.href = data.url;
-                    a.download = asset.name;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
+                    const iframe = document.createElement("iframe");
+                    iframe.style.display = "none";
+                    iframe.src = data.url;
+                    document.body.appendChild(iframe);
+                    setTimeout(() => iframe.remove(), 30000);
                   }
                 } catch {}
               }}
@@ -800,21 +799,40 @@ export default function ProjectDetailPage() {
               onBulkDelete={(assetIds, folderIds) => {
                 setPendingBulkDelete({ assetIds, folderIds });
               }}
-              onBulkDownload={async (assetIds) => {
-                for (const id of assetIds) {
-                  const asset = assets?.find((a) => a.id === id);
-                  if (!asset) continue;
+              onBulkDownload={async (assetIds, folderIds) => {
+                function triggerDownload(url: string) {
+                  const iframe = document.createElement("iframe");
+                  iframe.style.display = "none";
+                  iframe.src = url;
+                  document.body.appendChild(iframe);
+                  setTimeout(() => iframe.remove(), 30000);
+                }
+
+                async function downloadAsset(id: string) {
                   try {
                     const data = await api.get<{ url: string }>(
-                      `/assets/${id}/stream`,
+                      `/assets/${id}/stream?download=true`,
                     );
                     if (data?.url) {
-                      const a = document.createElement("a");
-                      a.href = data.url;
-                      a.download = asset.name;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
+                      triggerDownload(data.url);
+                      await new Promise((r) => setTimeout(r, 300));
+                    }
+                  } catch {}
+                }
+
+                // Download selected assets
+                for (const id of assetIds) {
+                  await downloadAsset(id);
+                }
+
+                // Download assets from selected folders
+                for (const folderId of folderIds) {
+                  try {
+                    const folderAssets = await api.get<AssetResponse[]>(
+                      `/projects/${projectId}/assets?folder_id=${folderId}&skip=0&limit=100`,
+                    );
+                    for (const fa of folderAssets) {
+                      await downloadAsset(fa.id);
                     }
                   } catch {}
                 }
@@ -882,10 +900,22 @@ export default function ProjectDetailPage() {
                     <UploadZone onFilesSelected={handleFilesSelected} />
                   ) : (
                     <>
-                      <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-secondary break-words">
-                        {pendingFiles.length} file
-                        {pendingFiles.length !== 1 ? "s" : ""} selected:{" "}
-                        {pendingFiles.map((f) => f.name).join(", ")}
+                      <div className="rounded-lg border border-border bg-bg-tertiary">
+                        <div className="px-3 py-2 text-xs font-medium text-text-tertiary border-b border-border">
+                          {pendingFiles.length} file{pendingFiles.length !== 1 ? "s" : ""} selected
+                        </div>
+                        <div className="max-h-40 overflow-y-auto divide-y divide-border">
+                          {pendingFiles.map((f, i) => (
+                            <div key={i} className="flex items-center justify-between px-3 py-1.5">
+                              <span className="text-sm text-text-primary truncate mr-2">{f.name}</span>
+                              <span className="text-xs text-text-tertiary shrink-0">
+                                {f.size < 1024 * 1024
+                                  ? `${(f.size / 1024).toFixed(0)} KB`
+                                  : `${(f.size / (1024 * 1024)).toFixed(1)} MB`}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                       {pendingFiles.length === 1 && (
                         <Input

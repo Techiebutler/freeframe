@@ -144,7 +144,7 @@ services:
     command: celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c ${EMAIL_CONCURRENCY:-2} --loglevel=info
 
   web:
-    image: node:18-alpine
+    image: node:20-alpine
     working_dir: /app
     ports:
       - "3000:3000"

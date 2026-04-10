@@ -1,4 +1,5 @@
 import json
+import re
 import boto3
 from botocore.exceptions import ClientError
 from ..config import settings
@@ -177,12 +178,24 @@ def abort_multipart_upload(s3_key: str, upload_id: str) -> None:
         UploadId=upload_id,
     )
 
-def generate_presigned_get_url(s3_key: str, expires_in: int = 3600) -> str:
-    """Generate a presigned GET URL for an object."""
+def generate_presigned_get_url(s3_key: str, expires_in: int = 3600, download_filename: str | None = None) -> str:
+    """Generate a presigned GET URL for an object.
+
+    Args:
+        s3_key: The S3 object key.
+        expires_in: URL expiry in seconds.
+        download_filename: If set, adds Content-Disposition: attachment header
+                          so the browser downloads with this filename.
+    """
     s3 = _get_presign_client()
+    params: dict = {"Bucket": settings.s3_bucket, "Key": s3_key}
+    if download_filename:
+        safe_name = re.sub(r'[\x00-\x1f\x7f]', '', download_filename)
+        safe_name = safe_name.replace('\\', '\\\\').replace('"', '\\"')
+        params["ResponseContentDisposition"] = f'attachment; filename="{safe_name}"'
     return s3.generate_presigned_url(
         "get_object",
-        Params={"Bucket": settings.s3_bucket, "Key": s3_key},
+        Params=params,
         ExpiresIn=expires_in,
     )
 

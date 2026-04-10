@@ -105,22 +105,79 @@ function getAssetTypeBadgeLabel(assetType: string): string {
 
 // ─── Download handler ─────────────────────────────────────────────────────────
 
-async function handleDownload(token: string, assetId: string, assetName: string) {
+function triggerDownload(url: string, filename: string) {
+  // Use an anchor click — works reliably for cross-origin URLs when the
+  // server sets Content-Disposition: attachment (which our backend does).
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener noreferrer'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => a.remove(), 1000)
+}
+
+async function fetchDownloadUrl(token: string, assetId: string, shareSession?: string | null): Promise<string | null> {
+  const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
   try {
-    const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}`)
-    if (!response.ok) return
+    const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true${sp}`)
+    if (!response.ok) return null
     const data = await response.json()
-    if (data?.url) {
-      const a = document.createElement('a')
-      a.href = data.url
-      a.download = assetName
-      a.rel = 'noopener noreferrer'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-    }
+    return data?.url ?? null
   } catch {
-    // silently fail
+    return null
+  }
+}
+
+async function handleDownload(token: string, assetId: string, assetName: string, shareSession?: string | null) {
+  const url = await fetchDownloadUrl(token, assetId, shareSession)
+  if (url) triggerDownload(url, assetName)
+}
+
+async function collectAllAssetsRecursive(
+  token: string,
+  folderId: string | null,
+  shareSession?: string | null,
+): Promise<{ id: string; name: string }[]> {
+  // Fetch assets + subfolders at this level, then recurse into subfolders.
+  const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+  const folderParam = folderId ? `folder_id=${folderId}&` : ''
+  try {
+    const res = await fetch(`${API_URL}/share/${token}/assets?${folderParam}page=1&per_page=500${sp}`)
+    if (!res.ok) return []
+    const data = await res.json() as { assets?: { id: string; name: string }[]; subfolders?: { id: string }[] }
+    const items: { id: string; name: string }[] = (data.assets ?? []).map((a) => ({ id: a.id, name: a.name }))
+    const subfolders = data.subfolders ?? []
+    for (const sub of subfolders) {
+      const nested = await collectAllAssetsRecursive(token, sub.id, shareSession)
+      items.push(...nested)
+    }
+    return items
+  } catch {
+    return []
+  }
+}
+
+async function handleDownloadAll(
+  token: string,
+  folderId: string | null,
+  shareSession?: string | null,
+) {
+  // Recursively collect all assets (including those in subfolders),
+  // pre-fetch presigned URLs in parallel, then trigger downloads
+  // sequentially with a delay so the browser doesn't block them.
+  const allAssets = await collectAllAssetsRecursive(token, folderId, shareSession)
+  const urls = await Promise.all(
+    allAssets.map(async (a) => ({
+      name: a.name,
+      url: await fetchDownloadUrl(token, a.id, shareSession),
+    })),
+  )
+  for (const { url, name } of urls) {
+    if (!url) continue
+    triggerDownload(url, name)
+    await new Promise((r) => setTimeout(r, 800))
   }
 }
 
@@ -209,6 +266,7 @@ interface AssetGridCardProps {
   asset: FolderShareAssetItem
   allowDownload: boolean
   token: string
+  shareSession?: string | null
   isSelected: boolean
   onSelect: (asset: FolderShareAssetItem) => void
   onOpen: (asset: FolderShareAssetItem) => void
@@ -217,7 +275,7 @@ interface AssetGridCardProps {
   showCardInfo?: boolean
 }
 
-function AssetGridCard({ asset, allowDownload, token, isSelected, onSelect, onOpen, aspectClass = 'aspect-[16/10]', thumbnailScale = 'fill', showCardInfo = true }: AssetGridCardProps) {
+function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, onSelect, onOpen, aspectClass = 'aspect-[16/10]', thumbnailScale = 'fill', showCardInfo = true }: AssetGridCardProps) {
   const TypeIcon = getAssetTypeIcon(asset.asset_type)
   const [imgError, setImgError] = React.useState(false)
 
@@ -274,7 +332,7 @@ function AssetGridCard({ asset, allowDownload, token, isSelected, onSelect, onOp
             className="absolute top-2 right-2 flex items-center justify-center h-6 w-6 rounded-md bg-bg-primary/70 hover:bg-bg-primary/90 text-text-primary backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => {
               e.stopPropagation()
-              handleDownload(token, asset.id, asset.name)
+              handleDownload(token, asset.id, asset.name, shareSession)
             }}
             title="Download"
           >
@@ -700,6 +758,7 @@ function ShareReviewScreen({
     <ReviewProvider assetId={assetId} shareToken={token} shareSession={shareSession}>
       <ShareReviewInner
         token={token}
+        shareSession={shareSession}
         assetName={assetName}
         permission={permission}
         allowDownload={allowDownload}
@@ -715,7 +774,7 @@ function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, assetName, permission, allowDownload, onBack,
+  token, shareSession, assetName, permission, allowDownload, onBack,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput,
 }: any) {
   // Import hooks from the review system
@@ -795,7 +854,7 @@ function ShareReviewInner({
         </div>
         <div className="flex items-center gap-2">
           {allowDownload && (
-            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, assetName)}>
+            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, assetName, shareSession)}>
               <Download className="h-3 w-3" /> Download
             </button>
           )}
@@ -1255,10 +1314,7 @@ export function FolderShareViewer({
           {allowDownload && (
             <button
               className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-white bg-accent hover:bg-accent-hover transition-colors"
-              onClick={() => {
-                // Download all visible assets
-                filteredAssets.forEach((a) => handleDownload(token, a.id, a.name))
-              }}
+              onClick={() => handleDownloadAll(token, currentSubfolderId ?? null, shareSession)}
             >
               <Download className="h-3 w-3" />
               Download All
@@ -1397,6 +1453,7 @@ export function FolderShareViewer({
                                 asset={asset}
                                 allowDownload={allowDownload}
                                 token={token}
+                                shareSession={shareSession}
                                 isSelected={selectedAsset?.id === asset.id}
                                 onSelect={setSelectedAsset}
                                 onOpen={openInViewer ? setViewingAsset : () => {}}
@@ -1451,7 +1508,7 @@ export function FolderShareViewer({
                                   {allowDownload && (
                                     <button
                                       className="w-7 shrink-0 flex items-center justify-center h-7 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-text-primary transition-all"
-                                      onClick={(e) => { e.stopPropagation(); handleDownload(token, asset.id, asset.name) }}
+                                      onClick={(e) => { e.stopPropagation(); handleDownload(token, asset.id, asset.name, shareSession) }}
                                       title="Download"
                                     >
                                       <Download className="h-4 w-4" />
