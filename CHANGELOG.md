@@ -5,6 +5,18 @@ All notable changes to FreeFrame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-04-10
+
+### Fixed
+- **Asset downloads** ([#35](https://github.com/Techiebutler/freeframe/issues/35)) — download buttons were serving HLS `.m3u8` playlist files instead of the original media. Stream endpoints now accept `?download=true` and return a presigned URL to the raw file (or the processed file for images/audio) with `Content-Disposition: attachment` so the browser saves it with the correct filename.
+- **Share link "Download All"** now recursively walks the share folder tree and downloads assets from all subfolders — previously only downloaded assets at the current level.
+- **Bulk download in project view** — the Download button in the bulk actions bar now appears when only folders are selected, and selecting folders recursively downloads their assets.
+- **Share link download permission** — the stream endpoint now enforces `allow_download` and logs `downloaded` activity separately from `viewed_asset`.
+- **Upload dialog file list** — selecting multiple files now shows a clean per-file list with individual sizes (KB/MB) instead of a single concatenated string.
+- **Dev environment** — `docker-compose.dev.yml` web service bumped from `node:18-alpine` to `node:20-alpine` (required by current frontend dependencies).
+
+---
+
 ## [1.1.1] - 2026-04-04
 
 ### Security
