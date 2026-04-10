@@ -704,6 +704,7 @@ function ShareReviewScreen({
     <ReviewProvider assetId={assetId} shareToken={token} shareSession={shareSession}>
       <ShareReviewInner
         token={token}
+        shareSession={shareSession}
         assetName={assetName}
         permission={permission}
         allowDownload={allowDownload}
@@ -719,7 +720,7 @@ function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, assetName, permission, allowDownload, onBack,
+  token, shareSession, assetName, permission, allowDownload, onBack,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput,
 }: any) {
   // Import hooks from the review system
