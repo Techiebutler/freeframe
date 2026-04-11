@@ -1144,15 +1144,15 @@ export default function ProjectDetailPage() {
                         className="gap-1"
                         onClick={async () => {
                           try {
-                            const res = await api.get<{ url: string }>(`/assets/${selectedAsset.id}/stream`);
+                            const res = await api.get<{ url: string }>(
+                              `/assets/${selectedAsset.id}/stream?download=true`,
+                            );
                             if (res.url) {
-                              const a = document.createElement('a');
-                              a.href = res.url;
-                              a.download = selectedAsset.name;
-                              a.rel = 'noopener noreferrer';
-                              document.body.appendChild(a);
-                              a.click();
-                              document.body.removeChild(a);
+                              const iframe = document.createElement("iframe");
+                              iframe.style.display = "none";
+                              iframe.src = res.url;
+                              document.body.appendChild(iframe);
+                              setTimeout(() => iframe.remove(), 30000);
                             }
                           } catch {
                             // Silent fail

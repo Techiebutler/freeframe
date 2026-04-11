@@ -15,7 +15,7 @@ from ..models.activity import Mention, Notification, NotificationType
 from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
-from ..services.s3_service import generate_presigned_get_url
+from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES, mime_to_asset_type
 from ..services.s3_service import create_multipart_upload
 
@@ -266,13 +266,18 @@ def get_stream_url(
         if download:
             # For video downloads, use the raw file (original upload) so user gets a single file
             s3_key = media_file.s3_key_raw or media_file.s3_key_processed
-            url = generate_presigned_get_url(s3_key, download_filename=asset.name)
+            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
+            url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:
             s3_key = f"{media_file.s3_key_processed}/master.m3u8"
             url = generate_presigned_get_url(s3_key)
     else:
         s3_key = media_file.s3_key_processed or media_file.s3_key_raw
-        url = generate_presigned_get_url(s3_key, download_filename=asset.name if download else None)
+        if download:
+            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
+            url = generate_presigned_get_url(s3_key, download_filename=filename)
+        else:
+            url = generate_presigned_get_url(s3_key)
 
     return StreamUrlResponse(url=url, asset_type=asset.asset_type)
 

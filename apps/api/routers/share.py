@@ -36,7 +36,7 @@ from ..schemas.share import (
 )
 from ..services.permissions import require_project_role, validate_share_link, validate_share_link_with_session
 from ..services.redis_service import create_share_session
-from ..services.s3_service import generate_presigned_get_url
+from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.crypto_service import encrypt_password, decrypt_password
 from ..models.project import Project, ProjectRole
 from ..tasks.email_tasks import send_share_email
@@ -1369,13 +1369,18 @@ def get_share_stream_url(
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
         if download:
             s3_key = media_file.s3_key_raw or media_file.s3_key_processed
-            url = generate_presigned_get_url(s3_key, download_filename=asset.name)
+            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
+            url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:
             s3_key = f"{media_file.s3_key_processed}/master.m3u8"
             url = generate_presigned_get_url(s3_key)
     else:
         s3_key = media_file.s3_key_processed or media_file.s3_key_raw
-        url = generate_presigned_get_url(s3_key, download_filename=asset.name if download else None)
+        if download:
+            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
+            url = generate_presigned_get_url(s3_key, download_filename=filename)
+        else:
+            url = generate_presigned_get_url(s3_key)
 
     # Log activity
     activity_action = ShareActivityAction.downloaded if download else ShareActivityAction.viewed_asset

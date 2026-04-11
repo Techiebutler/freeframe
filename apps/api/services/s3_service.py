@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import boto3
 from botocore.exceptions import ClientError
@@ -177,6 +178,23 @@ def abort_multipart_upload(s3_key: str, upload_id: str) -> None:
         Key=s3_key,
         UploadId=upload_id,
     )
+
+def build_download_filename(display_name: str, source: str | None) -> str:
+    """Return display_name with an extension appended from `source` if missing.
+
+    `source` is an original upload filename or an S3 key — whichever is most
+    authoritative for the file's real extension. If the display name already
+    ends with that extension (case-insensitive), it is returned unchanged.
+    """
+    if not source:
+        return display_name
+    ext = os.path.splitext(source)[1]
+    if not ext:
+        return display_name
+    if display_name.lower().endswith(ext.lower()):
+        return display_name
+    return f"{display_name}{ext}"
+
 
 def generate_presigned_get_url(s3_key: str, expires_in: int = 3600, download_filename: str | None = None) -> str:
     """Generate a presigned GET URL for an object.

@@ -105,12 +105,11 @@ function getAssetTypeBadgeLabel(assetType: string): string {
 
 // ─── Download handler ─────────────────────────────────────────────────────────
 
-function triggerDownload(url: string, filename: string) {
-  // Use an anchor click — works reliably for cross-origin URLs when the
-  // server sets Content-Disposition: attachment (which our backend does).
+function triggerDownload(url: string) {
+  // Let the server's Content-Disposition filename win — don't set `a.download`,
+  // since it would strip the extension the backend appended.
   const a = document.createElement('a')
   a.href = url
-  a.download = filename
   a.rel = 'noopener noreferrer'
   a.style.display = 'none'
   document.body.appendChild(a)
@@ -130,9 +129,9 @@ async function fetchDownloadUrl(token: string, assetId: string, shareSession?: s
   }
 }
 
-async function handleDownload(token: string, assetId: string, assetName: string, shareSession?: string | null) {
+async function handleDownload(token: string, assetId: string, shareSession?: string | null) {
   const url = await fetchDownloadUrl(token, assetId, shareSession)
-  if (url) triggerDownload(url, assetName)
+  if (url) triggerDownload(url)
 }
 
 async function collectAllAssetsRecursive(
@@ -169,14 +168,11 @@ async function handleDownloadAll(
   // sequentially with a delay so the browser doesn't block them.
   const allAssets = await collectAllAssetsRecursive(token, folderId, shareSession)
   const urls = await Promise.all(
-    allAssets.map(async (a) => ({
-      name: a.name,
-      url: await fetchDownloadUrl(token, a.id, shareSession),
-    })),
+    allAssets.map((a) => fetchDownloadUrl(token, a.id, shareSession)),
   )
-  for (const { url, name } of urls) {
+  for (const url of urls) {
     if (!url) continue
-    triggerDownload(url, name)
+    triggerDownload(url)
     await new Promise((r) => setTimeout(r, 800))
   }
 }
@@ -332,7 +328,7 @@ function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, 
             className="absolute top-2 right-2 flex items-center justify-center h-6 w-6 rounded-md bg-bg-primary/70 hover:bg-bg-primary/90 text-text-primary backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => {
               e.stopPropagation()
-              handleDownload(token, asset.id, asset.name, shareSession)
+              handleDownload(token, asset.id, shareSession)
             }}
             title="Download"
           >
@@ -854,7 +850,7 @@ function ShareReviewInner({
         </div>
         <div className="flex items-center gap-2">
           {allowDownload && (
-            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, assetName, shareSession)}>
+            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
               <Download className="h-3 w-3" /> Download
             </button>
           )}
@@ -1508,7 +1504,7 @@ export function FolderShareViewer({
                                   {allowDownload && (
                                     <button
                                       className="w-7 shrink-0 flex items-center justify-center h-7 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-text-primary transition-all"
-                                      onClick={(e) => { e.stopPropagation(); handleDownload(token, asset.id, asset.name, shareSession) }}
+                                      onClick={(e) => { e.stopPropagation(); handleDownload(token, asset.id, shareSession) }}
                                       title="Download"
                                     >
                                       <Download className="h-4 w-4" />
