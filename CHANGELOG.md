@@ -5,6 +5,13 @@ All notable changes to FreeFrame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-04-11
+
+### Fixed
+- **Missing file extensions on download** ([#41](https://github.com/Techiebutler/freeframe/issues/41)) — downloaded assets were saving without an extension (e.g. `Video_Title` instead of `Video_Title.mp4`). The API now derives the extension from `MediaFile.original_filename` (authoritative) or the S3 key and appends it to `asset.name` when missing, for both `/assets/{id}/stream` and `/share/{token}/stream/{asset_id}`. The dashboard Download button now uses `?download=true` + a hidden iframe, and the share viewer no longer overrides `a.download`, so the browser honors the server's `Content-Disposition` filename.
+
+---
+
 ## [1.1.2] - 2026-04-10
 
 ### Fixed
