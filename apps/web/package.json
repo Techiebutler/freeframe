@@ -32,7 +32,7 @@
     "react-zoom-pan-pinch": "^3.7.0",
     "swr": "^2.3.3",
     "tailwind-merge": "^3.3.0",
-    "wavesurfer.js": "^7.12.5",
+    "wavesurfer.js": "^7.12.6",
     "zustand": "^5.0.5"
   },
   "devDependencies": {
