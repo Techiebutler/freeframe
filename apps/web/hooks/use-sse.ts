@@ -126,7 +126,11 @@ export function useSSE(projectId: string | null | undefined, options: UseSSEOpti
       if (destroyed) return
 
       const token = getAccessToken()
-      const url = new URL(`${API_URL}/events/${projectId}`)
+      // Use window.location.origin as a base so deployments behind a reverse
+      // proxy can set NEXT_PUBLIC_API_URL to a relative path like "/api"
+      // without crashing the URL constructor.
+      const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+      const url = new URL(`${API_URL}/events/${projectId}`, base)
       if (token) {
         url.searchParams.set('token', token)
       }

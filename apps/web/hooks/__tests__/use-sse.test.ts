@@ -156,3 +156,30 @@ describe('useSSE hook', () => {
     vi.useRealTimers()
   })
 })
+
+describe('useSSE with relative NEXT_PUBLIC_API_URL', () => {
+  beforeEach(() => {
+    MockEventSource.reset()
+    vi.stubGlobal('EventSource', MockEventSource)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  // Regression for issue #46: deployments behind nginx set NEXT_PUBLIC_API_URL
+  // to a relative path like "/api". `new URL("/api/events/abc")` throws
+  // "Failed to construct 'URL': Invalid URL" without a base, crashing the
+  // dashboard the moment UploadSSEBridge first opens an SSE connection.
+  it('builds a valid URL when NEXT_PUBLIC_API_URL is a relative path', async () => {
+    vi.stubEnv('NEXT_PUBLIC_API_URL', '/api')
+    vi.resetModules()
+    const { useSSE: useSSEFresh } = await import('../use-sse')
+
+    expect(() => renderHook(() => useSSEFresh('project-123'))).not.toThrow()
+    expect(MockEventSource.instances).toHaveLength(1)
+    expect(MockEventSource.instances[0].url).toContain('/api/events/project-123')
+  })
+})
