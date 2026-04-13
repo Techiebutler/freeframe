@@ -5,6 +5,14 @@ All notable changes to FreeFrame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-04-13
+
+### Fixed
+- **Share endpoint returned folder path instead of master.m3u8 for video stream URLs** ([#45](https://github.com/Techiebutler/freeframe/issues/45)) — `GET /share/{token}` was building video stream URLs from `MediaFile.s3_key_processed` (the HLS folder prefix) without appending `/master.m3u8`, so share viewers received a folder URL instead of the playlist. Mirrors the existing fix already applied in `get_share_stream_url` and `assets.py`. Includes regression tests for both the video and image paths.
+- **Dashboard crash on upload with relative `NEXT_PUBLIC_API_URL`** ([#46](https://github.com/Techiebutler/freeframe/issues/46)) — `useSSE` called `new URL(`${API_URL}/events/${projectId}`)` without a base. When `NEXT_PUBLIC_API_URL` was set to a relative path like `/api` (typical for nginx-proxied deployments), the URL constructor threw `TypeError: Failed to construct 'URL': Invalid URL` the moment `UploadSSEBridge` opened its first SSE connection — crashing the dashboard immediately after any upload. Now passes `window.location.origin` as the base URL so relative paths resolve. Includes a regression test.
+
+---
+
 ## [1.1.3] - 2026-04-11
 
 ### Fixed
