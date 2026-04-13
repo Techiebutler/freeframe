@@ -295,7 +295,11 @@ def validate_share_link_endpoint(
         stream_url = None
         if media_file:
             if media_file.s3_key_processed:
-                stream_url = generate_presigned_get_url(media_file.s3_key_processed)
+                if asset.asset_type == AssetType.video:
+                    s3_key = f"{media_file.s3_key_processed}/master.m3u8"
+                else:
+                    s3_key = media_file.s3_key_processed
+                stream_url = generate_presigned_get_url(s3_key)
             elif media_file.s3_key_raw:
                 stream_url = generate_presigned_get_url(media_file.s3_key_raw)
 
