@@ -63,7 +63,7 @@ class TestRewriteManifest:
         result = _rewrite_manifest(content, "hls/proj/ver", "720p/index.m3u8", "tok123")
 
         assert "https://s3.example.com/presigned-segment.ts" in result
-        mock_presign.assert_called_once_with("hls/proj/ver/720p/segment0.ts", expires_in=14400)
+        mock_presign.assert_called_once_with("hls/proj/ver/720p/segment0.ts", expires_in=86400)
 
     @patch("apps.api.routers.hls_proxy.generate_presigned_get_url")
     def test_rewrites_m3u8_to_proxy_url(self, mock_presign):

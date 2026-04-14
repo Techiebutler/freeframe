@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stream", tags=["streaming"])
 
 
-def create_hls_token(s3_prefix: str, expires_hours: int = 4) -> str:
+def create_hls_token(s3_prefix: str, expires_hours: int = 24) -> str:
     """Create a short-lived JWT for HLS proxy access."""
     payload = {
         "sub": "hls",
@@ -72,9 +72,10 @@ def _rewrite_manifest(content: str, s3_prefix: str, manifest_path: str, token: s
             # Variant playlist -> proxy URL with token
             result.append(f"{relative_key}?token={token}")
         elif stripped.endswith(".ts"):
-            # Segment -> presigned S3 URL (direct to S3, 4-hour expiry)
+            # Segment -> presigned S3 URL (direct to S3, 24-hour expiry to
+            # match the outer token lifetime so pause-and-resume works)
             s3_key = f"{s3_prefix}/{relative_key}"
-            result.append(generate_presigned_get_url(s3_key, expires_in=14400))
+            result.append(generate_presigned_get_url(s3_key, expires_in=86400))
         else:
             result.append(line)
 

@@ -38,6 +38,7 @@ from ..services.permissions import require_project_role, validate_share_link, va
 from ..services.redis_service import create_share_session
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.crypto_service import encrypt_password, decrypt_password
+from .hls_proxy import create_hls_token
 from ..models.project import Project, ProjectRole
 from ..tasks.email_tasks import send_share_email
 from ..tasks.celery_app import send_task_safe
@@ -296,10 +297,11 @@ def validate_share_link_endpoint(
         if media_file:
             if media_file.s3_key_processed:
                 if asset.asset_type == AssetType.video:
-                    s3_key = f"{media_file.s3_key_processed}/master.m3u8"
+                    # Route through /stream/hls so S3 can stay private (#51)
+                    hls_token = create_hls_token(media_file.s3_key_processed)
+                    stream_url = f"/stream/hls/master.m3u8?token={hls_token}"
                 else:
-                    s3_key = media_file.s3_key_processed
-                stream_url = generate_presigned_get_url(s3_key)
+                    stream_url = generate_presigned_get_url(media_file.s3_key_processed)
             elif media_file.s3_key_raw:
                 stream_url = generate_presigned_get_url(media_file.s3_key_raw)
 
@@ -1376,8 +1378,9 @@ def get_share_stream_url(
             filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
             url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:
-            s3_key = f"{media_file.s3_key_processed}/master.m3u8"
-            url = generate_presigned_get_url(s3_key)
+            # Route through /stream/hls so S3 can stay private (#51)
+            hls_token = create_hls_token(media_file.s3_key_processed)
+            url = f"/stream/hls/master.m3u8?token={hls_token}"
     else:
         s3_key = media_file.s3_key_processed or media_file.s3_key_raw
         if download:

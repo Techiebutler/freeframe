@@ -5,6 +5,13 @@ All notable changes to FreeFrame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-04-14
+
+### Security
+- **HLS video streams now route through the API proxy so S3 objects can stay private** ([#51](https://github.com/Techiebutler/freeframe/issues/51)) — the `/stream/hls/{path}` proxy router was already built and registered in `main.py` but was never actually called. `GET /assets/{id}/stream`, `GET /share/{token}`, and `GET /share/{token}/stream/{asset_id}` all previously handed out a direct presigned URL to `master.m3u8`, which forced the HLS player to fetch variant playlists and `.ts` segments as unsigned requests — only working on buckets with public-read ACL. Non-AWS providers (Exoscale SOS, Cloudflare R2, etc.) do not inherit bucket-level ACL on new objects, so processed files returned 403 Forbidden. The three stream endpoints now mint a short-lived HLS JWT scoped to the asset's S3 prefix and return `/stream/hls/master.m3u8?token=…`; the proxy rewrites variant playlist URLs to stay inside the proxy (with the same token) and rewrites segment URLs to freshly-presigned S3 URLs. Result: the bucket can stay fully private on every S3-compatible provider, captured segment URLs expire in 24h instead of living forever via public-read, and a leaked master URL can't be replayed after its token expires. Token and segment presign TTLs both bumped from 4h to 24h so pause-and-resume works without refresh logic. Includes regression tests for the assets, share asset detail, and share stream endpoints.
+
+---
+
 ## [1.1.4] - 2026-04-13
 
 ### Fixed
