@@ -554,7 +554,7 @@ def list_share_comments(
     # Determine the asset_id to list comments for
     target_asset_id = link.asset_id or asset_id
     if not target_asset_id:
-        return {"comments": []}
+        return []
     asset_id = target_asset_id
 
     # Get top-level comments — reuse same format as authenticated endpoint

@@ -61,7 +61,7 @@ interface GuestComment {
   timecode_start?: number | null
 }
 
-type CommentsResponse = GuestComment[] | { comments?: GuestComment[] }
+type CommentsResponse = GuestComment[]
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -198,8 +198,8 @@ function GuestCommentList({ token, refreshKey }: GuestCommentListProps) {
   React.useEffect(() => {
     setLoading(true)
     fetch(`${API_URL}/share/${token}/comments`)
-      .then((r) => (r.ok ? r.json() : Promise.resolve({ comments: [] })))
-      .then((data: CommentsResponse) => setComments(Array.isArray(data) ? data : (data.comments ?? [])))
+      .then((r) => (r.ok ? r.json() : Promise.resolve([])))
+      .then((data: CommentsResponse) => setComments(data))
       .catch(() => setComments([]))
       .finally(() => setLoading(false))
   }, [token, refreshKey])
