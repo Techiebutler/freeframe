@@ -272,6 +272,8 @@ export interface ShareLink {
   visibility: "public" | "secure";
   show_versions: boolean;
   show_watermark: boolean;
+  watermark_template_id: string | null;
+  watermark_required?: boolean;
   appearance: ShareLinkAppearance | null;
   created_at: string;
   deleted_at: string | null;
@@ -436,14 +438,66 @@ export interface ProjectBranding {
 
 export interface WatermarkSettings {
   id: string;
-  project_id: string;
+  project_id: string | null;
   share_link_id: string | null;
   enabled: boolean;
   position: WatermarkPosition;
   content: WatermarkContent;
   custom_text: string | null;
   opacity: number;
+  require_internal: boolean;
+  require_shares: boolean;
+  template_id: string | null;
+  exempt_roles: ProjectRole[];
   created_at: string;
+}
+
+export type WatermarkBlockField =
+  | "custom_text"
+  | "name"
+  | "email"
+  | "ip"
+  | "date"
+  | "share_name";
+
+export interface WatermarkBlock {
+  field: WatermarkBlockField;
+  custom_text: string | null;
+  x: number; // percent of frame width (block center)
+  y: number; // percent of frame height (block center)
+  size: number; // font size as percent of frame height
+  color: string;
+  opacity: number;
+  rotation: number; // degrees
+  shadow: boolean;
+  scroll: boolean;
+  tiled: boolean;
+}
+
+export interface WatermarkTemplate {
+  id: string;
+  name: string;
+  scope: "instance" | "project";
+  project_id: string | null;
+  blocks: WatermarkBlock[];
+}
+
+export interface WatermarkRenderBlock {
+  text: string;
+  x: number;
+  y: number;
+  size: number;
+  color: string;
+  opacity: number;
+  rotation: number;
+  shadow: boolean;
+  scroll: boolean;
+  tiled: boolean;
+}
+
+export interface WatermarkRender {
+  enabled: boolean;
+  blocks: WatermarkRenderBlock[];
 }
 
 // ─── Folders ──────────────────────────────────────────────────────────────────

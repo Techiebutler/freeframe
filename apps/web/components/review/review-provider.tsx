@@ -118,6 +118,7 @@ export function ReviewProvider({
           updated_at: "",
           deleted_at: null,
           stream_url: streamData?.url,
+          watermark: streamData?.watermark ?? null,
           thumbnail_url: streamData?.thumbnail_url,
           latest_version: streamData?.version_id
             ? {

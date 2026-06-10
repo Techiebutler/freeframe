@@ -22,7 +22,9 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { GuestCommentInput } from '@/components/review/guest-comment-input'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
-import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
+import { WatermarkOverlay } from '@/components/review/watermark-overlay'
+import { getShareDownloadUrl, triggerUrlDownload } from '@/lib/download'
+import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance, WatermarkRender } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -362,16 +364,9 @@ function ShareTopBar({
   async function handleDownload() {
     setDownloading(true)
     try {
-      const res = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true`)
-      if (!res.ok) return
-      const data = await res.json()
-      if (data?.url) {
-        const iframe = document.createElement('iframe')
-        iframe.style.display = 'none'
-        iframe.src = data.url
-        document.body.appendChild(iframe)
-        setTimeout(() => iframe.remove(), 30000)
-      }
+      // Polls while a watermarked copy is prepared server-side
+      const url = await getShareDownloadUrl(token, assetId)
+      if (url) triggerUrlDownload(url)
     } catch {
       // silent
     } finally {
@@ -463,9 +458,10 @@ interface ShareMediaViewerProps {
   token: string
   streamUrl: string | null
   streamLoading: boolean
+  watermark?: WatermarkRender | null
 }
 
-function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMediaViewerProps) {
+function ShareMediaViewer({ asset, token, streamUrl, streamLoading, watermark }: ShareMediaViewerProps) {
   return (
     <div className="flex-1 flex items-center justify-center bg-black min-h-0 overflow-hidden">
       {asset.asset_type === 'video' && (
@@ -473,14 +469,17 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
           {streamLoading ? (
             <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
           ) : streamUrl ? (
-            <video
-              src={streamUrl}
-              controls
-              className="max-h-full max-w-full"
-              preload="metadata"
-            >
-              Your browser does not support video playback.
-            </video>
+            <div className="relative inline-flex max-h-full max-w-full">
+              <video
+                src={streamUrl}
+                controls
+                className="max-h-full max-w-full"
+                preload="metadata"
+              >
+                Your browser does not support video playback.
+              </video>
+              <WatermarkOverlay watermark={watermark} />
+            </div>
           ) : (
             <div className="flex flex-col items-center gap-2">
               <Video className="h-10 w-10 text-zinc-700" />
@@ -517,6 +516,7 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
 
       {(asset.asset_type === 'image' || asset.asset_type === 'image_carousel') && (
         <div className="w-full h-full flex items-center justify-center p-4">
+          <div className="relative inline-flex max-h-full max-w-full">
           <img
             src={asset.thumbnail_url || asset.stream_url || `${API_URL}/share/${token}/thumbnail/${asset.id}`}
             alt={asset.name}
@@ -536,6 +536,8 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
               }
             }}
           />
+          <WatermarkOverlay watermark={watermark} />
+          </div>
         </div>
       )}
     </div>
@@ -703,20 +705,22 @@ function ShareViewer({
 }: ShareViewerProps) {
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
+  const [watermark, setWatermark] = React.useState<WatermarkRender | null>(null)
   const [commentKey, setCommentKey] = React.useState(0)
   const [sidebarOpen, setSidebarOpen] = React.useState(true)
 
-  // For video/audio assets, get a stream URL if not already provided
+  // Get a stream URL (and the session watermark) for the asset
   React.useEffect(() => {
     if (asset.stream_url) {
       setStreamUrl(asset.stream_url)
-      return
+    } else if (asset.asset_type === 'video' || asset.asset_type === 'audio') {
+      setStreamLoading(true)
     }
-    if (asset.asset_type !== 'video' && asset.asset_type !== 'audio') return
-    setStreamLoading(true)
     fetch(`${API_URL}/share/${token}/stream/${asset.id}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
+        if (data?.watermark) setWatermark(data.watermark)
+        if (asset.stream_url) return
         if (data?.stream_url) setStreamUrl(data.stream_url)
         else if (data?.url) setStreamUrl(data.url)
       })
@@ -750,6 +754,7 @@ function ShareViewer({
           token={token}
           streamUrl={streamUrl}
           streamLoading={streamLoading}
+          watermark={watermark}
         />
 
         {/* Right: comments panel */}

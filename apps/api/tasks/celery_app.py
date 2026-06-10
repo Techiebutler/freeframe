@@ -41,6 +41,7 @@ celery_app.conf.update(
     # Route tasks to queues
     task_routes={
         "apps.api.tasks.transcode_tasks.*": {"queue": "transcoding"},
+        "render_watermark": {"queue": "transcoding"},
         "apps.api.tasks.email_tasks.send_magic_code_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_invite_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_mention_email": {"queue": "email_low"},

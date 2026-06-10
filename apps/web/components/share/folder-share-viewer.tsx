@@ -18,6 +18,7 @@ import {
   ArrowLeft,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getShareDownloadUrl } from '@/lib/download'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -118,12 +119,9 @@ function triggerDownload(url: string) {
 }
 
 async function fetchDownloadUrl(token: string, assetId: string, shareSession?: string | null): Promise<string | null> {
-  const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
   try {
-    const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true${sp}`)
-    if (!response.ok) return null
-    const data = await response.json()
-    return data?.url ?? null
+    // Polls while a watermarked copy is prepared server-side (202 responses)
+    return await getShareDownloadUrl(token, assetId, shareSession)
   } catch {
     return null
   }
@@ -870,6 +868,7 @@ function ShareReviewInner({
               comments={comments}
               className="flex-1"
               initialStreamUrl={(asset as any).stream_url}
+              initialWatermark={(asset as any).watermark}
               overlay={
                 <>
                   {AnnotationOverlay && <AnnotationOverlay key={focusedCommentId ?? 'none'} />}

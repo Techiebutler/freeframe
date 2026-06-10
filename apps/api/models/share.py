@@ -38,6 +38,9 @@ class ShareLink(Base):
     allow_download: Mapped[bool] = mapped_column(Boolean, default=False)
     show_versions: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     show_watermark: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    watermark_template_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("watermark_templates.id"), nullable=True
+    )
     appearance: Mapped[dict] = mapped_column(JSON, nullable=False, server_default='{"layout":"grid","theme":"dark","accent_color":null,"open_in_viewer":true,"sort_by":"created_at"}')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

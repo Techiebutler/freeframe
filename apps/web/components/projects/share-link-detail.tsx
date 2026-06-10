@@ -27,7 +27,8 @@ import {
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
-import type { ShareLink, ShareLinkAppearance } from "@/types";
+import { TemplatePicker } from "@/components/watermark/template-picker";
+import type { ShareLink, ShareLinkAppearance, WatermarkTemplate } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
 
@@ -138,11 +139,13 @@ function ToggleRow({
   label,
   description,
   checked,
+  disabled,
   onCheckedChange,
 }: {
   label: string;
   description?: string;
   checked: boolean;
+  disabled?: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
@@ -155,10 +158,12 @@ function ToggleRow({
       </div>
       <Switch.Root
         checked={checked}
+        disabled={disabled}
         onCheckedChange={onCheckedChange}
         className={cn(
           "relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
           checked ? "bg-accent" : "bg-bg-hover",
+          disabled && "opacity-60 cursor-not-allowed",
         )}
       >
         <Switch.Thumb
@@ -552,6 +557,7 @@ interface ShareLinkContentProps {
 
 interface ShareLinkSettingsPanelProps {
   token: string;
+  projectId?: string;
 }
 
 // ─── ShareLinkContent (LEFT/MAIN panel) ─────────────────────────────────────
@@ -803,7 +809,7 @@ export function ShareLinkContent({
 
 // ─── ShareLinkSettingsPanel (RIGHT panel) ───────────────────────────────────
 
-export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
+export function ShareLinkSettingsPanel({ token, projectId }: ShareLinkSettingsPanelProps) {
   const {
     shareLink,
     debouncedUpdate,
@@ -819,6 +825,17 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
   const [passwordEnabled, setPasswordEnabled] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
   const [localAccentColor, setLocalAccentColor] = React.useState("");
+
+  // Templates for the watermark picker: project-scoped when we know the
+  // project, otherwise the instance-wide set.
+  const templateProjectId = projectId || shareLink?.project_id || null;
+  const { data: watermarkTemplates } = useSWR<WatermarkTemplate[]>(
+    templateProjectId
+      ? `/projects/${templateProjectId}/watermark-templates`
+      : "/watermark-templates",
+    (key: string) => api.get<WatermarkTemplate[]>(key),
+    { revalidateOnFocus: false },
+  );
 
   React.useEffect(() => {
     if (shareLink) {
@@ -1025,12 +1042,26 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
 
               <ToggleRow
                 label="Watermark"
-                description="Overlay watermark on content"
-                checked={shareLink.show_watermark}
+                description={
+                  shareLink.watermark_required
+                    ? "Required by project policy"
+                    : "Overlay watermark on content"
+                }
+                checked={shareLink.show_watermark || !!shareLink.watermark_required}
+                disabled={!!shareLink.watermark_required}
                 onCheckedChange={(checked) =>
                   immediateUpdate({ show_watermark: checked })
                 }
               />
+              {(shareLink.show_watermark || shareLink.watermark_required) && (
+                <TemplatePicker
+                  templates={watermarkTemplates ?? []}
+                  value={shareLink.watermark_template_id}
+                  onChange={(id) =>
+                    immediateUpdate({ watermark_template_id: id })
+                  }
+                />
+              )}
             </Section>
 
             {/* Appearance */}

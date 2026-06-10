@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { cn, formatRelativeTime, formatBytes } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { getAssetDownloadUrl, triggerUrlDownload } from "@/lib/download";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/shared/avatar";
@@ -776,16 +777,8 @@ export default function ProjectDetailPage() {
               }}
               onAssetDownload={async (asset) => {
                 try {
-                  const data = await api.get<{ url: string }>(
-                    `/assets/${asset.id}/stream?download=true`,
-                  );
-                  if (data?.url) {
-                    const iframe = document.createElement("iframe");
-                    iframe.style.display = "none";
-                    iframe.src = data.url;
-                    document.body.appendChild(iframe);
-                    setTimeout(() => iframe.remove(), 30000);
-                  }
+                  const url = await getAssetDownloadUrl(asset.id);
+                  if (url) triggerUrlDownload(url);
                 } catch {}
               }}
               onAssetRename={(asset) => setAssetToRename(asset as AssetResponse)}
@@ -800,21 +793,11 @@ export default function ProjectDetailPage() {
                 setPendingBulkDelete({ assetIds, folderIds });
               }}
               onBulkDownload={async (assetIds, folderIds) => {
-                function triggerDownload(url: string) {
-                  const iframe = document.createElement("iframe");
-                  iframe.style.display = "none";
-                  iframe.src = url;
-                  document.body.appendChild(iframe);
-                  setTimeout(() => iframe.remove(), 30000);
-                }
-
                 async function downloadAsset(id: string) {
                   try {
-                    const data = await api.get<{ url: string }>(
-                      `/assets/${id}/stream?download=true`,
-                    );
-                    if (data?.url) {
-                      triggerDownload(data.url);
+                    const url = await getAssetDownloadUrl(id);
+                    if (url) {
+                      triggerUrlDownload(url);
                       await new Promise((r) => setTimeout(r, 300));
                     }
                   } catch {}
@@ -951,7 +934,7 @@ export default function ProjectDetailPage() {
       {rightPanelOpen && (
         <div className="hidden xl:flex w-[360px] flex-col border-l border-border bg-bg-secondary shrink-0">
           {showShareLinks && selectedShareLink ? (
-            <ShareLinkSettingsPanel token={selectedShareLink} />
+            <ShareLinkSettingsPanel token={selectedShareLink} projectId={projectId} />
           ) : (
             <>
               {/* Tabs */}
@@ -1144,16 +1127,10 @@ export default function ProjectDetailPage() {
                         className="gap-1"
                         onClick={async () => {
                           try {
-                            const res = await api.get<{ url: string }>(
-                              `/assets/${selectedAsset.id}/stream?download=true`,
+                            const url = await getAssetDownloadUrl(
+                              selectedAsset.id,
                             );
-                            if (res.url) {
-                              const iframe = document.createElement("iframe");
-                              iframe.style.display = "none";
-                              iframe.src = res.url;
-                              document.body.appendChild(iframe);
-                              setTimeout(() => iframe.remove(), 30000);
-                            }
+                            if (url) triggerUrlDownload(url);
                           } catch {
                             // Silent fail
                           }

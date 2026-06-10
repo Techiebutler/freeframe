@@ -24,10 +24,38 @@ import {
   LayoutGrid,
 } from 'lucide-react'
 import * as Switch from '@radix-ui/react-switch'
+import useSWR from 'swr'
 import { cn, endOfDayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import type { AssetResponse, Folder, ShareLink, ShareLinkAppearance } from '@/types'
+import { TemplatePicker } from '@/components/watermark/template-picker'
+import type {
+  AssetResponse,
+  Folder,
+  ShareLink,
+  ShareLinkAppearance,
+  WatermarkSettings,
+  WatermarkTemplate,
+} from '@/types'
+
+// ─── Watermark policy hook ───────────────────────────────────────────────────
+
+function useWatermarkOptions(projectId: string) {
+  const { data: policy } = useSWR<WatermarkSettings>(
+    `/projects/${projectId}/watermark`,
+    (key: string) => api.get<WatermarkSettings>(key),
+    { revalidateOnFocus: false },
+  )
+  const { data: templates } = useSWR<WatermarkTemplate[]>(
+    `/projects/${projectId}/watermark-templates`,
+    (key: string) => api.get<WatermarkTemplate[]>(key),
+    { revalidateOnFocus: false },
+  )
+  return {
+    watermarkRequired: policy?.require_shares ?? false,
+    templates: templates ?? [],
+  }
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -255,19 +283,21 @@ interface ShareConfig {
   passphrase: string | null
   expiresAt: string | null
   watermark: boolean
+  watermarkTemplateId: string | null
   visibility: 'public' | 'secure'
 }
 
 // ─── Configure Phase ──────────────────────────────────────────────────────────
 
 interface ConfigurePhaseProps {
+  projectId: string
   defaultTitle: string
   onBack: () => void
   onCreate: (config: ShareConfig) => void
   creating: boolean
 }
 
-function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigurePhaseProps) {
+function ConfigurePhase({ projectId, defaultTitle, onBack, onCreate, creating }: ConfigurePhaseProps) {
   const [title, setTitle] = React.useState(defaultTitle)
   const [allowComments, setAllowComments] = React.useState(false)
   const [allowDownloads, setAllowDownloads] = React.useState(false)
@@ -275,8 +305,12 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
   const [passphraseValue, setPassphraseValue] = React.useState('')
   const [showPassphraseInput, setShowPassphraseInput] = React.useState(false)
   const [watermark, setWatermark] = React.useState(false)
+  const [watermarkTemplateId, setWatermarkTemplateId] = React.useState<string | null>(null)
   const [expiresAt, setExpiresAt] = React.useState('')
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
+
+  const { watermarkRequired, templates } = useWatermarkOptions(projectId)
+  const watermarkOn = watermark || watermarkRequired
 
   function handleCreate() {
     onCreate({
@@ -285,7 +319,8 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
       allowDownloads,
       passphrase: passphrase && passphraseValue ? passphraseValue : null,
       expiresAt: expiresAt || null,
-      watermark,
+      watermark: watermarkOn,
+      watermarkTemplateId,
       visibility,
     })
   }
@@ -428,18 +463,33 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
           </div>
 
           {/* Watermark */}
-          <div className="flex items-center justify-between py-2.5">
-            <div className="flex items-center gap-2.5">
-              <Droplets className="h-4 w-4 text-text-tertiary" />
-              <span className="text-sm text-text-primary">Watermark</span>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between py-2.5">
+              <div className="flex items-center gap-2.5">
+                <Droplets className="h-4 w-4 text-text-tertiary" />
+                <div>
+                  <span className="text-sm text-text-primary">Watermark</span>
+                  {watermarkRequired && (
+                    <p className="text-2xs text-text-tertiary">Required by project policy</p>
+                  )}
+                </div>
+              </div>
+              <Switch.Root
+                checked={watermarkOn}
+                disabled={watermarkRequired}
+                onCheckedChange={setWatermark}
+                className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
+              </Switch.Root>
             </div>
-            <Switch.Root
-              checked={watermark}
-              onCheckedChange={setWatermark}
-              className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors"
-            >
-              <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
-            </Switch.Root>
+            {watermarkOn && (
+              <TemplatePicker
+                templates={templates}
+                value={watermarkTemplateId}
+                onChange={setWatermarkTemplateId}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -551,6 +601,7 @@ function SelectionPhase({
 // ─── Link Created Phase ──────────────────────────────────────────────────────
 
 interface LinkCreatedPhaseProps {
+  projectId: string
   result: CreatedShareResult
   allResults?: CreatedShareResult[]
   onSelectResult?: (result: CreatedShareResult) => void
@@ -558,7 +609,7 @@ interface LinkCreatedPhaseProps {
   onAdvancedSettings?: (token: string) => void
 }
 
-function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvancedSettings }: LinkCreatedPhaseProps) {
+function LinkCreatedPhase({ projectId, result, allResults, onSelectResult, onDone, onAdvancedSettings }: LinkCreatedPhaseProps) {
   const [title, setTitle] = React.useState(result.title)
   const [editingTitle, setEditingTitle] = React.useState(false)
   const [savingTitle, setSavingTitle] = React.useState(false)
@@ -570,7 +621,11 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   const [passphraseValue, setPassphraseValue] = React.useState('')
   const [showPassphraseInput, setShowPassphraseInput] = React.useState(false)
   const [watermark, setWatermark] = React.useState(false)
+  const [watermarkRequired, setWatermarkRequired] = React.useState(false)
+  const [watermarkTemplateId, setWatermarkTemplateId] = React.useState<string | null>(null)
   const [expiresAt, setExpiresAt] = React.useState<string>('')
+
+  const { templates } = useWatermarkOptions(projectId)
 
   // Sync title when switching between results
   React.useEffect(() => {
@@ -589,6 +644,8 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
       setAllowDownloads(data.allow_download)
       setPassphrase(data.has_password ?? false)
       setWatermark(data.show_watermark)
+      setWatermarkRequired(data.watermark_required ?? false)
+      setWatermarkTemplateId(data.watermark_template_id ?? null)
       setExpiresAt(data.expires_at ? new Date(data.expires_at).toISOString().split('T')[0] : '')
       setLayout((data.appearance as ShareLinkAppearance | null)?.layout || 'grid')
       setVisibility(data.visibility === 'secure' ? 'secure' : 'public')
@@ -893,18 +950,36 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
               </div>
 
               {/* Watermark */}
-              <div className="flex items-center justify-between py-2.5">
-                <div className="flex items-center gap-2.5">
-                  <Droplets className="h-4 w-4 text-text-tertiary" />
-                  <span className="text-sm text-text-primary">Watermark</span>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between py-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <Droplets className="h-4 w-4 text-text-tertiary" />
+                    <div>
+                      <span className="text-sm text-text-primary">Watermark</span>
+                      {watermarkRequired && (
+                        <p className="text-2xs text-text-tertiary">Required by project policy</p>
+                      )}
+                    </div>
+                  </div>
+                  <Switch.Root
+                    checked={watermark || watermarkRequired}
+                    disabled={watermarkRequired}
+                    onCheckedChange={(v) => { setWatermark(v); patchLink({ show_watermark: v }) }}
+                    className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
+                  </Switch.Root>
                 </div>
-                <Switch.Root
-                  checked={watermark}
-                  onCheckedChange={(v) => { setWatermark(v); patchLink({ show_watermark: v }) }}
-                  className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors"
-                >
-                  <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
-                </Switch.Root>
+                {(watermark || watermarkRequired) && (
+                  <TemplatePicker
+                    templates={templates}
+                    value={watermarkTemplateId}
+                    onChange={(id) => {
+                      setWatermarkTemplateId(id)
+                      patchLink({ watermark_template_id: id })
+                    }}
+                  />
+                )}
               </div>
             </div>
           </>
@@ -1059,6 +1134,7 @@ export function ShareCreateDialog({
           visibility: config.visibility,
           allow_download: config.allowDownloads,
           show_watermark: config.watermark,
+          watermark_template_id: config.watermarkTemplateId,
         }
         if (config.passphrase) body.password = config.passphrase
         if (config.expiresAt) body.expires_at = endOfDayISO(config.expiresAt)
@@ -1094,6 +1170,7 @@ export function ShareCreateDialog({
           permission: config.allowComments ? 'comment' : 'view',
           allow_download: config.allowDownloads,
           show_watermark: config.watermark,
+          watermark_template_id: config.watermarkTemplateId,
         }
         if (config.passphrase) patches.password = config.passphrase
         if (config.expiresAt) patches.expires_at = new Date(config.expiresAt).toISOString()
@@ -1139,6 +1216,7 @@ export function ShareCreateDialog({
 
           {phase === 'result' && createdResult ? (
             <LinkCreatedPhase
+              projectId={projectId}
               result={createdResult}
               allResults={allCreatedResults}
               onSelectResult={(r) => setCreatedResult(r)}
@@ -1147,6 +1225,7 @@ export function ShareCreateDialog({
             />
           ) : phase === 'configure' ? (
             <ConfigurePhase
+              projectId={projectId}
               defaultTitle={configureDefaultTitle}
               onBack={preselectedItem ? () => onOpenChange(false) : () => setPhase('selection')}
               onCreate={handleCreate}

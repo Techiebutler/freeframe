@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 from ..models.asset import AssetType, AssetStatus, ProcessingStatus, FileType
 from ..models.activity import NotificationType
+from .branding import WatermarkRender
 
 class MediaFileResponse(BaseModel):
     id: uuid.UUID
@@ -64,6 +65,7 @@ class StreamUrlResponse(BaseModel):
     url: str
     asset_type: AssetType
     expires_in: int = 3600
+    watermark: Optional[WatermarkRender] = None
 
 class NotificationResponse(BaseModel):
     id: uuid.UUID

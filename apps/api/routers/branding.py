@@ -1,13 +1,20 @@
 import uuid
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
-from ..models.asset import Asset
 from ..models.project import ProjectRole
-from ..models.branding import ProjectBranding, WatermarkSettings
+from ..models.share import ShareLink
+from ..models.branding import (
+    ProjectBranding,
+    WatermarkSettings,
+    WatermarkTemplate,
+    WatermarkTemplateScope,
+)
 from ..schemas.branding import (
     BrandingUpdate,
     BrandingResponse,
@@ -15,9 +22,13 @@ from ..schemas.branding import (
     WatermarkUpdate,
     WatermarkResponse,
     WatermarkImageUploadResponse,
+    WatermarkTemplateCreate,
+    WatermarkTemplateUpdate,
+    WatermarkTemplateResponse,
 )
-from ..services.permissions import require_project_role, require_asset_access
+from ..services.permissions import require_project_role
 from ..services import s3_service
+from ..services import watermark_service
 from ..config import settings
 
 router = APIRouter(tags=["branding"])
@@ -43,11 +54,35 @@ def _get_or_create_watermark(db: Session, project_id: uuid.UUID) -> WatermarkSet
         WatermarkSettings.share_link_id.is_(None),
     ).first()
     if not wm:
-        wm = WatermarkSettings(project_id=project_id)
+        # New project policies inherit the instance-wide defaults, mirroring
+        # Frame.io's "account defaults apply to new workspaces" behavior.
+        instance = watermark_service.get_instance_policy(db)
+        wm = WatermarkSettings(
+            project_id=project_id,
+            require_internal=instance.require_internal if instance else False,
+            require_shares=instance.require_shares if instance else False,
+            template_id=instance.template_id if instance else None,
+            exempt_roles=list(instance.exempt_roles) if instance and instance.exempt_roles else ["owner", "editor"],
+        )
         db.add(wm)
         db.commit()
         db.refresh(wm)
     return wm
+
+
+def _get_or_create_instance_watermark(db: Session) -> WatermarkSettings:
+    wm = watermark_service.get_instance_policy(db)
+    if not wm:
+        wm = WatermarkSettings(project_id=None)
+        db.add(wm)
+        db.commit()
+        db.refresh(wm)
+    return wm
+
+
+def _require_superadmin(current_user: User) -> None:
+    if not current_user.is_superadmin:
+        raise HTTPException(status_code=403, detail="Superadmin access required")
 
 
 def _branding_to_response(branding: ProjectBranding) -> BrandingResponse:
@@ -168,43 +203,170 @@ def get_watermark_image_upload_url(
     return WatermarkImageUploadResponse(upload_url=upload_url, key=key)
 
 
-# ── Apply Watermark ───────────────────────────────────────────────────────────
+# ── Instance-wide Watermark Policy (superadmin) ──────────────────────────────
 
-@router.post("/assets/{asset_id}/apply-watermark", status_code=status.HTTP_202_ACCEPTED)
-def apply_watermark_to_asset(
-    asset_id: uuid.UUID,
+@router.get("/settings/watermark", response_model=WatermarkResponse)
+def get_instance_watermark(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
-    if not asset:
-        raise HTTPException(status_code=404, detail="Asset not found")
+    _require_superadmin(current_user)
+    wm = _get_or_create_instance_watermark(db)
+    return WatermarkResponse.model_validate(wm)
 
-    require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
 
-    wm = db.query(WatermarkSettings).filter(
-        WatermarkSettings.project_id == asset.project_id,
-        WatermarkSettings.share_link_id.is_(None),
+@router.put("/settings/watermark", response_model=WatermarkResponse)
+def upsert_instance_watermark(
+    body: WatermarkUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_superadmin(current_user)
+    wm = _get_or_create_instance_watermark(db)
+    update_data = body.model_dump(exclude_none=True)
+    for field, value in update_data.items():
+        setattr(wm, field, value)
+    db.commit()
+    db.refresh(wm)
+    return WatermarkResponse.model_validate(wm)
+
+
+# ── Watermark Templates ───────────────────────────────────────────────────────
+
+def _get_template_or_404(db: Session, template_id: uuid.UUID) -> WatermarkTemplate:
+    template = db.query(WatermarkTemplate).filter(
+        WatermarkTemplate.id == template_id,
+        WatermarkTemplate.deleted_at.is_(None),
     ).first()
-    if not wm or not wm.enabled:
-        raise HTTPException(status_code=400, detail="Watermark not enabled")
+    if not template:
+        raise HTTPException(status_code=404, detail="Watermark template not found")
+    return template
 
-    # Resolve watermark text based on content type
-    if wm.content == "email":
-        watermark_text = current_user.email
-    elif wm.content == "name":
-        watermark_text = current_user.name or current_user.email
-    else:  # custom_text
-        watermark_text = wm.custom_text or ""
 
-    from ..tasks.watermark_tasks import apply_watermark
-    from ..tasks.celery_app import send_task_safe
-    send_task_safe(
-        apply_watermark,
-        str(asset_id),
-        watermark_text,
-        wm.position,
-        wm.opacity,
-        None,  # image_key not stored in model
+def _require_template_edit_access(
+    db: Session, template: WatermarkTemplate, current_user: User
+) -> None:
+    if template.scope == WatermarkTemplateScope.instance:
+        _require_superadmin(current_user)
+    else:
+        require_project_role(db, template.project_id, current_user, ProjectRole.editor)
+
+
+@router.get("/watermark-templates", response_model=list[WatermarkTemplateResponse])
+def list_instance_watermark_templates(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Instance-wide templates, visible to any authenticated user (for pickers)."""
+    templates = db.query(WatermarkTemplate).filter(
+        WatermarkTemplate.scope == WatermarkTemplateScope.instance,
+        WatermarkTemplate.deleted_at.is_(None),
+    ).order_by(WatermarkTemplate.created_at).all()
+    return [WatermarkTemplateResponse.model_validate(t) for t in templates]
+
+
+@router.post(
+    "/watermark-templates",
+    response_model=WatermarkTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_instance_watermark_template(
+    body: WatermarkTemplateCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_superadmin(current_user)
+    template = WatermarkTemplate(
+        name=body.name,
+        scope=WatermarkTemplateScope.instance,
+        project_id=None,
+        blocks=[b.model_dump() for b in body.blocks],
+        created_by=current_user.id,
     )
-    return {"status": "watermark_queued"}
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return WatermarkTemplateResponse.model_validate(template)
+
+
+@router.get(
+    "/projects/{project_id}/watermark-templates",
+    response_model=list[WatermarkTemplateResponse],
+)
+def list_project_watermark_templates(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Templates usable in a project: its own plus all instance-wide ones."""
+    require_project_role(db, project_id, current_user, ProjectRole.viewer)
+    templates = db.query(WatermarkTemplate).filter(
+        WatermarkTemplate.deleted_at.is_(None),
+        (WatermarkTemplate.project_id == project_id)
+        | (WatermarkTemplate.scope == WatermarkTemplateScope.instance),
+    ).order_by(WatermarkTemplate.created_at).all()
+    return [WatermarkTemplateResponse.model_validate(t) for t in templates]
+
+
+@router.post(
+    "/projects/{project_id}/watermark-templates",
+    response_model=WatermarkTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_watermark_template(
+    project_id: uuid.UUID,
+    body: WatermarkTemplateCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_project_role(db, project_id, current_user, ProjectRole.editor)
+    template = WatermarkTemplate(
+        name=body.name,
+        scope=WatermarkTemplateScope.project,
+        project_id=project_id,
+        blocks=[b.model_dump() for b in body.blocks],
+        created_by=current_user.id,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return WatermarkTemplateResponse.model_validate(template)
+
+
+@router.patch("/watermark-templates/{template_id}", response_model=WatermarkTemplateResponse)
+def update_watermark_template(
+    template_id: uuid.UUID,
+    body: WatermarkTemplateUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    template = _get_template_or_404(db, template_id)
+    _require_template_edit_access(db, template, current_user)
+    if body.name is not None:
+        template.name = body.name.strip()
+    if body.blocks is not None:
+        template.blocks = [b.model_dump() for b in body.blocks]
+    db.commit()
+    db.refresh(template)
+    return WatermarkTemplateResponse.model_validate(template)
+
+
+@router.delete("/watermark-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_watermark_template(
+    template_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    template = _get_template_or_404(db, template_id)
+    _require_template_edit_access(db, template, current_user)
+    template.deleted_at = datetime.now(timezone.utc)
+    # Detach the template from any policies or share links that reference it
+    db.query(WatermarkSettings).filter(
+        WatermarkSettings.template_id == template_id
+    ).update({WatermarkSettings.template_id: None})
+    db.query(ShareLink).filter(
+        ShareLink.watermark_template_id == template_id
+    ).update({ShareLink.watermark_template_id: None})
+    db.commit()
+
+

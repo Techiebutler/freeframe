@@ -150,3 +150,18 @@
     text-wrap: balance;
   }
 }
+
+/* Watermark overlay: horizontal drift matching the server-side burn-in
+   (~15s per pass across the frame) */
+@keyframes wm-scroll {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.wm-scroll {
+  animation: wm-scroll 30s linear infinite;
+}

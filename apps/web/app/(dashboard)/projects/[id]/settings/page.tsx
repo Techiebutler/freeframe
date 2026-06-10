@@ -12,6 +12,7 @@ import {
   Droplets,
   List,
   Plus,
+  Pencil,
   Trash2,
   ChevronDown,
   Check,
@@ -22,13 +23,16 @@ import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { TemplateEditorDialog } from '@/components/watermark/template-editor-dialog'
+import { TemplatePicker } from '@/components/watermark/template-picker'
+import { WatermarkPreview } from '@/components/watermark/watermark-preview'
 import type {
   ProjectBranding,
   WatermarkSettings,
+  WatermarkTemplate,
   MetadataField,
   MetadataFieldType,
-  WatermarkPosition,
-  WatermarkContent,
+  ProjectRole,
   ViewerLayout,
 } from '@/types'
 
@@ -265,20 +269,56 @@ function BrandingTab({ projectId }: { projectId: string }) {
 
 // ─── Watermark Tab ────────────────────────────────────────────────────────────
 
+const EXEMPTABLE_ROLES: { value: ProjectRole; label: string }[] = [
+  { value: 'owner', label: 'Owners' },
+  { value: 'editor', label: 'Editors' },
+  { value: 'reviewer', label: 'Reviewers' },
+  { value: 'viewer', label: 'Viewers' },
+]
+
+function PolicyToggle({
+  title,
+  description,
+  checked,
+  onChange,
+}: {
+  title: string
+  description: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-border bg-bg-secondary px-4 py-3">
+      <div>
+        <p className="text-sm font-medium text-text-primary">{title}</p>
+        <p className="text-xs text-text-tertiary">{description}</p>
+      </div>
+      <Switch.Root
+        checked={checked}
+        onCheckedChange={onChange}
+        className="relative inline-flex h-5 w-9 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus data-[state=checked]:bg-accent data-[state=unchecked]:bg-bg-tertiary"
+      >
+        <Switch.Thumb className="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0" />
+      </Switch.Root>
+    </div>
+  )
+}
+
 function WatermarkTab({ projectId }: { projectId: string }) {
-  const key = `/projects/${projectId}/watermark`
-  const { data: wm } = useSWR<WatermarkSettings>(key, () =>
-    api.get<WatermarkSettings>(key),
+  const policyKey = `/projects/${projectId}/watermark`
+  const templatesKey = `/projects/${projectId}/watermark-templates`
+  const { data: wm } = useSWR<WatermarkSettings>(policyKey, () =>
+    api.get<WatermarkSettings>(policyKey),
+  )
+  const { data: templates } = useSWR<WatermarkTemplate[]>(templatesKey, () =>
+    api.get<WatermarkTemplate[]>(templatesKey),
   )
 
-  const [form, setForm] = React.useState<Partial<WatermarkSettings>>({
-    enabled: false,
-    position: 'center',
-    content: 'email',
-    opacity: 0.3,
-  })
+  const [form, setForm] = React.useState<Partial<WatermarkSettings>>({})
   const [saving, setSaving] = React.useState(false)
   const [msg, setMsg] = React.useState('')
+  const [editorOpen, setEditorOpen] = React.useState(false)
+  const [editingTemplate, setEditingTemplate] = React.useState<WatermarkTemplate | null>(null)
 
   React.useEffect(() => {
     if (wm) setForm(wm)
@@ -287,20 +327,30 @@ function WatermarkTab({ projectId }: { projectId: string }) {
   const set = <K extends keyof WatermarkSettings>(k: K, value: WatermarkSettings[K]) =>
     setForm((f) => ({ ...f, [k]: value }))
 
+  const exemptRoles = form.exempt_roles ?? ['owner', 'editor']
+  const toggleExemptRole = (role: ProjectRole) => {
+    const next = exemptRoles.includes(role)
+      ? exemptRoles.filter((r) => r !== role)
+      : [...exemptRoles, role]
+    set('exempt_roles', next)
+  }
+
+  const selectedTemplate =
+    templates?.find((t) => t.id === form.template_id) ?? null
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaving(true)
     setMsg('')
     try {
-      await api.patch(key, {
-        enabled: form.enabled,
-        position: form.position,
-        content: form.content,
-        custom_text: form.custom_text,
-        opacity: form.opacity,
+      await api.put(policyKey, {
+        require_internal: form.require_internal ?? false,
+        require_shares: form.require_shares ?? false,
+        template_id: form.template_id,
+        exempt_roles: exemptRoles,
       })
       setMsg('Watermark settings saved.')
-      globalMutate(key)
+      globalMutate(policyKey)
     } catch (err: unknown) {
       setMsg(err instanceof Error ? err.message : 'Failed to save')
     } finally {
@@ -308,79 +358,165 @@ function WatermarkTab({ projectId }: { projectId: string }) {
     }
   }
 
+  const handleDeleteTemplate = async (template: WatermarkTemplate) => {
+    try {
+      await api.delete(`/watermark-templates/${template.id}`)
+      if (form.template_id === template.id) set('template_id', null)
+      globalMutate(templatesKey)
+    } catch {
+      // ignore — instance templates can only be removed by an admin
+    }
+  }
+
   return (
-    <form onSubmit={handleSave} className="space-y-5">
-      {/* Enable toggle */}
-      <div className="flex items-center justify-between rounded-lg border border-border bg-bg-secondary px-4 py-3">
-        <div>
-          <p className="text-sm font-medium text-text-primary">Enable watermark</p>
+    <div className="space-y-6">
+      <form onSubmit={handleSave} className="space-y-4">
+        <PolicyToggle
+          title="Watermark for team members"
+          description="Show a watermark when project members play or download media. Exempt roles below never see it."
+          checked={form.require_internal ?? false}
+          onChange={(v) => set('require_internal', v)}
+        />
+
+        <PolicyToggle
+          title="Require on shares"
+          description="Every share link from this project gets a watermark — the toggle is locked on in share settings."
+          checked={form.require_shares ?? false}
+          onChange={(v) => set('require_shares', v)}
+        />
+
+        {/* Exempt roles */}
+        <div className="rounded-lg border border-border bg-bg-secondary px-4 py-3 space-y-2">
+          <p className="text-sm font-medium text-text-primary">Exempt roles</p>
           <p className="text-xs text-text-tertiary">
-            Burn user identity into shared media
+            These team members see clean media in the app. Share link viewers are
+            never exempt.
           </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {EXEMPTABLE_ROLES.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => toggleExemptRole(value)}
+                className={cn(
+                  'h-7 px-3 rounded-full text-xs font-medium transition-colors border',
+                  exemptRoles.includes(value)
+                    ? 'bg-accent/15 border-accent/40 text-accent'
+                    : 'bg-bg-tertiary border-transparent text-text-secondary hover:text-text-primary',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-        <Switch.Root
-          checked={form.enabled ?? false}
-          onCheckedChange={(checked) => set('enabled', checked)}
-          className="relative inline-flex h-5 w-9 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus data-[state=checked]:bg-accent data-[state=unchecked]:bg-bg-tertiary"
-        >
-          <Switch.Thumb className="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0" />
-        </Switch.Root>
+
+        {/* Default template */}
+        <div className="rounded-lg border border-border bg-bg-secondary px-4 py-3 space-y-2">
+          <p className="text-sm font-medium text-text-primary">Default template</p>
+          <p className="text-xs text-text-tertiary">
+            Used whenever a watermark is shown, unless a share link picks its own.
+          </p>
+          <TemplatePicker
+            templates={templates ?? []}
+            value={form.template_id ?? null}
+            onChange={(id) => set('template_id', id)}
+            defaultLabel="Built-in (centered viewer email)"
+          />
+          {selectedTemplate && (
+            <WatermarkPreview blocks={selectedTemplate.blocks} className="mt-2" />
+          )}
+        </div>
+
+        {msg && <p className="text-xs text-text-secondary">{msg}</p>}
+
+        <div className="flex justify-end">
+          <Button type="submit" size="sm" loading={saving}>
+            Save watermark settings
+          </Button>
+        </div>
+      </form>
+
+      {/* Template manager */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-medium text-text-primary">Templates</h3>
+            <p className="text-xs text-text-tertiary">
+              Reusable watermark designs. Shared templates come from your instance
+              admin.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              setEditingTemplate(null)
+              setEditorOpen(true)
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            New template
+          </Button>
+        </div>
+
+        {!templates || templates.length === 0 ? (
+          <div className="rounded-lg border border-border bg-bg-secondary p-6 text-center">
+            <p className="text-sm text-text-secondary">No templates yet.</p>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-border bg-bg-secondary overflow-hidden divide-y divide-border">
+            {templates.map((template) => (
+              <div
+                key={template.id}
+                className="flex items-center justify-between px-4 py-2.5 hover:bg-bg-tertiary transition-colors"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-text-primary truncate">
+                    {template.name}
+                  </p>
+                  <p className="text-xs text-text-tertiary">
+                    {template.blocks.length}{' '}
+                    {template.blocks.length === 1 ? 'text block' : 'text blocks'}
+                    {template.scope === 'instance' ? ' · shared across instance' : ''}
+                  </p>
+                </div>
+                {template.scope === 'project' && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditingTemplate(template)
+                        setEditorOpen(true)
+                      }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeleteTemplate(template)}
+                      className="text-status-error hover:text-status-error"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      <SimpleSelect<WatermarkPosition>
-        label="Position"
-        value={form.position ?? 'center'}
-        options={[
-          { value: 'center', label: 'Center' },
-          { value: 'corner', label: 'Corner' },
-          { value: 'tiled', label: 'Tiled' },
-        ]}
-        onChange={(v) => set('position', v)}
+      <TemplateEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        template={editingTemplate}
+        projectId={projectId}
+        onSaved={() => globalMutate(templatesKey)}
       />
-
-      <SimpleSelect<WatermarkContent>
-        label="Content"
-        value={form.content ?? 'email'}
-        options={[
-          { value: 'email', label: 'User email' },
-          { value: 'name', label: 'User name' },
-          { value: 'custom_text', label: 'Custom text' },
-        ]}
-        onChange={(v) => set('content', v)}
-      />
-
-      {form.content === 'custom_text' && (
-        <Input
-          label="Custom watermark text"
-          value={form.custom_text ?? ''}
-          onChange={(e) => set('custom_text', e.target.value)}
-          placeholder="Confidential"
-        />
-      )}
-
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium text-text-secondary">
-          Opacity: {Math.round((form.opacity ?? 0.3) * 100)}%
-        </label>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={form.opacity ?? 0.3}
-          onChange={(e) => set('opacity', parseFloat(e.target.value))}
-          className="w-full accent-accent"
-        />
-      </div>
-
-      {msg && <p className="text-xs text-text-secondary">{msg}</p>}
-
-      <div className="flex justify-end">
-        <Button type="submit" size="sm" loading={saving}>
-          Save watermark
-        </Button>
-      </div>
-    </form>
+    </div>
   )
 }
 

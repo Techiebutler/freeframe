@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 import bcrypt
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 import sqlalchemy
 from sqlalchemy import func as sa_func, case
 from sqlalchemy.orm import Session
@@ -34,6 +35,7 @@ from ..schemas.share import (
     ShareLinkUpdate,
     ShareLinkValidateResponse,
 )
+from ..services import watermark_service
 from ..services.permissions import require_project_role, validate_share_link, validate_share_link_with_session
 from ..services.redis_service import create_share_session
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
@@ -154,6 +156,12 @@ def _is_descendant_of(db: Session, folder_id: uuid.UUID, ancestor_id: uuid.UUID)
     return False
 
 
+def _watermark_required_for_project(db: Session, project_id: uuid.UUID) -> bool:
+    """True when the project (or instance) policy forces watermarks on shares."""
+    policy = watermark_service.get_effective_policy(db, project_id)
+    return bool(policy and policy.require_shares)
+
+
 def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFile]:
     """Get the first media file from the latest ready version of an asset."""
     version = db.query(AssetVersion).filter(
@@ -200,7 +208,8 @@ def create_share_link(
         permission=body.permission,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
-        show_watermark=body.show_watermark,
+        show_watermark=body.show_watermark or _watermark_required_for_project(db, asset.project_id),
+        watermark_template_id=body.watermark_template_id,
         appearance=body.appearance.model_dump(),
     )
     db.add(link)
@@ -353,7 +362,7 @@ def validate_share_link_endpoint(
     )
 
 
-def _share_link_response(link: ShareLink) -> ShareLinkResponse:
+def _share_link_response(link: ShareLink, db: Optional[Session] = None) -> ShareLinkResponse:
     """Build ShareLinkResponse from ORM model, computing has_password and decrypting password."""
     response = ShareLinkResponse.model_validate(link)
     response.has_password = link.password_hash is not None and link.password_hash != ''
@@ -362,6 +371,12 @@ def _share_link_response(link: ShareLink) -> ShareLinkResponse:
             response.password_value = decrypt_password(link.password_encrypted)
         except Exception:
             response.password_value = None
+    if db is not None:
+        try:
+            project_id = _get_project_id_from_link(db, link)
+            response.watermark_required = _watermark_required_for_project(db, project_id)
+        except HTTPException:
+            pass
     return response
 
 
@@ -382,7 +397,7 @@ def get_share_link_details(
         raise HTTPException(status_code=404, detail="Share link not found")
     project_id = _get_project_id_from_link(db, link)
     require_project_role(db, project_id, current_user, ProjectRole.viewer)
-    return _share_link_response(link)
+    return _share_link_response(link, db)
 
 
 # ── PATCH share link ─────────────────────────────────────────────────────────
@@ -401,6 +416,13 @@ def update_share_link(
     require_project_role(db, project_id, current_user, ProjectRole.editor)
 
     updates = body.model_dump(exclude_unset=True)
+
+    # Watermark can't be switched off when the project/instance policy requires it
+    if updates.get("show_watermark") is False and _watermark_required_for_project(db, project_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Watermarking is required on shares by the project policy",
+        )
 
     # Handle password separately — hash + encrypt for reversible admin display
     if "password" in updates:
@@ -423,7 +445,7 @@ def update_share_link(
 
     db.commit()
     db.refresh(link)
-    return _share_link_response(link)
+    return _share_link_response(link, db)
 
 
 @router.delete("/share/{token}", status_code=status.HTTP_204_NO_CONTENT)
@@ -475,7 +497,8 @@ def create_folder_share_link(
         permission=body.permission,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
-        show_watermark=body.show_watermark,
+        show_watermark=body.show_watermark or _watermark_required_for_project(db, folder.project_id),
+        watermark_template_id=body.watermark_template_id,
         appearance=body.appearance.model_dump(),
     )
     db.add(link)
@@ -519,7 +542,8 @@ def create_project_share_link(
         permission=body.permission,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
-        show_watermark=body.show_watermark,
+        show_watermark=body.show_watermark or _watermark_required_for_project(db, project_id),
+        watermark_template_id=body.watermark_template_id,
         appearance=body.appearance.model_dump(),
     )
     db.add(link)
@@ -1127,7 +1151,8 @@ def create_multi_share_link(
         visibility=body.visibility,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
-        show_watermark=body.show_watermark,
+        show_watermark=body.show_watermark or _watermark_required_for_project(db, project_id),
+        watermark_template_id=body.watermark_template_id,
         password_hash=password_hash,
         password_encrypted=password_encrypted,
         expires_at=body.expires_at,
@@ -1349,6 +1374,7 @@ def get_folder_share_assets(
 
 @router.get("/share/{token}/stream/{asset_id}")
 def get_share_stream_url(
+    request: Request,
     token: str,
     asset_id: uuid.UUID,
     share_session: Optional[str] = Query(None, alias="share_session"),
@@ -1371,6 +1397,38 @@ def get_share_stream_url(
     media_file = _get_latest_media_file(db, asset.id)
     if not media_file:
         raise HTTPException(status_code=404, detail="No ready media file found")
+
+    watermark = watermark_service.resolve_share_watermark(
+        db, asset, link, user=current_user,
+        client_ip=watermark_service.get_client_ip(request),
+    )
+
+    if download and watermark.enabled and watermark_service.burnin_supported(asset.asset_type):
+        version = db.query(AssetVersion).filter(AssetVersion.id == media_file.version_id).first()
+        wm_url = watermark_service.get_or_request_watermarked_download(
+            db, asset, version, media_file, watermark
+        )
+        if wm_url is None:
+            return JSONResponse(
+                status_code=202,
+                content={"status": "preparing", "retry_after": 3},
+            )
+        _log_share_activity(
+            db, link.id, ShareActivityAction.downloaded,
+            actor_email=current_user.email if current_user else "anonymous",
+            actor_name=current_user.name if current_user else None,
+            asset_id=asset.id,
+            asset_name=asset.name,
+        )
+        return {
+            "url": wm_url,
+            "asset_type": asset.asset_type.value,
+            "name": asset.name,
+            "version_id": str(media_file.version_id) if media_file.version_id else None,
+            "thumbnail_url": None,
+            "duration_seconds": media_file.duration_seconds,
+            "watermark": watermark.model_dump(),
+        }
 
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
         if download:
@@ -1411,6 +1469,7 @@ def get_share_stream_url(
         "version_id": str(media_file.version_id) if media_file.version_id else None,
         "thumbnail_url": thumb_url,
         "duration_seconds": media_file.duration_seconds,
+        "watermark": watermark.model_dump(),
     }
 
 

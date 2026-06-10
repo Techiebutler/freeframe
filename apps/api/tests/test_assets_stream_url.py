@@ -1,5 +1,6 @@
 """Regression tests for issue #51 — /assets/{id}/stream must route video HLS
 through the /stream/hls proxy so S3 objects can stay private."""
+import itertools
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -34,7 +35,11 @@ def _setup_video_asset(mock_db, asset_type):
     media_file.s3_key_raw = "raw/proj/version-xyz/input.mp4"
     media_file.original_filename = "input.mp4"
 
-    mock_db.first.side_effect = [asset, version, media_file]
+    # Asset/version/media first, then None forever — the watermark policy
+    # lookups that follow should find no settings rows.
+    mock_db.first.side_effect = itertools.chain(
+        [asset, version, media_file], itertools.repeat(None)
+    )
     return asset, version, media_file
 
 

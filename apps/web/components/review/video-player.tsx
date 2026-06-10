@@ -18,12 +18,14 @@ import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
 import { useReview } from "./review-provider";
 import { ProgressBar } from "./progress-bar";
-import type { Comment } from "@/types";
+import { WatermarkOverlay } from "./watermark-overlay";
+import type { Comment, WatermarkRender } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface StreamUrlResponse {
   url: string;
+  watermark?: WatermarkRender | null;
 }
 
 interface VideoPlayerProps {
@@ -33,6 +35,8 @@ interface VideoPlayerProps {
   className?: string;
   /** Pre-fetched stream URL (for share mode — skips authenticated API call) */
   initialStreamUrl?: string | null;
+  /** Pre-resolved watermark (for share mode — supplied with the stream URL) */
+  initialWatermark?: WatermarkRender | null;
 }
 
 // ─── Video frame constraint ──────────────────────────────────────────────────
@@ -129,9 +133,13 @@ export function VideoPlayer({
   overlay,
   className,
   initialStreamUrl,
+  initialWatermark,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [watermark, setWatermark] = useState<WatermarkRender | null>(
+    initialWatermark ?? null,
+  );
   const [loop, setLoop] = useState(false);
 
   const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime } =
@@ -176,6 +184,7 @@ export function VideoPlayer({
         ? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${initialStreamUrl}`
         : initialStreamUrl;
       setStreamUrl(resolved);
+      setWatermark(initialWatermark ?? null);
       return;
     }
     api
@@ -186,11 +195,12 @@ export function VideoPlayer({
           ? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${data.url}`
           : data.url;
         setStreamUrl(url);
+        setWatermark(data.watermark ?? null);
       })
       .catch(() => {
         /* stream URL errors handled by player error state */
       });
-  }, [assetId, initialStreamUrl]);
+  }, [assetId, initialStreamUrl, initialWatermark]);
 
   const player = useVideoPlayer(streamUrl);
 
@@ -329,6 +339,13 @@ export function VideoPlayer({
           <div className="absolute inset-0 flex items-center justify-center bg-black/60">
             <p className="text-red-400 text-sm">{error}</p>
           </div>
+        )}
+
+        {/* Session watermark — constrained to the visible video frame */}
+        {watermark?.enabled && (
+          <VideoFrameConstraint videoRef={videoRef}>
+            <WatermarkOverlay watermark={watermark} />
+          </VideoFrameConstraint>
         )}
 
         {/* Overlay slot (annotation canvas / overlay) — constrained to video frame */}

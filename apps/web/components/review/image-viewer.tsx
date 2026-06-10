@@ -21,12 +21,14 @@ import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { useReviewStore } from '@/stores/review-store'
 import { useReview } from '@/components/review/review-provider'
-import type { Asset, AssetVersion, MediaFile } from '@/types'
+import { WatermarkOverlay } from '@/components/review/watermark-overlay'
+import type { Asset, AssetVersion, MediaFile, WatermarkRender } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface StreamResponse {
   url: string
+  watermark?: WatermarkRender | null
 }
 
 // AssetVersion already has files?: MediaFile[]
@@ -80,7 +82,7 @@ interface SingleImageProps {
   onImageLoad: (width: number, height: number) => void
 }
 
-function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay, isDrawingMode }: SingleImageProps & { annotationOverlay?: React.ReactNode; isDrawingMode?: boolean }) {
+function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay, isDrawingMode, watermark }: SingleImageProps & { annotationOverlay?: React.ReactNode; isDrawingMode?: boolean; watermark?: WatermarkRender | null }) {
   const imgRef = React.useRef<HTMLImageElement>(null)
 
   const handleLoad = () => {
@@ -92,15 +94,19 @@ function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay, i
 
   return (
     <div ref={containerRef} className="relative flex items-center justify-center w-full h-full">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        ref={imgRef}
-        src={url}
-        alt={alt}
-        onLoad={handleLoad}
-        className="max-w-full max-h-full object-contain select-none"
-        draggable={false}
-      />
+      {/* Shrink-wrapped so the watermark covers exactly the rendered image */}
+      <div className="relative inline-flex max-w-full max-h-full">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          ref={imgRef}
+          src={url}
+          alt={alt}
+          onLoad={handleLoad}
+          className="max-w-full max-h-full object-contain select-none"
+          draggable={false}
+        />
+        <WatermarkOverlay watermark={watermark} />
+      </div>
       {/* Annotation overlay — positioned on top of the image, moves with zoom/pan */}
       {annotationOverlay && (
         <div
@@ -152,6 +158,7 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
 
   // Presigned stream URLs indexed by media_file id (or 'single')
   const [imageUrls, setImageUrls] = React.useState<Record<string, string>>({})
+  const [watermark, setWatermark] = React.useState<WatermarkRender | null>(null)
   const [isLoading, setIsLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -195,7 +202,12 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
       const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
       fetch(`${API_URL}/share/${shareToken}/stream/${asset.id}?version_id=${version.id}${sp}`)
         .then(res => res.ok ? res.json() : Promise.reject(new Error('Failed to load image')))
-        .then(data => { if (!cancelled) setImageUrls({ single: data.url }) })
+        .then(data => {
+          if (!cancelled) {
+            setImageUrls({ single: data.url })
+            setWatermark(data.watermark ?? null)
+          }
+        })
         .catch(err => { if (!cancelled) setError(err.message) })
         .finally(() => { if (!cancelled) setIsLoading(false) })
       return () => { cancelled = true }
@@ -209,21 +221,23 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
 
       try {
         if (isCarousel) {
-          const entries = await Promise.all(
+          const responses = await Promise.all(
             mediaFiles.map(async (mf) => {
               const data = await api.get<StreamResponse>(
                 `/assets/${asset.id}/stream?media_file_id=${mf.id}&version_id=${version.id}`,
               )
-              return [mf.id, data.url] as [string, string]
+              return [mf.id, data] as [string, StreamResponse]
             }),
           )
           if (!cancelled) {
-            setImageUrls(Object.fromEntries(entries))
+            setImageUrls(Object.fromEntries(responses.map(([id, data]) => [id, data.url])))
+            setWatermark(responses[0]?.[1]?.watermark ?? null)
           }
         } else {
           const data = await api.get<StreamResponse>(`/assets/${asset.id}/stream?version_id=${version.id}`)
           if (!cancelled) {
             setImageUrls({ single: data.url })
+            setWatermark(data.watermark ?? null)
           }
         }
       } catch (err) {
@@ -309,6 +323,7 @@ export function ImageViewer({ asset, version, className, annotationCanvas }: Ima
                   onImageLoad={handleImageLoad}
                   annotationOverlay={annotationCanvas}
                   isDrawingMode={isDrawingMode}
+                  watermark={watermark}
                 />
               </TransformComponent>
 

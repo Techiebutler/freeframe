@@ -27,6 +27,7 @@ class ShareLinkCreate(BaseModel):
     description: Optional[str] = None
     show_versions: bool = True
     show_watermark: bool = False
+    watermark_template_id: Optional[uuid.UUID] = None
     appearance: ShareLinkAppearance = ShareLinkAppearance()
 
 
@@ -41,6 +42,7 @@ class MultiShareCreate(BaseModel):
     allow_download: bool = False
     show_versions: bool = True
     show_watermark: bool = False
+    watermark_template_id: Optional[uuid.UUID] = None
     appearance: ShareLinkAppearance = ShareLinkAppearance()
 
 
@@ -58,6 +60,8 @@ class ShareLinkResponse(BaseModel):
     allow_download: bool
     show_versions: bool
     show_watermark: bool
+    watermark_template_id: Optional[uuid.UUID] = None
+    watermark_required: bool = False  # locked on by project/instance policy
     appearance: dict
     expires_at: Optional[datetime] = None
     created_at: datetime
@@ -98,6 +102,7 @@ class ShareLinkUpdate(BaseModel):
     is_enabled: Optional[bool] = None
     show_versions: Optional[bool] = None
     show_watermark: Optional[bool] = None
+    watermark_template_id: Optional[uuid.UUID] = None
     appearance: Optional[ShareLinkAppearance] = None
     password: Optional[str] = None
     expires_at: Optional[datetime] = None

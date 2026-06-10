@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import os
@@ -15,6 +16,7 @@ from ..models.activity import Mention, Notification, NotificationType
 from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
+from ..services import watermark_service
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from .hls_proxy import create_hls_token
 from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES, mime_to_asset_type
@@ -230,6 +232,7 @@ def list_asset_versions(
 
 @router.get("/assets/{asset_id}/stream", response_model=StreamUrlResponse)
 def get_stream_url(
+    request: Request,
     asset_id: uuid.UUID,
     version_id: Optional[uuid.UUID] = Query(default=None),
     download: bool = Query(default=False),
@@ -263,6 +266,22 @@ def get_stream_url(
     if not media_file:
         raise HTTPException(status_code=404, detail="Media file not found")
 
+    watermark = watermark_service.resolve_internal_watermark(
+        db, asset, current_user, client_ip=watermark_service.get_client_ip(request)
+    )
+
+    if download and watermark.enabled and watermark_service.burnin_supported(asset.asset_type):
+        # Non-exempt viewers receive a burned-in copy instead of the original
+        wm_url = watermark_service.get_or_request_watermarked_download(
+            db, asset, version, media_file, watermark
+        )
+        if wm_url is None:
+            return JSONResponse(
+                status_code=202,
+                content={"status": "preparing", "retry_after": 3},
+            )
+        return StreamUrlResponse(url=wm_url, asset_type=asset.asset_type, watermark=watermark)
+
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
         if download:
             # For video downloads, use the raw file (original upload) so user gets a single file
@@ -283,7 +302,7 @@ def get_stream_url(
         else:
             url = generate_presigned_get_url(s3_key)
 
-    return StreamUrlResponse(url=url, asset_type=asset.asset_type)
+    return StreamUrlResponse(url=url, asset_type=asset.asset_type, watermark=watermark)
 
 
 @router.post("/assets/{asset_id}/versions", response_model=InitiateUploadResponse)
