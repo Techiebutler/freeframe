@@ -20,6 +20,7 @@ from ..schemas.upload import (
     CompleteUploadRequest, CompleteUploadResponse, AbortUploadRequest,
     ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES, mime_to_asset_type,
 )
+from ..config import settings
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -144,6 +145,12 @@ def complete_upload(
 
     # Then complete S3 multipart
     complete_multipart_upload(body.s3_key, body.upload_id, [p.model_dump() for p in body.parts])
+
+    asset = db.query(Asset).filter(Asset.id == body.asset_id, Asset.deleted_at.is_(None)).first()
+    if settings.use_original_videos and asset and asset.asset_type == AssetType.video:
+        version.processing_status = ProcessingStatus.ready
+        db.commit()
+        return CompleteUploadResponse(status="ready", asset_id=body.asset_id, version_id=body.version_id)
 
     version.processing_status = ProcessingStatus.processing
     db.commit()

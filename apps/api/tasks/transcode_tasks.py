@@ -83,6 +83,9 @@ def process_asset(self, asset_id: str, version_id: str):
 
 
 def _process_video(db, asset, version, media_file, s3, output_prefix):
+    if settings.use_original_videos:
+        return
+
     from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder
     from packages.transcoder.base import TranscodeJob
 

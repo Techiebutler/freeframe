@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     frontend_url: str = "http://localhost:3000"
     transcoder_engine: str = "ffmpeg"
-    
+    # Skip FFmpeg HLS transcoding and serve uploaded videos as-is (useful for local QC)
+    use_original_videos: bool = False
+
     # Worker concurrency settings
     transcoding_concurrency: int = 2  # Number of concurrent video transcoding jobs
     email_concurrency: int = 2  # Number of concurrent email sending jobs
