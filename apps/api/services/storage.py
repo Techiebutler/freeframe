@@ -12,13 +12,13 @@ def get_storage_limit(db: Session) -> int:
     return row.storage_limit_bytes if row else 0
 
 
-def instance_storage_used_bytes(db: Session) -> int:
-    """Instance-wide committed storage in bytes — the single source of truth for both
-    the member GET indicator and cap enforcement.
+def _committed_media_sum(db: Session):
+    """Base query summing MediaFile.file_size_bytes over *committed* media only — the single
+    definition of "used storage" shared by the instance-wide and per-project sums.
 
-    Counts only bytes actually in S3: versions in `processing`/`ready`, excluding
-    soft-deleted assets/versions. MediaFile has no deleted_at, so soft-delete is
-    excluded via the Asset/AssetVersion join filters.
+    Counts only bytes actually in S3: versions in `processing`/`ready`, excluding soft-deleted
+    assets/versions. MediaFile has no deleted_at, so soft-delete is excluded via the joins.
+    Callers add their own scope (e.g. a project filter) before `.scalar()`.
     """
     return db.query(func.coalesce(func.sum(MediaFile.file_size_bytes), 0)) \
         .join(AssetVersion, MediaFile.version_id == AssetVersion.id) \
@@ -29,7 +29,19 @@ def instance_storage_used_bytes(db: Session) -> int:
             AssetVersion.processing_status.in_(
                 [ProcessingStatus.processing, ProcessingStatus.ready]
             ),
-        ).scalar() or 0
+        )
+
+
+def instance_storage_used_bytes(db: Session) -> int:
+    """Instance-wide committed storage in bytes — the single source of truth for both the
+    member GET indicator and cap enforcement."""
+    return _committed_media_sum(db).scalar() or 0
+
+
+def project_storage_used_bytes(db: Session, project_id) -> int:
+    """Committed storage in bytes for a single project — same semantics as the instance-wide
+    figure, so per-project and instance usage agree."""
+    return _committed_media_sum(db).filter(Asset.project_id == project_id).scalar() or 0
 
 
 def storage_cap_error(db: Session, incoming_bytes: int) -> str | None:

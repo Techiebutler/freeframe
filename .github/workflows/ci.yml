@@ -46,6 +46,21 @@ jobs:
       JWT_SECRET: ci-test-secret-key-not-for-production
       FRONTEND_URL: http://localhost:3000
 
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: pass
+          POSTGRES_DB: freeframe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v6
 
@@ -67,6 +82,10 @@ jobs:
             echo "::error::Expected at least 5 test files but found $TEST_COUNT — test files may have been deleted"
             exit 1
           fi
+
+      - name: Run database migrations
+        working-directory: apps/api
+        run: alembic upgrade head
 
       - name: Run tests
         run: |
