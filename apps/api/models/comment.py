@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 from typing import Optional
-from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Float, Integer, func, Text, UniqueConstraint
+from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Float, Integer, BigInteger, func, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 try:
@@ -46,7 +46,7 @@ class CommentAttachment(Base):
     file_type: Mapped[str] = mapped_column(String(50), nullable=False)
     s3_key: Mapped[str] = mapped_column(String(1000), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
-    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 class CommentReaction(Base):
