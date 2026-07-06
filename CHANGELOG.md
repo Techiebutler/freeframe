@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Configurable per-file upload limit** ([#64](https://github.com/Techiebutler/freeframe/issues/64)) — new `MAX_UPLOAD_BYTES` env var caps the size of a single uploaded file (`0` = unlimited, the new default). Replaces the hardcoded 10GB ceiling that self-hosters running their own S3/MinIO had no way to change or remove. Enforced at both upload-initiation points (`POST /upload/initiate` and new-version upload) with an error that reports the configured cap instead of a hardcoded "10GB". Effective size is still structurally bounded by S3 multipart (10,000 parts × 10MB chunk ≈ 97GB).
 
 ### Fixed
+- **Files larger than ~2.1 GB could not be recorded** ([#99](https://github.com/Techiebutler/freeframe/pull/99)) — `MediaFile.file_size_bytes` and `CommentAttachment.file_size_bytes` were `INTEGER` (int4, ~2.1 GB ceiling), so a file above that size overflowed on insert despite per-file uploads being nominally unlimited ([#64]). Both columns are now `BigInteger`.
 - **Misleading "Storage X / 10 GB" indicator on the project page** ([#64](https://github.com/Techiebutler/freeframe/issues/64)) — the project sidebar rendered a hardcoded 10 GB denominator with 80%/90% color warnings, implying a per-project quota that never existed as a real, configurable concept. It now shows only storage used — no fake denominator, no progress bar.
 
 ---
