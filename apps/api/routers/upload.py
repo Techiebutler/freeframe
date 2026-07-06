@@ -18,7 +18,7 @@ from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
     PresignPartRequest, PresignPartResponse,
     CompleteUploadRequest, CompleteUploadResponse, AbortUploadRequest,
-    ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES, mime_to_asset_type,
+    ALLOWED_MIME_TYPES, upload_size_error, mime_to_asset_type,
 )
 
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -32,8 +32,9 @@ def initiate_upload(
     # Validate mime type
     if body.mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {body.mime_type}")
-    if body.file_size_bytes > MAX_FILE_SIZE_BYTES:
-        raise HTTPException(status_code=400, detail="File exceeds 10GB limit")
+    size_error = upload_size_error(body.file_size_bytes)
+    if size_error:
+        raise HTTPException(status_code=400, detail=size_error)
 
     # Verify project access (editor or above)
     project = db.query(Project).filter(Project.id == body.project_id, Project.deleted_at.is_(None)).first()

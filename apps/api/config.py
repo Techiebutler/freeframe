@@ -39,7 +39,11 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     frontend_url: str = "http://localhost:3000"
     transcoder_engine: str = "ffmpeg"
-    
+
+    # Maximum size (bytes) for a single uploaded file. 0 = unlimited (no per-file cap).
+    # Note: S3 multipart still caps effective size at ~10,000 parts x chunk size.
+    max_upload_bytes: int = 0
+
     # Worker concurrency settings
     transcoding_concurrency: int = 2  # Number of concurrent video transcoding jobs
     email_concurrency: int = 2  # Number of concurrent email sending jobs

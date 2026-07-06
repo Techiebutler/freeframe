@@ -17,7 +17,7 @@ from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from .hls_proxy import create_hls_token
-from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES, mime_to_asset_type
+from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, upload_size_error, mime_to_asset_type
 from ..services.s3_service import create_multipart_upload
 
 router = APIRouter(tags=["assets"])
@@ -301,8 +301,9 @@ def initiate_new_version(
 
     if body.mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported file type")
-    if body.file_size_bytes > MAX_FILE_SIZE_BYTES:
-        raise HTTPException(status_code=400, detail="File exceeds 10GB limit")
+    size_error = upload_size_error(body.file_size_bytes)
+    if size_error:
+        raise HTTPException(status_code=400, detail=size_error)
 
     last_version = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset_id,
