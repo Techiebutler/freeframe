@@ -111,6 +111,18 @@ def test_get_settings_member(client, auth_headers, mock_db, test_user, monkeypat
     assert r.json() == {"storage_limit_bytes": 8000, "storage_used_bytes": 100}
 
 
+def test_get_settings_no_row_is_read_only_and_unlimited(client, auth_headers, mock_db, test_user, monkeypatch):
+    # No row exists yet — GET must NOT create one; it should default to unlimited (0).
+    test_user.is_superadmin = False
+    mock_db.first.return_value = None
+    monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 100)
+    r = client.get("/instance/settings", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json() == {"storage_limit_bytes": 0, "storage_used_bytes": 100}
+    mock_db.add.assert_not_called()
+    mock_db.commit.assert_not_called()
+
+
 import uuid
 from apps.api.routers import upload as upload_router
 
