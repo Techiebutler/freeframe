@@ -109,3 +109,38 @@ def test_get_settings_member(client, auth_headers, mock_db, test_user, monkeypat
     r = client.get("/instance/settings", headers=auth_headers)
     assert r.status_code == 200
     assert r.json() == {"storage_limit_bytes": 8000, "storage_used_bytes": 100}
+
+
+import uuid
+from apps.api.routers import upload as upload_router
+
+
+def test_initiate_upload_rejected_when_over_cap(client, auth_headers, mock_db, test_user, monkeypatch):
+    # Force the upload guard to trip regardless of DB state
+    monkeypatch.setattr(upload_router, "upload_guard_error", lambda db, n: "Storage limit reached — 9 GB of 10 GB used")
+    body = {
+        "project_id": str(uuid.uuid4()),
+        "asset_name": "big.mp4",
+        "original_filename": "big.mp4",
+        "mime_type": "video/mp4",
+        "file_size_bytes": 2_000_000_000,
+    }
+    r = client.post("/upload/initiate", headers=auth_headers, json=body)
+    assert r.status_code == 400
+    assert "Storage limit reached" in r.json()["detail"]
+
+
+def test_initiate_upload_allowed_when_guard_passes(client, auth_headers, mock_db, test_user, monkeypatch):
+    # guard returns None; expect to pass the gate and fail later on project lookup (404)
+    # — proving the guard did NOT block it.
+    monkeypatch.setattr(upload_router, "upload_guard_error", lambda db, n: None)
+    mock_db.first.return_value = None                    # project not found → 404 after the gate
+    body = {
+        "project_id": str(uuid.uuid4()),
+        "asset_name": "ok.mp4",
+        "original_filename": "ok.mp4",
+        "mime_type": "video/mp4",
+        "file_size_bytes": 1_000,
+    }
+    r = client.post("/upload/initiate", headers=auth_headers, json=body)
+    assert r.status_code == 404                          # got past the guard gate

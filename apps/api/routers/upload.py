@@ -18,8 +18,9 @@ from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
     PresignPartRequest, PresignPartResponse,
     CompleteUploadRequest, CompleteUploadResponse, AbortUploadRequest,
-    ALLOWED_MIME_TYPES, upload_size_error, mime_to_asset_type,
+    ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
+from ..services.storage import upload_guard_error
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -32,9 +33,9 @@ def initiate_upload(
     # Validate mime type
     if body.mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {body.mime_type}")
-    size_error = upload_size_error(body.file_size_bytes)
-    if size_error:
-        raise HTTPException(status_code=400, detail=size_error)
+    guard_error = upload_guard_error(db, body.file_size_bytes)
+    if guard_error:
+        raise HTTPException(status_code=400, detail=guard_error)
 
     # Verify project access (editor or above)
     project = db.query(Project).filter(Project.id == body.project_id, Project.deleted_at.is_(None)).first()
