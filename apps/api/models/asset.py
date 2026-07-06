@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 from typing import Optional
-from sqlalchemy import String, Enum, DateTime, ForeignKey, Integer, Float, func, UniqueConstraint, Index
+from sqlalchemy import String, Enum, DateTime, ForeignKey, Integer, BigInteger, Float, func, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 try:
@@ -74,7 +74,7 @@ class MediaFile(Base):
     file_type: Mapped[FileType] = mapped_column(Enum(FileType), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     s3_key_raw: Mapped[str] = mapped_column(String(1000), nullable=False)
     s3_key_processed: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     s3_key_thumbnail: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
