@@ -5,6 +5,18 @@ All notable changes to FreeFrame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] - 2026-07-06
+
+### Fixed
+- **HLS video playback on the public share page in Chrome/Firefox** ([#68](https://github.com/Techiebutler/freeframe/issues/68)) — `ShareMediaViewer` used a plain `<video src={streamUrl}>`, which only plays HLS (`.m3u8`) natively in Safari and failed in Chrome/Firefox. It now uses hls.js (already a project dependency) for MediaSource-capable browsers, falling back to native playback for Safari and direct media files; the same pattern was applied to the audio branch. ([#76](https://github.com/Techiebutler/freeframe/pull/76))
+- **Public share comments response shape** ([#67](https://github.com/Techiebutler/freeframe/issues/67), [#72](https://github.com/Techiebutler/freeframe/issues/72)) — `GET /share/{token}/comments` now returns a consistent bare array on the no-target fallback path, and the single-asset share page handles the response robustly (aligned with the folder share viewer). Adds backend regression coverage for asset-share, folder/project-share, and no-target fallback paths. ([#70](https://github.com/Techiebutler/freeframe/pull/70), [#73](https://github.com/Techiebutler/freeframe/pull/73))
+
+### Dependencies
+- Bump `redis` (apps/api) from 5.1.0 to 5.3.1 ([#30](https://github.com/Techiebutler/freeframe/pull/30))
+- Bump `pnpm/action-setup` from 5 to 6 (CI) ([#58](https://github.com/Techiebutler/freeframe/pull/58))
+
+---
+
 ## [1.1.5] - 2026-04-14
 
 ### Security
