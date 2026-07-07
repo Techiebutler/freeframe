@@ -128,3 +128,33 @@ def test_purge_version_removes_media_carousel_and_s3(real_db, monkeypatch):
     assert real_db.query(Asset).filter_by(id=asset.id).count() == 1  # asset untouched
     assert set(deleted) == {f"raw/{version.id}", "processed/x/", "thumb/x"}
     assert counts.versions == 1 and counts.media_files == 1
+
+
+def _share_link(db, owner, asset=None, folder=None, project=None):
+    link = ShareLink(token=f"tok-{uuid.uuid4()}", created_by=owner.id,
+                     asset_id=(asset.id if asset else None),
+                     folder_id=(folder.id if folder else None),
+                     project_id=(project.id if project else None))
+    db.add(link); db.flush()
+    return link
+
+
+def test_purge_share_link_removes_items_activity_watermark(real_db):
+    owner = _user(real_db)
+    project = _project(real_db, owner)
+    asset = _asset(real_db, project, owner)
+    link = _share_link(real_db, owner, asset=asset)
+    real_db.add(ShareLinkItem(share_link_id=link.id, asset_id=asset.id))
+    real_db.add(ShareLinkActivity(share_link_id=link.id, action=ShareActivityAction.opened,
+                                  actor_email="x@t.local"))
+    real_db.add(WatermarkSettings(project_id=project.id, share_link_id=link.id))
+    real_db.flush()
+
+    counts = ct.PurgeCounts()
+    ct._purge_share_link(real_db, link.id, counts)
+
+    assert real_db.query(ShareLink).filter_by(id=link.id).count() == 0
+    assert real_db.query(ShareLinkItem).filter_by(share_link_id=link.id).count() == 0
+    assert real_db.query(ShareLinkActivity).filter_by(share_link_id=link.id).count() == 0
+    assert real_db.query(WatermarkSettings).filter_by(share_link_id=link.id).count() == 0
+    assert counts.share_links == 1

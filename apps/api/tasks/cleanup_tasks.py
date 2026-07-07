@@ -100,6 +100,19 @@ def _purge_version(db, version_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+def _purge_share_link(db, share_link_id, counts: PurgeCounts) -> None:
+    """Hard-delete a share link and its items, activity, and watermark override."""
+    link = db.query(ShareLink).filter(ShareLink.id == share_link_id).first()
+    if link is None:
+        return
+    db.query(ShareLinkItem).filter(ShareLinkItem.share_link_id == share_link_id).delete(synchronize_session=False)
+    db.query(ShareLinkActivity).filter(ShareLinkActivity.share_link_id == share_link_id).delete(synchronize_session=False)
+    db.query(WatermarkSettings).filter(WatermarkSettings.share_link_id == share_link_id).delete(synchronize_session=False)
+    db.query(ShareLink).filter(ShareLink.id == share_link_id).delete(synchronize_session=False)
+    counts.share_links += 1
+    db.flush()
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
