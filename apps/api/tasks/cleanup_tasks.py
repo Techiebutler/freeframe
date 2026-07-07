@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
 from .celery_app import celery_app
@@ -286,5 +286,27 @@ def reap_stale_uploads():
         n = _reap_stale_uploads(db)
         db.commit()
         return n
+    finally:
+        db.close()
+
+
+def _run_cleanup(db) -> PurgeCounts:
+    """Full cleanup pass: expire long-dead share links, then hard-delete aged soft-deletes.
+    Mutates db; the caller (task wrapper or admin endpoint) owns the commit."""
+    counts = PurgeCounts(retention_days=settings.soft_delete_retention_days)
+    _expire_share_links(db, counts)
+    _purge_soft_deleted(db, counts)
+    return counts
+
+
+@celery_app.task(name="cleanup_soft_deleted")
+def cleanup_soft_deleted():
+    """Daily beat task: retention-window GC + expired-share sweep."""
+    db = SessionLocal()
+    try:
+        counts = _run_cleanup(db)
+        db.commit()
+        log.info("cleanup: %s", asdict(counts))
+        return asdict(counts)
     finally:
         db.close()

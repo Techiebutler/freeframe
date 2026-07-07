@@ -315,3 +315,31 @@ def test_purge_soft_deleted_disabled_when_zero(monkeypatch):
     counts = ct.PurgeCounts()
     ct._purge_soft_deleted(db, counts)
     db.query.assert_not_called()
+
+
+def test_run_cleanup_returns_counts_and_stamps_retention(real_db, monkeypatch):
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 30)
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+
+    owner = _user(real_db)
+    _project(real_db, owner, deleted_hours_ago=24 * 40)
+
+    counts = ct._run_cleanup(real_db)
+
+    assert counts.retention_days == 30
+    assert counts.projects == 1
+
+
+def test_run_cleanup_disabled_when_zero(monkeypatch):
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 0)
+    db = _make_mock_db()
+    counts = ct._run_cleanup(db)
+    db.query.assert_not_called()
+    assert counts.projects == 0 and counts.share_links_expired == 0
+
+
+def test_cleanup_soft_deleted_beat_registered():
+    from apps.api.tasks.celery_app import celery_app
+    entry = celery_app.conf.beat_schedule["cleanup-soft-deleted"]
+    assert entry["task"] == "cleanup_soft_deleted"
