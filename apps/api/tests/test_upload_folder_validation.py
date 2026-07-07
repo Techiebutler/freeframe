@@ -60,9 +60,6 @@ def test_initiate_upload_allows_valid_folder(
 
     project = MagicMock()
     folder = MagicMock()
-    asset = MagicMock()
-    asset.id = uuid.uuid4()
-    asset.asset_type = upload_module.AssetType.image
 
     # Query sequence: project lookup -> project, folder lookup -> folder,
     # then last_version lookup -> None (first version).
@@ -77,4 +74,52 @@ def test_initiate_upload_allows_valid_folder(
 
     resp = client.post("/upload/initiate", json=_valid_body(), headers=auth_headers)
 
+    assert resp.status_code == 200
+
+
+def test_initiate_upload_new_version_ignores_bad_folder(
+    client, auth_headers, mock_db, test_user, monkeypatch
+):
+    """Uploading a new VERSION of an existing asset (asset_id given) must NOT
+    validate folder_id: that path ignores/does not persist folder_id, so a bogus
+    (e.g. now-trashed) folder_id must not cause a spurious 404 -- there is no
+    data-loss risk in this branch.
+    """
+    monkeypatch.setattr("apps.api.middleware.setup_guard._setup_complete", True)
+    monkeypatch.setattr(upload_module, "upload_guard_error", lambda db, n: None)
+    monkeypatch.setattr(upload_module, "require_project_role", lambda db, pid, u, r: None)
+    monkeypatch.setattr(
+        upload_module, "create_multipart_upload", lambda s3_key, mime_type: "fake-upload-id"
+    )
+
+    project_id = uuid.uuid4()
+    asset_id = uuid.uuid4()
+
+    project = MagicMock()
+    asset = MagicMock()
+    asset.id = asset_id
+    asset.project_id = project_id  # must match body.project_id (else 400)
+    asset.asset_type = upload_module.AssetType.image
+
+    # Query sequence for the asset_id (new-version) branch:
+    #   1) project lookup -> project
+    #   2) asset lookup -> asset  (NO folder lookup happens in this branch)
+    #   3) last_version lookup -> None (first version for this asset)
+    mock_db.first.side_effect = [project, asset, None]
+
+    def _add(obj):
+        if not hasattr(obj, "id") or obj.id is None:
+            obj.id = uuid.uuid4()
+
+    mock_db.add.side_effect = _add
+
+    body = _valid_body(
+        project_id=str(project_id),
+        asset_id=str(asset_id),
+        folder_id=str(uuid.uuid4()),  # bogus/trashed folder id -- must be ignored
+    )
+    resp = client.post("/upload/initiate", json=body, headers=auth_headers)
+
+    # The key assertion: NOT rejected for the bad folder.
+    assert resp.status_code != 404
     assert resp.status_code == 200

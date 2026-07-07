@@ -44,18 +44,6 @@ def initiate_upload(
         raise HTTPException(status_code=404, detail="Project not found")
     require_project_role(db, body.project_id, current_user, ProjectRole.editor)
 
-    # Validate the target folder (if any): it must exist, belong to this project, and not be
-    # soft-deleted. Without this, a live asset could be created under a trashed folder and then
-    # hard-deleted by the retention GC's folder cascade (mirrors move_asset/bulk_move's _get_folder).
-    if body.folder_id is not None:
-        folder = db.query(Folder).filter(
-            Folder.id == body.folder_id,
-            Folder.project_id == body.project_id,
-            Folder.deleted_at.is_(None),
-        ).first()
-        if not folder:
-            raise HTTPException(status_code=404, detail="Folder not found")
-
     # Get or create asset
     if body.asset_id:
         asset = db.query(Asset).filter(Asset.id == body.asset_id, Asset.deleted_at.is_(None)).first()
@@ -64,6 +52,19 @@ def initiate_upload(
         if asset.project_id != body.project_id:
             raise HTTPException(status_code=400, detail="Asset does not belong to the specified project")
     else:
+        # Validate the target folder for a new asset: it must exist, belong to this project, and not
+        # be soft-deleted -- otherwise a live asset could be placed under a trashed folder and later
+        # hard-deleted by the retention GC's folder cascade. folder_id is only persisted here (new
+        # asset); the new-version path above ignores it, so it must not be validated there.
+        if body.folder_id is not None:
+            folder = db.query(Folder).filter(
+                Folder.id == body.folder_id,
+                Folder.project_id == body.project_id,
+                Folder.deleted_at.is_(None),
+            ).first()
+            if not folder:
+                raise HTTPException(status_code=404, detail="Folder not found")
+
         asset_type = mime_to_asset_type(body.mime_type)
         asset = Asset(
             project_id=body.project_id,
