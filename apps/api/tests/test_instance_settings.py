@@ -102,6 +102,13 @@ def test_put_settings_rejects_negative(client, auth_headers, mock_db, test_user)
     assert r.status_code == 422
 
 
+def test_put_settings_rejects_over_bigint_max(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = True
+    # 2**63 exceeds PostgreSQL BigInteger; reject at validation (422), never overflow into a 500.
+    r = client.put("/instance/settings", headers=auth_headers, json={"storage_limit_bytes": 9223372036854775808})
+    assert r.status_code == 422
+
+
 def test_get_settings_member(client, auth_headers, mock_db, test_user, monkeypatch):
     test_user.is_superadmin = False
     mock_db.first.return_value = MagicMock(storage_limit_bytes=8000)
