@@ -20,9 +20,11 @@ export function InstanceSettingsTab() {
   const [saved, setSaved] = React.useState(false);
   const [error, setError] = React.useState("");
 
+  // Depend on storage_limit_bytes only — NOT the whole `data` object, whose volatile
+  // storage_used_bytes changes on every SWR revalidation and would clobber an in-progress edit.
   React.useEffect(() => {
     if (data) setGb(data.storage_limit_bytes > 0 ? String(bytesToGb(data.storage_limit_bytes)) : "");
-  }, [data]);
+  }, [data?.storage_limit_bytes]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -62,7 +64,8 @@ export function InstanceSettingsTab() {
       </div>
       {error && <p className="text-xs text-status-error">{error}</p>}
       {saved && <p className="text-xs text-status-success">Saved.</p>}
-      <Button size="sm" onClick={handleSave} loading={saving}>Save</Button>
+      {/* disabled until settings load, so a click before the fetch resolves can't PUT 0 and wipe an existing cap */}
+      <Button size="sm" onClick={handleSave} loading={saving} disabled={!data}>Save</Button>
     </section>
   );
 }
