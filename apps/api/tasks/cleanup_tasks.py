@@ -228,6 +228,27 @@ def _reap_stale_uploads(db) -> int:
     return len(versions)
 
 
+def _expire_share_links(db, counts: PurgeCounts) -> None:
+    """Soft-delete share links that expired BEYOND the retention window. Recently-expired links are
+    left alone so owners can still re-enable them (expiry is already 410-enforced at read time);
+    once aged past the window they flow into the normal purge. Mutates db; does NOT commit."""
+    days = settings.soft_delete_retention_days
+    if days <= 0:
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    links = db.query(ShareLink).filter(
+        ShareLink.deleted_at.is_(None),
+        ShareLink.expires_at.isnot(None),
+        ShareLink.expires_at < cutoff,
+    ).all()
+    now = datetime.now(timezone.utc)
+    for link in links:
+        link.deleted_at = now
+        counts.share_links_expired += 1
+    if links:
+        log.info("cleanup: soft-deleted %d long-expired share link(s)", len(links))
+
+
 def _purge_soft_deleted(db, counts: PurgeCounts) -> None:
     """Hard-delete every root soft-deleted longer than the retention window, cascading its subtree.
     Roots are processed top-down so a parent removes its children before a later pass queries them;
