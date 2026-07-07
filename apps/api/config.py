@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Note: S3 multipart still caps effective size at ~10,000 parts x chunk size.
     max_upload_bytes: int = 0
 
+    # Reaper: uploads stuck in `uploading`/`failed` longer than this are reclaimed. Hours.
+    stale_upload_timeout_hours: int = 24
+
     # Worker concurrency settings
     transcoding_concurrency: int = 2  # Number of concurrent video transcoding jobs
     email_concurrency: int = 2  # Number of concurrent email sending jobs

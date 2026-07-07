@@ -230,3 +230,37 @@ def put_object(s3_key: str, body: bytes, content_type: str | None = None, cache_
 def delete_object(s3_key: str) -> None:
     s3 = get_s3_client()
     s3.delete_object(Bucket=settings.s3_bucket, Key=s3_key)
+
+
+def list_stale_multipart_uploads(cutoff):
+    """Return (key, upload_id) for in-progress multipart uploads initiated before `cutoff`."""
+    s3 = get_s3_client()
+    stale = []
+    kwargs = {"Bucket": settings.s3_bucket}
+    while True:
+        resp = s3.list_multipart_uploads(**kwargs)
+        for up in resp.get("Uploads", []):
+            if up["Initiated"] < cutoff:
+                stale.append((up["Key"], up["UploadId"]))
+        if resp.get("IsTruncated"):
+            kwargs["KeyMarker"] = resp.get("NextKeyMarker")
+            kwargs["UploadIdMarker"] = resp.get("NextUploadIdMarker")
+        else:
+            break
+    return stale
+
+
+def delete_prefix(prefix: str) -> None:
+    """Delete every object whose key starts with `prefix` (works for a single key too —
+    a key is its own prefix). Used to reclaim HLS folders and single processed keys."""
+    s3 = get_s3_client()
+    kwargs = {"Bucket": settings.s3_bucket, "Prefix": prefix}
+    while True:
+        resp = s3.list_objects_v2(**kwargs)
+        objects = [{"Key": o["Key"]} for o in resp.get("Contents", [])]
+        if objects:
+            s3.delete_objects(Bucket=settings.s3_bucket, Delete={"Objects": objects})
+        if resp.get("IsTruncated"):
+            kwargs["ContinuationToken"] = resp.get("NextContinuationToken")
+        else:
+            break
