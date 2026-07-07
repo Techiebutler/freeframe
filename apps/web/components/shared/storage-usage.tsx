@@ -72,15 +72,15 @@ export function StorageRing({ used, limit }: { used: number; limit: number }) {
     )
   }
 
-  const r = 9
+  const r = 12
   const c = 2 * Math.PI * r
   return (
-    <div title={title} className={cn('flex items-center justify-center', RING_TEXT[level])} data-testid="storage-ring">
-      <svg width="24" height="24" viewBox="0 0 24 24" className="-rotate-90">
-        <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2.5" className="stroke-bg-tertiary" />
+    <div title={title} className={cn('relative flex items-center justify-center', RING_TEXT[level])} data-testid="storage-ring">
+      <svg width="32" height="32" viewBox="0 0 32 32" className="-rotate-90">
+        <circle cx="16" cy="16" r={r} fill="none" strokeWidth="2.5" className="stroke-bg-tertiary" />
         <circle
-          cx="12"
-          cy="12"
+          cx="16"
+          cy="16"
           r={r}
           fill="none"
           stroke="currentColor"
@@ -91,6 +91,9 @@ export function StorageRing({ used, limit }: { used: number; limit: number }) {
           className="transition-all duration-300"
         />
       </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[8px] font-semibold tabular-nums text-text-secondary">
+        {Math.round(pct)}
+      </span>
     </div>
   )
 }

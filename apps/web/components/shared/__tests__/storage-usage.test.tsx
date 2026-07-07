@@ -18,10 +18,11 @@ describe('StorageUsage', () => {
 })
 
 describe('StorageRing', () => {
-  it('renders a progress ring when a cap is set', () => {
-    const { container } = render(<StorageRing used={5 * 1024 ** 3} limit={10 * 1024 ** 3} />)
+  it('renders a progress ring with the percent in the center when a cap is set', () => {
+    const { container, getByText } = render(<StorageRing used={5 * 1024 ** 3} limit={10 * 1024 ** 3} />)
     expect(container.querySelector('[data-testid="storage-ring"]')).not.toBeNull()
     expect(container.querySelector('svg')).not.toBeNull()
+    expect(getByText('50')).toBeInTheDocument()  // 5 GB / 10 GB
   })
 
   it('renders a disk icon (no progress ring) when unlimited', () => {
