@@ -1,10 +1,21 @@
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
 from .celery_app import celery_app
 from ..database import SessionLocal
 from ..config import settings
-from ..models.asset import AssetVersion, MediaFile, ProcessingStatus
+from ..models.asset import (
+    Asset, AssetVersion, MediaFile, CarouselItem, ProcessingStatus,
+)
+from ..models.comment import Comment, Annotation, CommentAttachment, CommentReaction
+from ..models.approval import Approval
+from ..models.share import ShareLink, ShareLinkItem, ShareLinkActivity, AssetShare
+from ..models.project import Project, ProjectMember
+from ..models.folder import Folder
+from ..models.metadata import MetadataField, AssetMetadata, Collection, CollectionShare
+from ..models.branding import ProjectBranding, WatermarkSettings
+from ..models.activity import Mention, ActivityLog, Notification
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix,
 )
@@ -18,6 +29,42 @@ def _safe(fn, *args):
         fn(*args)
     except Exception as exc:  # noqa: BLE001 - best-effort cleanup
         log.warning("reaper: %s%r failed: %s", fn.__name__, args, exc)
+
+
+@dataclass
+class PurgeCounts:
+    """Accumulates what a purge run reclaimed. `retention_days` is filled by `_run_cleanup`."""
+    retention_days: int = 0
+    projects: int = 0
+    folders: int = 0
+    assets: int = 0
+    versions: int = 0
+    media_files: int = 0
+    comments: int = 0
+    share_links: int = 0
+    share_links_expired: int = 0
+    s3_deletes: int = 0
+
+
+def _purge_comment(db, comment_id, counts: PurgeCounts) -> None:
+    """Hard-delete a comment and its whole subtree (replies, annotations, attachments (+S3),
+    reactions, mentions, comment-scoped notifications). Mutates db; does NOT commit."""
+    c = db.query(Comment).filter(Comment.id == comment_id).first()
+    if c is None:
+        return  # already removed by an overlapping root/recursion
+    for reply in db.query(Comment).filter(Comment.parent_id == comment_id).all():
+        _purge_comment(db, reply.id, counts)
+    for att in db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment_id).all():
+        _safe(delete_object, att.s3_key)
+        counts.s3_deletes += 1
+    db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment_id).delete(synchronize_session=False)
+    db.query(Annotation).filter(Annotation.comment_id == comment_id).delete(synchronize_session=False)
+    db.query(CommentReaction).filter(CommentReaction.comment_id == comment_id).delete(synchronize_session=False)
+    db.query(Mention).filter(Mention.comment_id == comment_id).delete(synchronize_session=False)
+    db.query(Notification).filter(Notification.comment_id == comment_id).delete(synchronize_session=False)
+    db.query(Comment).filter(Comment.id == comment_id).delete(synchronize_session=False)
+    counts.comments += 1
+    db.flush()
 
 
 def _reap_stale_uploads(db) -> int:
