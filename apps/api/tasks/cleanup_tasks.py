@@ -23,7 +23,14 @@ def _safe(fn, *args):
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.stale_upload_timeout_hours)
+    hours = settings.stale_upload_timeout_hours
+    if hours <= 0:
+        # 0 (or negative) DISABLES the reaper — matching the 0 = unlimited/disabled convention
+        # of MAX_UPLOAD_BYTES / storage_limit_bytes. Without this guard, cutoff would be `now()`
+        # and the sweep would destroy every in-progress upload on the next run.
+        log.info("reaper: disabled (stale_upload_timeout_hours=%s)", hours)
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     # 1. Abort stale, still-open multipart uploads (reclaims uploaded parts).
     for key, upload_id in list_stale_multipart_uploads(cutoff):

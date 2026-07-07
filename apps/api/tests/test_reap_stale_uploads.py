@@ -102,3 +102,15 @@ def test_reap_selects_only_old_uploading_and_failed(real_db, monkeypatch):
     assert old_failed.deleted_at is not None
     assert recent_uploading.deleted_at is None
     assert ready.deleted_at is None
+
+
+def test_reaper_disabled_when_timeout_zero(mock_db, monkeypatch):
+    """timeout <= 0 disables the reaper — it must not list multiparts or query/soft-delete anything."""
+    from apps.api.config import settings
+    monkeypatch.setattr(settings, "stale_upload_timeout_hours", 0)
+    listed = []
+    monkeypatch.setattr(ct, "list_stale_multipart_uploads", lambda cutoff: listed.append(cutoff) or [])
+
+    assert ct._reap_stale_uploads(mock_db) == 0
+    assert listed == []                 # never computed a cutoff / listed multiparts
+    mock_db.query.assert_not_called()   # never selected any versions
