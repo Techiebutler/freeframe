@@ -2,6 +2,8 @@ import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
+from sqlalchemy import text
+
 from .celery_app import celery_app
 from ..database import SessionLocal
 from ..config import settings
@@ -23,6 +25,7 @@ from ..services.s3_service import (
 log = logging.getLogger("celery.cleanup")
 
 _MAX_RETENTION_DAYS = 36500  # 100 years; guards timedelta OverflowError on absurd misconfig (e.g. seconds mistaken for days)
+_PURGE_ADVISORY_LOCK_KEY = 5477651  # identifies the retention GC purge (pg advisory lock space)
 
 
 def _retention_days() -> int:
@@ -263,10 +266,26 @@ def _expire_share_links(db, counts: PurgeCounts) -> None:
         log.info("cleanup: soft-deleted %d long-expired share link(s)", len(links))
 
 
+def _lock_if_still_purgeable(db, model, obj_id, cutoff):
+    """Re-fetch a root row under SELECT ... FOR UPDATE, re-checking it is still soft-deleted and
+    aged past the cutoff. Returns the locked row, or None if it was restored (deleted_at cleared),
+    is no longer aged, or is already gone — in which case the caller must skip it. This closes the
+    purge-vs-restore TOCTOU: a restore that commits before this runs is filtered out; a restore
+    in-flight blocks on the lock and is then seen as deleted_at IS NULL; a restore after this locks
+    the row blocks until the purge deletes+commits (the restore then no-ops)."""
+    return db.query(model).filter(
+        model.id == obj_id,
+        model.deleted_at.isnot(None),
+        model.deleted_at < cutoff,
+    ).with_for_update().first()
+
+
 def _purge_soft_deleted(db, counts: PurgeCounts) -> None:
     """Hard-delete every root soft-deleted longer than the retention window, cascading its subtree.
     Roots are processed top-down so a parent removes its children before a later pass queries them;
-    each pass re-queries the DB, and every helper guards against a row already removed."""
+    each pass re-queries the DB, and every helper guards against a row already removed. Each root is
+    re-checked+locked (`_lock_if_still_purgeable`) right before cascading, so a restore that races
+    the scan can never be purged (see #107)."""
     days = _retention_days()
     if days <= 0:
         # 0/negative DISABLES the purge — guard BEFORE computing a cutoff so a misconfigured 0
@@ -275,18 +294,22 @@ def _purge_soft_deleted(db, counts: PurgeCounts) -> None:
         return
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    for p in db.query(Project).filter(Project.deleted_at.isnot(None), Project.deleted_at < cutoff).all():
-        _purge_project(db, p.id, counts)
-    for f in db.query(Folder).filter(Folder.deleted_at.isnot(None), Folder.deleted_at < cutoff).all():
-        _purge_folder(db, f.id, counts)
-    for a in db.query(Asset).filter(Asset.deleted_at.isnot(None), Asset.deleted_at < cutoff).all():
-        _purge_asset(db, a.id, counts)
-    for v in db.query(AssetVersion).filter(AssetVersion.deleted_at.isnot(None), AssetVersion.deleted_at < cutoff).all():
-        _purge_version(db, v.id, counts)
-    for c in db.query(Comment).filter(Comment.deleted_at.isnot(None), Comment.deleted_at < cutoff).all():
-        _purge_comment(db, c.id, counts)
-    for link in db.query(ShareLink).filter(ShareLink.deleted_at.isnot(None), ShareLink.deleted_at < cutoff).all():
-        _purge_share_link(db, link.id, counts)
+    for model, purge in (
+        (Project, _purge_project),
+        (Folder, _purge_folder),
+        (Asset, _purge_asset),
+        (AssetVersion, _purge_version),
+        (Comment, _purge_comment),
+        (ShareLink, _purge_share_link),
+    ):
+        ids = [r.id for r in db.query(model.id).filter(
+            model.deleted_at.isnot(None), model.deleted_at < cutoff,
+        ).all()]
+        for obj_id in ids:
+            if _lock_if_still_purgeable(db, model, obj_id, cutoff) is None:
+                continue  # restored or already removed since the scan
+            purge(db, obj_id, counts)
+
     db.query(Approval).filter(Approval.deleted_at.isnot(None), Approval.deleted_at < cutoff).delete(synchronize_session=False)
     db.query(AssetShare).filter(AssetShare.deleted_at.isnot(None), AssetShare.deleted_at < cutoff).delete(synchronize_session=False)
     db.flush()
@@ -306,8 +329,17 @@ def reap_stale_uploads():
 
 def _run_cleanup(db) -> PurgeCounts:
     """Full cleanup pass: expire long-dead share links, then hard-delete aged soft-deletes.
-    Mutates db; the caller (task wrapper or admin endpoint) owns the commit."""
-    counts = PurgeCounts(retention_days=_retention_days())  # report the clamped window actually used
+    Mutates db; the caller (task wrapper or admin endpoint) owns the commit. Guarded by a
+    Postgres advisory xact lock so an overlapping purge (daily beat racing a manual
+    `/admin/purge` enqueue) is skipped rather than double-cascading (see #107)."""
+    days = _retention_days()
+    counts = PurgeCounts(retention_days=days)  # report the clamped window actually used
+    if days <= 0:
+        return counts  # disabled; skip the advisory lock and all work
+    got_lock = db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": _PURGE_ADVISORY_LOCK_KEY}).scalar()
+    if not got_lock:
+        log.info("cleanup: another purge holds the advisory lock; skipping this run")
+        return counts
     _expire_share_links(db, counts)
     _purge_soft_deleted(db, counts)
     return counts

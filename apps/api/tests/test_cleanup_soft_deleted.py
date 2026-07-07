@@ -433,3 +433,37 @@ def test_purge_soft_deleted_does_not_overflow_on_huge_retention(mock_db, monkeyp
     monkeypatch.setattr(settings, "soft_delete_retention_days", 2_592_000)
     counts = ct.PurgeCounts()
     ct._purge_soft_deleted(mock_db, counts)  # must NOT raise OverflowError; mock_db returns [] for all queries
+
+
+def test_lock_if_still_purgeable_rejects_restored_and_recent(real_db):
+    from datetime import datetime, timezone, timedelta
+    owner = _user(real_db)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    aged = _project(real_db, owner, deleted_hours_ago=24 * 40)
+    recent = _project(real_db, owner, deleted_hours_ago=24 * 5)
+    restored = _project(real_db, owner, deleted_hours_ago=24 * 40)
+    restored.deleted_at = None
+    real_db.flush()
+    assert ct._lock_if_still_purgeable(real_db, Project, aged.id, cutoff) is not None
+    assert ct._lock_if_still_purgeable(real_db, Project, recent.id, cutoff) is None
+    assert ct._lock_if_still_purgeable(real_db, Project, restored.id, cutoff) is None
+
+
+def test_run_cleanup_skips_when_advisory_lock_held(real_db, monkeypatch):
+    from apps.api.config import settings
+    from apps.api.database import engine
+    from sqlalchemy import text
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 30)
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+    owner = _user(real_db)
+    old = _project(real_db, owner, deleted_hours_ago=24 * 40)
+    other = engine.connect()
+    try:
+        other.execute(text("SELECT pg_advisory_lock(:k)"), {"k": ct._PURGE_ADVISORY_LOCK_KEY})
+        counts = ct._run_cleanup(real_db)
+        assert counts.projects == 0                                    # skipped — nothing purged
+        assert real_db.query(Project).filter_by(id=old.id).count() == 1  # survived
+    finally:
+        other.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": ct._PURGE_ADVISORY_LOCK_KEY})
+        other.close()

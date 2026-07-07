@@ -120,7 +120,9 @@ def purge_now(current_user: User = Depends(require_admin)):
 
     Superadmin only. Enqueues the same `cleanup_soft_deleted` task the daily beat runs, so the
     request returns immediately instead of blocking on a potentially long cascade + S3 deletes.
-    Reclaimed counts are logged by the worker.
+    Reclaimed counts are logged by the worker. If a purge is already running (e.g. the daily beat),
+    the advisory lock serializes purges and this enqueued run is skipped rather than double-cascading,
+    so a 202 here means "enqueued", not "a fresh run happened".
     """
     send_task_safe(cleanup_soft_deleted)
     return PurgeStartResponse(
