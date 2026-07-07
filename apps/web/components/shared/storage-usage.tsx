@@ -1,3 +1,4 @@
+import { HardDrive } from 'lucide-react'
 import { cn, formatBytes, storageMeterState } from '@/lib/utils'
 
 const FILL: Record<'ok' | 'warn' | 'critical', string> = {
@@ -6,6 +7,19 @@ const FILL: Record<'ok' | 'warn' | 'critical', string> = {
   critical: 'bg-status-error',
 }
 
+const RING_TEXT: Record<'ok' | 'warn' | 'critical', string> = {
+  ok: 'text-accent',
+  warn: 'text-amber-400',
+  critical: 'text-status-error',
+}
+
+function usageTitle(used: number, limit: number, unlimited: boolean): string {
+  return unlimited
+    ? `Storage used ${formatBytes(used)}`
+    : `Storage ${formatBytes(used)} / ${formatBytes(limit)}`
+}
+
+/** Full "used / limit" row + meter bar — for expanded surfaces (sidebar / admin panel). */
 export function StorageUsage({
   used,
   limit,
@@ -40,6 +54,43 @@ export function StorageUsage({
           />
         </div>
       )}
+    </div>
+  )
+}
+
+/** Compact circular gauge — for the collapsed sidebar rail. Ring colored by usage level
+ *  when a cap is set; a plain disk icon when unlimited. Hover title shows used/limit. */
+export function StorageRing({ used, limit }: { used: number; limit: number }) {
+  const { unlimited, pct, level } = storageMeterState(used, limit)
+  const title = usageTitle(used, limit, unlimited)
+
+  if (unlimited) {
+    return (
+      <div title={title} className="flex items-center justify-center text-text-tertiary" data-testid="storage-ring-unlimited">
+        <HardDrive className="h-[18px] w-[18px]" strokeWidth={1.5} />
+      </div>
+    )
+  }
+
+  const r = 9
+  const c = 2 * Math.PI * r
+  return (
+    <div title={title} className={cn('flex items-center justify-center', RING_TEXT[level])} data-testid="storage-ring">
+      <svg width="24" height="24" viewBox="0 0 24 24" className="-rotate-90">
+        <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2.5" className="stroke-bg-tertiary" />
+        <circle
+          cx="12"
+          cy="12"
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - Math.max(pct, 0) / 100)}
+          className="transition-all duration-300"
+        />
+      </svg>
     </div>
   )
 }

@@ -586,17 +586,8 @@ export default function ProjectDetailPage() {
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Storage indicator — matches global sidebar bottom section (p-2 + space-y-1).
-            Shows storage used; no quota denominator (FreeFrame has no fixed cap). */}
-        <div className="border-t border-border shrink-0 p-2 space-y-1">
-          <div className="flex items-center justify-between px-2.5 py-1.5">
-            <span className="text-[11px] font-medium text-text-secondary">Storage used</span>
-            <span className="text-[10px] tabular-nums text-text-tertiary">
-              {formatBytes(project?.storage_bytes ?? 0)}
-            </span>
-          </div>
-          <div className="h-5" />
-        </div>
+        {/* Per-project storage indicator removed — the global sidebar shows instance used/limit
+            (there is no per-project cap; one instance-level indicator is clearer UX). */}
       </div>
 
       {/* ─── Main Content ───────────────────────────────────────────────── */}
