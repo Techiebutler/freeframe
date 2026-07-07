@@ -30,7 +30,6 @@ def _valid_body(**overrides):
 def test_initiate_upload_rejects_soft_deleted_or_foreign_folder(
     client, auth_headers, mock_db, test_user, monkeypatch
 ):
-    monkeypatch.setattr("apps.api.middleware.setup_guard._setup_complete", True)
     # Bypass the upstream gates so we isolate the folder-validation path.
     monkeypatch.setattr(upload_module, "upload_guard_error", lambda db, n: None)
     monkeypatch.setattr(upload_module, "require_project_role", lambda db, pid, u, r: None)
@@ -51,7 +50,6 @@ def test_initiate_upload_allows_valid_folder(
     client, auth_headers, mock_db, test_user, monkeypatch
 ):
     """Sanity check: a real, project-owned, non-deleted folder is accepted."""
-    monkeypatch.setattr("apps.api.middleware.setup_guard._setup_complete", True)
     monkeypatch.setattr(upload_module, "upload_guard_error", lambda db, n: None)
     monkeypatch.setattr(upload_module, "require_project_role", lambda db, pid, u, r: None)
     monkeypatch.setattr(
@@ -85,7 +83,6 @@ def test_initiate_upload_new_version_ignores_bad_folder(
     (e.g. now-trashed) folder_id must not cause a spurious 404 -- there is no
     data-loss risk in this branch.
     """
-    monkeypatch.setattr("apps.api.middleware.setup_guard._setup_complete", True)
     monkeypatch.setattr(upload_module, "upload_guard_error", lambda db, n: None)
     monkeypatch.setattr(upload_module, "require_project_role", lambda db, pid, u, r: None)
     monkeypatch.setattr(

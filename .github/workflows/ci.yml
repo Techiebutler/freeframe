@@ -89,8 +89,10 @@ jobs:
 
       - name: Run tests
         run: |
+          set -o pipefail
           python -m pytest apps/api/tests/ -v --tb=short 2>&1 | tee test-output.txt
-          # Extract passed count and enforce minimum
+          # pipefail above makes this step fail on ANY test failure (zero-failure gate).
+          # The floor below additionally guards against tests being deleted or gutted.
           PASSED=$(grep -oP '\d+ passed' test-output.txt | grep -oP '\d+')
           echo "Tests passed: $PASSED"
           if [ -z "$PASSED" ] || [ "$PASSED" -lt 40 ]; then

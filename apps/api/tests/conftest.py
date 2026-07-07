@@ -124,6 +124,16 @@ def auth_headers(client, mock_db, test_user):
     app.dependency_overrides.pop(get_current_user, None)
 
 
+@pytest.fixture(autouse=True)
+def _bypass_setup_guard(monkeypatch):
+    """Mark initial setup complete so SetupGuardMiddleware doesn't 503 auth-gated client tests.
+    The middleware caches a module-level `_setup_complete` flag checked against the REAL DB (its own
+    SessionLocal, ignoring the get_db override); a fresh CI DB has no superadmin, so without this every
+    client request 503s (masked only by the >=40 floor). No test asserts the needs_setup/503 path, so a
+    blanket bypass is safe; monkeypatch restores the flag after each test."""
+    monkeypatch.setattr("apps.api.middleware.setup_guard._setup_complete", True)
+
+
 @pytest.fixture
 def real_db():
     """Real-Postgres session inside a transaction that is always rolled back (no writes persist).
