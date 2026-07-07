@@ -17,6 +17,7 @@ celery_app = Celery(
         "apps.api.tasks.watermark_tasks",
         "apps.api.tasks.reminder_tasks",
         "apps.api.tasks.email_tasks",
+        "apps.api.tasks.cleanup_tasks",
     ],
 )
 
@@ -59,6 +60,10 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     "due-date-reminders": {
         "task": "send_due_date_reminders",
+        "schedule": crontab(minute="0"),  # every hour
+    },
+    "reap-stale-uploads": {
+        "task": "reap_stale_uploads",
         "schedule": crontab(minute="0"),  # every hour
     },
 }

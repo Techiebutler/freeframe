@@ -8,10 +8,8 @@ transaction that is always rolled back — no rows persist.
 import uuid
 from datetime import datetime, timezone
 
-import pytest
-from sqlalchemy.orm import Session
+import pytest  # noqa: F401  (real_db fixture now lives in conftest.py)
 
-from apps.api.database import engine
 from apps.api.models.user import User
 from apps.api.models.project import Project, ProjectType
 from apps.api.models.asset import (
@@ -20,20 +18,6 @@ from apps.api.models.asset import (
 from apps.api.services.storage import (
     instance_storage_used_bytes, project_storage_used_bytes,
 )
-
-
-@pytest.fixture
-def real_db():
-    """Real-Postgres session inside a transaction that is always rolled back (no writes persist)."""
-    conn = engine.connect()
-    trans = conn.begin()
-    session = Session(bind=conn)
-    try:
-        yield session
-    finally:
-        session.close()
-        trans.rollback()
-        conn.close()
 
 
 def _user(db) -> User:
