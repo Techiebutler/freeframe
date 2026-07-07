@@ -123,6 +123,7 @@ def _purge_asset(db, asset_id, counts: PurgeCounts) -> None:
     # defensive: comments not removed via a version (all comments have a version_id, so usually none)
     for c in db.query(Comment).filter(Comment.asset_id == asset_id).all():
         _purge_comment(db, c.id, counts)
+    # defensive: Approval.version_id is NOT NULL, so _purge_version already removed these
     db.query(Approval).filter(Approval.asset_id == asset_id).delete(synchronize_session=False)
     db.query(AssetMetadata).filter(AssetMetadata.asset_id == asset_id).delete(synchronize_session=False)
     for link in db.query(ShareLink).filter(ShareLink.asset_id == asset_id).all():
@@ -165,7 +166,8 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
         _purge_asset(db, a.id, counts)
     for f in db.query(Folder).filter(Folder.project_id == project_id, Folder.parent_id.is_(None)).all():
         _purge_folder(db, f.id, counts)
-    for f in db.query(Folder).filter(Folder.project_id == project_id).all():  # defensive leftovers
+    # catch orphaned folders (folders.parent_id has no same-project constraint) not reachable from the project's root folders
+    for f in db.query(Folder).filter(Folder.project_id == project_id).all():
         _purge_folder(db, f.id, counts)
     for link in db.query(ShareLink).filter(ShareLink.project_id == project_id).all():
         _purge_share_link(db, link.id, counts)

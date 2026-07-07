@@ -343,3 +343,64 @@ def test_cleanup_soft_deleted_beat_registered():
     from apps.api.tasks.celery_app import celery_app
     entry = celery_app.conf.beat_schedule["cleanup-soft-deleted"]
     assert entry["task"] == "cleanup_soft_deleted"
+
+
+def test_gc_covers_all_inbound_fks_to_purged_tables():
+    """Guard: every foreign key pointing INTO a table the GC hard-deletes must be handled by a
+    _purge_* helper (deleted child-first). Reflected from Base.metadata so a NEW inbound FK added
+    later fails CI instead of crashing the daily job with an IntegrityError in production.
+    If this fails, the printed (table, column) references a purged table but no helper deletes it
+    first — extend the correct _purge_* helper in cleanup_tasks.py, then add it to KNOWN_HANDLED."""
+    # Ensure all models are registered on Base.metadata.
+    import apps.api.models.asset, apps.api.models.project, apps.api.models.folder  # noqa: F401
+    import apps.api.models.comment, apps.api.models.share, apps.api.models.approval  # noqa: F401
+    import apps.api.models.metadata, apps.api.models.branding, apps.api.models.activity  # noqa: F401
+    from apps.api.database import Base
+
+    # Tables the GC cascade-deletes INTO (their inbound FKs must be handled child-first).
+    PURGED_TABLES = {
+        "projects", "folders", "assets", "asset_versions", "media_files",
+        "comments", "share_links", "collections", "metadata_fields",
+    }
+    # (referencing_table, referencing_column) confirmed handled by a _purge_* helper.
+    KNOWN_HANDLED = {
+        # -> projects.id
+        ("assets", "project_id"), ("folders", "project_id"), ("share_links", "project_id"),
+        ("project_brandings", "project_id"), ("watermark_settings", "project_id"),
+        ("metadata_fields", "project_id"), ("collections", "project_id"),
+        ("project_members", "project_id"), ("activity_logs", "project_id"),
+        # -> folders.id
+        ("assets", "folder_id"), ("share_links", "folder_id"), ("share_link_items", "folder_id"),
+        ("asset_shares", "folder_id"), ("folders", "parent_id"),
+        # -> assets.id
+        ("asset_versions", "asset_id"), ("comments", "asset_id"), ("share_links", "asset_id"),
+        ("share_link_items", "asset_id"), ("asset_shares", "asset_id"), ("asset_metadata", "asset_id"),
+        ("activity_logs", "asset_id"), ("notifications", "asset_id"), ("approvals", "asset_id"),
+        # -> asset_versions.id
+        ("media_files", "version_id"), ("carousel_items", "version_id"),
+        ("comments", "version_id"), ("approvals", "version_id"),
+        # -> media_files.id
+        ("carousel_items", "media_file_id"),
+        # -> comments.id
+        ("comments", "parent_id"), ("annotations", "comment_id"), ("comment_attachments", "comment_id"),
+        ("comment_reactions", "comment_id"), ("mentions", "comment_id"), ("notifications", "comment_id"),
+        # -> share_links.id
+        ("share_link_items", "share_link_id"), ("share_link_activity", "share_link_id"),
+        ("watermark_settings", "share_link_id"),
+        # -> collections.id
+        ("collection_shares", "collection_id"),
+        # -> metadata_fields.id
+        ("asset_metadata", "field_id"),
+    }
+
+    inbound = set()
+    for tbl in Base.metadata.tables.values():
+        for fk in tbl.foreign_keys:
+            if fk.column.table.name in PURGED_TABLES:
+                inbound.add((tbl.name, fk.parent.name))
+
+    unhandled = inbound - KNOWN_HANDLED
+    assert not unhandled, (
+        f"New inbound FK(s) into GC-purged tables not covered by a _purge_* helper: {sorted(unhandled)}. "
+        f"Extend the cascade in cleanup_tasks.py, then add them to KNOWN_HANDLED."
+    )
