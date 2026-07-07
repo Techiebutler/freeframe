@@ -137,6 +137,24 @@ def _purge_asset(db, asset_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+def _purge_folder(db, folder_id, counts: PurgeCounts) -> None:
+    """Hard-delete a folder, its nested folders, its assets, and folder-scoped shares."""
+    f = db.query(Folder).filter(Folder.id == folder_id).first()
+    if f is None:
+        return
+    for child in db.query(Folder).filter(Folder.parent_id == folder_id).all():
+        _purge_folder(db, child.id, counts)
+    for a in db.query(Asset).filter(Asset.folder_id == folder_id).all():
+        _purge_asset(db, a.id, counts)
+    for link in db.query(ShareLink).filter(ShareLink.folder_id == folder_id).all():
+        _purge_share_link(db, link.id, counts)
+    db.query(ShareLinkItem).filter(ShareLinkItem.folder_id == folder_id).delete(synchronize_session=False)
+    db.query(AssetShare).filter(AssetShare.folder_id == folder_id).delete(synchronize_session=False)
+    db.query(Folder).filter(Folder.id == folder_id).delete(synchronize_session=False)
+    counts.folders += 1
+    db.flush()
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""

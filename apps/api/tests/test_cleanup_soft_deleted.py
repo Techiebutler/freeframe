@@ -193,3 +193,32 @@ def test_purge_asset_removes_full_subtree(real_db, monkeypatch):
     assert real_db.query(Notification).filter_by(asset_id=asset.id).count() == 0
     assert real_db.query(ShareLink).filter_by(id=other_link.id).count() == 1  # project link survives
     assert counts.assets == 1
+
+
+def _folder(db, project, owner, parent=None):
+    f = Folder(project_id=project.id, name=f"fld-{uuid.uuid4()}", created_by=owner.id,
+               parent_id=(parent.id if parent else None))
+    db.add(f); db.flush()
+    return f
+
+
+def test_purge_folder_recurses_nested_and_assets(real_db, monkeypatch):
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+
+    owner = _user(real_db)
+    project = _project(real_db, owner)
+    root = _folder(real_db, project, owner)
+    nested = _folder(real_db, project, owner, parent=root)
+    a_root = _asset(real_db, project, owner, folder=root)
+    a_nested = _asset(real_db, project, owner, folder=nested)
+    _version(real_db, a_nested, owner)
+    link = _share_link(real_db, owner, folder=root)
+
+    counts = ct.PurgeCounts()
+    ct._purge_folder(real_db, root.id, counts)
+
+    assert real_db.query(Folder).filter(Folder.id.in_([root.id, nested.id])).count() == 0
+    assert real_db.query(Asset).filter(Asset.id.in_([a_root.id, a_nested.id])).count() == 0
+    assert real_db.query(ShareLink).filter_by(id=link.id).count() == 0
+    assert counts.folders == 2 and counts.assets == 2
