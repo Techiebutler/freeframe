@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Retention-window garbage collection** ([#65](https://github.com/Techiebutler/freeframe/issues/65)) — a daily `cleanup_soft_deleted` job hard-deletes rows soft-deleted longer than `SOFT_DELETE_RETENTION_DAYS` (default 30, `0` disables) and reclaims their S3 objects, cascading through projects, folders, assets, versions, media, comments, approvals, and share links. Long-expired share links are swept into soft-delete first. No effect unless you run `celery beat`.
+- **S3 orphan sweeper** ([#65](https://github.com/Techiebutler/freeframe/issues/65)) — an opt-in weekly `sweep_orphan_s3` job reclaims bucket objects under `raw/`/`processed/` that no `MediaFile` row references. **Off and report-only by default**: set `ORPHAN_SWEEP_GRACE_HOURS` > 0 to enable (only keys older than that window are considered, so active uploads are never touched) and `ORPHAN_SWEEP_DELETE=true` to actually delete (otherwise it just logs what it would reclaim). No effect unless you run `celery beat`.
 - **Manual `POST /admin/purge` endpoint** — superadmin-only; triggers the retention collector to run in the background (returns `202`); reclaimed counts are logged by the worker.
+
+### Changed
+- **`POST /assets/{id}/restore` and `/folders/{id}/restore` now return `409`** when the item's project has been deleted — a deleted project has no restore path, so there is nothing to restore into.
 
 ## [1.2.0] - 2026-07-07
 
