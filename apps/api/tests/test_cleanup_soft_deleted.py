@@ -158,3 +158,38 @@ def test_purge_share_link_removes_items_activity_watermark(real_db):
     assert real_db.query(ShareLinkActivity).filter_by(share_link_id=link.id).count() == 0
     assert real_db.query(WatermarkSettings).filter_by(share_link_id=link.id).count() == 0
     assert counts.share_links == 1
+
+
+def test_purge_asset_removes_full_subtree(real_db, monkeypatch):
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+
+    owner = _user(real_db)
+    project = _project(real_db, owner)
+    asset = _asset(real_db, project, owner)
+    version = _version(real_db, asset, owner)
+    _media(real_db, version)
+    field = MetadataField(project_id=project.id, name="f", field_type=FieldType.text)
+    real_db.add(field); real_db.flush()
+    real_db.add(AssetMetadata(asset_id=asset.id, field_id=field.id, value={"v": 1}))
+    link = _share_link(real_db, owner, asset=asset)
+    other_link = _share_link(real_db, owner, project=project)
+    real_db.add(ShareLinkItem(share_link_id=other_link.id, asset_id=asset.id))  # cross-link ref
+    real_db.add(AssetShare(asset_id=asset.id, shared_with_user_id=owner.id, shared_by=owner.id))
+    real_db.add(ActivityLog(asset_id=asset.id, action="created"))
+    real_db.add(Notification(user_id=owner.id, type=NotificationType.assignment, asset_id=asset.id))
+    real_db.flush()
+
+    counts = ct.PurgeCounts()
+    ct._purge_asset(real_db, asset.id, counts)
+
+    assert real_db.query(Asset).filter_by(id=asset.id).count() == 0
+    assert real_db.query(AssetVersion).filter_by(asset_id=asset.id).count() == 0
+    assert real_db.query(AssetMetadata).filter_by(asset_id=asset.id).count() == 0
+    assert real_db.query(ShareLink).filter_by(id=link.id).count() == 0
+    assert real_db.query(ShareLinkItem).filter_by(asset_id=asset.id).count() == 0
+    assert real_db.query(AssetShare).filter_by(asset_id=asset.id).count() == 0
+    assert real_db.query(ActivityLog).filter_by(asset_id=asset.id).count() == 0
+    assert real_db.query(Notification).filter_by(asset_id=asset.id).count() == 0
+    assert real_db.query(ShareLink).filter_by(id=other_link.id).count() == 1  # project link survives
+    assert counts.assets == 1

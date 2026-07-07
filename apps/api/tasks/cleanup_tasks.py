@@ -113,6 +113,30 @@ def _purge_share_link(db, share_link_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+def _purge_asset(db, asset_id, counts: PurgeCounts) -> None:
+    """Hard-delete an asset and everything hanging off it."""
+    a = db.query(Asset).filter(Asset.id == asset_id).first()
+    if a is None:
+        return
+    for v in db.query(AssetVersion).filter(AssetVersion.asset_id == asset_id).all():
+        _purge_version(db, v.id, counts)
+    # defensive: comments not removed via a version (all comments have a version_id, so usually none)
+    for c in db.query(Comment).filter(Comment.asset_id == asset_id).all():
+        _purge_comment(db, c.id, counts)
+    db.query(Approval).filter(Approval.asset_id == asset_id).delete(synchronize_session=False)
+    db.query(AssetMetadata).filter(AssetMetadata.asset_id == asset_id).delete(synchronize_session=False)
+    for link in db.query(ShareLink).filter(ShareLink.asset_id == asset_id).all():
+        _purge_share_link(db, link.id, counts)
+    # share-link items in OTHER (multi-asset) links that reference this asset
+    db.query(ShareLinkItem).filter(ShareLinkItem.asset_id == asset_id).delete(synchronize_session=False)
+    db.query(AssetShare).filter(AssetShare.asset_id == asset_id).delete(synchronize_session=False)
+    db.query(ActivityLog).filter(ActivityLog.asset_id == asset_id).delete(synchronize_session=False)
+    db.query(Notification).filter(Notification.asset_id == asset_id).delete(synchronize_session=False)
+    db.query(Asset).filter(Asset.id == asset_id).delete(synchronize_session=False)
+    counts.assets += 1
+    db.flush()
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
