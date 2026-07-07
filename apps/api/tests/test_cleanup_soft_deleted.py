@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import apps.api.tasks.cleanup_tasks as ct
 from apps.api.models.user import User
-from apps.api.models.project import Project, ProjectType
+from apps.api.models.project import Project, ProjectType, ProjectMember
 from apps.api.models.folder import Folder
 from apps.api.models.asset import (
     Asset, AssetType, AssetVersion, MediaFile, CarouselItem, FileType, ProcessingStatus,
@@ -222,3 +222,46 @@ def test_purge_folder_recurses_nested_and_assets(real_db, monkeypatch):
     assert real_db.query(Asset).filter(Asset.id.in_([a_root.id, a_nested.id])).count() == 0
     assert real_db.query(ShareLink).filter_by(id=link.id).count() == 0
     assert counts.folders == 2 and counts.assets == 2
+
+
+def test_purge_project_removes_everything(real_db, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(ct, "delete_object", lambda k: deleted.append(k))
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: deleted.append(k))
+
+    owner = _user(real_db)
+    project = _project(real_db, owner)
+    project.poster_s3_key = "posters/p.webp"; real_db.flush()
+    folder = _folder(real_db, project, owner)
+    foldered = _asset(real_db, project, owner, folder=folder)
+    loose = _asset(real_db, project, owner)
+    _version(real_db, loose, owner)
+    real_db.add(ProjectBranding(project_id=project.id, logo_s3_key="branding/logo.png"))
+    real_db.add(WatermarkSettings(project_id=project.id))
+    real_db.add(ProjectMember(project_id=project.id, user_id=owner.id))
+    coll = Collection(project_id=project.id, name="c", created_by=owner.id)
+    real_db.add(coll); real_db.flush()
+    real_db.add(CollectionShare(collection_id=coll.id, token=f"c-{uuid.uuid4()}", created_by=owner.id))
+    field = MetadataField(project_id=project.id, name="f", field_type=FieldType.text)
+    real_db.add(field); real_db.flush()
+    real_db.add(AssetMetadata(asset_id=loose.id, field_id=field.id, value={"v": 1}))
+    _share_link(real_db, owner, project=project)
+    real_db.add(ActivityLog(project_id=project.id, action="created"))
+    real_db.flush()
+
+    counts = ct.PurgeCounts()
+    ct._purge_project(real_db, project.id, counts)
+
+    assert real_db.query(Project).filter_by(id=project.id).count() == 0
+    assert real_db.query(Folder).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(Asset).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(ProjectBranding).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(WatermarkSettings).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(ProjectMember).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(Collection).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(CollectionShare).filter_by(collection_id=coll.id).count() == 0
+    assert real_db.query(MetadataField).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(ShareLink).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(ActivityLog).filter_by(project_id=project.id).count() == 0
+    assert "branding/logo.png" in deleted and "posters/p.webp" in deleted
+    assert counts.projects == 1 and counts.assets == 2 and counts.folders == 1

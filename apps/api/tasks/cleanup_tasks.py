@@ -155,6 +155,45 @@ def _purge_folder(db, folder_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+def _purge_project(db, project_id, counts: PurgeCounts) -> None:
+    """Hard-delete a project and its entire contents."""
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if p is None:
+        return
+    # assets first (covers foldered + loose); folder loops below are then empty
+    for a in db.query(Asset).filter(Asset.project_id == project_id).all():
+        _purge_asset(db, a.id, counts)
+    for f in db.query(Folder).filter(Folder.project_id == project_id, Folder.parent_id.is_(None)).all():
+        _purge_folder(db, f.id, counts)
+    for f in db.query(Folder).filter(Folder.project_id == project_id).all():  # defensive leftovers
+        _purge_folder(db, f.id, counts)
+    for link in db.query(ShareLink).filter(ShareLink.project_id == project_id).all():
+        _purge_share_link(db, link.id, counts)
+    field_ids = [mf.id for mf in db.query(MetadataField).filter(MetadataField.project_id == project_id).all()]
+    if field_ids:
+        db.query(AssetMetadata).filter(AssetMetadata.field_id.in_(field_ids)).delete(synchronize_session=False)
+    db.query(MetadataField).filter(MetadataField.project_id == project_id).delete(synchronize_session=False)
+    coll_ids = [c.id for c in db.query(Collection).filter(Collection.project_id == project_id).all()]
+    if coll_ids:
+        db.query(CollectionShare).filter(CollectionShare.collection_id.in_(coll_ids)).delete(synchronize_session=False)
+    db.query(Collection).filter(Collection.project_id == project_id).delete(synchronize_session=False)
+    branding = db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).first()
+    if branding is not None:
+        if branding.logo_s3_key:
+            _safe(delete_object, branding.logo_s3_key)
+            counts.s3_deletes += 1
+        db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).delete(synchronize_session=False)
+    db.query(WatermarkSettings).filter(WatermarkSettings.project_id == project_id).delete(synchronize_session=False)
+    db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(synchronize_session=False)
+    db.query(ActivityLog).filter(ActivityLog.project_id == project_id).delete(synchronize_session=False)
+    if p.poster_s3_key:
+        _safe(delete_object, p.poster_s3_key)
+        counts.s3_deletes += 1
+    db.query(Project).filter(Project.id == project_id).delete(synchronize_session=False)
+    counts.projects += 1
+    db.flush()
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
