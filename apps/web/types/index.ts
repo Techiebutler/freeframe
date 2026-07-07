@@ -57,6 +57,11 @@ export interface User {
   deleted_at: string | null;
 }
 
+export interface InstanceSettings {
+  storage_limit_bytes: number;
+  storage_used_bytes: number;
+}
+
 export interface Team {
   id: string;
   org_id: string;

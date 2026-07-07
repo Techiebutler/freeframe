@@ -6,6 +6,9 @@ import {
   formatRelativeTime,
   truncate,
   cn,
+  storageMeterState,
+  gbToBytes,
+  bytesToGb,
 } from '../utils'
 
 describe('formatTime', () => {
@@ -128,5 +131,37 @@ describe('cn', () => {
   it('merges conflicting tailwind classes (last wins)', () => {
     const result = cn('text-red-500', 'text-blue-500')
     expect(result).toBe('text-blue-500')
+  })
+})
+
+describe('storageMeterState', () => {
+  it('is unlimited when limit is 0', () => {
+    expect(storageMeterState(500, 0)).toEqual({ unlimited: true, pct: 0, level: 'ok' })
+  })
+  it('is unlimited when limit is negative', () => {
+    expect(storageMeterState(500, -1).unlimited).toBe(true)
+  })
+  it('computes pct and ok level under 80%', () => {
+    expect(storageMeterState(500, 1000)).toEqual({ unlimited: false, pct: 50, level: 'ok' })
+  })
+  it('warns at 80%', () => {
+    expect(storageMeterState(800, 1000).level).toBe('warn')
+  })
+  it('is critical at 90%', () => {
+    expect(storageMeterState(900, 1000).level).toBe('critical')
+  })
+  it('clamps pct to 100 when over limit', () => {
+    const s = storageMeterState(2000, 1000)
+    expect(s.pct).toBe(100)
+    expect(s.level).toBe('critical')
+  })
+})
+
+describe('GB conversion', () => {
+  it('gbToBytes rounds to whole bytes', () => {
+    expect(gbToBytes(10)).toBe(10 * 1024 ** 3)
+  })
+  it('bytesToGb is the inverse', () => {
+    expect(bytesToGb(10 * 1024 ** 3)).toBe(10)
   })
 })

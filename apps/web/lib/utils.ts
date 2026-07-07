@@ -61,6 +61,26 @@ export function formatBytes(bytes: number): string {
   return `${parseFloat(value.toFixed(1))} ${units[i]}`
 }
 
+export const GB = 1024 ** 3
+
+export function gbToBytes(gb: number): number {
+  return Math.round(gb * GB)
+}
+
+export function bytesToGb(bytes: number): number {
+  return bytes / GB
+}
+
+export function storageMeterState(
+  used: number,
+  limit: number,
+): { unlimited: boolean; pct: number; level: 'ok' | 'warn' | 'critical' } {
+  if (limit <= 0) return { unlimited: true, pct: 0, level: 'ok' }
+  const pct = Math.min(100, (used / limit) * 100)
+  const level = pct >= 90 ? 'critical' : pct >= 80 ? 'warn' : 'ok'
+  return { unlimited: false, pct, level }
+}
+
 /**
  * Format an ISO date string into a relative time string
  * e.g. "2 hours ago", "3 days ago", "just now"
