@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { useAuthStore } from "@/stores/auth-store";
 import { useRouter } from "next/navigation";
 import type { User, UserStatus } from "@/types";
+import { InstanceSettingsTab } from "@/components/settings/instance-settings-tab";
 
 function BulkInviteDialog() {
   const [open, setOpen] = React.useState(false);
@@ -166,6 +167,7 @@ function userStatusBadge(status: UserStatus) {
 export default function AdminPage() {
   const { user, isSuperAdmin } = useAuthStore();
   const router = useRouter();
+  const [tab, setTab] = React.useState<"users" | "instance">("users");
 
   const { data: usersResp, isLoading: loadingUsers } = useSWR<User[]>(
     isSuperAdmin ? "/admin/users" : null,
@@ -245,7 +247,28 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* Sub-tabs */}
+      <div className="flex gap-1 border-b border-border">
+        {([["users", "Users"], ["instance", "Instance settings"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={cn(
+              "px-3 py-2 text-sm border-b-2 -mb-px transition-colors",
+              tab === key
+                ? "border-accent text-text-primary"
+                : "border-transparent text-text-secondary hover:text-text-primary",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "instance" && <InstanceSettingsTab />}
+
       {/* User management */}
+      {tab === "users" && (
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-text-primary">
@@ -392,6 +415,7 @@ export default function AdminPage() {
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }
