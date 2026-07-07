@@ -1,12 +1,17 @@
 """Tests for share-link expiry: the conservative expire sweep + enforcement regression (#65)."""
 import uuid
 from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi import HTTPException
 
 import apps.api.tasks.cleanup_tasks as ct
 from apps.api.config import settings
 from apps.api.models.user import User
 from apps.api.models.project import Project, ProjectType
 from apps.api.models.share import ShareLink
+from apps.api.services.permissions import validate_share_link
 
 
 def _owner(db):
@@ -52,3 +57,27 @@ def test_expire_share_links_disabled_when_zero(monkeypatch):
     counts = ct.PurgeCounts()
     ct._expire_share_links(db, counts)
     db.query.assert_not_called()
+
+
+def _mock_db_returning(link):
+    db = MagicMock()
+    db.query.return_value = db
+    db.filter.return_value = db
+    db.first.return_value = link
+    return db
+
+
+def test_validate_share_link_rejects_expired():
+    link = MagicMock(is_enabled=True,
+                     expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
+    with pytest.raises(HTTPException) as exc:
+        validate_share_link(_mock_db_returning(link), "tok")
+    assert exc.value.status_code == 410
+
+
+def test_validate_share_link_allows_future_and_none_expiry():
+    future = MagicMock(is_enabled=True,
+                       expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
+    assert validate_share_link(_mock_db_returning(future), "tok") is future
+    never = MagicMock(is_enabled=True, expires_at=None)
+    assert validate_share_link(_mock_db_returning(never), "tok") is never
