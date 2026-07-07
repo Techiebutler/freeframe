@@ -23,6 +23,7 @@ describe('API client', () => {
         get: (key: string) => key === 'content-type' ? 'application/json' : null,
       },
       json: () => Promise.resolve(mockData),
+      text: () => Promise.resolve(JSON.stringify(mockData)),
     }))
 
     const result = await api.get('/test')
@@ -38,6 +39,7 @@ describe('API client', () => {
         get: (key: string) => key === 'content-type' ? 'application/json' : null,
       },
       json: () => Promise.resolve({}),
+      text: () => Promise.resolve(JSON.stringify({})),
     }))
 
     await api.get('/test')
@@ -89,6 +91,7 @@ describe('API client', () => {
           get: (key: string) => key === 'content-type' ? 'application/json' : null,
         },
         json: () => Promise.resolve({ success: true }),
+        text: () => Promise.resolve(JSON.stringify({ success: true })),
       })
 
     vi.stubGlobal('fetch', fetchMock)

@@ -6,6 +6,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     get: vi.fn(),
     patch: vi.fn(),
+    post: vi.fn(),
   },
 }))
 
@@ -80,7 +81,7 @@ describe('Notification store', () => {
   })
 
   it('markAllRead resets unread count to 0', async () => {
-    vi.mocked(api.patch).mockResolvedValue(undefined)
+    vi.mocked(api.post).mockResolvedValue(undefined)
     useNotificationStore.setState({
       notifications: mockNotifications,
       unreadCount: 1,
@@ -91,11 +92,11 @@ describe('Notification store', () => {
     const state = useNotificationStore.getState()
     expect(state.unreadCount).toBe(0)
     expect(state.notifications.every((n) => n.read)).toBe(true)
-    expect(api.patch).toHaveBeenCalledWith('/notifications/read-all', {})
+    expect(api.post).toHaveBeenCalledWith('/me/notifications/read-all')
   })
 
   it('markAsRead marks a specific notification as read', async () => {
-    vi.mocked(api.patch).mockResolvedValue(undefined)
+    vi.mocked(api.post).mockResolvedValue(undefined)
     useNotificationStore.setState({
       notifications: mockNotifications,
       unreadCount: 1,
@@ -106,6 +107,6 @@ describe('Notification store', () => {
     const state = useNotificationStore.getState()
     expect(state.notifications.find((n) => n.id === 'n1')?.read).toBe(true)
     expect(state.unreadCount).toBe(0)
-    expect(api.patch).toHaveBeenCalledWith('/notifications/n1/read', {})
+    expect(api.post).toHaveBeenCalledWith('/me/notifications/n1/read')
   })
 })

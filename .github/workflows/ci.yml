@@ -154,6 +154,9 @@ jobs:
         run: pnpm exec tsc --noEmit
         continue-on-error: true
 
+      - name: Run tests
+        run: pnpm test
+
       - name: Build
         run: pnpm build
         env:
