@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-07
+
+### Upgrade notes
+
+New garbage-collection features for [#65](https://github.com/Techiebutler/freeframe/issues/65), all with safe defaults — nothing runs unless you run `celery beat`, and the destructive parts are opt-in:
+
+- **Retention GC activates if you run `celery beat`.** A daily `cleanup_soft_deleted` job hard-deletes rows soft-deleted longer than `SOFT_DELETE_RETENTION_DAYS` (default `30`) and deletes their S3 objects, cascading the full project→folder→asset→version→media/comment/share tree. Set `SOFT_DELETE_RETENTION_DAYS=0` to disable.
+- **The S3 orphan sweeper is off and report-only by default.** It runs only when `ORPHAN_SWEEP_GRACE_HOURS > 0`, and even then only *reports* bucket objects with no DB row — it deletes only if you also set `ORPHAN_SWEEP_DELETE=true`. Review its report-only logs before enabling deletion.
+- **No migration required** — the GC reuses the existing `deleted_at` columns.
+- **New optional env vars, all safe-by-default:** `SOFT_DELETE_RETENTION_DAYS=30`, `ORPHAN_SWEEP_GRACE_HOURS=0` (disabled), `ORPHAN_SWEEP_DELETE=false` (report-only).
+
 ### Added
 - **Retention-window garbage collection** ([#65](https://github.com/Techiebutler/freeframe/issues/65)) — a daily `cleanup_soft_deleted` job hard-deletes rows soft-deleted longer than `SOFT_DELETE_RETENTION_DAYS` (default 30, `0` disables) and reclaims their S3 objects, cascading through projects, folders, assets, versions, media, comments, approvals, and share links. Long-expired share links are swept into soft-delete first. No effect unless you run `celery beat`.
 - **S3 orphan sweeper** ([#65](https://github.com/Techiebutler/freeframe/issues/65)) — an opt-in weekly `sweep_orphan_s3` job reclaims bucket objects under `raw/`/`processed/` that no `MediaFile` row references. **Off and report-only by default**: set `ORPHAN_SWEEP_GRACE_HOURS` > 0 to enable (only keys older than that window are considered, so active uploads are never touched) and `ORPHAN_SWEEP_DELETE=true` to actually delete (otherwise it just logs what it would reclaim). No effect unless you run `celery beat`.
