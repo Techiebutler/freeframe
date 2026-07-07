@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-07
+
+### Upgrade notes
+
+Upgrading from v1.1.6 is non-breaking by default (the new storage cap and per-file limit both default to unlimited), but note:
+
+- **Run `alembic upgrade head`.** This adds the `instance_settings` table and widens `MediaFile.file_size_bytes` / `CommentAttachment.file_size_bytes` to `BigInteger`. ⚠️ The bigint change **rewrites the `media_files` and `comment_attachments` tables under an `ACCESS EXCLUSIVE` lock** (int4→int8 is not an in-place change in PostgreSQL), blocking reads and writes for the duration of the rewrite. Negligible on small installs; on a large `media_files` table, **run it during a low-traffic maintenance window.**
+- **The upload reaper activates if you run `celery beat`.** An hourly job aborts stale, still-open S3 multipart uploads and soft-deletes `uploading`/`failed` versions older than `STALE_UPLOAD_TIMEOUT_HOURS` (default `24`), deleting their S3 objects. Raise the value to be more conservative, or set it to `0` to disable. No effect if you don't run `celery beat`.
+- **New optional env vars, both with safe defaults:** `MAX_UPLOAD_BYTES=0` (unlimited per-file size) and `STALE_UPLOAD_TIMEOUT_HOURS=24`.
+- **No behavior change until you opt in** — set an instance storage cap via the admin **Instance settings** tab (or `PUT /instance/settings`) when you want to enforce one.
+
 ### Added
 - **Storage cap admin UI + sidebar indicator** ([#102](https://github.com/Techiebutler/freeframe/pull/102)) — the global sidebar shows instance storage `used / limit` with a meter (amber ≥80%, red ≥90%); admins set the cap in GB (`0` = unlimited) in a new **Instance settings** sub-tab on the admin settings page. Frontend for the #98 storage cap.
 - **Automatic reclamation of stuck/failed upload storage** ([#101](https://github.com/Techiebutler/freeframe/pull/101)) — a scoped slice of #65: an hourly job aborts stale, still-open S3 multipart uploads and soft-deletes `uploading`/`failed` versions older than `STALE_UPLOAD_TIMEOUT_HOURS` (default 24), reclaiming their S3 objects. Prevents unbounded storage leak from interrupted/failed uploads that the committed-only cap doesn't count.
