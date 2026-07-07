@@ -4,15 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import uuid
 
-from dataclasses import asdict
-
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User, UserStatus
 from ..schemas.auth import UserResponse, UpdateUserRoleRequest
 from .users import require_admin
-from ..tasks.cleanup_tasks import _run_cleanup
-from ..schemas.admin import PurgeResult
+from ..tasks.celery_app import send_task_safe
+from ..tasks.cleanup_tasks import cleanup_soft_deleted
+from ..schemas.admin import PurgeStartResponse
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -115,16 +114,16 @@ def update_user_role(
     db.refresh(user)
     return user
 
-@router.post("/purge", response_model=PurgeResult)
-def purge_now(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
-):
-    """Run the retention-window garbage collector now and return what was reclaimed.
+@router.post("/purge", response_model=PurgeStartResponse, status_code=status.HTTP_202_ACCEPTED)
+def purge_now(current_user: User = Depends(require_admin)):
+    """Trigger the retention-window garbage collector to run now, in the background.
 
-    Superadmin only. Runs synchronously; typical self-hosted installs finish quickly. Large
-    installs should rely on the daily `cleanup_soft_deleted` beat task instead.
+    Superadmin only. Enqueues the same `cleanup_soft_deleted` task the daily beat runs, so the
+    request returns immediately instead of blocking on a potentially long cascade + S3 deletes.
+    Reclaimed counts are logged by the worker.
     """
-    counts = _run_cleanup(db)
-    db.commit()
-    return PurgeResult(**asdict(counts))
+    send_task_safe(cleanup_soft_deleted)
+    return PurgeStartResponse(
+        status="started",
+        detail="Retention garbage collection is running in the background; see worker logs for reclaimed counts.",
+    )

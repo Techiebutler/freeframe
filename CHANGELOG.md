@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Retention-window garbage collection** ([#65](https://github.com/Techiebutler/freeframe/issues/65)) — a daily `cleanup_soft_deleted` job hard-deletes rows soft-deleted longer than `SOFT_DELETE_RETENTION_DAYS` (default 30, `0` disables) and reclaims their S3 objects, cascading through projects, folders, assets, versions, media, comments, approvals, and share links. Long-expired share links are swept into soft-delete first. No effect unless you run `celery beat`.
-- **Manual `POST /admin/purge` endpoint** — superadmin-only; runs the retention collector on demand and returns the reclaimed counts.
+- **Manual `POST /admin/purge` endpoint** — superadmin-only; triggers the retention collector to run in the background (returns `202`); reclaimed counts are logged by the worker.
 
 ## [1.2.0] - 2026-07-07
 
