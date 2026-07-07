@@ -20,7 +20,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Widen file_size_bytes from INTEGER (int4, ~2.1GB) to BIGINT so files larger
-    than ~2.1GB can be recorded (media files support up to 10GB+)."""
+    than ~2.1GB can be recorded (media files support up to 10GB+).
+
+    WARNING: int4->int8 is not binary-coercible in PostgreSQL, so each ALTER COLUMN
+    rewrites the entire table under an ACCESS EXCLUSIVE lock, blocking all reads/writes
+    to media_files (and comment_attachments) for the rewrite's duration. On a large
+    deployment run this in a maintenance window, or migrate zero-downtime via a
+    nullable new column + backfill + rename."""
     op.alter_column("media_files", "file_size_bytes",
                     existing_type=sa.Integer(), type_=sa.BigInteger(), existing_nullable=False)
     op.alter_column("comment_attachments", "file_size_bytes",
