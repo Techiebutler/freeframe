@@ -265,3 +265,53 @@ def test_purge_project_removes_everything(real_db, monkeypatch):
     assert real_db.query(ActivityLog).filter_by(project_id=project.id).count() == 0
     assert "branding/logo.png" in deleted and "posters/p.webp" in deleted
     assert counts.projects == 1 and counts.assets == 2 and counts.folders == 1
+
+
+from apps.api.config import settings
+from apps.api.tests.conftest import _make_mock_db
+
+
+def test_purge_soft_deleted_respects_retention_window(real_db, monkeypatch):
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 30)
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+
+    owner = _user(real_db)
+    old = _project(real_db, owner, deleted_hours_ago=24 * 40)     # 40 days > 30 → purge
+    recent = _project(real_db, owner, deleted_hours_ago=24 * 5)   # 5 days < 30 → keep
+    _asset(real_db, old, owner)
+    _asset(real_db, recent, owner)
+
+    counts = ct.PurgeCounts()
+    ct._purge_soft_deleted(real_db, counts)
+
+    assert real_db.query(Project).filter_by(id=old.id).count() == 0
+    assert real_db.query(Project).filter_by(id=recent.id).count() == 1
+    assert counts.projects == 1
+
+
+def test_purge_soft_deleted_purges_standalone_old_version(real_db, monkeypatch):
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 30)
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+
+    owner = _user(real_db)
+    project = _project(real_db, owner)                    # live project
+    asset = _asset(real_db, project, owner)               # live asset
+    stale = _version(real_db, asset, owner, deleted_hours_ago=24 * 40)  # reaper-soft-deleted
+    _media(real_db, stale)
+
+    counts = ct.PurgeCounts()
+    ct._purge_soft_deleted(real_db, counts)
+
+    assert real_db.query(AssetVersion).filter_by(id=stale.id).count() == 0
+    assert real_db.query(Asset).filter_by(id=asset.id).count() == 1   # live asset untouched
+    assert counts.versions == 1
+
+
+def test_purge_soft_deleted_disabled_when_zero(monkeypatch):
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 0)
+    db = _make_mock_db()
+    counts = ct.PurgeCounts()
+    ct._purge_soft_deleted(db, counts)
+    db.query.assert_not_called()

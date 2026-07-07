@@ -228,6 +228,35 @@ def _reap_stale_uploads(db) -> int:
     return len(versions)
 
 
+def _purge_soft_deleted(db, counts: PurgeCounts) -> None:
+    """Hard-delete every root soft-deleted longer than the retention window, cascading its subtree.
+    Roots are processed top-down so a parent removes its children before a later pass queries them;
+    each pass re-queries the DB, and every helper guards against a row already removed."""
+    days = settings.soft_delete_retention_days
+    if days <= 0:
+        # 0/negative DISABLES the purge — guard BEFORE computing a cutoff so a misconfigured 0
+        # can never make cutoff == now() and hard-delete every soft-deleted row.
+        log.info("cleanup: disabled (soft_delete_retention_days=%s)", days)
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    for p in db.query(Project).filter(Project.deleted_at.isnot(None), Project.deleted_at < cutoff).all():
+        _purge_project(db, p.id, counts)
+    for f in db.query(Folder).filter(Folder.deleted_at.isnot(None), Folder.deleted_at < cutoff).all():
+        _purge_folder(db, f.id, counts)
+    for a in db.query(Asset).filter(Asset.deleted_at.isnot(None), Asset.deleted_at < cutoff).all():
+        _purge_asset(db, a.id, counts)
+    for v in db.query(AssetVersion).filter(AssetVersion.deleted_at.isnot(None), AssetVersion.deleted_at < cutoff).all():
+        _purge_version(db, v.id, counts)
+    for c in db.query(Comment).filter(Comment.deleted_at.isnot(None), Comment.deleted_at < cutoff).all():
+        _purge_comment(db, c.id, counts)
+    for link in db.query(ShareLink).filter(ShareLink.deleted_at.isnot(None), ShareLink.deleted_at < cutoff).all():
+        _purge_share_link(db, link.id, counts)
+    db.query(Approval).filter(Approval.deleted_at.isnot(None), Approval.deleted_at < cutoff).delete(synchronize_session=False)
+    db.query(AssetShare).filter(AssetShare.deleted_at.isnot(None), AssetShare.deleted_at < cutoff).delete(synchronize_session=False)
+    db.flush()
+
+
 @celery_app.task(name="reap_stale_uploads")
 def reap_stale_uploads():
     """Periodic beat task: reclaim storage from stuck/failed uploads."""

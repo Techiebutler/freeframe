@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # Reaper: uploads stuck in `uploading`/`failed` longer than this are reclaimed. Hours.
     stale_upload_timeout_hours: int = 24
 
+    # Retention GC: rows soft-deleted (deleted_at) longer than this are hard-deleted and their
+    # S3 objects reclaimed. Days. 0 (or negative) DISABLES the sweep (matches the reaper convention).
+    soft_delete_retention_days: int = 30
+
     # Worker concurrency settings
     transcoding_concurrency: int = 2  # Number of concurrent video transcoding jobs
     email_concurrency: int = 2  # Number of concurrent email sending jobs
