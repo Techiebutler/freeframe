@@ -91,3 +91,40 @@ def test_purge_comment_removes_subtree_and_attachment_s3(real_db, monkeypatch):
     assert real_db.query(Notification).filter_by(comment_id=parent.id).count() == 0
     assert "att/x" in deleted
     assert counts.comments == 2  # parent + reply
+
+
+def _media(db, version, ftype=FileType.video, processed="processed/x/", thumb="thumb/x"):
+    mf = MediaFile(version_id=version.id, file_type=ftype, original_filename="f.mp4",
+                   mime_type="video/mp4", file_size_bytes=10, s3_key_raw=f"raw/{version.id}",
+                   s3_key_processed=processed, s3_key_thumbnail=thumb)
+    db.add(mf); db.flush()
+    return mf
+
+
+def test_purge_version_removes_media_carousel_and_s3(real_db, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(ct, "delete_object", lambda k: deleted.append(k))
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: deleted.append(k))
+
+    owner = _user(real_db)
+    project = _project(real_db, owner)
+    asset = _asset(real_db, project, owner)
+    version = _version(real_db, asset, owner)
+    mf = _media(real_db, version)
+    real_db.add(CarouselItem(version_id=version.id, media_file_id=mf.id, position=0))
+    comment = _comment(real_db, asset, version, owner)
+    real_db.add(Approval(asset_id=asset.id, version_id=version.id, user_id=owner.id,
+                         status=ApprovalStatus.approved))
+    real_db.flush()
+
+    counts = ct.PurgeCounts()
+    ct._purge_version(real_db, version.id, counts)
+
+    assert real_db.query(AssetVersion).filter_by(id=version.id).count() == 0
+    assert real_db.query(MediaFile).filter_by(version_id=version.id).count() == 0
+    assert real_db.query(CarouselItem).filter_by(version_id=version.id).count() == 0
+    assert real_db.query(Comment).filter_by(version_id=version.id).count() == 0
+    assert real_db.query(Approval).filter_by(version_id=version.id).count() == 0
+    assert real_db.query(Asset).filter_by(id=asset.id).count() == 1  # asset untouched
+    assert set(deleted) == {f"raw/{version.id}", "processed/x/", "thumb/x"}
+    assert counts.versions == 1 and counts.media_files == 1

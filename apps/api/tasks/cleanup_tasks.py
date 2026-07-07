@@ -67,6 +67,39 @@ def _purge_comment(db, comment_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+def _reclaim_media_s3(mf, counts: PurgeCounts) -> None:
+    """Best-effort delete of a MediaFile's S3 objects. processed is a prefix (HLS or single key)."""
+    _safe(delete_object, mf.s3_key_raw)
+    counts.s3_deletes += 1
+    if mf.s3_key_processed:
+        _safe(delete_prefix, mf.s3_key_processed)
+        counts.s3_deletes += 1
+    if mf.s3_key_thumbnail:
+        _safe(delete_object, mf.s3_key_thumbnail)
+        counts.s3_deletes += 1
+
+
+def _purge_version(db, version_id, counts: PurgeCounts) -> None:
+    """Hard-delete a version's media (+S3), carousel items, comments and approvals, then the row."""
+    v = db.query(AssetVersion).filter(AssetVersion.id == version_id).first()
+    if v is None:
+        return
+    # carousel items reference media_file_id + version_id — remove before media files
+    db.query(CarouselItem).filter(CarouselItem.version_id == version_id).delete(synchronize_session=False)
+    media = db.query(MediaFile).filter(MediaFile.version_id == version_id).all()
+    for mf in media:
+        _reclaim_media_s3(mf, counts)
+    counts.media_files += len(media)
+    db.query(MediaFile).filter(MediaFile.version_id == version_id).delete(synchronize_session=False)
+    # comments on this version (recurse each; every comment has a version_id, NOT NULL)
+    for c in db.query(Comment).filter(Comment.version_id == version_id).all():
+        _purge_comment(db, c.id, counts)
+    db.query(Approval).filter(Approval.version_id == version_id).delete(synchronize_session=False)
+    db.query(AssetVersion).filter(AssetVersion.id == version_id).delete(synchronize_session=False)
+    counts.versions += 1
+    db.flush()
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
