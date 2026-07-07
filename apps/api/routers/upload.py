@@ -7,6 +7,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
 from ..models.asset import Asset, AssetVersion, MediaFile, AssetType, ProcessingStatus, FileType
+from ..models.folder import Folder
 from ..models.project import Project
 from ..services.s3_service import (
     create_multipart_upload, presign_upload_part,
@@ -42,6 +43,18 @@ def initiate_upload(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     require_project_role(db, body.project_id, current_user, ProjectRole.editor)
+
+    # Validate the target folder (if any): it must exist, belong to this project, and not be
+    # soft-deleted. Without this, a live asset could be created under a trashed folder and then
+    # hard-deleted by the retention GC's folder cascade (mirrors move_asset/bulk_move's _get_folder).
+    if body.folder_id is not None:
+        folder = db.query(Folder).filter(
+            Folder.id == body.folder_id,
+            Folder.project_id == body.project_id,
+            Folder.deleted_at.is_(None),
+        ).first()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
 
     # Get or create asset
     if body.asset_id:
