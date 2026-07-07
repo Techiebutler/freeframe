@@ -307,7 +307,7 @@ def reap_stale_uploads():
 def _run_cleanup(db) -> PurgeCounts:
     """Full cleanup pass: expire long-dead share links, then hard-delete aged soft-deletes.
     Mutates db; the caller (task wrapper or admin endpoint) owns the commit."""
-    counts = PurgeCounts(retention_days=settings.soft_delete_retention_days)
+    counts = PurgeCounts(retention_days=_retention_days())  # report the clamped window actually used
     _expire_share_links(db, counts)
     _purge_soft_deleted(db, counts)
     return counts
