@@ -10,7 +10,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.asset import Asset
 from ..models.folder import Folder
-from ..models.project import ProjectRole
+from ..models.project import Project, ProjectRole
 from ..models.user import User
 from ..schemas.folder import (
     AssetMoveRequest,
@@ -467,6 +467,12 @@ def restore_asset(
 
     require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
 
+    # A deleted project has no restore path, so restoring an asset into a soft-deleted project would be
+    # a false success — the retention GC's project cascade would silently hard-delete it. Refuse.
+    project = db.query(Project).filter(Project.id == asset.project_id).first()
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="Cannot restore: the project has been deleted")
+
     # If parent folder is deleted, move to root
     if asset.folder_id:
         parent_folder = (
@@ -493,6 +499,10 @@ def restore_folder(
         raise HTTPException(status_code=404, detail="Deleted folder not found")
 
     require_project_role(db, folder.project_id, current_user, ProjectRole.editor)
+
+    project = db.query(Project).filter(Project.id == folder.project_id).first()
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="Cannot restore: the project has been deleted")
 
     # If parent folder is deleted, restore to root
     if folder.parent_id:

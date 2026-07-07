@@ -68,3 +68,20 @@ def test_orphan_sweep_disabled_when_grace_zero(mock_db, monkeypatch):
     monkeypatch.setattr(ct, "list_keys", lambda prefix: called.append(prefix) or [])
     counts = ct._sweep_orphan_s3(mock_db)
     assert counts.orphans == 0 and called == []                      # never listed the bucket
+
+
+def test_orphan_sweep_safety_abort_on_empty_live_set(mock_db, monkeypatch):
+    """Fix B: if the live-set is EMPTY (0 MediaFile rows — e.g. DATABASE_URL points at the wrong/empty
+    DB) but keys were scanned, deletion must be refused even with ORPHAN_SWEEP_DELETE=true — otherwise
+    every object in the bucket would be treated as an orphan and wiped."""
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    all_keys = [
+        ("raw/some-proj/some-asset/some-ver/original.mp4", old, 500),
+        ("processed/some-proj/some-asset/some-ver/master.m3u8", old, 300),
+    ]
+    # mock_db.all() defaults to [] -> db.query(MediaFile...).all() returns [] -> empty live-set.
+    counts, deleted = _run(mock_db, monkeypatch, all_keys, grace=24, delete=True)
+
+    assert deleted == []
+    assert counts.deleted == 0
+    assert counts.orphans == 2  # still correctly reports what was scanned

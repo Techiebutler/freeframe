@@ -158,10 +158,18 @@ def _purge_folder(db, folder_id, counts: PurgeCounts) -> None:
     f = db.query(Folder).filter(Folder.id == folder_id).first()
     if f is None:
         return
-    for child in db.query(Folder).filter(Folder.parent_id == folder_id).all():
-        _purge_folder(db, child.id, counts)
-    for a in db.query(Asset).filter(Asset.folder_id == folder_id).all():
-        _purge_asset(db, a.id, counts)
+    child_ids = [c.id for c in db.query(Folder.id).filter(Folder.parent_id == folder_id).all()]
+    for cid in child_ids:
+        # re-check under lock: skip a child folder reparented out (e.g. restored to root) since the scan
+        if db.query(Folder).filter(Folder.id == cid, Folder.parent_id == folder_id).with_for_update().first() is None:
+            continue
+        _purge_folder(db, cid, counts)
+    asset_ids = [a.id for a in db.query(Asset.id).filter(Asset.folder_id == folder_id).all()]
+    for aid in asset_ids:
+        # re-check under lock: skip an asset reparented out (restored to root) since the scan
+        if db.query(Asset).filter(Asset.id == aid, Asset.folder_id == folder_id).with_for_update().first() is None:
+            continue
+        _purge_asset(db, aid, counts)
     for link in db.query(ShareLink).filter(ShareLink.folder_id == folder_id).all():
         _purge_share_link(db, link.id, counts)
     db.query(ShareLinkItem).filter(ShareLinkItem.folder_id == folder_id).delete(synchronize_session=False)
@@ -412,7 +420,14 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
 
     counts.orphans = len(orphans)
     counts.orphan_bytes = sum(s for _, s in orphans)
-    if counts.delete_enabled:
+
+    # Safety floor: a degenerate (empty) live-set — e.g. DATABASE_URL pointed at the wrong/empty DB —
+    # must never be allowed to mass-delete every scanned key as "orphaned". Report-only in that case.
+    live_set_empty = not exact_live and not processed_roots
+    if counts.delete_enabled and live_set_empty and orphans:
+        log.error("orphan-sweep: SAFETY ABORT — live-set is EMPTY (0 MediaFile rows) but %d key(s) scanned; "
+                  "refusing to delete (likely a wrong/empty DATABASE_URL). Reporting only.", counts.orphans)
+    if counts.delete_enabled and not (live_set_empty and orphans):
         for key, _ in orphans:
             _safe(delete_object, key)
             counts.deleted += 1

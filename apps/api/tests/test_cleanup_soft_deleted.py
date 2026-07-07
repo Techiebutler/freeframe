@@ -224,6 +224,48 @@ def test_purge_folder_recurses_nested_and_assets(real_db, monkeypatch):
     assert counts.folders == 2 and counts.assets == 2
 
 
+def test_purge_folder_deletes_soft_deleted_child_asset(real_db, monkeypatch):
+    """Regression: normal case — a folder and its still-member soft-deleted asset are both purged."""
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+
+    owner = _user(real_db)
+    project = _project(real_db, owner)
+    folder = _folder(real_db, project, owner)
+    folder.deleted_at = datetime.now(timezone.utc); real_db.flush()
+    asset = _asset(real_db, project, owner, folder=folder, deleted_hours_ago=1)
+
+    counts = ct.PurgeCounts()
+    ct._purge_folder(real_db, folder.id, counts)
+
+    assert real_db.query(Folder).filter_by(id=folder.id).count() == 0
+    assert real_db.query(Asset).filter_by(id=asset.id).count() == 0
+    assert counts.folders == 1 and counts.assets == 1
+
+
+def test_purge_folder_skips_child_reparented_out_since_scan(real_db, monkeypatch):
+    """Fix A2: a child asset restored (reparented to root) between the scan and the cascade must
+    survive — _purge_folder re-checks folder_id membership under FOR UPDATE before recursing/deleting."""
+    monkeypatch.setattr(ct, "delete_object", lambda k: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+
+    owner = _user(real_db)
+    project = _project(real_db, owner)
+    folder = _folder(real_db, project, owner)
+    folder.deleted_at = datetime.now(timezone.utc); real_db.flush()
+    asset = _asset(real_db, project, owner, folder=folder, deleted_hours_ago=1)
+    # Simulate a restore-to-root that happened after the outer scan listed this asset as a child.
+    asset.folder_id = None
+    real_db.flush()
+
+    counts = ct.PurgeCounts()
+    ct._purge_folder(real_db, folder.id, counts)
+
+    assert real_db.query(Folder).filter_by(id=folder.id).count() == 0
+    assert real_db.query(Asset).filter_by(id=asset.id).count() == 1  # survived — no longer a member
+    assert counts.folders == 1 and counts.assets == 0
+
+
 def test_purge_project_removes_everything(real_db, monkeypatch):
     deleted = []
     monkeypatch.setattr(ct, "delete_object", lambda k: deleted.append(k))
