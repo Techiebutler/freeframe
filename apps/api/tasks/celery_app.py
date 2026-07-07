@@ -70,6 +70,10 @@ celery_app.conf.beat_schedule = {
         "task": "cleanup_soft_deleted",
         "schedule": crontab(minute=0, hour=3),  # daily at 03:00 UTC
     },
+    "sweep-orphan-s3": {
+        "task": "sweep_orphan_s3",
+        "schedule": crontab(minute=0, hour=4, day_of_week=0),  # weekly, Sunday 04:00 UTC
+    },
 }
 
 

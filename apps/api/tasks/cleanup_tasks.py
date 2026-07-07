@@ -19,7 +19,7 @@ from ..models.metadata import MetadataField, AssetMetadata, Collection, Collecti
 from ..models.branding import ProjectBranding, WatermarkSettings
 from ..models.activity import Mention, ActivityLog, Notification
 from ..services.s3_service import (
-    list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix,
+    list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
 )
 
 log = logging.getLogger("celery.cleanup")
@@ -354,5 +354,81 @@ def cleanup_soft_deleted():
         db.commit()
         log.info("cleanup: %s", asdict(counts))
         return asdict(counts)
+    finally:
+        db.close()
+
+
+_ORPHAN_SWEEP_PREFIXES = ("raw/", "processed/")
+
+
+@dataclass
+class OrphanSweepCounts:
+    grace_hours: int = 0
+    delete_enabled: bool = False
+    scanned: int = 0
+    orphans: int = 0
+    orphan_bytes: int = 0
+    deleted: int = 0
+
+
+def _sweep_orphan_s3(db) -> OrphanSweepCounts:
+    """Report (and optionally delete) S3 keys under raw/ and processed/ that no MediaFile row owns.
+    Report-only unless orphan_sweep_delete is True. Only keys older than orphan_sweep_grace_hours
+    (0 disables) are considered. Read-only on the DB (no commit). A key is LIVE if it is a
+    MediaFile.s3_key_raw / s3_key_thumbnail, or lives under processed/{project_id}/{asset_id}/{version_id}/
+    (= the transcode output_prefix) for some MediaFile — derived from the raw key
+    `raw/{project_id}/{asset_id}/{version_id}/...`. MediaFile is queried UNFILTERED on purpose: a
+    soft-deleted-but-not-yet-purged asset still owns its S3 and belongs to the retention GC, not here."""
+    grace = settings.orphan_sweep_grace_hours
+    counts = OrphanSweepCounts(grace_hours=grace, delete_enabled=settings.orphan_sweep_delete)
+    if grace <= 0:
+        log.info("orphan-sweep: disabled (orphan_sweep_grace_hours=%s)", grace)
+        return counts
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=grace)
+
+    exact_live: set = set()
+    processed_roots: set = set()
+    for raw, thumb in db.query(MediaFile.s3_key_raw, MediaFile.s3_key_thumbnail).all():
+        if raw:
+            exact_live.add(raw)
+            parts = raw.split("/")  # raw/{project_id}/{asset_id}/{version_id}/original.ext
+            if len(parts) >= 4 and parts[0] == "raw":
+                processed_roots.add("processed/" + "/".join(parts[1:4]) + "/")
+        if thumb:
+            exact_live.add(thumb)
+
+    def _is_live(key):
+        return key in exact_live or any(key.startswith(root) for root in processed_roots)
+
+    orphans = []
+    for prefix in _ORPHAN_SWEEP_PREFIXES:
+        for key, last_modified, size in list_keys(prefix):
+            counts.scanned += 1
+            if last_modified >= cutoff:
+                continue  # too recent — may be an in-flight / just-committed upload
+            if _is_live(key):
+                continue
+            orphans.append((key, size))
+
+    counts.orphans = len(orphans)
+    counts.orphan_bytes = sum(s for _, s in orphans)
+    if counts.delete_enabled:
+        for key, _ in orphans:
+            _safe(delete_object, key)
+            counts.deleted += 1
+        log.info("orphan-sweep: deleted %d/%d orphan key(s), %d bytes", counts.deleted, counts.orphans, counts.orphan_bytes)
+    else:
+        log.info("orphan-sweep: REPORT-ONLY — %d orphan key(s) under %s, %d bytes "
+                 "(set ORPHAN_SWEEP_DELETE=true to reclaim). sample=%s",
+                 counts.orphans, list(_ORPHAN_SWEEP_PREFIXES), counts.orphan_bytes, [k for k, _ in orphans[:10]])
+    return counts
+
+
+@celery_app.task(name="sweep_orphan_s3")
+def sweep_orphan_s3():
+    """Periodic beat task: report (or delete) orphaned S3 objects. Off until ORPHAN_SWEEP_GRACE_HOURS>0."""
+    db = SessionLocal()
+    try:
+        return asdict(_sweep_orphan_s3(db))
     finally:
         db.close()

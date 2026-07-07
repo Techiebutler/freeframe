@@ -250,6 +250,20 @@ def list_stale_multipart_uploads(cutoff):
     return stale
 
 
+def list_keys(prefix: str):
+    """Yield (key, last_modified, size) for every object under `prefix`, paginated."""
+    s3 = get_s3_client()
+    kwargs = {"Bucket": settings.s3_bucket, "Prefix": prefix}
+    while True:
+        resp = s3.list_objects_v2(**kwargs)
+        for o in resp.get("Contents", []):
+            yield o["Key"], o["LastModified"], o["Size"]
+        if resp.get("IsTruncated"):
+            kwargs["ContinuationToken"] = resp.get("NextContinuationToken")
+        else:
+            break
+
+
 def delete_prefix(prefix: str) -> None:
     """Delete every object whose key starts with `prefix` (works for a single key too —
     a key is its own prefix). Used to reclaim HLS folders and single processed keys."""
