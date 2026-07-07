@@ -22,6 +22,18 @@ from ..services.s3_service import (
 
 log = logging.getLogger("celery.cleanup")
 
+_MAX_RETENTION_DAYS = 36500  # 100 years; guards timedelta OverflowError on absurd misconfig (e.g. seconds mistaken for days)
+
+
+def _retention_days() -> int:
+    """Effective retention window in days, clamped to a sane max so a misconfigured huge value can't
+    raise OverflowError and silently kill the GC. `<= 0` (disabled) is handled by callers and passes through."""
+    days = settings.soft_delete_retention_days
+    if days > _MAX_RETENTION_DAYS:
+        log.warning("cleanup: soft_delete_retention_days=%s exceeds max %s; clamping", days, _MAX_RETENTION_DAYS)
+        return _MAX_RETENTION_DAYS
+    return days
+
 
 def _safe(fn, *args):
     """Run a best-effort S3 op; log and swallow any error so the sweep never aborts."""
@@ -234,7 +246,7 @@ def _expire_share_links(db, counts: PurgeCounts) -> None:
     """Soft-delete share links that expired BEYOND the retention window. Recently-expired links are
     left alone so owners can still re-enable them (expiry is already 410-enforced at read time);
     once aged past the window they flow into the normal purge. Mutates db; does NOT commit."""
-    days = settings.soft_delete_retention_days
+    days = _retention_days()
     if days <= 0:
         return
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -255,7 +267,7 @@ def _purge_soft_deleted(db, counts: PurgeCounts) -> None:
     """Hard-delete every root soft-deleted longer than the retention window, cascading its subtree.
     Roots are processed top-down so a parent removes its children before a later pass queries them;
     each pass re-queries the DB, and every helper guards against a row already removed."""
-    days = settings.soft_delete_retention_days
+    days = _retention_days()
     if days <= 0:
         # 0/negative DISABLES the purge — guard BEFORE computing a cutoff so a misconfigured 0
         # can never make cutoff == now() and hard-delete every soft-deleted row.

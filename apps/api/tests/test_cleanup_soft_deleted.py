@@ -346,21 +346,37 @@ def test_cleanup_soft_deleted_beat_registered():
 
 
 def test_gc_covers_all_inbound_fks_to_purged_tables():
-    """Guard: every foreign key pointing INTO a table the GC hard-deletes must be handled by a
-    _purge_* helper (deleted child-first). Reflected from Base.metadata so a NEW inbound FK added
-    later fails CI instead of crashing the daily job with an IntegrityError in production.
-    If this fails, the printed (table, column) references a purged table but no helper deletes it
-    first — extend the correct _purge_* helper in cleanup_tasks.py, then add it to KNOWN_HANDLED."""
-    # Ensure all models are registered on Base.metadata.
-    import apps.api.models.asset, apps.api.models.project, apps.api.models.folder  # noqa: F401
-    import apps.api.models.comment, apps.api.models.share, apps.api.models.approval  # noqa: F401
-    import apps.api.models.metadata, apps.api.models.branding, apps.api.models.activity  # noqa: F401
+    """Guard: every foreign key pointing INTO a table the GC hard-deletes from must be handled by a
+    _purge_* helper (deleted child-first). Covers ALL ~25 tables the GC cascade hard-deletes rows
+    from (not just the 9 top-level "container" tables) — leaf/junction tables like approvals,
+    asset_shares, carousel_items and notifications are just as capable of gaining a new inbound FK.
+    Reflected from Base.metadata (with every model module imported so no table is missed) so a NEW
+    inbound FK added later fails CI instead of crashing the daily job with an IntegrityError in
+    production. If this fails, the printed (table, column) references a purged table but no helper
+    deletes it first — extend the correct _purge_* helper in cleanup_tasks.py, then add it to
+    KNOWN_HANDLED."""
+    # Ensure ALL models are registered on Base.metadata — every module under apps/api/models/.
+    import apps.api.models.asset  # noqa: F401
+    import apps.api.models.project  # noqa: F401
+    import apps.api.models.folder  # noqa: F401
+    import apps.api.models.comment  # noqa: F401
+    import apps.api.models.share  # noqa: F401
+    import apps.api.models.approval  # noqa: F401
+    import apps.api.models.metadata  # noqa: F401
+    import apps.api.models.branding  # noqa: F401
+    import apps.api.models.activity  # noqa: F401
+    import apps.api.models.user  # noqa: F401
+    import apps.api.models.instance_settings  # noqa: F401
     from apps.api.database import Base
 
-    # Tables the GC cascade-deletes INTO (their inbound FKs must be handled child-first).
+    # Every table the GC cascade hard-deletes rows from (grep `cleanup_tasks.py` for
+    # `.delete(synchronize_session=False)` + the row-delete calls in each `_purge_*` helper).
     PURGED_TABLES = {
-        "projects", "folders", "assets", "asset_versions", "media_files",
-        "comments", "share_links", "collections", "metadata_fields",
+        "projects", "folders", "assets", "asset_versions", "media_files", "comments", "share_links",
+        "collections", "metadata_fields", "approvals", "asset_shares", "asset_metadata", "carousel_items",
+        "collection_shares", "share_link_items", "share_link_activity", "watermark_settings",
+        "project_members", "project_brandings", "activity_logs", "annotations", "comment_attachments",
+        "comment_reactions", "mentions", "notifications",
     }
     # (referencing_table, referencing_column) confirmed handled by a _purge_* helper.
     KNOWN_HANDLED = {
@@ -404,3 +420,16 @@ def test_gc_covers_all_inbound_fks_to_purged_tables():
         f"New inbound FK(s) into GC-purged tables not covered by a _purge_* helper: {sorted(unhandled)}. "
         f"Extend the cascade in cleanup_tasks.py, then add them to KNOWN_HANDLED."
     )
+
+
+def test_retention_days_clamped_to_max(monkeypatch):
+    from apps.api.config import settings
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 2_592_000)  # seconds-not-days fat-finger
+    assert ct._retention_days() == ct._MAX_RETENTION_DAYS
+
+
+def test_purge_soft_deleted_does_not_overflow_on_huge_retention(mock_db, monkeypatch):
+    from apps.api.config import settings
+    monkeypatch.setattr(settings, "soft_delete_retention_days", 2_592_000)
+    counts = ct.PurgeCounts()
+    ct._purge_soft_deleted(mock_db, counts)  # must NOT raise OverflowError; mock_db returns [] for all queries
