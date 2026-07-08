@@ -72,6 +72,14 @@ def _intel_available() -> bool:
     return os.path.exists("/dev/dri")
 
 
+def _has_dovi(stream: dict) -> bool:
+    """True if the stream carries a Dolby Vision side-data record (dv_profile)."""
+    for sd in stream.get("side_data_list", []) or []:
+        if isinstance(sd, dict) and sd.get("dv_profile") is not None:
+            return True
+    return False
+
+
 def _pipeline_to_backend(pipeline: str | None) -> str | None:
     """Map the high-level TRANSCODER_PIPELINE knob to an internal backend.
 
@@ -164,8 +172,9 @@ _BACKEND_SCALE_FORMAT = {
 # device afterwards, while on the cpu backend it stays in software so HDR works
 # on CPU-only / ARM hosts with no GPU. Output is 10-bit (Main10) with Rec.709
 # tags when tone-mapped, or the original HDR tags when preserved.
+# Detection is transfer-only per upstream review (#127): bt2020 primaries alone
+# do not signal HDR (SDR wide-gamut footage carries bt2020 + bt709 transfer).
 _HDR_TRANSFERS = {"smpte2084", "arib-std-b67", "smpte2094"}
-_HDR_PRIMARIES = {"bt2020"}
 _HDR_TONEMAP_ALGO = "mobius"
 _HDR_UPLOAD = {"nvenc": "_cuda", "vaapi": "", "qsv": "_qsv"}
 
@@ -301,14 +310,16 @@ class FFmpegTranscoder(BaseTranscoder):
             ]
             vid_info = self._run(cmd, timeout=120, label="ffprobe")
             _vid_stream = json.loads(vid_info).get("streams", [{}])[0]
-            # HDR detection: PQ (smpte2084), HLG (arib-std-b67), Dolby Vision
-            # (smpte2094) transfer, or bt2020 primaries. PQ is fully covered.
-            is_hdr = (
-                _vid_stream.get("color_transfer") in _HDR_TRANSFERS
-                or _vid_stream.get("color_primaries") in _HDR_PRIMARIES
-            )
+            # HDR detection: PQ (smpte2084), HLG (arib-std-b67) transfer.
+            # DV (profile 5) is handled separately below. (transfer-only per
+            # upstream review #127: bt2020 primaries alone are not an HDR signal.)
+            is_hdr = _vid_stream.get("color_transfer") in _HDR_TRANSFERS
+            is_dv = _has_dovi(_vid_stream)
             hdr_mode = get_hdr_mode()
-            tone_map = is_hdr and hdr_mode == "convert"
+            # DV has no SDR base layer, so it is always tone-mapped (re-encoding
+            # drops the RPU anyway); ordinary HDR respects TRANSCODER_HDR.
+            tone_map = (is_hdr and hdr_mode == "convert") or is_dv
+            dv_software = is_dv
 
             # 2. Check if input has an audio stream
             audio_cmd = [
@@ -327,7 +338,9 @@ class FFmpegTranscoder(BaseTranscoder):
             qualities = [q for q in job.qualities if q in QUALITY_MAP]
 
             backend = get_backend()
-            scale_filter = _BACKEND_SCALE.get(backend, "scale")
+            # DV is tone-mapped via libplacebo and encoded in software (see
+            # below), so force the CPU scale filter for it.
+            scale_filter = "scale" if dv_software else _BACKEND_SCALE.get(backend, "scale")
             out_mode = _OUTPUT_MODES.get(get_output_mode(), _OUTPUT_MODES["h264_8"])
 
             hls_dir = work_dir / "hls"
@@ -338,7 +351,18 @@ class FFmpegTranscoder(BaseTranscoder):
             # the GPU scale filters (scale_cuda/scale_qsv/scale_vaapi) keep the
             # whole pipeline on the hardware device.
             split_outputs = "".join(f"[v{i}]" for i in range(len(qualities)))
-            if is_hdr:
+            if is_dv:
+                # Dolby Vision (profile 5) is IPT-encoded with no SDR base
+                # layer. The frames must be inverse-mapped via the RPU, which
+                # only libplacebo knows how to parse, so tone-map to Rec.709
+                # SDR here. This runs on the CPU/Vulkan path and is encoded with
+                # the software encoder (avoids cuda<->vulkan interop); hwaccel
+                # is skipped for DV. Output is bt709 SDR (8- or 10-bit).
+                _lp = "libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv"
+                _lp += ":format=yuv420p10le" if out_mode["ten_bit"] else ":format=yuv420p"
+                hdr_prefix = f"[v:0]{_lp}[tcpu];"
+                src = "[tcpu]"
+            elif is_hdr:
                 # Normalize HDR to 10-bit p010, tone-map to Rec.709 SDR (or keep
                 # the 10-bit HDR frames when preserving), then feed the encoder.
                 # On a hardware backend the source is a hardware frame, so it is
@@ -361,7 +385,7 @@ class FFmpegTranscoder(BaseTranscoder):
                         hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
                                        f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
                                        f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le")
-                    hdr_prefix += f"[tcpu]hwupload{_HDR_UPLOAD.get(backend, '')}[t];"
+                    hdr_prefix += f"[tcpu];[tcpu]hwupload{_HDR_UPLOAD.get(backend, '')}[t];"
                     src = "[t]"
             else:
                 hdr_prefix = ""
@@ -371,14 +395,20 @@ class FFmpegTranscoder(BaseTranscoder):
             _sf = _BACKEND_SCALE_FORMAT.get(backend, {}).get(
                 "10" if out_mode["ten_bit"] else "8", "")
             scale_extra += _sf
+            if dv_software:
+                # DV runs on the CPU scale filter, which takes no interp_algo
+                # or format option; the libplacebo prefix already set the target
+                # bit depth and the software encoder sets -pix_fmt itself.
+                scale_extra = ""
             filter_complex = f"{hdr_prefix}{src}split={len(qualities)}{split_outputs};"
             filter_complex += ";".join(
-                f"[v{i}]{scale_filter}={QUALITY_MAP[q][0]}:force_original_aspect_ratio=decrease{scale_extra}[{q}]"
+                f"[v{i}]{scale_filter}={QUALITY_MAP[q][0]}:force_original_aspect_ratio=decrease:force_divisible_by=2{scale_extra}[{q}]"
                 for i, q in enumerate(qualities)
             )
 
             ffmpeg_cmd = ["ffmpeg", "-y"]
-            ffmpeg_cmd += _BACKEND_HWACCEL.get(backend, [])
+            if not dv_software:
+                ffmpeg_cmd += _BACKEND_HWACCEL.get(backend, [])
             ffmpeg_cmd += ["-i", input_url]
             ffmpeg_cmd += ["-filter_complex", filter_complex]
 
@@ -390,7 +420,7 @@ class FFmpegTranscoder(BaseTranscoder):
                 ffmpeg_cmd += ["-map", f"[{quality}]"]
                 if has_audio:
                     ffmpeg_cmd += ["-map", "a:0"]
-                if backend == "cpu":
+                if backend == "cpu" or dv_software:
                     enc = "libx265" if family == "hevc" else "libx264"
                     ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
                                    "-force_key_frames", "expr:gte(t,n_forced*2)"]
@@ -471,8 +501,19 @@ class FFmpegTranscoder(BaseTranscoder):
             # 5. Generate and upload thumbnail (using streaming URL)
             thumb_path = work_dir / "thumb_0001.jpg"
             thumb_vf = "thumbnail"
-            if is_hdr:
-                thumb_vf += ",tonemap=tonemap=" + _HDR_TONEMAP_ALGO + ":desat=0"
+            if is_dv:
+                thumb_vf += ",libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv,format=yuvj420p"
+            elif is_hdr:
+                # Match the HLS path's full zscale->tonemap->zscale chain so the
+                # thumbnail converts BOTH the HDR transfer (PQ/HLG->linear->bt709)
+                # AND the wide gamut (bt2020->bt709 primaries). The older short
+                # form (tonemap=mobius only) tone-mapped the curve but left
+                # bt2020 primaries, producing a washed-out "log on Rec709" look.
+                thumb_vf += (
+                    ",format=p010,zscale=t=linear:npl=100,format=gbrpf32le,"
+                    "zscale=p=bt709,tonemap=tonemap=" + _HDR_TONEMAP_ALGO + ":desat=0,"
+                    "zscale=t=bt709:m=bt709:r=tv"
+                )
             thumb_vf += ",format=yuvj420p"
             thumb_cmd = [
                 "ffmpeg", "-y", "-i", input_url,
