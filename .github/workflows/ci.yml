@@ -151,8 +151,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - name: Verify critical frontend files exist
         run: |
@@ -229,8 +227,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile

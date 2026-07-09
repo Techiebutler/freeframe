@@ -51,6 +51,11 @@ cover/
 /node_modules
 /node_modules/*
 node_modules/
+
+# This repo uses pnpm (pnpm-lock.yaml) as the single lockfile. Ignore npm's
+# package-lock.json so `npm install` can't reintroduce a competing lockfile.
+package-lock.json
+
 # Translations
 *.mo
 *.pot
