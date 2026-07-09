@@ -179,7 +179,7 @@ S3_SECRET_KEY=YOUR_SECRET_KEY
 S3_REGION=us-east-1
 ```
 
-For **non-AWS providers**, also set the endpoint:
+For **non-AWS S3-compatible providers** (R2, B2, Spaces, MinIO, Hetzner, …), set `S3_STORAGE` to a non-`s3` value (e.g. `minio`) so `S3_ENDPOINT` is used — with `S3_STORAGE=s3` the client talks to native AWS and the endpoint is **ignored** (FreeFrame refuses to start if `s3` is combined with a non-AWS endpoint). Then set the endpoint:
 
 | Provider | S3_ENDPOINT |
 |----------|-------------|
@@ -188,7 +188,23 @@ For **non-AWS providers**, also set the endpoint:
 | DigitalOcean Spaces | `https://<region>.digitaloceanspaces.com` |
 | MinIO (self-hosted) | `http://your-minio-host:9000` |
 
-Make sure your bucket has CORS configured to allow requests from your FreeFrame domain.
+#### Bucket CORS — required for uploads
+
+Uploads go **directly from the browser to your bucket** via presigned URLs, so the bucket's CORS must allow your FreeFrame origin **and expose the `ETag` header** — the client reads each part's `ETag` to complete a multipart upload. If `ExposeHeaders` omits `ETag`, large uploads fail partway with a generic browser error ("Load failed") and **no server-side log**.
+
+```json
+{
+  "CORSRules": [{
+    "AllowedOrigins": ["https://your-freeframe-domain.example"],
+    "AllowedMethods": ["GET", "PUT", "POST", "HEAD", "DELETE"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }]
+}
+```
+
+FreeFrame applies this automatically to **non-AWS** buckets at startup when it has permission (and logs a warning if it can't). Set it yourself for **AWS S3**, or wherever FreeFrame lacks CORS permission. **Hetzner Object Storage** exposes CORS only via API/CLI (not the Console UI), so it's easy to miss — apply the JSON above with `aws s3api put-bucket-cors`.
 
 ### External SMTP
 
