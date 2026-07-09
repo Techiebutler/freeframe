@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from functools import lru_cache
 import boto3
 from botocore.exceptions import ClientError
 from ..config import settings
@@ -21,6 +22,7 @@ def _is_aws_s3() -> bool:
     """Check if using AWS S3 (vs MinIO/local). Controlled by S3_STORAGE env var."""
     return settings.s3_storage.lower() == "s3"
 
+@lru_cache(maxsize=1)
 def get_s3_client():
     """
     Create the S3 client for server-side operations. Selection is driven by
@@ -46,6 +48,7 @@ def get_s3_client():
             region_name=settings.s3_region,
         )
 
+@lru_cache(maxsize=1)
 def _get_presign_client():
     """
     Client for generating presigned URLs. Uses s3_public_endpoint if set,
