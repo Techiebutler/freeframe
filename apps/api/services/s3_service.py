@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from functools import lru_cache
 import boto3
 from botocore.config import Config
@@ -155,22 +156,39 @@ def ensure_bucket_exists():
             pass  # Policy config failed, non-critical
 
 
-def run_startup_bucket_setup() -> None:
+def run_startup_bucket_setup(attempts: int = 5, base_delay: float = 3.0, _sleep=time.sleep) -> None:
     """App-startup entrypoint for bucket setup that NEVER raises.
 
     A slow or unreachable object store must not crash or block app startup, so this
-    swallows every error and logs a clear warning instead. Call it off the request
-    path (a daemon thread from the FastAPI lifespan) — see main.py.
+    swallows every error and logs a clear warning instead. It retries a transient
+    failure a few times with linear backoff, so a store that comes up shortly after
+    the app self-heals without a manual restart (that self-heal was previously a
+    side effect of the crash-loop that finding #6 intentionally removed). Call it off
+    the request path (a daemon thread from the FastAPI lifespan) — see main.py.
+
+    `_sleep` is injectable so tests can run the retry loop without real delays.
     """
-    try:
-        ensure_bucket_exists()
-    except Exception as e:  # noqa: BLE001 - startup must survive any storage failure
-        where = "AWS" if _is_aws_s3() else settings.s3_endpoint
-        logger.warning(
-            "S3/object-storage setup failed at startup — uploads and streaming will "
-            "not work until storage is reachable (S3_STORAGE=%s, endpoint=%s): %s",
-            settings.s3_storage, where, e,
-        )
+    for attempt in range(1, attempts + 1):
+        try:
+            ensure_bucket_exists()
+            return
+        except Exception as e:  # noqa: BLE001 - startup must survive any storage failure
+            where = "AWS" if _is_aws_s3() else settings.s3_endpoint
+            if attempt < attempts:
+                delay = base_delay * attempt
+                logger.warning(
+                    "S3/object-storage setup attempt %d/%d failed (S3_STORAGE=%s, endpoint=%s); "
+                    "retrying in %.0fs: %s",
+                    attempt, attempts, settings.s3_storage, where, delay, e,
+                )
+                _sleep(delay)
+            else:
+                logger.warning(
+                    "S3/object-storage setup failed after %d attempts — uploads and streaming "
+                    "will not work until storage is reachable and the app is restarted "
+                    "(S3_STORAGE=%s, endpoint=%s): %s",
+                    attempts, settings.s3_storage, where, e,
+                )
 
 
 def get_content_type(key: str) -> tuple[str, str]:
