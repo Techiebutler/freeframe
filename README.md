@@ -48,9 +48,24 @@ Open [http://localhost:3000](http://localhost:3000) to access FreeFrame. The fir
 | API Docs    | http://localhost:8000/docs    |
 | MinIO Console | http://localhost:9001       |
 
+## Release channels
+
+Production self-hosters should run a **released** version, not `main`:
+
+| Ref | What it is | Use it if… |
+|-----|-----------|------------|
+| `stable` | The latest release we've validated — a bad release is never promoted here. | **Production (safe default):** `git clone -b stable …`, then `git pull` to update. |
+| `latest` | The newest published release (moves on every release). | You want new features sooner and can tolerate the occasional regression. |
+| `v1.3.1` (any `vX.Y.Z`) | An immutable, pinned release. | You want to pin an exact version: `git checkout v1.3.1`. |
+| `main` | Active development; may be unreleased or unstable. | You're developing or contributing to FreeFrame. |
+
+Release notes are on the [Releases page](https://github.com/Techiebutler/freeframe/releases). Maintainers: see [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Production Deployment
 
 ```bash
+git clone -b stable https://github.com/Techiebutler/freeframe.git
+cd freeframe
 cp .env.example .env.prod
 # Edit .env.prod — set your credentials, S3, email config
 # For SSL: also set DOMAIN and ACME_EMAIL (Traefik auto-provisions Let's Encrypt certs)
