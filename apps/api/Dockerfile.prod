@@ -22,8 +22,10 @@ RUN adduser --disabled-password --no-create-home appuser
 
 WORKDIR /workspace
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# No HEALTHCHECK here: this image is shared by the API *and* the Celery
+# worker/beat/email_worker, which don't serve HTTP — a baked-in `curl :8000/health`
+# marks every worker perpetually "unhealthy". The API's healthcheck lives on the
+# `api` service in docker-compose.prod.yml instead.
 
 USER appuser
 

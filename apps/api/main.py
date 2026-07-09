@@ -1,16 +1,27 @@
+import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .routers import auth, users, projects, upload, events, assets, me, comments, approvals, share, metadata, branding, notifications, admin, setup, folders, hls_proxy, instance_settings
-from .services.s3_service import ensure_bucket_exists
+from .services.s3_service import run_startup_bucket_setup
+from .services.email_service import mail_is_configured
 from .middleware.global_rate_limit import GlobalRateLimitMiddleware
 from .middleware.setup_guard import SetupGuardMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ensure_bucket_exists()
+    # Run bucket setup off the request path (daemon thread) so a slow or unreachable
+    # object store can't block app startup (deploy-test finding #6).
+    threading.Thread(target=run_startup_bucket_setup, name="s3-bucket-setup", daemon=True).start()
+    if not mail_is_configured():
+        logging.getLogger("apps.api.startup").warning(
+            "Email is not configured (MAIL_PROVIDER=%s) — magic-code login and invites "
+            "will FAIL until you configure SMTP or SES. See docs/deployment.md.",
+            settings.mail_provider,
+        )
     yield
 
 _disable_docs = os.getenv("DISABLE_DOCS", "").lower() in ("true", "1", "yes")

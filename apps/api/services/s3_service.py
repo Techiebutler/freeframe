@@ -4,10 +4,15 @@ import os
 import re
 from functools import lru_cache
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from ..config import settings
 
 logger = logging.getLogger(__name__)
+
+# Short timeouts for the one-off startup bucket check, so a slow or unreachable
+# store can't hang app startup for boto3's default ~60s (deploy-test finding #6).
+_STARTUP_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2})
 
 # S3 Content-Type and Cache-Control mappings
 CONTENT_TYPE_MAP = {
@@ -25,31 +30,28 @@ def _is_aws_s3() -> bool:
     """Check if using AWS S3 (vs MinIO/local). Controlled by S3_STORAGE env var."""
     return settings.s3_storage.lower() == "s3"
 
-@lru_cache(maxsize=1)
-def get_s3_client():
-    """
-    Create the S3 client for server-side operations. Selection is driven by
-    S3_STORAGE (see _is_aws_s3):
+def _build_s3_client(config=None):
+    """Construct an S3 client. Selection is driven by S3_STORAGE (see _is_aws_s3):
     - "s3"   -> native AWS S3 (no endpoint_url; S3_ENDPOINT is not used)
     - other  -> S3_ENDPOINT for MinIO or another S3-compatible backend
+    Pass `config` (a botocore Config) when you need bounded timeouts (startup check).
     """
-    if _is_aws_s3():
-        # Real AWS S3 - don't pass endpoint_url
-        return boto3.client(
-            "s3",
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-        )
-    else:
-        # MinIO or S3-compatible storage
-        return boto3.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint,
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-        )
+    kwargs = {
+        "aws_access_key_id": settings.s3_access_key,
+        "aws_secret_access_key": settings.s3_secret_key,
+        "region_name": settings.s3_region,
+    }
+    if not _is_aws_s3():
+        kwargs["endpoint_url"] = settings.s3_endpoint
+    if config is not None:
+        kwargs["config"] = config
+    return boto3.client("s3", **kwargs)
+
+
+@lru_cache(maxsize=1)
+def get_s3_client():
+    """The shared, cached S3 client for server-side operations (see _build_s3_client)."""
+    return _build_s3_client()
 
 @lru_cache(maxsize=1)
 def _get_presign_client():
@@ -69,8 +71,13 @@ def _get_presign_client():
     return boto3.client("s3", **kwargs)
 
 def ensure_bucket_exists():
-    """Create the S3 bucket if it does not exist. Called on app startup."""
-    s3 = get_s3_client()
+    """Create the S3 bucket if it does not exist (+ configure CORS/policy on non-AWS).
+
+    Uses a short-timeout client so it fails fast rather than blocking for boto3's
+    default ~60s if the store is slow/unreachable. Run via run_startup_bucket_setup()
+    off the request path at startup — see main.py.
+    """
+    s3 = _build_s3_client(config=_STARTUP_S3_CONFIG)
     try:
         s3.head_bucket(Bucket=settings.s3_bucket)
     except ClientError as e:
@@ -146,6 +153,24 @@ def ensure_bucket_exists():
             )
         except ClientError:
             pass  # Policy config failed, non-critical
+
+
+def run_startup_bucket_setup() -> None:
+    """App-startup entrypoint for bucket setup that NEVER raises.
+
+    A slow or unreachable object store must not crash or block app startup, so this
+    swallows every error and logs a clear warning instead. Call it off the request
+    path (a daemon thread from the FastAPI lifespan) — see main.py.
+    """
+    try:
+        ensure_bucket_exists()
+    except Exception as e:  # noqa: BLE001 - startup must survive any storage failure
+        where = "AWS" if _is_aws_s3() else settings.s3_endpoint
+        logger.warning(
+            "S3/object-storage setup failed at startup — uploads and streaming will "
+            "not work until storage is reachable (S3_STORAGE=%s, endpoint=%s): %s",
+            settings.s3_storage, where, e,
+        )
 
 
 def get_content_type(key: str) -> tuple[str, str]:

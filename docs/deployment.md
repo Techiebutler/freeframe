@@ -208,6 +208,8 @@ FreeFrame applies this automatically to **non-AWS** buckets at startup when it h
 
 ### External SMTP
 
+> **⚠️ Email is required for login.** FreeFrame authenticates with emailed **magic codes**, and also sends invites/notifications. If email isn't configured, users **cannot log in** — the send fails and the app logs a warning at startup. Configure SMTP or SES before going live.
+
 Works with: **Mailgun, Postmark, SendGrid, Amazon SES, or any SMTP server.**
 
 Configure in `.env.prod`:
