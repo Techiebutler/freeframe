@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-09
+
+### Upgrade notes
+- **S3 misconfiguration now fails fast.** If you set `S3_STORAGE=s3` (native AWS) together with a non-AWS `S3_ENDPOINT`, the app refuses to start with a clear error — use `S3_STORAGE=minio` (or any non-`s3` value) for R2/B2/Spaces/MinIO. Valid setups are unaffected.
+- **boto3 1.35 → 1.43 + older S3-compatible backends.** boto3 now sends CRC32 checksums on batch deletes; MinIO/Ceph older than ~2025 reject them. `delete_prefix` falls back to per-key deletes automatically and the bundled dev MinIO is bumped — but for the fast path, upgrade an external older store.
+- **Browser uploads need bucket CORS `ExposeHeaders: ["ETag"]`** (especially Hetzner, where CORS is API/CLI-only). See `docs/deployment.md`.
+- **Release channels:** production self-hosters should now `git clone -b stable` instead of `main`.
+
+### Added
+- **`stable` / `latest` release channels** ([#140](https://github.com/Techiebutler/freeframe/pull/140)) — moving branch pointers on top of the immutable `vX.Y.Z` tags. `stable` = last validated release (production default), `latest` = newest release; a bad release is never promoted. See the README "Release channels" table and `docs/RELEASING.md`.
+
+### Changed
+- **Faster review playback for long videos** ([#132](https://github.com/Techiebutler/freeframe/issues/132)) — the HLS proxy no longer rebuilds a boto3 client per segment when rewriting a VOD manifest (previously ~7s of blocking overhead for a ~55-minute video); clients are now cached.
+- **Dependency updates** — FastAPI 0.115 → 0.139, boto3 1.35 → 1.43, python-multipart 0.0.12 → 0.0.32, kombu 5.4 → 5.6, hls.js 1.6.15 → 1.6.16, wavesurfer.js 7.12.5 → 7.12.10 (plus dev/CI: vitest, pytest-asyncio, actions/checkout v7). The frontend now uses pnpm as the single lockfile.
+
 ### Fixed
-- **S3 prefix cleanup stays compatible with older S3-compatible storage** ([#97](https://github.com/Techiebutler/freeframe/pull/97)) — boto3/botocore ≥ 1.36 (which FreeFrame is upgrading to) send a CRC32 data-integrity checksum on batch `DeleteObjects` instead of the legacy `Content-MD5` header; S3-compatible backends predating AWS flexible checksums (MinIO older than ~2025, older Ceph/RGW, etc.) reject it with `MissingContentMD5`, which would break HLS/prefix cleanup (`delete_prefix`). `delete_prefix` now falls back to per-key deletes when a backend rejects the batch delete, and the bundled dev MinIO image is bumped to a release that supports the new checksums. Self-hosters on an external store older than 2025 keep working via the fallback (upgrade it for the faster batch-delete path). `put_object`/multipart uploads are unaffected.
-- **Misconfigured S3 storage now fails fast instead of silently routing to AWS** — with `S3_STORAGE=s3` (native AWS), `S3_ENDPOINT` is ignored, so pairing it with a non-AWS endpoint (Cloudflare R2, Backblaze B2, self-hosted MinIO, …) used to silently send traffic to AWS. Startup now raises a clear error naming the offending endpoint and pointing to `S3_STORAGE=minio`. Valid configs (native AWS, or any `minio`-mode endpoint) are unaffected.
+- **S3 prefix cleanup stays compatible with older S3-compatible storage** ([#97](https://github.com/Techiebutler/freeframe/pull/97)) — boto3/botocore ≥ 1.36 send a CRC32 data-integrity checksum on batch `DeleteObjects` instead of the legacy `Content-MD5` header; S3-compatible backends predating AWS flexible checksums (MinIO older than ~2025, older Ceph/RGW, etc.) reject it with `MissingContentMD5`, which would break HLS/prefix cleanup (`delete_prefix`). `delete_prefix` now falls back to per-key deletes when a backend rejects the batch delete, and the bundled dev MinIO image is bumped to a release that supports the new checksums. `put_object`/multipart uploads are unaffected.
+- **Misconfigured S3 storage fails fast instead of silently routing to AWS** ([#137](https://github.com/Techiebutler/freeframe/pull/137)) — with `S3_STORAGE=s3` (native AWS), `S3_ENDPOINT` is ignored, so pairing it with a non-AWS endpoint (Cloudflare R2, Backblaze B2, self-hosted MinIO, …) used to silently send traffic to AWS. Startup now raises a clear error naming the offending endpoint and pointing to `S3_STORAGE=minio`.
+- **Browser multipart uploads: required bucket CORS `ETag` documented + surfaced** ([#131](https://github.com/Techiebutler/freeframe/issues/131)) — uploads read each part's `ETag` response header, which browsers expose only when the bucket CORS `ExposeHeaders` includes it; documented in `docs/deployment.md` (with Hetzner/AWS notes), and the previously-silent `put_bucket_cors` failure now logs a warning.
 
 ## [1.3.1] - 2026-07-08
 
