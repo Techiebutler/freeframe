@@ -41,15 +41,21 @@ jobs:
 
           if [ "${FORCE}" != "true" ]; then
             runs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}/check-runs")"
-            total="$(echo "$runs" | jq '.check_runs | length')"
-            bad="$(echo "$runs" | jq '[.check_runs[] | select(.conclusion != "success")] | length')"
+            # Exclude this workflow's OWN check-run: a workflow_dispatch run registers a
+            # `promote` check-run on the default branch's HEAD commit. When a release is
+            # promoted straight from main HEAD (the common case), that HEAD *is* the tag
+            # commit being gated, so this run would count its own in_progress/failed
+            # `promote` check as a non-success and refuse to promote against itself.
+            checks="$(echo "$runs" | jq '[.check_runs[] | select(.name != "promote")]')"
+            total="$(echo "$checks" | jq 'length')"
+            bad="$(echo "$checks" | jq '[.[] | select(.conclusion != "success")] | length')"
             if [ "$total" -lt 1 ]; then
               echo "::error::No CI check-runs found for ${TAG} (${COMMIT}); refusing to promote. Re-run with force=true only if this tag legitimately has no CI."
               exit 1
             fi
             if [ "$bad" -gt 0 ]; then
               echo "::error::${TAG} has non-success checks; refusing to promote:"
-              echo "$runs" | jq -r '.check_runs[] | select(.conclusion != "success") | "  - \(.name): \(.conclusion // .status)"'
+              echo "$checks" | jq -r '.[] | select(.conclusion != "success") | "  - \(.name): \(.conclusion // .status)"'
               exit 1
             fi
             echo "All ${total} CI check(s) green for ${TAG}."
