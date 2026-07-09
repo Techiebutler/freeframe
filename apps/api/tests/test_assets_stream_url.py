@@ -60,7 +60,10 @@ def test_video_stream_returns_hls_proxy_url_with_token(
     assert url.startswith("/stream/hls/master.m3u8?token="), (
         f"Expected /stream/hls/master.m3u8?token=..., got: {url}"
     )
-    assert "s3" not in url.lower(), (
+    # Only inspect the part before the query string: the opaque JWT token can
+    # incidentally contain "s3" (flaking this check), whereas a leaked presigned
+    # S3 URL would still carry "s3" in its host/path here.
+    assert "s3" not in url.split("?", 1)[0].lower(), (
         f"Stream URL must not contain a presigned S3 URL, got: {url}"
     )
 
