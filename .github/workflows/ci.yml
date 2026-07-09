@@ -125,8 +125,12 @@ jobs:
         run: |
           python -c "
           from apps.api.main import app
-          print(f'FastAPI app loaded: {len(app.routes)} routes')
-          assert len(app.routes) >= 30, f'Expected 30+ routes but got {len(app.routes)} — routers may have been removed'
+          # Count API paths from the OpenAPI schema instead of len(app.routes): recent
+          # FastAPI versions store lazy included-router wrappers, so app.routes no longer
+          # reflects the real endpoint count (it drops sharply) while the schema still does.
+          paths = len(app.openapi()['paths'])
+          print(f'FastAPI app loaded: {paths} API paths')
+          assert paths >= 30, f'Expected 30+ API paths but got {paths} — routers may have been removed'
           "
 
   # ─── Frontend ─────────────────────────────────────────────────────────────────
