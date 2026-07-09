@@ -273,7 +273,19 @@ def delete_prefix(prefix: str) -> None:
         resp = s3.list_objects_v2(**kwargs)
         objects = [{"Key": o["Key"]} for o in resp.get("Contents", [])]
         if objects:
-            s3.delete_objects(Bucket=settings.s3_bucket, Delete={"Objects": objects})
+            try:
+                s3.delete_objects(Bucket=settings.s3_bucket, Delete={"Objects": objects})
+            except ClientError as e:
+                # botocore >=1.36 sends a CRC32 data-integrity checksum on batch DeleteObjects
+                # instead of the legacy Content-MD5 header. S3-compatible backends that predate
+                # AWS flexible checksums (older MinIO/Ceph/etc.) reject it with MissingContentMD5.
+                # Fall back to per-key deletes, which require no checksum, so cleanup still works.
+                err = e.response.get("Error", {})
+                if err.get("Code") == "MissingContentMD5" or "content-md5" in err.get("Message", "").lower():
+                    for obj in objects:
+                        s3.delete_object(Bucket=settings.s3_bucket, Key=obj["Key"])
+                else:
+                    raise
         if resp.get("IsTruncated"):
             kwargs["ContinuationToken"] = resp.get("NextContinuationToken")
         else:
