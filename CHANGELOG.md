@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **S3 prefix cleanup stays compatible with older S3-compatible storage** ([#97](https://github.com/Techiebutler/freeframe/pull/97)) — boto3/botocore ≥ 1.36 (which FreeFrame is upgrading to) send a CRC32 data-integrity checksum on batch `DeleteObjects` instead of the legacy `Content-MD5` header; S3-compatible backends predating AWS flexible checksums (MinIO older than ~2025, older Ceph/RGW, etc.) reject it with `MissingContentMD5`, which would break HLS/prefix cleanup (`delete_prefix`). `delete_prefix` now falls back to per-key deletes when a backend rejects the batch delete, and the bundled dev MinIO image is bumped to a release that supports the new checksums. Self-hosters on an external store older than 2025 keep working via the fallback (upgrade it for the faster batch-delete path). `put_object`/multipart uploads are unaffected.
+- **Misconfigured S3 storage now fails fast instead of silently routing to AWS** — with `S3_STORAGE=s3` (native AWS), `S3_ENDPOINT` is ignored, so pairing it with a non-AWS endpoint (Cloudflare R2, Backblaze B2, self-hosted MinIO, …) used to silently send traffic to AWS. Startup now raises a clear error naming the offending endpoint and pointing to `S3_STORAGE=minio`. Valid configs (native AWS, or any `minio`-mode endpoint) are unaffected.
 
 ## [1.3.1] - 2026-07-08
 

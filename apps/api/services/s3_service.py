@@ -23,9 +23,10 @@ def _is_aws_s3() -> bool:
 
 def get_s3_client():
     """
-    Create S3 client. Auto-detects AWS vs MinIO:
-    - If access_key starts with 'AKIA' -> use AWS S3 (no endpoint_url)
-    - Otherwise -> use custom endpoint (MinIO or S3-compatible)
+    Create the S3 client for server-side operations. Selection is driven by
+    S3_STORAGE (see _is_aws_s3):
+    - "s3"   -> native AWS S3 (no endpoint_url; S3_ENDPOINT is not used)
+    - other  -> S3_ENDPOINT for MinIO or another S3-compatible backend
     """
     if _is_aws_s3():
         # Real AWS S3 - don't pass endpoint_url

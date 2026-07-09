@@ -1,6 +1,18 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Default S3 endpoint (local MinIO). Shared between the field default and the
+# consistency validator so the two can't drift.
+DEFAULT_S3_ENDPOINT = "http://minio:9000"
+
+
+def _is_aws_endpoint(url: str) -> bool:
+    """True if `url`'s host is an AWS S3 endpoint (an ``*.amazonaws.com`` host)."""
+    host = (urlparse(url).hostname or "").lower()
+    return host == "amazonaws.com" or host.endswith(".amazonaws.com")
 
 # Find .env file - check current dir, then project root
 # __file__ = apps/api/config.py, so parent.parent = project root
@@ -28,7 +40,7 @@ class Settings(BaseSettings):
     redis_url: str
     s3_storage: str = "minio"  # "s3" for AWS S3, "minio" for local MinIO
     s3_bucket: str = "freeframe"
-    s3_endpoint: str = "http://minio:9000"
+    s3_endpoint: str = DEFAULT_S3_ENDPOINT
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
     s3_region: str = "us-east-1"
@@ -80,5 +92,26 @@ class Settings(BaseSettings):
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_use_tls: bool = True
+
+    @model_validator(mode="after")
+    def _check_s3_endpoint_consistency(self):
+        """Fail loud on `S3_STORAGE=s3` + a real custom (non-AWS) `S3_ENDPOINT`.
+
+        In `s3` mode the client talks to native AWS and S3_ENDPOINT is ignored,
+        so pairing it with an R2/B2/MinIO URL would silently route to AWS. An
+        untouched default and any `*.amazonaws.com` endpoint are harmless and
+        allowed; a custom non-AWS endpoint is a misconfiguration.
+        """
+        if self.s3_storage.lower() == "s3":
+            endpoint = (self.s3_endpoint or "").strip()
+            if endpoint and endpoint != DEFAULT_S3_ENDPOINT and not _is_aws_endpoint(endpoint):
+                raise ValueError(
+                    f"S3_STORAGE=s3 selects native AWS S3 and ignores S3_ENDPOINT, but "
+                    f"S3_ENDPOINT is set to a non-AWS URL ({endpoint!r}). To use a custom "
+                    f"S3-compatible endpoint (MinIO, Cloudflare R2, Backblaze B2, "
+                    f"DigitalOcean Spaces), set S3_STORAGE=minio. To use native AWS S3, "
+                    f"leave S3_ENDPOINT unset."
+                )
+        return self
 
 settings = Settings()
