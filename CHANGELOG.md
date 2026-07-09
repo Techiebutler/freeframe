@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-07-09
+
 ### Fixed
 - **Celery workers no longer report `unhealthy`** — the prod image no longer bakes an API-only `HEALTHCHECK` (`curl :8000/health`); it now lives on the `api` service in `docker-compose.prod.yml`, so `worker`/`beat`/`email_worker` (which don't serve HTTP) report their real state instead of perpetually unhealthy.
 - **A slow or unreachable object store no longer blocks app startup** — the startup S3 bucket check now runs off the request path (background thread) with bounded timeouts and never crashes/hangs the app (previously a slow S3 could block startup ~60s+). Failures log a clear warning.
