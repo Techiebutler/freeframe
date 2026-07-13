@@ -11,6 +11,37 @@ from botocore.config import Config
 from .base import BaseTranscoder, TranscodeJob, TranscodeResult, VideoMetadata
 
 
+def parse_probe_metadata(data: dict) -> Optional[VideoMetadata]:
+    """Parse ffprobe JSON (-show_streams -show_format) into VideoMetadata.
+
+    Returns None when there is no video stream. Guards r_frame_rate "0/0"
+    (fps stays 0.0 — never fabricate a rate) and falls back to format-level
+    duration when the stream lacks one (common for MKV/WebM).
+    """
+    streams = data.get("streams") or []
+    if not streams:
+        return None
+    stream = streams[0]
+    fps = 0.0
+    raw_rate = stream.get("r_frame_rate", "")
+    if "/" in raw_rate:
+        num, _, den = raw_rate.partition("/")
+        try:
+            if float(den) != 0:
+                fps = float(num) / float(den)
+        except ValueError:
+            fps = 0.0
+    duration = float(stream.get("duration") or 0)
+    if not duration:
+        duration = float((data.get("format") or {}).get("duration") or 0)
+    return VideoMetadata(
+        duration_seconds=duration,
+        width=int(stream.get("width") or 0),
+        height=int(stream.get("height") or 0),
+        fps=fps,
+    )
+
+
 class FFmpegTranscoder(BaseTranscoder):
     def __init__(self, s3_client, bucket: str, s3_endpoint: str = None):
         self.s3 = s3_client
@@ -47,19 +78,13 @@ class FFmpegTranscoder(BaseTranscoder):
         input_url = self._get_presigned_url(s3_key)
         cmd = [
             "ffprobe", "-v", "error", "-print_format", "json",
-            "-show_streams", "-select_streams", "v:0", input_url,
+            "-show_streams", "-select_streams", "v:0", "-show_format", input_url,
         ]
         stdout = self._run(cmd, timeout=120, label="ffprobe")
-        data = json.loads(stdout)
-        stream = data["streams"][0]
-        fps_parts = stream.get("r_frame_rate", "30/1").split("/")
-        fps = float(fps_parts[0]) / float(fps_parts[1])
-        return VideoMetadata(
-            duration_seconds=float(stream.get("duration", 0)),
-            width=int(stream.get("width", 0)),
-            height=int(stream.get("height", 0)),
-            fps=fps,
-        )
+        meta = parse_probe_metadata(json.loads(stdout))
+        if meta is None:
+            raise RuntimeError(f"No video stream found in {s3_key}")
+        return meta
 
     async def generate_thumbnails(self, s3_key: str, count: int) -> list[str]:
         """Generate thumbnails at 1 per 10 seconds using streaming input."""

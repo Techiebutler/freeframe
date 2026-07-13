@@ -17,6 +17,10 @@ class TranscodeResult:
     thumbnail_keys: list[str] = field(default_factory=list)
     waveform_key: Optional[str] = None
     error: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[float] = None
 
 @dataclass
 class VideoMetadata:
