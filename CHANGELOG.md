@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Version compare** — a fullscreen split view for any two versions of an asset: synced side-by-side playback with per-side frame-accurate offset trim for video, wipe slider + side-by-side with shared zoom/pan for images, and a version-scoped comment panel on each side (comments land on the correct version at the correct frame). Deep-linkable via URL.
+
 ## [1.5.0] - 2026-07-13
 
 ### Upgrade notes
