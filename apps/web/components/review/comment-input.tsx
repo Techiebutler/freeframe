@@ -45,6 +45,8 @@ interface CommentInputProps {
   ) => Promise<void>;
   onCancelReply?: () => void;
   onPauseVideo?: () => void;
+  /** Compare mode: pane-local playhead seconds; replaces the global store playheadTime. */
+  playheadTimeOverride?: number;
   className?: string;
 }
 
@@ -183,13 +185,14 @@ export function CommentInput({
   onSubmit,
   onCancelReply,
   onPauseVideo,
+  playheadTimeOverride,
   className,
 }: CommentInputProps) {
   const {
     isDrawingMode,
     drawingTool,
     drawingColor,
-    playheadTime,
+    playheadTime: storePlayheadTime,
     timeFormat,
     pendingAnnotation,
     toggleDrawingMode,
@@ -199,6 +202,7 @@ export function CommentInput({
     setPendingAnnotation,
     setActiveAnnotation,
   } = useReviewStore();
+  const playheadTime = playheadTimeOverride ?? storePlayheadTime;
 
   const { pauseVideo } = useReview();
 

@@ -50,6 +50,8 @@ interface CommentPanelProps {
   onRemoveReaction: (commentId: string, emoji: string) => Promise<void>;
   onReply: (parentId: string) => void;
   onSubmitReply?: (parentId: string, body: string) => Promise<void>;
+  /** Compare mode: route comment-timecode clicks to a pane-scoped transport instead of the global store. */
+  onSeekToTimecode?: (time: number, pause?: boolean) => void;
   className?: string;
 }
 
@@ -362,6 +364,7 @@ interface CommentItemProps {
   onReply: (parentId: string) => void;
   onCancelReply: () => void;
   onSubmitReply?: (parentId: string, body: string) => Promise<void>;
+  onSeekToTimecode?: (time: number, pause?: boolean) => void;
 }
 
 function CommentItem({
@@ -378,8 +381,10 @@ function CommentItem({
   onReply,
   onCancelReply,
   onSubmitReply,
+  onSeekToTimecode,
 }: CommentItemProps) {
-  const seekTo = useReviewStore((s) => s.seekTo);
+  const storeSeekTo = useReviewStore((s) => s.seekTo);
+  const seekTo = onSeekToTimecode ?? storeSeekTo;
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation);
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId);
   const itemRef = React.useRef<HTMLDivElement>(null);
@@ -718,6 +723,7 @@ function CommentItem({
                   onReply={onReply}
                   onCancelReply={onCancelReply}
                   onSubmitReply={onSubmitReply}
+                  onSeekToTimecode={onSeekToTimecode}
                 />
               ))}
             </div>
@@ -763,6 +769,7 @@ export function CommentPanel({
   onRemoveReaction,
   onReply,
   onSubmitReply,
+  onSeekToTimecode,
   className,
 }: CommentPanelProps) {
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId);
@@ -1279,6 +1286,7 @@ export function CommentPanel({
                 onReply={handleReply}
                 onCancelReply={() => setReplyingTo(null)}
                 onSubmitReply={onSubmitReply}
+                onSeekToTimecode={onSeekToTimecode}
               />
             </div>
           ))}
