@@ -156,3 +156,26 @@ def test_start_tc_out_of_range_422(_, client, mock_db, auth_headers):
 
     assert r.status_code == 422
     assert "out of range" in r.json()["detail"]
+
+
+@patch("apps.api.routers.comments.require_asset_access")
+def test_cors_exposes_content_disposition(_, client, mock_db, auth_headers):
+    """Cross-origin JS can only read the export filename if CORS exposes the header.
+    Verify via a live CORS preflight/response with Origin header."""
+    asset, version = _asset(), _version()
+    mock_db.first.side_effect = [asset, version, _media()]
+    mock_db.order_by.return_value = mock_db
+    mock_db.all.side_effect = [[_comment()]]
+
+    # Send request with Origin header (simulates cross-origin fetch)
+    r = client.get(
+        f"/assets/{asset.id}/comments/export?format=edl&version_id={version.id}",
+        headers={**auth_headers, "Origin": "http://localhost:3000"},
+    )
+
+    assert r.status_code == 200
+    # Content-Disposition is set by the endpoint
+    assert "content-disposition" in r.headers
+    # CORS expose-headers makes it readable by cross-origin JS
+    assert "access-control-expose-headers" in r.headers
+    assert "Content-Disposition" in r.headers["access-control-expose-headers"]
