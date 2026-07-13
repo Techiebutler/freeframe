@@ -18,6 +18,11 @@ vi.mock('@/hooks/use-comments', () => ({
   }),
 }))
 vi.mock('@/hooks/use-stream-url', () => ({ useStreamUrl: () => ({ url: null, error: false }) }))
+// CommentInput calls useReview() unconditionally; the overlay mounts it on render
+// (right comment panel defaults open), so provide the minimal context shape it uses.
+vi.mock('@/components/review/review-provider', () => ({
+  useReview: () => ({ pauseVideo: vi.fn(), registerPauseHandler: vi.fn() }),
+}))
 vi.mock('@/hooks/use-video-player', () => ({
   useVideoPlayer: () => ({
     videoRef: { current: null }, state: { duration: 60 },
@@ -30,7 +35,7 @@ import { CompareOverlay } from '../compare-overlay'
 function makeVersion(n: number, status = 'ready') {
   return {
     id: `v-${n}`, asset_id: 'a1', version_number: n, processing_status: status,
-    created_at: new Date().toISOString(), media_files: [{ fps: 25, duration_seconds: 60 }],
+    created_at: new Date().toISOString(), files: [{ fps: 25, duration_seconds: 60 }],
   } as never
 }
 

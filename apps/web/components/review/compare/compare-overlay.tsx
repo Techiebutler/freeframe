@@ -23,18 +23,18 @@ interface CompareOverlayProps {
   versions: AssetVersion[]
   rightVersion: AssetVersion
   onClose(): void
+  /** Mirror of the page's role gate — comment inputs render only when true. */
+  canComment?: boolean
 }
 
 function mediaOf(v: AssetVersion | null | undefined): { fps?: number | null; duration_seconds?: number | null } {
-  // NOTE: AssetVersion's real type field is `files` (see types/index.ts), not
-  // `media_files`. Kept as `media_files` per task-8-brief.md Step 3 (controller
-  // instruction: implement transportInput/mediaOf as specified, flag as a
-  // concern rather than redesign) — see task-8-report.md for details.
-  return (v as { media_files?: Array<{ fps?: number | null; duration_seconds?: number | null }> })?.media_files?.[0] ?? {}
+  // AssetVersion embeds media metadata as `files` (MediaFile[], types/index.ts);
+  // fps / duration_seconds live on the first entry.
+  return (v as { files?: Array<{ fps?: number | null; duration_seconds?: number | null }> })?.files?.[0] ?? {}
 }
 
 /** Fullscreen two-version compare. Chrome: select A, (image mode toggle), select B, close. */
-export function CompareOverlay({ asset, versions, rightVersion, onClose }: CompareOverlayProps) {
+export function CompareOverlay({ asset, versions, rightVersion, onClose, canComment = true }: CompareOverlayProps) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -98,7 +98,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose }: Compa
   const sideA = useComments(asset.id, left?.id ?? null)
   const sideB = useComments(asset.id, right.id)
   const [panelAOpen, setPanelAOpen] = React.useState(false)
-  const [panelBOpen, setPanelBOpen] = React.useState(false)
+  const [panelBOpen, setPanelBOpen] = React.useState(true)
 
   const markersA: ScrubberMarker[] = sideA.comments
     .filter((c) => c.timecode_start != null)
@@ -199,6 +199,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose }: Compa
                 onSubmitReply={handleReplyA}
                 onSeekToTimecode={(tc) => transport.seekTo(tc + timingA.offset)}
               />
+              {canComment && (
               <CommentInput
                 assetId={asset.id}
                 projectId={asset.project_id}
@@ -224,6 +225,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose }: Compa
                   )
                 }}
               />
+              )}
             </div>
           )}
         </aside>
@@ -317,6 +319,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose }: Compa
                 onSubmitReply={handleReplyB}
                 onSeekToTimecode={(tc) => transport.seekTo(tc + timingB.offset)}
               />
+              {canComment && (
               <CommentInput
                 assetId={asset.id}
                 projectId={asset.project_id}
@@ -342,6 +345,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose }: Compa
                   )
                 }}
               />
+              )}
             </div>
           )}
         </aside>

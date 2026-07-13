@@ -451,7 +451,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 
       {/* ─── Main content: viewer + sidebar ────────────────────────────── */}
       {compareOpen && asset && currentVersion ? (
-        <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} />
+        <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} />
       ) : (
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left: viewer column */}
