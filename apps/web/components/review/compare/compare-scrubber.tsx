@@ -59,8 +59,9 @@ function ScrubberCommentMarker({
   const color = getAvatarColor(marker.authorName)
 
   // Recalculate tooltip position when hovered to avoid viewport clipping.
-  // A markers sit above the track, so their tooltip opens further upward;
-  // B markers sit below the track, so their tooltip opens downward.
+  // BOTH sides open upward: the scrubber sits flush against the viewport
+  // bottom, so a downward tooltip would land entirely off-screen. Opening
+  // upward puts the B tooltip above the scrubber, over the video area.
   React.useEffect(() => {
     if (!isHovered || !markerRef.current) {
       setTooltipPos(null)
@@ -71,9 +72,9 @@ function ScrubberCommentMarker({
     let left = rect.left + rect.width / 2 - tooltipWidth / 2
     if (left < 8) left = 8
     if (left + tooltipWidth > window.innerWidth - 8) left = window.innerWidth - 8 - tooltipWidth
-    const top = side === 'a' ? rect.top - 8 : rect.bottom + 8
+    const top = Math.max(8, rect.top - 8)
     setTooltipPos({ left, top })
-  }, [isHovered, side])
+  }, [isHovered])
 
   return (
     <div
@@ -101,7 +102,7 @@ function ScrubberCommentMarker({
             left: tooltipPos.left,
             top: tooltipPos.top,
             width: 240,
-            transform: side === 'a' ? 'translateY(-100%)' : undefined,
+            transform: 'translateY(-100%)',
             zIndex: 9999,
             pointerEvents: 'none',
           }}
