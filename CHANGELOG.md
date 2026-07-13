@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-13
+
+### Upgrade notes
+- **Run the media-metadata backfill once after upgrading** — `docker exec freeframe-api-1 python -m apps.api.scripts.backfill_media_metadata` populates duration/resolution/fps for files uploaded before this release. Without it, older videos will ask for a frame rate when exporting comments to the NLE formats (the export still works — you just pick the fps by hand).
+
 ### Added
 - **Export comments as NLE timeline markers** ([#84](https://github.com/Techiebutler/freeframe/issues/84)) — `GET /assets/{id}/comments/export?format=edl|fcpxml|premiere_xml|csv` turns a version's timecoded comments into importable markers for DaVinci Resolve (marker EDL — import via Timelines → Import → Timeline Markers from EDL, matching the timeline start TC, default 01:00:00:00), Final Cut Pro (FCPXML), and Premiere Pro (FCP7 XML — Premiere cannot import FCPXML), plus CSV. Uses the stored frame rate (see #124) with a `?fps=` override. Note: variable-frame-rate sources may land markers ±1 frame.
 - **Export comments menu in the review panel** ([#84](https://github.com/Techiebutler/freeframe/issues/84)) — download markers for Resolve/Final Cut/Premiere/CSV from the comment panel toolbar; prompts for frame rate when the video predates the metadata backfill.
