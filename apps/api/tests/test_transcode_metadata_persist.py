@@ -34,3 +34,15 @@ def test_process_video_leaves_fields_untouched_when_metadata_missing():
 
     assert media_file.duration_seconds is None
     assert media_file.fps is None
+
+
+def test_process_audio_persists_duration():
+    from apps.api.tasks.transcode_tasks import _process_audio
+
+    media_file = MagicMock(duration_seconds=None)
+    with patch("packages.transcoder.image_processor.process_audio",
+               return_value={"mp3_key": "k.mp3", "waveform_key": "w.json", "duration_seconds": 12.5}):
+        _process_audio(MagicMock(), MagicMock(), MagicMock(), media_file, MagicMock(), "prefix")
+
+    assert media_file.duration_seconds == 12.5
+    assert media_file.s3_key_processed == "k.mp3"

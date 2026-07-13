@@ -50,6 +50,18 @@ def process_audio(s3_client, bucket: str, input_s3_key: str, output_prefix: str)
     try:
         s3_client.download_file(bucket, input_s3_key, tmp_input)
 
+        # Probe duration before processing (#124)
+        duration_seconds = None
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", tmp_input],
+                check=True, capture_output=True, text=True, timeout=120,
+            )
+            duration_seconds = float(json.loads(probe.stdout).get("format", {}).get("duration") or 0) or None
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError):
+            pass  # a failed probe must not fail audio processing
+        result["duration_seconds"] = duration_seconds
+
         # Normalize and convert to MP3
         mp3_path = os.path.join(work_dir, "processed.mp3")
         subprocess.run(

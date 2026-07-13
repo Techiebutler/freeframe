@@ -118,6 +118,8 @@ def _process_audio(db, asset, version, media_file, s3, output_prefix):
     media_file.s3_key_processed = result.get("mp3_key")
     if result.get("waveform_key"):
         media_file.s3_key_thumbnail = result["waveform_key"]
+    if result.get("duration_seconds"):
+        media_file.duration_seconds = result["duration_seconds"]
     db.flush()
 
 
