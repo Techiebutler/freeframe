@@ -12,9 +12,13 @@ vi.mock('next/navigation', () => ({
 // Per-side capture: record which version's hook instance received each create.
 const createComment = vi.fn().mockResolvedValue({})
 const createCommentCalls: Array<{ versionId: string | null; args: unknown[] }> = []
+// Per-side comments fixture keyed by versionId — lets a single test give one
+// side (and only that side) markers/comments without touching the other side.
+const commentsByVersion: Record<string, unknown[]> = {}
 vi.mock('@/hooks/use-comments', () => ({
   useComments: (_assetId: string, versionId: string | null) => ({
-    comments: [], isLoading: false,
+    comments: (versionId && commentsByVersion[versionId]) || [],
+    isLoading: false,
     createComment: (...args: unknown[]) => {
       createCommentCalls.push({ versionId, args })
       return createComment(...args)
@@ -35,13 +39,19 @@ vi.mock('@/hooks/use-video-player', () => ({
     controls: { play: vi.fn(), pause: vi.fn(), seek: vi.fn() },
   }),
 }))
+// Stable fn references (module-level, not recreated per render) so marker-click
+// tests can assert on calls; transportIsPlaying is read at render time.
+const transportSeekTo = vi.fn()
+const transportToggle = vi.fn()
+const transportSetIsPlaying = vi.fn()
+let transportIsPlaying = false
 // Pin the transport clock so pane-local timecodes are deterministic (t = 12.5s).
 vi.mock('../use-synced-transport', () => ({
   useSyncedTransport: () => ({
     playerA: { videoRef: { current: null } },
     playerB: { videoRef: { current: null } },
-    t: 12.5, total: 60, isPlaying: false,
-    toggle: vi.fn(), seekTo: vi.fn(), setIsPlaying: vi.fn(),
+    t: 12.5, total: 60, isPlaying: transportIsPlaying,
+    toggle: transportToggle, seekTo: transportSeekTo, setIsPlaying: transportSetIsPlaying,
   }),
 }))
 
@@ -54,6 +64,19 @@ function makeVersion(n: number, status = 'ready') {
   } as never
 }
 
+function makeComment(id: string, versionId: string, over: Record<string, unknown> = {}) {
+  return {
+    id, asset_id: 'a1', version_id: versionId, parent_id: null,
+    author_id: 'u1', guest_author_id: null,
+    timecode_start: 5, timecode_end: null,
+    body: 'Fix the color grade', resolved: false, visibility: 'all',
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(), deleted_at: null,
+    author: { id: 'u1', name: 'Alice', avatar_url: null }, guest_author: null,
+    replies: [], annotation: null, reactions: [],
+    ...over,
+  } as never
+}
+
 const asset = { id: 'a1', name: 'Demo', asset_type: 'image' } as never
 const videoAsset = { id: 'a1', name: 'Demo', asset_type: 'video' } as never
 
@@ -62,6 +85,15 @@ beforeEach(() => {
   replace.mockClear()
   createComment.mockClear()
   createCommentCalls.length = 0
+  for (const k of Object.keys(commentsByVersion)) delete commentsByVersion[k]
+  transportSeekTo.mockClear()
+  transportToggle.mockClear()
+  transportSetIsPlaying.mockClear()
+  transportIsPlaying = false
+  // jsdom does not implement scrollIntoView; CommentItem calls it when it
+  // becomes focused (marker click → setFocusedCommentId). Unrelated to the
+  // marker-click contract under test (see comment-overrides.test.tsx).
+  Element.prototype.scrollIntoView = vi.fn()
 })
 
 describe('CompareOverlay', () => {
@@ -73,6 +105,13 @@ describe('CompareOverlay', () => {
     expect(screen.getByTestId('compare-select-b')).toBeInTheDocument()
     expect(screen.getByLabelText('Close compare')).toBeInTheDocument()
     expect(screen.getByLabelText(/wipe|side-by-side/i)).toBeInTheDocument()
+  })
+
+  it('shows the asset name, centered in the top bar', () => {
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    expect(screen.getByText('Demo')).toBeInTheDocument()
   })
 
   it('ESC closes', () => {
@@ -139,5 +178,70 @@ describe('CompareOverlay per-side comment submission', () => {
     expect(createCommentCalls).toHaveLength(1)
     expect(createCommentCalls[0].versionId).toBe('v-1')
     expect(createCommentCalls[0].args[0]).toBe('left side note')
+  })
+})
+
+describe('CompareOverlay per-side audio toggle', () => {
+  it('defaults to B audible / A muted, and exclusive-unmutes on click (A→B mutes, B unmute, mute-audible→both muted)', () => {
+    const { container } = render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    // badgeA = v1 (left, id v-1 per the mocked ?compare=v-1 param), badgeB = v3 (rightVersion = makeVersion(3))
+    const videos = container.querySelectorAll('video')
+    expect(videos).toHaveLength(2)
+    const [videoA, videoB] = Array.from(videos) as HTMLVideoElement[]
+
+    // Default: B carries audio.
+    expect(videoA.muted).toBe(true)
+    expect(videoB.muted).toBe(false)
+    expect(screen.getByLabelText('Unmute v1')).toBeInTheDocument()
+    expect(screen.getByLabelText('Mute v3')).toBeInTheDocument()
+
+    // Click the muted side (A) — unmutes A AND mutes B (exclusive unmute).
+    fireEvent.click(screen.getByLabelText('Unmute v1'))
+    expect(videoA.muted).toBe(false)
+    expect(videoB.muted).toBe(true)
+    expect(screen.getByLabelText('Mute v1')).toBeInTheDocument()
+    expect(screen.getByLabelText('Unmute v3')).toBeInTheDocument()
+
+    // Click the now-audible side (A) again — mutes it; B stays muted (both muted).
+    fireEvent.click(screen.getByLabelText('Mute v1'))
+    expect(videoA.muted).toBe(true)
+    expect(videoB.muted).toBe(true)
+    expect(screen.getByLabelText('Unmute v1')).toBeInTheDocument()
+    expect(screen.getByLabelText('Unmute v3')).toBeInTheDocument()
+  })
+})
+
+describe('CompareOverlay marker click', () => {
+  it('seeks with the offset, pauses via toggle (not setIsPlaying), focuses the comment, and opens the closed panel', () => {
+    commentsByVersion['v-1'] = [makeComment('c1', 'v-1')]
+    transportIsPlaying = true
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    // Left panel starts closed — its CommentPanel content isn't rendered yet.
+    expect(screen.queryByText('Fix the color grade')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('marker-a-c1'))
+
+    // offA defaults to 0 (mocked searchParams carries no offA/offB).
+    expect(transportSeekTo).toHaveBeenCalledWith(5)
+    expect(transportToggle).toHaveBeenCalledTimes(1)
+    expect(transportSetIsPlaying).not.toHaveBeenCalled()
+    expect(useReviewStore.getState().focusedCommentId).toBe('c1')
+    expect(screen.getByText('Fix the color grade')).toBeInTheDocument()
+  })
+
+  it('does not pause when already paused', () => {
+    commentsByVersion['v-1'] = [makeComment('c2', 'v-1')]
+    transportIsPlaying = false
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByTestId('marker-a-c2'))
+    expect(transportSeekTo).toHaveBeenCalledWith(5)
+    expect(transportToggle).not.toHaveBeenCalled()
+    expect(useReviewStore.getState().focusedCommentId).toBe('c2')
   })
 })

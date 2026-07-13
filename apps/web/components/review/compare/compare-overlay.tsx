@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { Columns2, FlipHorizontal2, MessageSquare, X } from 'lucide-react'
+import { Columns2, FlipHorizontal2, MessageSquare, Volume2, VolumeX, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import { useAuthStore } from '@/stores/auth-store'
@@ -146,6 +146,9 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const sideB = useComments(asset.id, right.id)
   const [panelAOpen, setPanelAOpen] = React.useState(false)
   const [panelBOpen, setPanelBOpen] = React.useState(true)
+  // Exclusive-unmute audio: at most one side is ever audible. 'b' preserves
+  // the pre-existing default (side B carried audio, hardcoded).
+  const [audioSide, setAudioSide] = React.useState<'a' | 'b' | 'none'>('b')
 
   const markersA: ScrubberMarker[] = sideA.comments
     .filter((c) => c.timecode_start != null && !c.resolved)
@@ -161,6 +164,23 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
       authorName: c.author?.name ?? c.guest_author?.name ?? 'Unknown',
       body: c.body, hasAnnotation: Boolean(c.annotation),
     }))
+
+  // Marker click (mirrors progress-bar.tsx's CommentMarker click, adapted to
+  // compare's two panes): seek pane-local, pause if playing, focus the comment
+  // (drives CommentItem's scrollIntoView/highlight in whichever panel holds
+  // it), and open that side's panel if closed. Annotations: next task.
+  const handleMarkerClick = React.useCallback(
+    (side: 'a' | 'b', marker: ScrubberMarker) => {
+      transport.seekTo(marker.tc + (side === 'a' ? timingA.offset : timingB.offset))
+      // CRITICAL: toggle() (not setIsPlaying) — only toggle() updates the
+      // transport's internal playingRef; setIsPlaying is the raw state setter.
+      if (transport.isPlaying) transport.toggle()
+      setFocusedCommentId(marker.id)
+      if (side === 'a') setPanelAOpen(true)
+      else setPanelBOpen(true)
+    },
+    [transport, timingA.offset, timingB.offset, setFocusedCommentId, setPanelAOpen, setPanelBOpen],
+  )
 
   // Per-side reply adapters — mirror page.tsx's handleSubmitReply (createComment
   // with only body + parentId, no timecode) so CommentPanel's inline reply box
@@ -201,26 +221,35 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-bg-primary">
       {/* Top bar — minimalist chrome only */}
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
-        <CompareVersionSelect
-          testId="compare-select-a"
-          versions={versions}
-          value={left.id}
-          accentClass="text-sky-400"
-          onChange={(v) => writeParams((p) => p.set('compare', v.id))}
-        />
-        {!isVideo && (
-          <button
-            type="button"
-            aria-label={mode === 'wipe' ? 'Switch to side-by-side' : 'Switch to wipe'}
-            onClick={() => writeParams((p) => p.set('mode', mode === 'wipe' ? 'sbs' : 'wipe'))}
-            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[13px] text-text-secondary hover:bg-bg-hover"
-          >
-            {mode === 'wipe' ? <Columns2 className="h-3.5 w-3.5" /> : <FlipHorizontal2 className="h-3.5 w-3.5" />}
-            {mode === 'wipe' ? 'Side-by-side' : 'Wipe'}
-          </button>
-        )}
-        <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 border-b border-border px-4 py-2">
+        <div className="shrink-0">
+          <CompareVersionSelect
+            testId="compare-select-a"
+            versions={versions}
+            value={left.id}
+            accentClass="text-sky-400"
+            onChange={(v) => writeParams((p) => p.set('compare', v.id))}
+          />
+        </div>
+        {/* Center: asset title (flex-1 min-w-0 truncates without pushing either
+            side's chrome), plus the image-only mode toggle beside it. */}
+        <div className="flex min-w-0 flex-1 items-center justify-center gap-3">
+          <span className="min-w-0 flex-1 truncate text-center text-[13px] font-medium text-text-primary" title={asset.name}>
+            {asset.name}
+          </span>
+          {!isVideo && (
+            <button
+              type="button"
+              aria-label={mode === 'wipe' ? 'Switch to side-by-side' : 'Switch to wipe'}
+              onClick={() => writeParams((p) => p.set('mode', mode === 'wipe' ? 'sbs' : 'wipe'))}
+              className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[13px] text-text-secondary hover:bg-bg-hover"
+            >
+              {mode === 'wipe' ? <Columns2 className="h-3.5 w-3.5" /> : <FlipHorizontal2 className="h-3.5 w-3.5" />}
+              {mode === 'wipe' ? 'Side-by-side' : 'Wipe'}
+            </button>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
           <CompareVersionSelect
             testId="compare-select-b"
             versions={versions}
@@ -315,15 +344,35 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
             <>
               <div className="flex min-h-0 flex-1">
                 <div className="relative flex min-w-0 flex-1 items-center justify-center bg-black">
-                  <span className="absolute left-3 top-3 z-10 rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeA}</span>
-                  {/* Side B carries audio; side A muted to avoid doubled sound. */}
-                  <video ref={transport.playerA.videoRef} className="max-h-full max-w-full" playsInline muted />
+                  <div className="absolute left-3 top-3 z-10 flex items-center gap-1.5">
+                    <span className="rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeA}</span>
+                    <button
+                      type="button"
+                      aria-label={audioSide === 'a' ? `Mute ${badgeA}` : `Unmute ${badgeA}`}
+                      onClick={() => setAudioSide((prev) => (prev === 'a' ? 'none' : 'a'))}
+                      className="flex h-7 w-7 items-center justify-center rounded bg-black/40 text-white/80 transition-colors hover:text-white"
+                    >
+                      {audioSide === 'a' ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {/* Exclusive unmute: audioSide names the (at most one) audible side. */}
+                  <video ref={transport.playerA.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'a'} />
                   {errA && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeA}</span>}
                 </div>
                 <div className="w-px bg-border" />
                 <div className="relative flex min-w-0 flex-1 items-center justify-center bg-black">
-                  <span className="absolute right-3 top-3 z-10 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
-                  <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline />
+                  <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      aria-label={audioSide === 'b' ? `Mute ${badgeB}` : `Unmute ${badgeB}`}
+                      onClick={() => setAudioSide((prev) => (prev === 'b' ? 'none' : 'b'))}
+                      className="flex h-7 w-7 items-center justify-center rounded bg-black/40 text-white/80 transition-colors hover:text-white"
+                    >
+                      {audioSide === 'b' ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                    </button>
+                    <span className="rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
+                  </div>
+                  <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'b'} />
                   {errB && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeB}</span>}
                 </div>
               </div>
@@ -338,7 +387,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 markersB={markersB}
                 timingA={timingA}
                 timingB={timingB}
-                onMarkerClick={(side, marker) => transport.seekTo(marker.tc + (side === 'a' ? timingA.offset : timingB.offset))}
+                onMarkerClick={handleMarkerClick}
                 onOffsetChange={(side, value) =>
                   writeParams((p) => p.set(side === 'a' ? 'offA' : 'offB', String(value)))
                 }
