@@ -111,6 +111,14 @@ beforeEach(() => {
   // becomes focused (marker click → setFocusedCommentId). Unrelated to the
   // marker-click contract under test (see comment-overrides.test.tsx).
   Element.prototype.scrollIntoView = vi.fn()
+  // jsdom does not implement ResizeObserver; VideoFrameConstraint (which
+  // positions each video pane's AnnotationOverlay over the rendered video
+  // box) observes the pane container for aspect-fit recalculation.
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  })
 })
 
 describe('CompareOverlay', () => {
@@ -279,9 +287,14 @@ describe('CompareOverlay per-pane annotation display', () => {
 
     const overlays = screen.getAllByTestId('annotation-overlay')
     expect(overlays).toHaveLength(1)
-    // The overlay shares the video-hugging wrapper with pane A's <video>.
+    // The overlay renders inside pane A's VideoFrameConstraint (video-frame
+    // coordinates — the space drawings are authored in), which sits in the
+    // same pane container as pane A's <video>.
     const videos = container.querySelectorAll('video')
-    expect(overlays[0].parentElement).toContainElement(videos[0] as HTMLElement)
+    const constraint = overlays[0].parentElement as HTMLElement
+    expect(constraint).toHaveClass('overflow-hidden')
+    expect(constraint.parentElement).toContainElement(videos[0] as HTMLElement)
+    expect(constraint.parentElement).not.toContainElement(videos[1] as HTMLElement)
     // Per-side state, not the global store (which would leak to the normal view).
     expect(useReviewStore.getState().activeAnnotation).toBeNull()
   })

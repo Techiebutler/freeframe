@@ -15,6 +15,7 @@ import { useSyncedTransport } from './use-synced-transport'
 import { useSharedTransform } from './use-shared-transform'
 import { WipeViewer } from './wipe-viewer'
 import { AnnotationOverlay } from '@/components/review/annotation-overlay'
+import { VideoFrameConstraint } from '@/components/review/video-player'
 import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
 import type { AssetResponse, AssetVersion } from '@/types'
@@ -383,14 +384,14 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                   </div>
                   {/* Exclusive unmute: audioSide names the (at most one) audible side. */}
                   <video ref={transport.playerA.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'a'} />
-                  {/* Sibling of the video, sized by the pane box: the pane's
-                      dimensions are DEFINITE, so the video's max-h-full keeps
-                      resolving (a max-* hugging wrapper is content-sized —
-                      children's percentages don't resolve against it and
-                      portrait video spills). The pane box also matches the
-                      authoring space: drawings are saved over the normal
-                      player's full overlay container, not the video box. */}
-                  <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
+                  {/* Drawings are AUTHORED inside VideoFrameConstraint on the
+                      normal player (video-frame coordinates, letterbox bars
+                      excluded) — render them in the same space. The constraint
+                      aspect-fits itself to the rendered video box within
+                      video.parentElement = this pane container (relative). */}
+                  <VideoFrameConstraint videoRef={transport.playerA.videoRef}>
+                    <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
+                  </VideoFrameConstraint>
                   {errA && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeA}</span>}
                 </div>
                 <div className="w-px bg-border" />
@@ -407,7 +408,9 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     <span className="rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
                   </div>
                   <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'b'} />
-                  <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
+                  <VideoFrameConstraint videoRef={transport.playerB.videoRef}>
+                    <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
+                  </VideoFrameConstraint>
                   {errB && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeB}</span>}
                 </div>
               </div>
