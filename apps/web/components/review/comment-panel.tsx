@@ -884,8 +884,8 @@ export function CommentPanel({
   }
 
   async function handleExport(format: ExportFormat, fps?: number) {
-    if (!currentAsset || !currentVersion) return;
     setExportOpen(false);
+    if (!currentAsset || !currentVersion) return;
     try {
       await exportComments({
         assetId: currentAsset.id,
