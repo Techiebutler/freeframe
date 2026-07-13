@@ -382,12 +382,15 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     </button>
                   </div>
                   {/* Exclusive unmute: audioSide names the (at most one) audible side. */}
-                  {/* Wrapper hugs the RENDERED video box so the annotation canvas
-                      scales against the video area, not the letterboxed pane. */}
-                  <div className="relative flex max-h-full max-w-full items-center justify-center">
-                    <video ref={transport.playerA.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'a'} />
-                    <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
-                  </div>
+                  <video ref={transport.playerA.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'a'} />
+                  {/* Sibling of the video, sized by the pane box: the pane's
+                      dimensions are DEFINITE, so the video's max-h-full keeps
+                      resolving (a max-* hugging wrapper is content-sized —
+                      children's percentages don't resolve against it and
+                      portrait video spills). The pane box also matches the
+                      authoring space: drawings are saved over the normal
+                      player's full overlay container, not the video box. */}
+                  <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
                   {errA && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeA}</span>}
                 </div>
                 <div className="w-px bg-border" />
@@ -403,10 +406,8 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     </button>
                     <span className="rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
                   </div>
-                  <div className="relative flex max-h-full max-w-full items-center justify-center">
-                    <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'b'} />
-                    <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
-                  </div>
+                  <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'b'} />
+                  <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
                   {errB && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeB}</span>}
                 </div>
               </div>
@@ -457,10 +458,13 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
               <div className="relative flex min-w-0 flex-1 items-center justify-center">
                 <span className="absolute left-3 top-3 z-10 rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeA}</span>
                 {urlA && (
-                  // Transform lives on the image-hugging wrapper (not the img)
-                  // so the annotation overlay zooms/pans with the image —
-                  // mirrors ImageViewer's inside-the-transform placement.
-                  <div className="relative flex max-h-full max-w-full items-center justify-center" style={transform.styleFor()}>
+                  // Transform lives on a DEFINITE-size (h-full w-full — never
+                  // max-*, whose content-sized box breaks the img's percentage
+                  // caps) wrapper so the annotation overlay zooms/pans with
+                  // the image — mirrors ImageViewer's inside-the-transform
+                  // placement. At scale 1 the img letterboxes in the same
+                  // available box as before.
+                  <div className="relative flex h-full w-full items-center justify-center" style={transform.styleFor()}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
                     <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
@@ -471,7 +475,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
               <div className="relative flex min-w-0 flex-1 items-center justify-center">
                 <span className="absolute right-3 top-3 z-10 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
                 {urlB && (
-                  <div className="relative flex max-h-full max-w-full items-center justify-center" style={transform.styleFor()}>
+                  <div className="relative flex h-full w-full items-center justify-center" style={transform.styleFor()}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
                     <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
