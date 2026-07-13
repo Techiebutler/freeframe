@@ -7,13 +7,9 @@ docs/superpowers/specs/2026-07-13-comment-export-nle-design.md.
 """
 from __future__ import annotations
 
-import csv
-import io
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
-from xml.etree import ElementTree as ET
 
 
 @dataclass(frozen=True)

@@ -37,3 +37,12 @@ def test_snap_fps():
 def test_seconds_to_frames():
     assert seconds_to_frames(10.0, spec_for(60, False)) == 600
     assert seconds_to_frames(2.52, spec_for(25, False)) == 63
+
+
+def test_df_5994_known_vectors():
+    df = spec_for(60, True)
+    assert frames_to_tc(3600, df) == "00:01:00;04"
+    assert tc_to_frames("00:01:00;04", df) == 3600
+    # one hour @ 59.94 DF = 215,784 frames (industry reference constant)
+    assert tc_to_frames("01:00:00;00", df) == 215784
+    assert frames_to_tc(215784, df) == "01:00:00;00"
