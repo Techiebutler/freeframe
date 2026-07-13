@@ -7,8 +7,11 @@ docs/superpowers/specs/2026-07-13-comment-export-nle-design.md.
 """
 from __future__ import annotations
 
+import csv
+import io
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 
@@ -86,3 +89,101 @@ def tc_to_frames(tc: str, spec: FpsSpec) -> int:
         total_min = hh * 60 + mm
         total -= drop * (total_min - total_min // 10)
     return total
+
+
+@dataclass
+class CommentRow:
+    """One comment, flattened by the router (author already resolved)."""
+    id: str
+    parent_id: Optional[str]
+    author_name: str
+    author_email: str
+    body: str
+    timecode_start: Optional[float]
+    timecode_end: Optional[float]
+    resolved: bool
+    created_at: datetime
+    version_number: int
+
+
+@dataclass
+class Marker:
+    frames: int
+    duration_frames: int
+    text: str    # "{author}: {body}", same-frame comments joined with " — "
+    note: str    # folded replies, one "— {author}: {body}" per line
+    resolved: bool
+
+
+def _descendants(parent_id: str, children_by_parent: dict) -> list[CommentRow]:
+    out: list[CommentRow] = []
+    for child in children_by_parent.get(parent_id, []):
+        out.append(child)
+        out.extend(_descendants(child.id, children_by_parent))
+    return out
+
+
+def build_markers(rows: list[CommentRow], spec: FpsSpec, include_resolved: bool = True) -> list[Marker]:
+    """Top-level timecoded comments -> markers; replies fold into the note;
+    same-frame markers merge (Resolve drops overlapping point markers)."""
+    children_by_parent: dict[str, list[CommentRow]] = {}
+    for r in rows:
+        if r.parent_id is not None:
+            children_by_parent.setdefault(r.parent_id, []).append(r)
+    for kids in children_by_parent.values():
+        kids.sort(key=lambda r: r.created_at)
+
+    by_frame: dict[int, list[tuple[CommentRow, list[CommentRow]]]] = {}
+    for r in rows:
+        if r.parent_id is not None or r.timecode_start is None:
+            continue
+        if not include_resolved and r.resolved:
+            continue
+        frames = seconds_to_frames(r.timecode_start, spec)
+        by_frame.setdefault(frames, []).append((r, _descendants(r.id, children_by_parent)))
+
+    markers: list[Marker] = []
+    for frames in sorted(by_frame):
+        texts, notes, durations, resolved_flags = [], [], [], []
+        for top, replies in by_frame[frames]:
+            texts.append(f"{top.author_name}: {top.body}")
+            notes.extend(f"— {r.author_name}: {r.body}" for r in replies)
+            if top.timecode_end is not None and top.timecode_end > top.timecode_start:
+                durations.append(max(1, seconds_to_frames(top.timecode_end, spec) - frames))
+            else:
+                durations.append(1)
+            resolved_flags.append(top.resolved)
+        markers.append(Marker(
+            frames=frames,
+            duration_frames=max(durations),
+            text=" — ".join(texts),
+            note="\n".join(notes),
+            resolved=all(resolved_flags),
+        ))
+    return markers
+
+
+CSV_COLUMNS = [
+    "comment_id", "parent_id", "version_number", "timecode_smpte",
+    "timecode_start_seconds", "timecode_end_seconds",
+    "author_name", "author_email", "body", "resolved", "created_at",
+]
+
+
+def to_csv(rows: list[CommentRow], spec: Optional[FpsSpec]) -> str:
+    """Flat chronological CSV of ALL comments (replies and untimecoded included)."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(CSV_COLUMNS)
+    for r in sorted(rows, key=lambda r: r.created_at):
+        smpte = ""
+        if spec is not None and r.timecode_start is not None:
+            smpte = frames_to_tc(seconds_to_frames(r.timecode_start, spec), spec)
+        w.writerow([
+            r.id, r.parent_id or "", r.version_number, smpte,
+            "" if r.timecode_start is None else r.timecode_start,
+            "" if r.timecode_end is None else r.timecode_end,
+            r.author_name, r.author_email, r.body,
+            str(r.resolved).lower(), r.created_at.isoformat(),
+        ])
+    return buf.getvalue()
