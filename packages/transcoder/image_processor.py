@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def process_image(s3_client, bucket: str, input_s3_key: str, output_prefix: str) -> dict:
@@ -42,7 +45,10 @@ def process_image(s3_client, bucket: str, input_s3_key: str, output_prefix: str)
 
 
 def process_audio(s3_client, bucket: str, input_s3_key: str, output_prefix: str) -> dict:
-    """Normalize audio to MP3 + generate waveform JSON. Returns dict of S3 keys."""
+    """Normalize audio to MP3 + generate waveform JSON.
+
+    Returns dict of S3 keys plus a `duration_seconds` key (probed from the
+    input via ffprobe; None if the probe fails)."""
     with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as f:
         tmp_input = f.name
     work_dir = tempfile.mkdtemp()
@@ -58,8 +64,8 @@ def process_audio(s3_client, bucket: str, input_s3_key: str, output_prefix: str)
                 check=True, capture_output=True, text=True, timeout=120,
             )
             duration_seconds = float(json.loads(probe.stdout).get("format", {}).get("duration") or 0) or None
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError, OSError, AttributeError):
-            pass  # a failed probe must not fail audio processing
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError, OSError, AttributeError) as exc:
+            log.warning("audio duration probe failed for %s: %s", input_s3_key, exc)  # a failed probe must not fail audio processing
         result["duration_seconds"] = duration_seconds
 
         # Normalize and convert to MP3

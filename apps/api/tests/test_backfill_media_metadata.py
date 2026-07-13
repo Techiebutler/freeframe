@@ -2,6 +2,7 @@
 import json
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from apps.api.models.asset import AssetType
@@ -141,7 +142,12 @@ def _media(db, version, duration_seconds=None):
 
 def test_eligible_media_rows_scopes_to_ready_nondeleted_null_duration_video_or_audio(real_db):
     """Finding 2: exercise the real query — only the (video|audio, ready, non-deleted,
-    duration_seconds IS NULL) row should come back."""
+    duration_seconds IS NULL) row should come back.
+
+    Uses membership assertions (not exact-equality on the full result set) because this
+    runs against the shared dev Postgres via `real_db`, which may already contain other
+    eligible rows left over from manual testing/other suites — asserting the full result
+    set would make this test fragile against that shared state."""
     from apps.api.models.asset import ProcessingStatus
     from apps.api.tasks.transcode_tasks import _eligible_media_rows
 
@@ -156,18 +162,37 @@ def test_eligible_media_rows_scopes_to_ready_nondeleted_null_duration_video_or_a
     # excluded: same shape but duration_seconds already set (idempotency)
     filled_asset = _asset(real_db, project, owner, asset_type=AssetType.video)
     filled_version = _version(real_db, filled_asset, owner, status=ProcessingStatus.ready)
-    _media(real_db, filled_version, duration_seconds=12.5)
+    filled_media = _media(real_db, filled_version, duration_seconds=12.5)
 
     # excluded: image asset
     image_asset = _asset(real_db, project, owner, asset_type=AssetType.image)
     image_version = _version(real_db, image_asset, owner, status=ProcessingStatus.ready)
-    _media(real_db, image_version, duration_seconds=None)
+    image_media = _media(real_db, image_version, duration_seconds=None)
 
     # excluded: soft-deleted version
+    deleted_version_asset = _asset(real_db, project, owner, asset_type=AssetType.video)
+    deleted_version = _version(real_db, deleted_version_asset, owner, status=ProcessingStatus.ready, deleted=True)
+    deleted_version_media = _media(real_db, deleted_version, duration_seconds=None)
+
+    # excluded: version not yet ready (still processing)
+    processing_asset = _asset(real_db, project, owner, asset_type=AssetType.video)
+    processing_version = _version(real_db, processing_asset, owner, status=ProcessingStatus.processing)
+    processing_media = _media(real_db, processing_version, duration_seconds=None)
+
+    # excluded: soft-deleted ASSET, version itself still alive (locks fix 2 — asset
+    # soft-delete does not cascade to versions, so the query must filter on the asset too)
     deleted_asset = _asset(real_db, project, owner, asset_type=AssetType.video)
-    deleted_version = _version(real_db, deleted_asset, owner, status=ProcessingStatus.ready, deleted=True)
-    _media(real_db, deleted_version, duration_seconds=None)
+    deleted_asset_version = _version(real_db, deleted_asset, owner, status=ProcessingStatus.ready)
+    deleted_asset_media = _media(real_db, deleted_asset_version, duration_seconds=None)
+    deleted_asset.deleted_at = datetime.now(timezone.utc)
+    real_db.flush()
 
     rows = _eligible_media_rows(real_db)
+    result_ids = [mf.id for mf, _asset_type in rows]
 
-    assert [mf.id for mf, _asset_type in rows] == [eligible_media.id]
+    assert eligible_media.id in result_ids
+    assert filled_media.id not in result_ids
+    assert image_media.id not in result_ids
+    assert deleted_version_media.id not in result_ids
+    assert processing_media.id not in result_ids
+    assert deleted_asset_media.id not in result_ids

@@ -1,4 +1,4 @@
-"""#124: _process_video persists probe metadata onto MediaFile."""
+"""#124: _process_video and _process_audio persist probe metadata onto MediaFile."""
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from packages.transcoder.base import TranscodeResult

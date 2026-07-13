@@ -155,6 +155,7 @@ def _eligible_media_rows(db):
         .filter(
             AssetVersion.processing_status == ProcessingStatus.ready,
             AssetVersion.deleted_at.is_(None),
+            Asset.deleted_at.is_(None),
             MediaFile.duration_seconds.is_(None),
             Asset.asset_type.in_([AssetType.video, AssetType.audio]),
         )
@@ -176,6 +177,7 @@ def backfill_media_metadata(self):
         rows = _eligible_media_rows(db)
         s3 = get_s3_client()
         for media_file, asset_type in rows:
+            row_id = media_file.id
             try:
                 url = s3.generate_presigned_url(
                     "get_object",
@@ -209,8 +211,9 @@ def backfill_media_metadata(self):
                 db.commit()
                 updated += 1
             except Exception as exc:
+                db.rollback()
                 skipped += 1
-                log.warning("backfill: skipping media_file %s: %s", media_file.id, exc)
+                log.warning("backfill: skipping media_file %s: %s", row_id, exc)
                 continue
         return {"updated": updated, "skipped": skipped}
     finally:

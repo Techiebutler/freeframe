@@ -23,7 +23,7 @@ def parse_probe_metadata(data: dict) -> Optional[VideoMetadata]:
         return None
     stream = streams[0]
     fps = 0.0
-    raw_rate = stream.get("r_frame_rate", "")
+    raw_rate = stream.get("r_frame_rate") or ""
     if "/" in raw_rate:
         num, _, den = raw_rate.partition("/")
         try:
