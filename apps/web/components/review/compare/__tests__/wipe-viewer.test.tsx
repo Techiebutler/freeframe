@@ -32,6 +32,25 @@ describe('WipeViewer', () => {
     fireEvent.pointerUp(window)
     expect(divider).toHaveAttribute('data-split', '25')
   })
+
+  it('renders the overlay prop inside the stage, unclipped (outside the clipPath layer)', () => {
+    const { result } = renderHook(() => useSharedTransform())
+    render(
+      <WipeViewer
+        urlA="/a.webp" urlB="/b.webp" badgeA="v1" badgeB="v3"
+        transform={result.current}
+        overlay={<div data-testid="wipe-overlay" />}
+      />,
+    )
+    const overlay = screen.getByTestId('wipe-overlay')
+    expect(screen.getByTestId('wipe-stage')).toContainElement(overlay)
+    // Unclipped: no ancestor between the overlay and the stage carries a clipPath.
+    let node = overlay.parentElement
+    while (node && node !== screen.getByTestId('wipe-stage')) {
+      expect(node.style.clipPath).toBe('')
+      node = node.parentElement
+    }
+  })
 })
 
 describe('useSharedTransform', () => {

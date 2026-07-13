@@ -24,6 +24,15 @@ function timecodedComment() {
   } as never
 }
 
+const DRAWING = { objects: [], _canvasWidth: 640, _canvasHeight: 360 }
+
+function annotatedComment() {
+  return {
+    ...(timecodedComment() as Record<string, unknown>),
+    annotation: { id: 'ann1', comment_id: 'c1', drawing_data: DRAWING },
+  } as never
+}
+
 describe('CommentPanel onSeekToTimecode', () => {
   it('routes timecode clicks through the override instead of the store', () => {
     const onSeek = vi.fn()
@@ -40,5 +49,89 @@ describe('CommentPanel onSeekToTimecode', () => {
     fireEvent.click(screen.getByText(/0:02/))
     expect(onSeek).toHaveBeenCalledWith(2.52, true)
     expect(storeSeek).not.toHaveBeenCalled()
+  })
+})
+
+describe('CommentPanel onShowAnnotation', () => {
+  it('routes the Show annotation button through the override instead of the store', () => {
+    const onShow = vi.fn()
+    render(
+      <CommentPanel
+        comments={[annotatedComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSeekToTimecode={vi.fn()}
+        onShowAnnotation={onShow}
+      />,
+    )
+    fireEvent.click(screen.getByTitle('Show annotation'))
+    expect(onShow).toHaveBeenCalledWith(DRAWING)
+    expect(useReviewStore.getState().activeAnnotation).toBeNull()
+  })
+
+  it('routes the whole-row click through the override (annotated comment)', () => {
+    const onShow = vi.fn()
+    render(
+      <CommentPanel
+        comments={[annotatedComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSeekToTimecode={vi.fn()}
+        onShowAnnotation={onShow}
+      />,
+    )
+    fireEvent.click(screen.getByText('Fix the logo'))
+    expect(onShow).toHaveBeenCalledWith(DRAWING)
+    expect(useReviewStore.getState().activeAnnotation).toBeNull()
+  })
+
+  it('row click on a drawing-less comment routes null through the override', () => {
+    const onShow = vi.fn()
+    render(
+      <CommentPanel
+        comments={[timecodedComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSeekToTimecode={vi.fn()}
+        onShowAnnotation={onShow}
+      />,
+    )
+    fireEvent.click(screen.getByText('Fix the logo'))
+    expect(onShow).toHaveBeenCalledWith(null)
+    expect(useReviewStore.getState().activeAnnotation).toBeNull()
+  })
+
+  it('timecode-badge click routes the annotation through the override', () => {
+    const onShow = vi.fn()
+    render(
+      <CommentPanel
+        comments={[annotatedComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSeekToTimecode={vi.fn()}
+        onShowAnnotation={onShow}
+      />,
+    )
+    fireEvent.click(screen.getByText(/0:02/))
+    expect(onShow).toHaveBeenCalledWith(DRAWING)
+    expect(useReviewStore.getState().activeAnnotation).toBeNull()
+  })
+
+  it('defaults to the store when the override is omitted', () => {
+    render(
+      <CommentPanel
+        comments={[annotatedComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSeekToTimecode={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByTitle('Show annotation'))
+    expect(useReviewStore.getState().activeAnnotation).toEqual(DRAWING)
   })
 })

@@ -12,6 +12,13 @@ interface WipeViewerProps {
     onWheel(e: { deltaY: number; preventDefault(): void }): void
     onPointerDown(e: React.PointerEvent): void
   }
+  /**
+   * Extra stage layer rendered ABOVE both image layers, UNCLIPPED, inside the
+   * shared transform (annotation display — both wipe layers share image
+   * coordinates, so one full-stage overlay is correct; clipping a drawing at
+   * the divider would be misleading).
+   */
+  overlay?: React.ReactNode
 }
 
 /**
@@ -19,7 +26,7 @@ interface WipeViewerProps {
  * The clip lives in SCREEN space (outside the shared transform) so the divider
  * line always matches the visible split, regardless of zoom/pan.
  */
-export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform }: WipeViewerProps) {
+export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay }: WipeViewerProps) {
   const [split, setSplit] = React.useState(50)
   const stageRef = React.useRef<HTMLDivElement>(null)
   const dividerCleanup = React.useRef<(() => void) | null>(null)
@@ -62,6 +69,12 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform }: WipeViewer
           <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
         </div>
       </div>
+      {/* Overlay layer — above both images, unclipped, tracks the shared transform */}
+      {overlay && (
+        <div className="pointer-events-none absolute inset-0" style={transform.styleFor()}>
+          {overlay}
+        </div>
+      )}
       {/* Divider */}
       <div
         data-testid="wipe-divider"

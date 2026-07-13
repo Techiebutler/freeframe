@@ -3,10 +3,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useReviewStore } from '@/stores/review-store'
 
 const replace = vi.fn()
+// Configurable per test (image tests flip mode / provide stream urls).
+let searchParamsString = 'compare=v-1'
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace, push: vi.fn() }),
   usePathname: () => '/projects/p1/assets/a1',
-  useSearchParams: () => new URLSearchParams('compare=v-1'),
+  useSearchParams: () => new URLSearchParams(searchParamsString),
 }))
 
 // Per-side capture: record which version's hook instance received each create.
@@ -27,7 +29,20 @@ vi.mock('@/hooks/use-comments', () => ({
     addReaction: vi.fn(), removeReaction: vi.fn(),
   }),
 }))
-vi.mock('@/hooks/use-stream-url', () => ({ useStreamUrl: () => ({ url: null, error: false }) }))
+let streamUrl: string | null = null
+vi.mock('@/hooks/use-stream-url', () => ({ useStreamUrl: () => ({ url: streamUrl, error: false }) }))
+// AnnotationOverlay lazy-imports fabric inside a rAF; stub the exact API
+// surface it touches (new Canvas(el, opts) → setDimensions → loadFromJSON
+// (awaited) → getObjects → renderAll → dispose) so no real canvas is needed.
+vi.mock('fabric', () => ({
+  Canvas: class {
+    setDimensions() {}
+    async loadFromJSON() { return this }
+    getObjects() { return [] }
+    renderAll() {}
+    dispose() {}
+  },
+}))
 // CommentInput calls useReview() unconditionally; the overlay mounts it on render
 // (right comment panel defaults open), so provide the minimal context shape it uses.
 vi.mock('@/components/review/review-provider', () => ({
@@ -90,6 +105,8 @@ beforeEach(() => {
   transportToggle.mockClear()
   transportSetIsPlaying.mockClear()
   transportIsPlaying = false
+  searchParamsString = 'compare=v-1'
+  streamUrl = null
   // jsdom does not implement scrollIntoView; CommentItem calls it when it
   // becomes focused (marker click → setFocusedCommentId). Unrelated to the
   // marker-click contract under test (see comment-overrides.test.tsx).
@@ -243,5 +260,83 @@ describe('CompareOverlay marker click', () => {
     expect(transportSeekTo).toHaveBeenCalledWith(5)
     expect(transportToggle).not.toHaveBeenCalled()
     expect(useReviewStore.getState().focusedCommentId).toBe('c2')
+  })
+})
+
+describe('CompareOverlay per-pane annotation display', () => {
+  const DRAWING = { objects: [], _canvasWidth: 640, _canvasHeight: 360 }
+
+  it('marker click on an annotated comment mounts the overlay in that video pane only; store untouched', () => {
+    commentsByVersion['v-1'] = [
+      makeComment('c1', 'v-1', { annotation: { id: 'ann1', comment_id: 'c1', drawing_data: DRAWING } }),
+    ]
+    const { container } = render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    expect(screen.queryByTestId('annotation-overlay')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('marker-a-c1'))
+
+    const overlays = screen.getAllByTestId('annotation-overlay')
+    expect(overlays).toHaveLength(1)
+    // The overlay shares the video-hugging wrapper with pane A's <video>.
+    const videos = container.querySelectorAll('video')
+    expect(overlays[0].parentElement).toContainElement(videos[0] as HTMLElement)
+    // Per-side state, not the global store (which would leak to the normal view).
+    expect(useReviewStore.getState().activeAnnotation).toBeNull()
+  })
+
+  it('marker click on a drawing-less comment clears that side annotation', () => {
+    commentsByVersion['v-1'] = [
+      makeComment('c1', 'v-1', { annotation: { id: 'ann1', comment_id: 'c1', drawing_data: DRAWING } }),
+      makeComment('c2', 'v-1', { timecode_start: 10 }),
+    ]
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByTestId('marker-a-c1'))
+    expect(screen.getAllByTestId('annotation-overlay')).toHaveLength(1)
+
+    fireEvent.click(screen.getByTestId('marker-a-c2'))
+    expect(screen.queryByTestId('annotation-overlay')).not.toBeInTheDocument()
+  })
+
+  it('image side-by-side: annotated comment row click mounts the overlay inside that pane transform wrapper', () => {
+    searchParamsString = 'compare=v-1&mode=sbs'
+    streamUrl = '/img.webp'
+    commentsByVersion['v-3'] = [
+      makeComment('c9', 'v-3', {
+        timecode_start: null,
+        annotation: { id: 'ann9', comment_id: 'c9', drawing_data: DRAWING },
+      }),
+    ]
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    // Right panel is open by default — click the comment row (side B).
+    fireEvent.click(screen.getByText('Fix the color grade'))
+
+    const overlay = screen.getByTestId('annotation-overlay')
+    // Same wrapper as pane B's <img> — drawings zoom/pan with the image.
+    expect(overlay.parentElement).toContainElement(screen.getByAltText('v3'))
+    expect(overlay.parentElement).not.toContainElement(screen.getByAltText('v1'))
+    expect(useReviewStore.getState().activeAnnotation).toBeNull()
+  })
+
+  it('wipe: last activated side annotation renders inside the stage', () => {
+    streamUrl = '/img.webp'
+    commentsByVersion['v-3'] = [
+      makeComment('c9', 'v-3', {
+        timecode_start: null,
+        annotation: { id: 'ann9', comment_id: 'c9', drawing_data: DRAWING },
+      }),
+    ]
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByText('Fix the color grade'))
+
+    const overlay = screen.getByTestId('annotation-overlay')
+    expect(screen.getByTestId('wipe-stage')).toContainElement(overlay)
   })
 })

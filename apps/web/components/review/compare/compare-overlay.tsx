@@ -14,6 +14,7 @@ import { CompareScrubber, type ScrubberMarker } from './compare-scrubber'
 import { useSyncedTransport } from './use-synced-transport'
 import { useSharedTransform } from './use-shared-transform'
 import { WipeViewer } from './wipe-viewer'
+import { AnnotationOverlay } from '@/components/review/annotation-overlay'
 import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
 import type { AssetResponse, AssetVersion } from '@/types'
@@ -41,6 +42,9 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const setCurrentVersion = useReviewStore((s) => s.setCurrentVersion)
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation)
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId)
+  // Remount key for the per-pane AnnotationOverlays (page.tsx idiom) so a
+  // re-click on the same comment re-runs the canvas sizing effect.
+  const focusedCommentId = useReviewStore((s) => s.focusedCommentId)
   const setIsDrawingMode = useReviewStore((s) => s.setIsDrawingMode)
   const setPendingAnnotation = useReviewStore((s) => s.setPendingAnnotation)
   const { user } = useAuthStore()
@@ -146,6 +150,24 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const sideB = useComments(asset.id, right.id)
   const [panelAOpen, setPanelAOpen] = React.useState(false)
   const [panelBOpen, setPanelBOpen] = React.useState(true)
+
+  // Per-side annotation DISPLAY (view-only — creation stays disabled in
+  // compare). Component-local so it dies with the overlay: never written to
+  // the store, whose activeAnnotation the normal view's overlay reads.
+  // lastAnnotationSide picks which drawing the single wipe stage shows.
+  const [annotationA, setAnnotationA] = React.useState<Record<string, unknown> | null>(null)
+  const [annotationB, setAnnotationB] = React.useState<Record<string, unknown> | null>(null)
+  const [lastAnnotationSide, setLastAnnotationSide] = React.useState<'a' | 'b' | null>(null)
+  const showAnnotationFor = React.useCallback(
+    (side: 'a' | 'b', drawing: Record<string, unknown> | null) => {
+      if (side === 'a') setAnnotationA(drawing)
+      else setAnnotationB(drawing)
+      // Showing a drawing claims the wipe stage for this side; clearing one
+      // releases it only if this side held it (the other side keeps its claim).
+      setLastAnnotationSide((prev) => (drawing ? side : prev === side ? null : prev))
+    },
+    [],
+  )
   // Exclusive-unmute audio: at most one side is ever audible. 'b' preserves
   // the pre-existing default (side B carried audio, hardcoded).
   const [audioSide, setAudioSide] = React.useState<'a' | 'b' | 'none'>('b')
@@ -168,7 +190,8 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   // Marker click (mirrors progress-bar.tsx's CommentMarker click, adapted to
   // compare's two panes): seek pane-local, pause if playing, focus the comment
   // (drives CommentItem's scrollIntoView/highlight in whichever panel holds
-  // it), and open that side's panel if closed. Annotations: next task.
+  // it), open that side's panel if closed, and show the comment's drawing in
+  // that pane (or clear it for drawing-less comments).
   const handleMarkerClick = React.useCallback(
     (side: 'a' | 'b', marker: ScrubberMarker) => {
       transport.seekTo(marker.tc + (side === 'a' ? timingA.offset : timingB.offset))
@@ -178,8 +201,10 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
       setFocusedCommentId(marker.id)
       if (side === 'a') setPanelAOpen(true)
       else setPanelBOpen(true)
+      const comment = (side === 'a' ? sideA : sideB).comments.find((c) => c.id === marker.id)
+      showAnnotationFor(side, comment?.annotation?.drawing_data ?? null)
     },
-    [transport, timingA.offset, timingB.offset, setFocusedCommentId, setPanelAOpen, setPanelBOpen],
+    [transport, timingA.offset, timingB.offset, setFocusedCommentId, setPanelAOpen, setPanelBOpen, sideA, sideB, showAnnotationFor],
   )
 
   // Per-side reply adapters — mirror page.tsx's handleSubmitReply (createComment
@@ -284,6 +309,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 onReply={() => {}}
                 onSubmitReply={handleReplyA}
                 onSeekToTimecode={(tc) => transport.seekTo(tc + timingA.offset)}
+                onShowAnnotation={(d) => showAnnotationFor('a', d)}
                 exportVersionId={left.id}
               />
               {canComment && (
@@ -356,7 +382,12 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     </button>
                   </div>
                   {/* Exclusive unmute: audioSide names the (at most one) audible side. */}
-                  <video ref={transport.playerA.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'a'} />
+                  {/* Wrapper hugs the RENDERED video box so the annotation canvas
+                      scales against the video area, not the letterboxed pane. */}
+                  <div className="relative flex max-h-full max-w-full items-center justify-center">
+                    <video ref={transport.playerA.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'a'} />
+                    <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
+                  </div>
                   {errA && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeA}</span>}
                 </div>
                 <div className="w-px bg-border" />
@@ -372,7 +403,10 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     </button>
                     <span className="rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
                   </div>
-                  <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'b'} />
+                  <div className="relative flex max-h-full max-w-full items-center justify-center">
+                    <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'b'} />
+                    <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
+                  </div>
                   {errB && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeB}</span>}
                 </div>
               </div>
@@ -394,7 +428,25 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
               />
             </>
           ) : mode === 'wipe' ? (
-            urlA && urlB ? <WipeViewer urlA={urlA} urlB={urlB} badgeA={badgeA} badgeB={badgeB} transform={transform} /> : null
+            urlA && urlB ? (
+              <WipeViewer
+                urlA={urlA}
+                urlB={urlB}
+                badgeA={badgeA}
+                badgeB={badgeB}
+                transform={transform}
+                overlay={
+                  // Most recently activated side's drawing, across the whole
+                  // stage: both wipe layers share image coordinates, so one
+                  // unclipped overlay is correct (clipping at the divider
+                  // would be misleading).
+                  <AnnotationOverlay
+                    key={`${lastAnnotationSide ?? 'none'}-${focusedCommentId ?? 'none'}`}
+                    annotation={lastAnnotationSide === 'a' ? annotationA : lastAnnotationSide === 'b' ? annotationB : null}
+                  />
+                }
+              />
+            ) : null
           ) : (
             <div
               className="relative flex min-h-0 flex-1 items-stretch overflow-hidden bg-black"
@@ -405,16 +457,25 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
               <div className="relative flex min-w-0 flex-1 items-center justify-center">
                 <span className="absolute left-3 top-3 z-10 rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeA}</span>
                 {urlA && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={urlA} alt={badgeA} style={transform.styleFor()} className="max-h-full max-w-full object-contain" draggable={false} />
+                  // Transform lives on the image-hugging wrapper (not the img)
+                  // so the annotation overlay zooms/pans with the image —
+                  // mirrors ImageViewer's inside-the-transform placement.
+                  <div className="relative flex max-h-full max-w-full items-center justify-center" style={transform.styleFor()}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
+                    <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
+                  </div>
                 )}
               </div>
               <div className="w-px bg-border" />
               <div className="relative flex min-w-0 flex-1 items-center justify-center">
                 <span className="absolute right-3 top-3 z-10 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
                 {urlB && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={urlB} alt={badgeB} style={transform.styleFor()} className="max-h-full max-w-full object-contain" draggable={false} />
+                  <div className="relative flex max-h-full max-w-full items-center justify-center" style={transform.styleFor()}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
+                    <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
+                  </div>
                 )}
               </div>
             </div>
@@ -435,6 +496,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 onReply={() => {}}
                 onSubmitReply={handleReplyB}
                 onSeekToTimecode={(tc) => transport.seekTo(tc + timingB.offset)}
+                onShowAnnotation={(d) => showAnnotationFor('b', d)}
                 exportVersionId={right.id}
               />
               {canComment && (
