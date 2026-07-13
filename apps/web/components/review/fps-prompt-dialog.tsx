@@ -29,8 +29,10 @@ export function FpsPromptDialog({
             Frame rate needed
           </Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-text-tertiary">
-            This video has no stored frame rate. Pick the source frame rate so
-            markers land on the right frames.
+            This video was uploaded before FreeFrame started capturing frame
+            rates automatically, so its fps isn&apos;t on file. Pick the
+            video&apos;s original frame rate so exported markers land on the
+            correct frames. (Newly uploaded videos won&apos;t ask this.)
           </Dialog.Description>
 
           <div className="mt-3 grid grid-cols-3 gap-1.5">
