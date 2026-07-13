@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import { ReviewProvider, useReview } from '@/components/review/review-provider'
 import { VideoPlayer } from '@/components/review/video-player'
@@ -14,6 +14,7 @@ import { CommentInput } from '@/components/review/comment-input'
 // ApprovalBar removed for now
 import { VersionSwitcher } from '@/components/review/version-switcher'
 import { ShareDialog } from '@/components/review/share-dialog'
+import { CompareOverlay } from '@/components/review/compare/compare-overlay'
 import { useReviewStore } from '@/stores/review-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
@@ -21,6 +22,7 @@ import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
 import { useUploadStore } from '@/stores/upload-store'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
+import { canCompare } from '@/lib/compare-time'
 import {
   ArrowLeft,
   ChevronLeft,
@@ -29,6 +31,7 @@ import {
   Loader2,
   Columns2,
   Upload,
+  GitCompareArrows,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
@@ -44,6 +47,7 @@ const acceptByType: Record<string, string> = {
 
 function ReviewScreenInner({ projectId }: { projectId: string }) {
   const router = useRouter()
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
@@ -156,6 +160,15 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     }
   }, [comments, searchParams, seekTo, setFocusedCommentId, setActiveAnnotation])
 
+  // Version-compare overlay: driven entirely by the ?compare= URL param so it
+  // survives refresh/deep-link. closeCompare strips all four compare params.
+  const compareOpen = Boolean(searchParams.get('compare'))
+  const closeCompare = useCallback(() => {
+    const p = new URLSearchParams(searchParams.toString())
+    p.delete('compare'); p.delete('mode'); p.delete('offA'); p.delete('offB')
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false })
+  }, [router, pathname, searchParams])
+
   // Asset navigation
   const currentIndex = allAssets?.findIndex((a) => a.id === asset?.id) ?? -1
   const totalAssets = allAssets?.length ?? 0
@@ -169,6 +182,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   // Keyboard navigation for prev/next asset
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (searchParams.get('compare')) return
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === 'ArrowLeft' && prevAsset) {
         e.preventDefault()
@@ -181,7 +195,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [prevAsset, nextAsset])
+  }, [prevAsset, nextAsset, searchParams])
 
   if (isLoading || !asset) {
     return (
@@ -390,6 +404,27 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             }}
           />
           <VersionSwitcher versions={versions} />
+          {asset && canCompare(asset.asset_type, versions) && (
+            <button
+              onClick={() => {
+                const readyVersions = versions
+                  .filter((v) => v.processing_status === 'ready')
+                  .sort((a, b) => a.version_number - b.version_number)
+                const cur = currentVersion ?? readyVersions[readyVersions.length - 1]
+                const prev = [...readyVersions].reverse().find((v) => v.version_number < cur.version_number)
+                  ?? readyVersions.find((v) => v.id !== cur.id)
+                if (!prev) return
+                const p = new URLSearchParams(searchParams.toString())
+                p.set('compare', prev.id)
+                router.replace(`${pathname}?${p.toString()}`, { scroll: false })
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+              title="Compare versions"
+            >
+              <GitCompareArrows className="h-3.5 w-3.5" />
+              Compare
+            </button>
+          )}
           <button
             onClick={() => versionFileInputRef.current?.click()}
             className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
@@ -415,6 +450,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       </div>
 
       {/* ─── Main content: viewer + sidebar ────────────────────────────── */}
+      {compareOpen && asset && currentVersion ? (
+        <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} />
+      ) : (
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left: viewer column */}
         <div className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0">
@@ -515,6 +553,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }
