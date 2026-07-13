@@ -99,7 +99,7 @@ def test_nle_rejected_for_audio_but_csv_allowed(_, client, mock_db, auth_headers
     r = client.get(f"/assets/{asset.id}/comments/export?format=csv&version_id={version.id}",
                    headers=auth_headers)
     assert r.status_code == 200
-    assert r.text.lstrip("﻿").startswith("comment_id,")
+    assert r.text.lstrip("\ufeff").startswith("comment_id,")
 
 
 @patch("apps.api.routers.comments.require_asset_access")

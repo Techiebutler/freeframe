@@ -648,7 +648,7 @@ def export_comments(
     if format == "csv":
         if not include_resolved:
             rows = [r for r in rows if not r.resolved]
-        content = "﻿" + comment_export.to_csv(rows, spec)  # BOM for Excel
+        content = "\ufeff" + comment_export.to_csv(rows, spec)  # BOM for Excel
     else:
         markers = comment_export.build_markers(rows, spec, include_resolved)
         if format == "edl":
