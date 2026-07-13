@@ -39,7 +39,21 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const setCurrentVersion = useReviewStore((s) => s.setCurrentVersion)
+  const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation)
+  const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId)
   const { user } = useAuthStore()
+
+  // CommentPanel writes focusedCommentId/activeAnnotation to the shared store with
+  // no prop override; while compare is open nothing renders them, but the normal
+  // view's AnnotationOverlay would show the stale drawing on close. Clear both on
+  // unmount (covers ESC, the X button, and browser-back param stripping).
+  React.useEffect(
+    () => () => {
+      setActiveAnnotation(null)
+      setFocusedCommentId(null)
+    },
+    [setActiveAnnotation, setFocusedCommentId],
+  )
 
   const ready = React.useMemo(
     () => versions.filter((v) => v.processing_status === 'ready').sort((a, b) => a.version_number - b.version_number),
@@ -72,27 +86,52 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const { url: urlA, error: errA } = useStreamUrl(asset.id, left?.id ?? null)
   const { url: urlB, error: errB } = useStreamUrl(asset.id, right.id)
 
-  // Timings (stored metadata, fall back to loaded element duration below)
+  // Timings — ONE source shared by the transport, scrubber, localTime and markers.
+  // Stored metadata first; reactive element-duration fallback (below) for
+  // pre-backfill files whose MediaFile rows lack duration_seconds.
   const mediaA = mediaOf(left)
   const mediaB = mediaOf(right)
   const fps = mediaB.fps ?? mediaA.fps ?? null
 
-  const transportInput = {
+  const [elemDur, setElemDur] = React.useState<{ a: number | null; b: number | null }>({ a: null, b: null })
+
+  const timingA: SideTiming = { offset: offA, duration: mediaA.duration_seconds ?? elemDur.a ?? 0 }
+  const timingB: SideTiming = { offset: offB, duration: mediaB.duration_seconds ?? elemDur.b ?? 0 }
+
+  const transport = useSyncedTransport({
     urlA: isVideo ? urlA : null,
     urlB: isVideo ? urlB : null,
-    timingA: { offset: offA, duration: mediaA.duration_seconds ?? 0 } as SideTiming,
-    timingB: { offset: offB, duration: mediaB.duration_seconds ?? 0 } as SideTiming,
-  }
-  const transport = useSyncedTransport(transportInput)
-  // Fallback: durations from loaded media elements (pre-backfill instances)
-  const timingA: SideTiming = {
-    offset: offA,
-    duration: mediaA.duration_seconds ?? transport.playerA.videoRef.current?.duration ?? 0,
-  }
-  const timingB: SideTiming = {
-    offset: offB,
-    duration: mediaB.duration_seconds ?? transport.playerB.videoRef.current?.duration ?? 0,
-  }
+    timingA,
+    timingB,
+  })
+
+  // Reactive element-duration fallback: re-render when metadata loads (a render-time
+  // videoRef.current?.duration read would go stale while paused).
+  const videoRefA = transport.playerA.videoRef
+  const videoRefB = transport.playerB.videoRef
+  React.useEffect(() => {
+    if (!isVideo) return
+    const sides: Array<['a' | 'b', HTMLVideoElement | null]> = [
+      ['a', videoRefA.current],
+      ['b', videoRefB.current],
+    ]
+    const cleanups: Array<() => void> = []
+    for (const [side, el] of sides) {
+      if (!el) continue
+      const update = () => {
+        const d = Number.isFinite(el.duration) ? el.duration : null
+        setElemDur((prev) => (prev[side] === d ? prev : { ...prev, [side]: d }))
+      }
+      el.addEventListener('loadedmetadata', update)
+      el.addEventListener('durationchange', update)
+      update() // metadata may already be loaded
+      cleanups.push(() => {
+        el.removeEventListener('loadedmetadata', update)
+        el.removeEventListener('durationchange', update)
+      })
+    }
+    return () => cleanups.forEach((fn) => fn())
+  }, [isVideo, urlA, urlB, videoRefA, videoRefB])
 
   // Per-side comments
   const sideA = useComments(asset.id, left?.id ?? null)
