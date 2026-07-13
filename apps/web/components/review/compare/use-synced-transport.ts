@@ -1,0 +1,108 @@
+'use client'
+
+import * as React from 'react'
+import { useVideoPlayer } from '@/hooks/use-video-player'
+import {
+  driftedBeyond, localTime, sideEnded, sideNotStarted, tMax, type SideTiming,
+} from '@/lib/compare-time'
+
+export interface SlavableVideo {
+  currentTime: number
+  paused: boolean
+  play(): unknown
+  pause(): void
+}
+
+/**
+ * Slave one side's <video> to transport time `t`.
+ * Before its offset: paused on first frame. Past its end: paused on last frame.
+ * Otherwise: playing (when the transport plays) with drift corrected past 50ms.
+ */
+export function applySideState(video: SlavableVideo, t: number, side: SideTiming, playing: boolean): void {
+  const expected = localTime(t, side)
+  if (sideNotStarted(t, side) || sideEnded(t, side) || !playing) {
+    if (!video.paused) video.pause()
+    if (driftedBeyond(expected, video.currentTime, 0.001)) video.currentTime = expected
+    return
+  }
+  if (video.paused) void video.play()
+  if (driftedBeyond(expected, video.currentTime)) video.currentTime = expected
+}
+
+interface UseSyncedTransportArgs {
+  urlA: string | null
+  urlB: string | null
+  timingA: SideTiming
+  timingB: SideTiming
+}
+
+/**
+ * One monotonic transport clock driving two detached players.
+ * The clock advances via requestAnimationFrame while playing; both videos are
+ * slaved to it every frame via applySideState (50ms drift rule).
+ */
+export function useSyncedTransport({ urlA, urlB, timingA, timingB }: UseSyncedTransportArgs) {
+  const playerA = useVideoPlayer(urlA, { detached: true })
+  const playerB = useVideoPlayer(urlB, { detached: true })
+
+  const [t, setT] = React.useState(0)
+  const [isPlaying, setIsPlaying] = React.useState(false)
+  const tRef = React.useRef(0)
+  const playingRef = React.useRef(false)
+  const total = tMax(timingA, timingB)
+  const totalRef = React.useRef(total)
+  totalRef.current = total
+  const timingARef = React.useRef(timingA)
+  const timingBRef = React.useRef(timingB)
+  timingARef.current = timingA
+  timingBRef.current = timingB
+
+  const slaveBoth = React.useCallback((time: number, playing: boolean) => {
+    const a = playerA.videoRef.current
+    const b = playerB.videoRef.current
+    if (a) applySideState(a, time, timingARef.current, playing)
+    if (b) applySideState(b, time, timingBRef.current, playing)
+  }, [playerA.videoRef, playerB.videoRef])
+
+  // rAF clock
+  React.useEffect(() => {
+    let raf = 0
+    let last = performance.now()
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000
+      last = now
+      if (playingRef.current) {
+        const next = Math.min(tRef.current + dt, totalRef.current)
+        tRef.current = next
+        setT(next)
+        if (next >= totalRef.current) {
+          playingRef.current = false
+          setIsPlaying(false)
+        }
+      }
+      slaveBoth(tRef.current, playingRef.current)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [slaveBoth])
+
+  const seekTo = React.useCallback((time: number) => {
+    const clamped = Math.min(Math.max(time, 0), totalRef.current)
+    tRef.current = clamped
+    setT(clamped)
+    slaveBoth(clamped, playingRef.current)
+  }, [slaveBoth])
+
+  const toggle = React.useCallback(() => {
+    // Restart from 0 when toggling play at the very end.
+    if (!playingRef.current && tRef.current >= totalRef.current) {
+      tRef.current = 0
+      setT(0)
+    }
+    playingRef.current = !playingRef.current
+    setIsPlaying(playingRef.current)
+  }, [])
+
+  return { playerA, playerB, t, total, isPlaying, toggle, seekTo, setIsPlaying }
+}
