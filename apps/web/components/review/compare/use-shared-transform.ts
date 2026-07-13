@@ -8,6 +8,8 @@ export function useSharedTransform() {
   const [tx, setTx] = React.useState(0)
   const [ty, setTy] = React.useState(0)
   const drag = React.useRef<{ x: number; y: number; tx: number; ty: number } | null>(null)
+  const dragCleanup = React.useRef<(() => void) | null>(null)
+  React.useEffect(() => () => dragCleanup.current?.(), [])
 
   const onWheel = React.useCallback((e: { deltaY: number; preventDefault(): void }) => {
     e.preventDefault()
@@ -29,9 +31,11 @@ export function useSharedTransform() {
     }
     const up = () => {
       drag.current = null
+      dragCleanup.current = null
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
     }
+    dragCleanup.current = up
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }, [scale, tx, ty])

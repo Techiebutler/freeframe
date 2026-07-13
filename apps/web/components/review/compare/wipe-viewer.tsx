@@ -22,6 +22,8 @@ interface WipeViewerProps {
 export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform }: WipeViewerProps) {
   const [split, setSplit] = React.useState(50)
   const stageRef = React.useRef<HTMLDivElement>(null)
+  const dividerCleanup = React.useRef<(() => void) | null>(null)
+  React.useEffect(() => () => dividerCleanup.current?.(), [])
 
   const onDividerDown = (e: React.PointerEvent) => {
     e.stopPropagation()
@@ -31,9 +33,11 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform }: WipeViewer
       setSplit(Math.min(Math.max(((ev.clientX - rect.left) / rect.width) * 100, 0), 100))
     }
     const up = () => {
+      dividerCleanup.current = null
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
     }
+    dividerCleanup.current = up
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
