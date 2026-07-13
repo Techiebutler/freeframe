@@ -379,6 +379,8 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 
 Database migrations run automatically on API startup. Always check the [CHANGELOG](../CHANGELOG.md) before updating.
 
+If you're upgrading past the media-metadata fix ([#124](https://github.com/Techiebutler/freeframe/issues/124)), backfill missing `duration_seconds`/`width`/`height`/`fps` on already-processed files with: `docker exec freeframe-api-1 python -m apps.api.scripts.backfill_media_metadata`.
+
 ### Update Checklist
 
 1. **Read the changelog** — check for breaking changes or new env vars

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Transcode pipeline now persists media metadata** ([#124](https://github.com/Techiebutler/freeframe/issues/124)) — `duration_seconds`, `width`, `height`, and `fps` are stored on every new video/audio transcode (previously always NULL, breaking duration display). Existing files: run the one-off backfill — `docker exec freeframe-api-1 python -m apps.api.scripts.backfill_media_metadata`.
+
 ## [1.4.1] - 2026-07-09
 
 ### Fixed
