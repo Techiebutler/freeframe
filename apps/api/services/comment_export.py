@@ -258,3 +258,37 @@ def to_fcpxml(markers: list[Marker], spec: FpsSpec, asset_name: str, total_durat
         ET.SubElement(gap, "marker", attrs)
     body = ET.tostring(root, encoding="unicode")
     return '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n' + body + "\n"
+
+
+def to_premiere_xml(markers: list[Marker], spec: FpsSpec, asset_name: str, total_duration_frames: int) -> str:
+    """FCP7 interchange XML (xmeml) sequence markers — the only file-based
+    marker import path Premiere Pro supports."""
+    last_end = max((m.frames + m.duration_frames for m in markers), default=0)
+    duration = max(total_duration_frames, last_end + spec.timebase * 10)
+
+    def _rate(parent):
+        rate = ET.SubElement(parent, "rate")
+        ET.SubElement(rate, "timebase").text = str(spec.timebase)
+        ET.SubElement(rate, "ntsc").text = "TRUE" if spec.ntsc else "FALSE"
+
+    root = ET.Element("xmeml", version="4")
+    seq = ET.SubElement(root, "sequence")
+    ET.SubElement(seq, "name").text = f"{asset_name} — comments"
+    ET.SubElement(seq, "duration").text = str(duration)
+    _rate(seq)
+    tc = ET.SubElement(seq, "timecode")
+    _rate(tc)
+    ET.SubElement(tc, "string").text = "00:00:00:00"
+    ET.SubElement(tc, "frame").text = "0"
+    ET.SubElement(tc, "displayformat").text = "DF" if spec.drop_frame else "NDF"
+    media = ET.SubElement(seq, "media")
+    video = ET.SubElement(media, "video")
+    ET.SubElement(video, "track")
+    for m in markers:
+        marker = ET.SubElement(seq, "marker")
+        ET.SubElement(marker, "name").text = m.text
+        comment_text = (("[resolved] " if m.resolved else "") + m.note).strip()
+        ET.SubElement(marker, "comment").text = comment_text
+        ET.SubElement(marker, "in").text = str(m.frames)
+        ET.SubElement(marker, "out").text = str(-1 if m.duration_frames <= 1 else m.frames + m.duration_frames)
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n' + ET.tostring(root, encoding="unicode") + "\n"

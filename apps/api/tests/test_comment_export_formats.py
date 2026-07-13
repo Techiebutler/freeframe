@@ -85,3 +85,32 @@ def test_fcpxml_gap_extends_past_last_marker_when_duration_unknown():
     xml = to_fcpxml([_marker(frames=1000)], SPEC25, "D", total_duration_frames=0)
     gap = _fcpxml_root(xml).find(".//gap")
     assert gap.get("duration") == f"{1000 + 1 + 250}/25s"
+
+
+from apps.api.services.comment_export import to_premiere_xml
+
+
+def _xmeml_seq(xml: str):
+    assert xml.startswith('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n')
+    return ET.fromstring(xml.split("<!DOCTYPE xmeml>\n", 1)[1]).find("sequence")
+
+
+def test_xmeml_point_marker_and_rate():
+    seq = _xmeml_seq(to_premiere_xml([_marker()], SPEC25, "Demo", 1500))
+    assert seq.find("rate/timebase").text == "25"
+    assert seq.find("rate/ntsc").text == "FALSE"
+    marker = seq.find("marker")
+    assert marker.find("name").text == "Jane: Fix the logo"
+    assert marker.find("in").text == "63"
+    assert marker.find("out").text == "-1"
+
+
+def test_xmeml_ntsc_range_and_resolved_prefix():
+    df = snap_fps(29.97)
+    seq = _xmeml_seq(to_premiere_xml(
+        [_marker(frames=100, duration=30, resolved=True, note="— Bob: ok")], df, "D", 0))
+    assert seq.find("rate/timebase").text == "30"
+    assert seq.find("rate/ntsc").text == "TRUE"
+    marker = seq.find("marker")
+    assert marker.find("out").text == "130"
+    assert marker.find("comment").text == "[resolved] — Bob: ok"
