@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Export comments as NLE timeline markers** ([#84](https://github.com/Techiebutler/freeframe/issues/84)) — `GET /assets/{id}/comments/export?format=edl|fcpxml|premiere_xml|csv` turns a version's timecoded comments into importable markers for DaVinci Resolve (marker EDL — import via Timelines → Import → Timeline Markers from EDL, matching the timeline start TC, default 01:00:00:00), Final Cut Pro (FCPXML), and Premiere Pro (FCP7 XML — Premiere cannot import FCPXML), plus CSV. Uses the stored frame rate (see #124) with a `?fps=` override. Note: variable-frame-rate sources may land markers ±1 frame.
+- **Export comments menu in the review panel** ([#84](https://github.com/Techiebutler/freeframe/issues/84)) — download markers for Resolve/Final Cut/Premiere/CSV from the comment panel toolbar; prompts for frame rate when the video predates the metadata backfill.
 
 ### Fixed
 - **Transcode pipeline now persists media metadata** ([#124](https://github.com/Techiebutler/freeframe/issues/124)) — `duration_seconds`, `width`, `height`, and `fps` are stored on every new video/audio transcode (previously always NULL, breaking duration display). Existing files: run the one-off backfill — `docker exec freeframe-api-1 python -m apps.api.scripts.backfill_media_metadata`.

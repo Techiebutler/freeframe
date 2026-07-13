@@ -26,10 +26,17 @@ import {
   Check,
   Send,
   Lock,
+  Download,
 } from "lucide-react";
 import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review-store";
 import type { CommentWithReplies } from "@/hooks/use-comments";
+import {
+  exportComments,
+  FpsRequiredError,
+  type ExportFormat,
+} from "@/lib/export-comments";
+import { FpsPromptDialog } from "@/components/review/fps-prompt-dialog";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -761,6 +768,8 @@ export function CommentPanel({
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId);
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId);
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation);
+  const currentAsset = useReviewStore((s) => s.currentAsset);
+  const currentVersion = useReviewStore((s) => s.currentVersion);
 
   // Toolbar state
   const [visibility, setVisibility] = React.useState<CommentVisibility>("all");
@@ -772,6 +781,9 @@ export function CommentPanel({
   const [sortMode, setSortMode] = React.useState<SortMode>("oldest");
   const [filters, setFilters] = React.useState<FilterState>(EMPTY_FILTERS);
   const [replyingTo, setReplyingTo] = React.useState<string | null>(null);
+  const [exportOpen, setExportOpen] = React.useState(false);
+  const [fpsPromptFormat, setFpsPromptFormat] =
+    React.useState<ExportFormat | null>(null);
 
   const searchRef = React.useRef<HTMLInputElement>(null);
 
@@ -871,7 +883,27 @@ export function CommentPanel({
     onReply(parentId);
   }
 
+  async function handleExport(format: ExportFormat, fps?: number) {
+    if (!currentAsset || !currentVersion) return;
+    setExportOpen(false);
+    try {
+      await exportComments({
+        assetId: currentAsset.id,
+        versionId: currentVersion.id,
+        format,
+        fps,
+      });
+    } catch (err) {
+      if (err instanceof FpsRequiredError) {
+        setFpsPromptFormat(format);
+      } else {
+        console.error(err);
+      }
+    }
+  }
+
   return (
+    <>
     <div className={cn("flex flex-col flex-1 min-h-0", className)}>
       {/* ─── Toolbar ──────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2.5 shrink-0">
@@ -1114,6 +1146,64 @@ export function CommentPanel({
             <Search className="h-4 w-4" />
           </button>
 
+          {/* Export */}
+          <div className="relative">
+            <button
+              className={cn(
+                "h-7 w-7 flex items-center justify-center rounded-md transition-colors",
+                exportOpen
+                  ? "text-accent bg-accent/10"
+                  : "text-text-tertiary hover:text-text-secondary hover:bg-bg-tertiary",
+              )}
+              title="Export comments"
+              onClick={() => {
+                setExportOpen((p) => !p);
+                setVisOpen(false);
+                setFilterOpen(false);
+                setSortOpen(false);
+              }}
+            >
+              <Download className="h-4 w-4" />
+            </button>
+            <Dropdown
+              open={exportOpen}
+              onClose={() => setExportOpen(false)}
+              align="right"
+              className="w-56"
+            >
+              <div className="px-3 py-2 text-[11px] text-text-tertiary uppercase tracking-wider font-medium">
+                Export comments
+              </div>
+              {currentAsset?.asset_type === "video" && (
+                <>
+                  <button
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                    onClick={() => handleExport("edl")}
+                  >
+                    DaVinci Resolve (EDL)
+                  </button>
+                  <button
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                    onClick={() => handleExport("fcpxml")}
+                  >
+                    Final Cut Pro (FCPXML)
+                  </button>
+                  <button
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                    onClick={() => handleExport("premiere_xml")}
+                  >
+                    Premiere Pro (XML)
+                  </button>
+                </>
+              )}
+              <button
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                onClick={() => handleExport("csv")}
+              >
+                CSV
+              </button>
+            </Dropdown>
+          </div>
         </div>
       </div>
 
@@ -1194,5 +1284,13 @@ export function CommentPanel({
           ))}
       </div>
     </div>
+    <FpsPromptDialog
+      open={fpsPromptFormat !== null}
+      onOpenChange={(open) => !open && setFpsPromptFormat(null)}
+      onConfirm={(fps) =>
+        fpsPromptFormat && handleExport(fpsPromptFormat, fps)
+      }
+    />
+    </>
   );
 }
