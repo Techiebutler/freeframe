@@ -166,7 +166,7 @@ export function useVideoPlayer(
     }
     const onEnded = () => {
       setIsPlaying(false)
-      setPlayheadTime(video.duration)
+      if (!detached) setPlayheadTime(video.duration)
     }
     const onError = () => {
       setIsLoading(false)
@@ -277,8 +277,8 @@ export function useVideoPlayer(
     const clamped = Math.max(0, Math.min(time, video.duration || 0))
     video.currentTime = clamped
     setCurrentTime(clamped)
-    setPlayheadTime(clamped)
-  }, [setPlayheadTime])
+    if (!detached) setPlayheadTime(clamped)
+  }, [setPlayheadTime, detached])
 
   const setPlaybackRate = useCallback((rate: number) => {
     const video = videoRef.current
