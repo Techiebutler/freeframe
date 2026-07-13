@@ -165,9 +165,11 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   // Shared zoom/pan for image modes
   const transform = useSharedTransform()
 
-  // ESC closes
+  // ESC closes; space toggles play (video). Ignore keys typed into comment
+  // inputs — same guard idiom as the page's global keydown handler.
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === 'Escape') onClose()
       if (e.key === ' ' && isVideo) { e.preventDefault(); transport.toggle() }
     }

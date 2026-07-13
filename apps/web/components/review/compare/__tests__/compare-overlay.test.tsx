@@ -65,4 +65,16 @@ describe('CompareOverlay', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('ignores hotkeys while typing in a comment input', () => {
+    const onClose = vi.fn()
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={onClose} />,
+    )
+    // Right comment panel is open by default — type into its CommentInput textarea.
+    const textarea = screen.getByPlaceholderText('Leave your comment...')
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    fireEvent.keyDown(textarea, { key: ' ' })
+    expect(onClose).not.toHaveBeenCalled()
+  })
 })
