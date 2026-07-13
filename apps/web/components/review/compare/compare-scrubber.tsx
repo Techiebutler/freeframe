@@ -1,11 +1,19 @@
 'use client'
 
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { Pause, Play } from 'lucide-react'
 import { cn, formatTimecode } from '@/lib/utils'
 import { frameStep, markerPosition, type SideTiming } from '@/lib/compare-time'
+import { getAvatarColor, getInitials } from '@/components/review/progress-bar'
 
-export interface ScrubberMarker { id: string; tc: number }
+export interface ScrubberMarker {
+  id: string
+  tc: number
+  authorName: string
+  body: string
+  hasAnnotation: boolean
+}
 
 interface CompareScrubberProps {
   t: number
@@ -18,8 +26,108 @@ interface CompareScrubberProps {
   markersB: ScrubberMarker[]
   timingA: SideTiming
   timingB: SideTiming
-  onMarkerClick(side: 'a' | 'b', tc: number): void
+  onMarkerClick(side: 'a' | 'b', marker: ScrubberMarker): void
   onOffsetChange(side: 'a' | 'b', value: number): void
+}
+
+// ─── Marker dot + hover preview (mirrors progress-bar.tsx's CommentMarker) ────
+
+interface HoveredMarker { side: 'a' | 'b'; id: string }
+
+function ScrubberCommentMarker({
+  marker,
+  side,
+  leftPercent,
+  fps,
+  isHovered,
+  onHover,
+  onLeave,
+  onClick,
+}: {
+  marker: ScrubberMarker
+  side: 'a' | 'b'
+  leftPercent: number
+  fps?: number | null
+  isHovered: boolean
+  onHover: () => void
+  onLeave: () => void
+  onClick: () => void
+}) {
+  const markerRef = React.useRef<HTMLDivElement>(null)
+  const [tooltipPos, setTooltipPos] = React.useState<{ left: number; top: number } | null>(null)
+  const initials = getInitials(marker.authorName)
+  const color = getAvatarColor(marker.authorName)
+
+  // Recalculate tooltip position when hovered to avoid viewport clipping.
+  // A markers sit above the track, so their tooltip opens further upward;
+  // B markers sit below the track, so their tooltip opens downward.
+  React.useEffect(() => {
+    if (!isHovered || !markerRef.current) {
+      setTooltipPos(null)
+      return
+    }
+    const rect = markerRef.current.getBoundingClientRect()
+    const tooltipWidth = 240
+    let left = rect.left + rect.width / 2 - tooltipWidth / 2
+    if (left < 8) left = 8
+    if (left + tooltipWidth > window.innerWidth - 8) left = window.innerWidth - 8 - tooltipWidth
+    const top = side === 'a' ? rect.top - 8 : rect.bottom + 8
+    setTooltipPos({ left, top })
+  }, [isHovered, side])
+
+  return (
+    <div
+      ref={markerRef}
+      data-testid={`marker-${side}-${marker.id}`}
+      className={cn('absolute -translate-x-1/2 cursor-pointer', side === 'a' ? 'top-0' : 'bottom-0')}
+      style={{ left: `${leftPercent}%` }}
+      onMouseEnter={onHover}
+      onMouseLeave={onLeave}
+      onClick={onClick}
+    >
+      {/* Avatar dot */}
+      <div
+        className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-bg-primary text-[9px] font-bold text-white shadow-md transition-transform hover:scale-110"
+        style={{ backgroundColor: color }}
+      >
+        {initials}
+      </div>
+
+      {/* Tooltip — portaled to document.body to escape all overflow */}
+      {isHovered && tooltipPos && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: tooltipPos.left,
+            top: tooltipPos.top,
+            width: 240,
+            transform: side === 'a' ? 'translateY(-100%)' : undefined,
+            zIndex: 9999,
+            pointerEvents: 'none',
+          }}
+        >
+          <div className="bg-[#1e1e22] border border-white/10 rounded-lg shadow-2xl p-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <div
+                className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
+                style={{ backgroundColor: color }}
+              >
+                {initials}
+              </div>
+              <span className="text-xs font-medium text-white truncate">{marker.authorName}</span>
+              <span className="ml-auto text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                {formatTimecode(marker.tc, fps ?? 24)}
+              </span>
+            </div>
+            <p className="text-xs text-text-secondary line-clamp-2 leading-relaxed">
+              {marker.body}
+            </p>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
 }
 
 function OffsetStepper({ side, offset, fps, onOffsetChange }: {
@@ -44,6 +152,7 @@ function OffsetStepper({ side, offset, fps, onOffsetChange }: {
 export function CompareScrubber(props: CompareScrubberProps) {
   const { t, total, isPlaying, fps, onToggle, onSeek, markersA, markersB, timingA, timingB, onMarkerClick, onOffsetChange } = props
   const trackRef = React.useRef<HTMLDivElement>(null)
+  const [hovered, setHovered] = React.useState<HoveredMarker | null>(null)
 
   const seekFromEvent = (clientX: number) => {
     const rect = trackRef.current?.getBoundingClientRect()
@@ -62,16 +171,19 @@ export function CompareScrubber(props: CompareScrubberProps) {
         {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
       </button>
 
-      <div className="relative flex-1 py-3">
+      <div className="relative flex-1 py-6">
         {/* A markers above the track */}
         {markersA.map((m) => (
-          <button
+          <ScrubberCommentMarker
             key={m.id}
-            data-testid={`marker-a-${m.id}`}
-            type="button"
-            onClick={() => onMarkerClick('a', m.tc)}
-            className="absolute -top-0.5 h-2 w-2 -translate-x-1/2 rounded-full bg-sky-400"
-            style={{ left: `${markerPosition(m.tc, timingA, total) * 100}%` }}
+            marker={m}
+            side="a"
+            fps={fps}
+            leftPercent={markerPosition(m.tc, timingA, total) * 100}
+            isHovered={hovered?.side === 'a' && hovered.id === m.id}
+            onHover={() => setHovered({ side: 'a', id: m.id })}
+            onLeave={() => setHovered(null)}
+            onClick={() => onMarkerClick('a', m)}
           />
         ))}
         <div
@@ -84,13 +196,16 @@ export function CompareScrubber(props: CompareScrubberProps) {
         </div>
         {/* B markers below the track */}
         {markersB.map((m) => (
-          <button
+          <ScrubberCommentMarker
             key={m.id}
-            data-testid={`marker-b-${m.id}`}
-            type="button"
-            onClick={() => onMarkerClick('b', m.tc)}
-            className="absolute -bottom-0.5 h-2 w-2 -translate-x-1/2 rounded-full bg-emerald-400"
-            style={{ left: `${markerPosition(m.tc, timingB, total) * 100}%` }}
+            marker={m}
+            side="b"
+            fps={fps}
+            leftPercent={markerPosition(m.tc, timingB, total) * 100}
+            isHovered={hovered?.side === 'b' && hovered.id === m.id}
+            onHover={() => setHovered({ side: 'b', id: m.id })}
+            onLeave={() => setHovered(null)}
+            onClick={() => onMarkerClick('b', m)}
           />
         ))}
       </div>

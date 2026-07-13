@@ -5,7 +5,8 @@ import { CompareScrubber } from '../compare-scrubber'
 const base = {
   t: 10, total: 63, isPlaying: false, fps: 25,
   onToggle: vi.fn(), onSeek: vi.fn(), onMarkerClick: vi.fn(), onOffsetChange: vi.fn(),
-  markersA: [{ id: 'c1', tc: 10 }], markersB: [{ id: 'c2', tc: 4 }],
+  markersA: [{ id: 'c1', tc: 10, authorName: 'Maya Chen', body: 'Looks great, nice color grade here', hasAnnotation: false }],
+  markersB: [{ id: 'c2', tc: 4, authorName: 'Sam', body: 'Audio is a bit low', hasAnnotation: false }],
   timingA: { offset: 2, duration: 60 }, timingB: { offset: 0, duration: 61 },
 }
 
@@ -29,7 +30,7 @@ describe('CompareScrubber', () => {
     const a = screen.getByTestId('marker-a-c1')
     expect(a.style.left).toBe(`${((10 + 2) / 63) * 100}%`)
     fireEvent.click(a)
-    expect(base.onMarkerClick).toHaveBeenCalledWith('a', 10)
+    expect(base.onMarkerClick).toHaveBeenCalledWith('a', expect.objectContaining({ id: 'c1', tc: 10 }))
   })
 
   it('offset steppers nudge by one frame and one second, never below 0', () => {
@@ -38,5 +39,24 @@ describe('CompareScrubber', () => {
     expect(base.onOffsetChange).toHaveBeenCalledWith('a', 2.04)
     fireEvent.click(screen.getByTestId('offB-minus-second'))
     expect(base.onOffsetChange).toHaveBeenCalledWith('b', 0)
+  })
+
+  it('shows author initials inside the marker dot', () => {
+    render(<CompareScrubber {...base} />)
+    const a = screen.getByTestId('marker-a-c1')
+    expect(a.textContent).toContain('MC')
+  })
+
+  it('shows a hover tooltip with author name and body, hidden on mouse leave', () => {
+    render(<CompareScrubber {...base} />)
+    const a = screen.getByTestId('marker-a-c1')
+    expect(screen.queryByText('Maya Chen')).not.toBeInTheDocument()
+
+    fireEvent.mouseEnter(a)
+    expect(screen.getByText('Maya Chen')).toBeInTheDocument()
+    expect(screen.getByText(/Looks great/)).toBeInTheDocument()
+
+    fireEvent.mouseLeave(a)
+    expect(screen.queryByText('Maya Chen')).not.toBeInTheDocument()
   })
 })

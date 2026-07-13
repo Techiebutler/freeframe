@@ -148,11 +148,19 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const [panelBOpen, setPanelBOpen] = React.useState(true)
 
   const markersA: ScrubberMarker[] = sideA.comments
-    .filter((c) => c.timecode_start != null)
-    .map((c) => ({ id: c.id, tc: c.timecode_start as number }))
+    .filter((c) => c.timecode_start != null && !c.resolved)
+    .map((c) => ({
+      id: c.id, tc: c.timecode_start as number,
+      authorName: c.author?.name ?? c.guest_author?.name ?? 'Unknown',
+      body: c.body, hasAnnotation: Boolean(c.annotation),
+    }))
   const markersB: ScrubberMarker[] = sideB.comments
-    .filter((c) => c.timecode_start != null)
-    .map((c) => ({ id: c.id, tc: c.timecode_start as number }))
+    .filter((c) => c.timecode_start != null && !c.resolved)
+    .map((c) => ({
+      id: c.id, tc: c.timecode_start as number,
+      authorName: c.author?.name ?? c.guest_author?.name ?? 'Unknown',
+      body: c.body, hasAnnotation: Boolean(c.annotation),
+    }))
 
   // Per-side reply adapters — mirror page.tsx's handleSubmitReply (createComment
   // with only body + parentId, no timecode) so CommentPanel's inline reply box
@@ -330,7 +338,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 markersB={markersB}
                 timingA={timingA}
                 timingB={timingB}
-                onMarkerClick={(side, tc) => transport.seekTo(tc + (side === 'a' ? timingA.offset : timingB.offset))}
+                onMarkerClick={(side, marker) => transport.seekTo(marker.tc + (side === 'a' ? timingA.offset : timingB.offset))}
                 onOffsetChange={(side, value) =>
                   writeParams((p) => p.set(side === 'a' ? 'offA' : 'offB', String(value)))
                 }
