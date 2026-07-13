@@ -4,14 +4,14 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
 from ..middleware.auth import get_current_user, get_optional_user
 from ..middleware.share_auth import get_share_link
-from ..models.asset import Asset
+from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
 from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
@@ -32,11 +32,20 @@ from ..schemas.comment import (
     ReactionResponse,
 )
 from ..services import s3_service
+from ..services import comment_export
 from ..services.permissions import require_asset_access, validate_share_link
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
 
 router = APIRouter(tags=["comments"])
+
+EXPORT_FORMATS = {
+    "edl": ("text/plain; charset=utf-8", "edl"),
+    "fcpxml": ("application/xml", "fcpxml"),
+    "premiere_xml": ("application/xml", "xml"),
+    "csv": ("text/csv; charset=utf-8", "csv"),
+}
+_START_TC_RE = re.compile(r"^\d{2}[:;]\d{2}[:;]\d{2}[:;]\d{2}$")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -537,6 +546,127 @@ def comment_deep_link(
 
     url = f"{settings.frontend_url}/assets/{asset_id}?comment={comment_id}"
     return {"url": url}
+
+
+@router.get("/assets/{asset_id}/comments/export")
+def export_comments(
+    asset_id: uuid.UUID,
+    format: str = Query(...),
+    version_id: Optional[uuid.UUID] = Query(default=None),
+    fps: Optional[float] = Query(default=None, gt=0),
+    start_tc: str = Query(default="01:00:00:00"),
+    include_resolved: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export a version's comments as NLE timeline markers (#84):
+    Resolve marker EDL, FCPXML (Final Cut), FCP7 XML (Premiere), or CSV."""
+    if format not in EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported format '{format}'. Use one of: {', '.join(EXPORT_FORMATS)}",
+        )
+
+    asset = _get_asset(db, asset_id)
+    require_asset_access(db, asset, current_user)
+
+    if version_id is not None:
+        version = db.query(AssetVersion).filter(
+            AssetVersion.id == version_id,
+            AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+        ).first()
+    else:
+        version = db.query(AssetVersion).filter(
+            AssetVersion.asset_id == asset.id,
+            AssetVersion.processing_status == ProcessingStatus.ready,
+            AssetVersion.deleted_at.is_(None),
+        ).order_by(AssetVersion.version_number.desc()).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    spec = None
+    if format == "csv":
+        media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+        stored_fps = media_file.fps if media_file else None
+        if fps or stored_fps:
+            spec = comment_export.snap_fps(fps or stored_fps)  # None is fine for CSV
+    else:
+        if asset.asset_type != AssetType.video:
+            raise HTTPException(
+                status_code=422,
+                detail="EDL/FCPXML/Premiere XML export is only available for video assets; use format=csv",
+            )
+        media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+        effective_fps = fps or (media_file.fps if media_file else None)
+        if not effective_fps:
+            raise HTTPException(status_code=422, detail={
+                "code": "fps_required",
+                "message": "Frame rate unknown for this version; pass ?fps= "
+                           "(e.g. 23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60)",
+            })
+        spec = comment_export.snap_fps(effective_fps)
+        if spec is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported frame rate {effective_fps}; supported: "
+                       + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
+            )
+        if format == "edl" and not _START_TC_RE.match(start_tc):
+            raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
+
+    comments = db.query(Comment).filter(
+        Comment.version_id == version.id,
+        Comment.deleted_at.is_(None),
+    ).order_by(Comment.created_at.asc()).all()
+
+    user_ids = {c.author_id for c in comments if c.author_id}
+    guest_ids = {c.guest_author_id for c in comments if c.guest_author_id}
+    users = {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()} if user_ids else {}
+    guests = {g.id: g for g in db.query(GuestUser).filter(GuestUser.id.in_(guest_ids)).all()} if guest_ids else {}
+
+    rows = []
+    for c in comments:
+        author = users.get(c.author_id) or guests.get(c.guest_author_id)
+        rows.append(comment_export.CommentRow(
+            id=str(c.id),
+            parent_id=str(c.parent_id) if c.parent_id else None,
+            author_name=(author.name or author.email) if author else "Unknown",
+            author_email=author.email if author else "",
+            body=c.body,
+            timecode_start=c.timecode_start,
+            timecode_end=c.timecode_end,
+            resolved=bool(c.resolved),
+            created_at=c.created_at,
+            version_number=version.version_number,
+        ))
+
+    duration_frames = 0
+    if spec is not None and media_file is not None and media_file.duration_seconds:
+        duration_frames = comment_export.seconds_to_frames(media_file.duration_seconds, spec)
+
+    if format == "csv":
+        if not include_resolved:
+            rows = [r for r in rows if not r.resolved]
+        content = "﻿" + comment_export.to_csv(rows, spec)  # BOM for Excel
+    else:
+        markers = comment_export.build_markers(rows, spec, include_resolved)
+        if format == "edl":
+            content = comment_export.to_edl(
+                markers, spec, comment_export.tc_to_frames(start_tc, spec), asset.name)
+        elif format == "fcpxml":
+            content = comment_export.to_fcpxml(markers, spec, asset.name, duration_frames)
+        else:
+            content = comment_export.to_premiere_xml(markers, spec, asset.name, duration_frames)
+
+    media_type, ext = EXPORT_FORMATS[format]
+    safe_name = re.sub(r"[^\w\-. ]", "_", asset.name).strip() or "asset"
+    filename = f"{safe_name}_v{version.version_number}_comments.{ext}"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── Guest comments (via share link) ───────────────────────────────────────────
