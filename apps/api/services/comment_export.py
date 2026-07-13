@@ -187,3 +187,33 @@ def to_csv(rows: list[CommentRow], spec: Optional[FpsSpec]) -> str:
             str(r.resolved).lower(), r.created_at.isoformat(),
         ])
     return buf.getvalue()
+
+
+EDL_MAX_EVENTS = 999  # CMX 3600 hard limit
+_EDL_COLOR_OPEN = "ResolveColorBlue"
+_EDL_COLOR_RESOLVED = "ResolveColorGreen"
+
+
+def _edl_sanitize(text: str) -> str:
+    """One line, no pipes; '_' prefix when starting with a digit
+    (Resolve ignores markers whose text starts with an Arabic numeral)."""
+    text = re.sub(r"[\r\n]+", " ", text).replace("|", "/").strip()
+    if text and text[0].isdigit():
+        text = "_" + text
+    return text
+
+
+def to_edl(markers: list[Marker], spec: FpsSpec, start_tc_frames: int, title: str) -> str:
+    """Resolve 'Import Timeline Markers from EDL' flavor of CMX 3600:
+    one event line per marker (out = in + 1 frame always) followed by
+    ' |C:<color> |M:<text> |D:<frames>'."""
+    fcm = "DROP FRAME" if spec.drop_frame else "NON-DROP FRAME"
+    lines = [f"TITLE: {title}", f"FCM: {fcm}", ""]
+    for i, m in enumerate(markers[:EDL_MAX_EVENTS], start=1):
+        rec_in = frames_to_tc(start_tc_frames + m.frames, spec)
+        rec_out = frames_to_tc(start_tc_frames + m.frames + 1, spec)
+        color = _EDL_COLOR_RESOLVED if m.resolved else _EDL_COLOR_OPEN
+        text = _edl_sanitize(f"{m.text} — {m.note}" if m.note else m.text)
+        lines.append(f"{i:03d}  001      V     C        {rec_in} {rec_out} {rec_in} {rec_out}")
+        lines.append(f" |C:{color} |M:{text} |D:{m.duration_frames}")
+    return "\n".join(lines) + "\n"
