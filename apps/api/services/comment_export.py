@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
+from xml.etree import ElementTree as ET
 
 
 @dataclass(frozen=True)
@@ -217,3 +218,43 @@ def to_edl(markers: list[Marker], spec: FpsSpec, start_tc_frames: int, title: st
         lines.append(f"{i:03d}  001      V     C        {rec_in} {rec_out} {rec_in} {rec_out}")
         lines.append(f" |C:{color} |M:{text} |D:{m.duration_frames}")
     return "\n".join(lines) + "\n"
+
+
+def _rational(frames: int, spec: FpsSpec) -> str:
+    """Frame count -> FCPXML rational seconds, always a multiple of frameDuration."""
+    return f"{frames * spec.frame_dur_num}/{spec.frame_dur_den}s"
+
+
+def to_fcpxml(markers: list[Marker], spec: FpsSpec, asset_name: str, total_duration_frames: int) -> str:
+    """FCPXML 1.9 with markers on a media-less gap (importable by FCP 10.4+)."""
+    last_end = max((m.frames + m.duration_frames for m in markers), default=0)
+    gap_frames = max(total_duration_frames, last_end + spec.timebase * 10)
+
+    root = ET.Element("fcpxml", version="1.9")
+    resources = ET.SubElement(root, "resources")
+    ET.SubElement(resources, "format", id="r1",
+                  frameDuration=f"{spec.frame_dur_num}/{spec.frame_dur_den}s",
+                  width="1920", height="1080")
+    library = ET.SubElement(root, "library")
+    event = ET.SubElement(library, "event", name="FreeFrame Comments")
+    project = ET.SubElement(event, "project", name=f"{asset_name} — comments")
+    sequence = ET.SubElement(project, "sequence", format="r1",
+                             duration=_rational(gap_frames, spec),
+                             tcStart="0s",
+                             tcFormat="DF" if spec.drop_frame else "NDF")
+    spine = ET.SubElement(sequence, "spine")
+    gap = ET.SubElement(spine, "gap", name="Gap", offset="0s", start="0s",
+                        duration=_rational(gap_frames, spec))
+    for m in markers:
+        attrs = {
+            "start": _rational(m.frames, spec),
+            "duration": _rational(m.duration_frames, spec),
+            "value": m.text,
+        }
+        if m.note:
+            attrs["note"] = m.note
+        if m.resolved:
+            attrs["completed"] = "1"
+        ET.SubElement(gap, "marker", attrs)
+    body = ET.tostring(root, encoding="unicode")
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n' + body + "\n"

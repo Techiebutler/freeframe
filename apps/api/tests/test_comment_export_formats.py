@@ -2,7 +2,7 @@
 from xml.etree import ElementTree as ET
 
 from apps.api.services.comment_export import (
-    Marker, snap_fps, tc_to_frames, to_edl,
+    Marker, snap_fps, tc_to_frames, to_edl, to_fcpxml,
 )
 
 SPEC25 = snap_fps(25.0)
@@ -48,3 +48,40 @@ def test_edl_caps_at_999_events():
     markers = [_marker(frames=i * 10) for i in range(1200)]
     edl = to_edl(markers, SPEC25, 0, "T")
     assert edl.count("|M:") == 999
+
+
+def _fcpxml_root(xml: str):
+    assert xml.startswith('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n')
+    return ET.fromstring(xml.split("<!DOCTYPE fcpxml>\n", 1)[1])
+
+
+def test_fcpxml_structure_and_rational_times():
+    xml = to_fcpxml([_marker()], SPEC25, "Demo", total_duration_frames=1500)
+    root = _fcpxml_root(xml)
+    assert root.tag == "fcpxml" and root.get("version") == "1.9"
+    fmt = root.find("./resources/format")
+    assert fmt.get("frameDuration") == "1/25s"
+    gap = root.find("./library/event/project/sequence/spine/gap")
+    assert gap.get("duration") == "1500/25s"
+    marker = gap.find("marker")
+    assert marker.get("start") == "63/25s"
+    assert marker.get("duration") == "1/25s"
+    assert marker.get("value") == "Jane: Fix the logo"
+    assert marker.get("completed") is None
+
+
+def test_fcpxml_ntsc_frame_duration_and_completed():
+    df = snap_fps(29.97)
+    xml = to_fcpxml([_marker(frames=100, resolved=True, note="— Bob: ok")], df, "D", 0)
+    root = _fcpxml_root(xml)
+    assert root.find("./resources/format").get("frameDuration") == "1001/30000s"
+    marker = root.find(".//marker")
+    assert marker.get("start") == "100100/30000s"
+    assert marker.get("completed") == "1"
+    assert marker.get("note") == "— Bob: ok"
+
+
+def test_fcpxml_gap_extends_past_last_marker_when_duration_unknown():
+    xml = to_fcpxml([_marker(frames=1000)], SPEC25, "D", total_duration_frames=0)
+    gap = _fcpxml_root(xml).find(".//gap")
+    assert gap.get("duration") == f"{1000 + 1 + 250}/25s"
