@@ -33,10 +33,13 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 - **Real-time updates** via Server-Sent Events
 - **Self-hosted** with Docker Compose — runs on any server or cloud VM
 
-<p align="center">
-  <img src="docs/images/export-comments-menu.png" alt="Export comments straight into DaVinci Resolve, Final Cut Pro, Premiere Pro, or CSV" width="800">
-  <br><em>Review feedback goes straight to the timeline: export comments as NLE markers.</em>
-</p>
+### Share with clients — no accounts needed
+
+Send a link; clients review and comment without signing up. You stay in control of every link: comments/downloads permissions, passphrase, expiration date, watermarking, and appearance.
+
+| Client view (no login) | Your share-link controls |
+|---|---|
+| ![Public share link — clients browse assets and comment without an account](docs/images/share-client-view.png) | ![Share link settings — permissions, passphrase, expiration, watermark](docs/images/share-link-settings.png) |
 
 ## Quick Start (Development)
 
