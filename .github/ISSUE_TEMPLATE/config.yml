@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Help
+    url: https://github.com/Techiebutler/freeframe/discussions/categories/q-a
+    about: Ask setup or usage questions in Discussions — faster answers, searchable for others.
+  - name: Feature Ideas & Feedback
+    url: https://github.com/Techiebutler/freeframe/discussions/categories/ideas
+    about: Not sure it's a concrete feature request yet? Start a discussion.
+  - name: Security Vulnerability
+    url: https://github.com/Techiebutler/freeframe/blob/main/SECURITY.md
+    about: Please report security issues privately — see our security policy.

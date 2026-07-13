@@ -2,17 +2,24 @@
 
 **Self-hostable, open-source media review platform. A collaborative alternative to Frame.io.**
 
+[![CI](https://github.com/Techiebutler/freeframe/actions/workflows/ci.yml/badge.svg)](https://github.com/Techiebutler/freeframe/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](docker-compose.prod.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](docs/contributing.md)
+[![Discussions](https://img.shields.io/github/discussions/Techiebutler/freeframe)](https://github.com/Techiebutler/freeframe/discussions)
 
 FreeFrame gives production houses and creative teams a self-hosted platform for reviewing video, image, and audio assets with frame-accurate commenting, annotations, and approval workflows. Your media stays on your infrastructure.
+
+![FreeFrame review player — frame-accurate timecoded comments, threads with guest replies, and timeline markers](docs/images/review-player.png)
+
+<p align="center"><em>Frame-accurate review: timecoded comment threads, guest replies, resolved ranges, and SMPTE timecode — on your own infrastructure.</em></p>
 
 ---
 
 ## Features
 
 - **Video review** with HLS adaptive streaming and frame-accurate timecoded comments
+- **Export comments to your NLE** — DaVinci Resolve (marker EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), or CSV
 - **Image and audio review** with annotations and waveform visualization
 - **Drawing annotations** on any frame using canvas tools
 - **Threaded comments** with mentions, reactions, and attachments
@@ -25,6 +32,11 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 - **Due date tracking** with email reminders
 - **Real-time updates** via Server-Sent Events
 - **Self-hosted** with Docker Compose — runs on any server or cloud VM
+
+<p align="center">
+  <img src="docs/images/export-comments-menu.png" alt="Export comments straight into DaVinci Resolve, Final Cut Pro, Premiere Pro, or CSV" width="800">
+  <br><em>Review feedback goes straight to the timeline: export comments as NLE markers.</em>
+</p>
 
 ## Quick Start (Development)
 
@@ -130,7 +142,13 @@ For the full guide including **SSL setup**, **bring-your-own infrastructure** (e
 
 ## Contributing
 
-We welcome contributions! Please read our [Contributing Guide](docs/contributing.md) to get started.
+We welcome contributions of every kind — **not just code**. Testing a release against your NLE and reporting what you find, improving docs, filing detailed bug reports, and suggesting workflow features from real production experience all move FreeFrame forward.
+
+- Read the [Contributing Guide](docs/contributing.md) for dev setup and conventions
+- Grab a [`good first issue`](https://github.com/Techiebutler/freeframe/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) to make your first PR
+- Ask questions or propose ideas in [Discussions](https://github.com/Techiebutler/freeframe/discussions)
+
+We aim to respond to new issues and PRs **within 48 hours**.
 
 ## License
 
