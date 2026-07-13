@@ -1,8 +1,10 @@
+import logging
 import re
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
@@ -36,6 +38,8 @@ from ..services import comment_export
 from ..services.permissions import require_asset_access, validate_share_link
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["comments"])
 
@@ -612,8 +616,12 @@ def export_comments(
                 detail=f"Unsupported frame rate {effective_fps}; supported: "
                        + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
             )
-        if format == "edl" and not _START_TC_RE.match(start_tc):
-            raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
+        if format == "edl":
+            if not _START_TC_RE.match(start_tc):
+                raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
+            hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
+            if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
+                raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
 
     comments = db.query(Comment).filter(
         Comment.version_id == version.id,
@@ -652,6 +660,13 @@ def export_comments(
     else:
         markers = comment_export.build_markers(rows, spec, include_resolved)
         if format == "edl":
+            if len(markers) > comment_export.EDL_MAX_EVENTS:
+                log.warning(
+                    "EDL export for asset %s truncated: %d markers exceed EDL_MAX_EVENTS=%d, "
+                    "%d dropped",
+                    asset_id, len(markers), comment_export.EDL_MAX_EVENTS,
+                    len(markers) - comment_export.EDL_MAX_EVENTS,
+                )
             content = comment_export.to_edl(
                 markers, spec, comment_export.tc_to_frames(start_tc, spec), asset.name)
         elif format == "fcpxml":
@@ -660,12 +675,17 @@ def export_comments(
             content = comment_export.to_premiere_xml(markers, spec, asset.name, duration_frames)
 
     media_type, ext = EXPORT_FORMATS[format]
-    safe_name = re.sub(r"[^\w\-. ]", "_", asset.name).strip() or "asset"
+    safe_name = re.sub(r"[^\w\-. ]", "_", asset.name, flags=re.ASCII).strip() or "asset"
     filename = f"{safe_name}_v{version.version_number}_comments.{ext}"
+    utf8_name = quote(f"{asset.name}_v{version.version_number}_comments.{ext}", safe="")
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"; filename*=UTF-8\'\'{utf8_name}'
+            )
+        },
     )
 
 

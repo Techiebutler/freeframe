@@ -208,6 +208,7 @@ def to_edl(markers: list[Marker], spec: FpsSpec, start_tc_frames: int, title: st
     """Resolve 'Import Timeline Markers from EDL' flavor of CMX 3600:
     one event line per marker (out = in + 1 frame always) followed by
     ' |C:<color> |M:<text> |D:<frames>'."""
+    title = re.sub(r"\s+", " ", title).strip().replace("|", "/")
     fcm = "DROP FRAME" if spec.drop_frame else "NON-DROP FRAME"
     lines = [f"TITLE: {title}", f"FCM: {fcm}", ""]
     for i, m in enumerate(markers[:EDL_MAX_EVENTS], start=1):

@@ -56,7 +56,10 @@ def test_edl_export_happy_path(_, client, mock_db, auth_headers):
                    headers=auth_headers)
 
     assert r.status_code == 200
-    assert r.headers["content-disposition"] == 'attachment; filename="Demo Asset_v2_comments.edl"'
+    assert r.headers["content-disposition"] == (
+        'attachment; filename="Demo Asset_v2_comments.edl"; '
+        "filename*=UTF-8''Demo%20Asset_v2_comments.edl"
+    )
     assert "TITLE: Demo Asset" in r.text
     assert "|M:Unknown: Fix logo" in r.text
 
@@ -115,3 +118,41 @@ def test_version_not_found_404(_, client, mock_db, auth_headers):
     r = client.get(f"/assets/{asset.id}/comments/export?format=edl&version_id={uuid.uuid4()}",
                    headers=auth_headers)
     assert r.status_code == 404
+
+
+@patch("apps.api.routers.comments.require_asset_access")
+def test_cjk_asset_name_export_does_not_crash(_, client, mock_db, auth_headers):
+    """Non-ASCII asset names must not 500 (Content-Disposition is latin-1 only);
+    the ASCII fallback filename is underscored, and the RFC 5987 filename*
+    part carries the real UTF-8 name for browsers that support it."""
+    asset, version = _asset(), _version()
+    asset.name = "デモ動画 v2"
+    mock_db.first.side_effect = [asset, version, _media()]
+    mock_db.order_by.return_value = mock_db
+    mock_db.all.side_effect = [[_comment()]]
+
+    r = client.get(f"/assets/{asset.id}/comments/export?format=edl&version_id={version.id}",
+                   headers=auth_headers)
+
+    assert r.status_code == 200
+    disposition = r.headers["content-disposition"]
+    assert 'filename="____ v2_v2_comments.edl"' in disposition
+    assert "filename*=UTF-8''" in disposition
+    assert disposition.isascii()
+
+
+@patch("apps.api.routers.comments.require_asset_access")
+def test_start_tc_out_of_range_422(_, client, mock_db, auth_headers):
+    """start_tc=99:99:99:99 satisfies the HH:MM:SS:FF regex but every field
+    is out of range for any supported frame rate."""
+    asset, version = _asset(), _version()
+    mock_db.first.side_effect = [asset, version, _media()]
+
+    r = client.get(
+        f"/assets/{asset.id}/comments/export?format=edl&version_id={version.id}"
+        "&start_tc=99:99:99:99",
+        headers=auth_headers,
+    )
+
+    assert r.status_code == 422
+    assert "out of range" in r.json()["detail"]
