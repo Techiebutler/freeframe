@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import type { AssetVersion, AssetVersionStatus } from '@/types'
 
-const versionStatusConfig: Record<
+export const versionStatusConfig: Record<
   AssetVersionStatus,
   { label: string; className: string; icon: React.ReactNode }
 > = {
