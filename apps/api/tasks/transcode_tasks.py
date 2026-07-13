@@ -101,6 +101,14 @@ def _process_video(db, asset, version, media_file, s3, output_prefix):
     media_file.s3_key_processed = result.hls_prefix
     if result.thumbnail_keys:
         media_file.s3_key_thumbnail = result.thumbnail_keys[0]
+    if result.duration_seconds:
+        media_file.duration_seconds = result.duration_seconds
+    if result.width:
+        media_file.width = result.width
+    if result.height:
+        media_file.height = result.height
+    if result.fps:
+        media_file.fps = result.fps
     db.flush()
 
 

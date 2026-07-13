@@ -121,13 +121,12 @@ class FFmpegTranscoder(BaseTranscoder):
 
         try:
             # 1. Get video metadata via streaming (no download)
-            # Note: ffprobe result is used for metadata logging only;
-            # _run() already fail-fasts on non-zero exit.
             cmd = [
                 "ffprobe", "-v", "error", "-print_format", "json",
-                "-show_streams", "-select_streams", "v:0", input_url,
+                "-show_streams", "-select_streams", "v:0", "-show_format", input_url,
             ]
             vid_info = self._run(cmd, timeout=120, label="ffprobe")
+            meta = parse_probe_metadata(json.loads(vid_info))
 
             # 2. Check if input has an audio stream
             audio_cmd = [
@@ -228,6 +227,10 @@ class FFmpegTranscoder(BaseTranscoder):
                 success=True,
                 hls_prefix=job.output_s3_prefix,
                 thumbnail_keys=[thumbnail_key],
+                duration_seconds=(meta.duration_seconds or None) if meta else None,
+                width=(meta.width or None) if meta else None,
+                height=(meta.height or None) if meta else None,
+                fps=(meta.fps or None) if meta else None,
             )
 
         except Exception as e:

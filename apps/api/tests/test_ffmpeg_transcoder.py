@@ -187,3 +187,26 @@ def test_run_returns_stdout():
 
         result = FFmpegTranscoder._run(["echo", "hello"], label="test")
         assert result == "output data"
+
+
+def test_transcode_returns_probe_metadata():
+    t = FFmpegTranscoder(MagicMock(), "bucket")
+    video_probe = json.dumps({
+        "streams": [{"r_frame_rate": "25/1", "width": 1920, "height": 1080, "duration": "8.0"}],
+        "format": {"duration": "8.0"},
+    })
+    audio_probe = json.dumps({"streams": []})
+
+    def fake_run(cmd, timeout=None, label="ffmpeg"):
+        if label == "ffprobe":
+            return video_probe if "v:0" in cmd else audio_probe
+        return ""
+
+    with patch.object(FFmpegTranscoder, "_run", side_effect=fake_run), \
+         patch.object(FFmpegTranscoder, "_get_presigned_url", return_value="http://in"):
+        result = asyncio.run(t.transcode(_make_job()))
+
+    assert result.success is True
+    assert result.fps == 25.0
+    assert result.width == 1920
+    assert result.duration_seconds == 8.0
