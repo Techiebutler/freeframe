@@ -74,7 +74,7 @@ export function CompareVersionSelect({ versions, value, onChange, accentClass, t
                 )}
               >
                 <span>v{v.version_number}</span>
-                {!ready && (
+                {status && !ready && (
                   <span
                     className={cn('inline-flex items-center gap-1 text-[11px]', status.className)}
                     title={status.label}
