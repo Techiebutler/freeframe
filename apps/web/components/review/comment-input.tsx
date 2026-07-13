@@ -24,6 +24,7 @@ import { useReviewStore } from "@/stores/review-store";
 import { useReview } from "./review-provider";
 import { useDrawing } from "@/hooks/use-drawing";
 import { api } from "@/lib/api";
+import { resolveSubmitTimecode } from "@/lib/resolve-submit-timecode";
 import type { User } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -365,11 +366,20 @@ export function CommentInput({
         }
       }
 
+      // A timecode is included whenever attached (INCLUDING 0 — 0:00 is a
+      // valid video time and must never be silently dropped), and is
+      // force-attached whenever this submit carries a drawing: a drawing is
+      // frame-anchored and must never save timecode-less on timed media.
+      const timecodeStart = resolveSubmitTimecode({
+        hasTimecode,
+        timecodeAttached,
+        hasAnnotation: !!finalAnnotation,
+        playheadTime,
+      });
+
       await onSubmit(
         trimmed,
-        hasTimecode && timecodeAttached && playheadTime > 0
-          ? playheadTime
-          : undefined,
+        timecodeStart,
         undefined,
         finalAnnotation,
         replyToId ?? undefined,

@@ -745,7 +745,7 @@ function CommentItem({
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type CommentVisibility = "all" | "public" | "internal";
-type SortMode = "oldest" | "newest" | "commenter" | "completed";
+type SortMode = "timecode" | "oldest" | "newest" | "commenter" | "completed";
 
 interface FilterState {
   annotations: boolean;
@@ -795,7 +795,7 @@ export function CommentPanel({
   const [sortOpen, setSortOpen] = React.useState(false);
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
-  const [sortMode, setSortMode] = React.useState<SortMode>("oldest");
+  const [sortMode, setSortMode] = React.useState<SortMode>("timecode");
   const [filters, setFilters] = React.useState<FilterState>(EMPTY_FILTERS);
   const [replyingTo, setReplyingTo] = React.useState<string | null>(null);
   const [exportOpen, setExportOpen] = React.useState(false);
@@ -869,7 +869,12 @@ export function CommentPanel({
         if (a.resolved && !b.resolved) return -1;
         if (!a.resolved && b.resolved) return 1;
       }
-      // Default: oldest / timecoded first
+      if (sortMode === "oldest")
+        return (
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+      // Default (sortMode === "timecode"): timecoded ascending, then
+      // untimecoded last (by created_at ascending).
       const aHasTime =
         a.timecode_start !== null && a.timecode_start !== undefined;
       const bHasTime =
@@ -1120,7 +1125,8 @@ export function CommentPanel({
                 Sort thread by...
               </div>
               {[
-                { id: "oldest" as const, label: "Oldest (Default)" },
+                { id: "timecode" as const, label: "Timecode (Default)" },
+                { id: "oldest" as const, label: "Oldest" },
                 { id: "newest" as const, label: "Newest" },
                 { id: "commenter" as const, label: "Commenter" },
                 { id: "completed" as const, label: "Completed" },
