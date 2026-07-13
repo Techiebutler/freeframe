@@ -52,6 +52,8 @@ interface CommentPanelProps {
   onSubmitReply?: (parentId: string, body: string) => Promise<void>;
   /** Compare mode: route comment-timecode clicks to a pane-scoped transport instead of the global store. */
   onSeekToTimecode?: (time: number, pause?: boolean) => void;
+  /** Compare mode: export this pane's version instead of the store's currentVersion. */
+  exportVersionId?: string;
   className?: string;
 }
 
@@ -770,6 +772,7 @@ export function CommentPanel({
   onReply,
   onSubmitReply,
   onSeekToTimecode,
+  exportVersionId,
   className,
 }: CommentPanelProps) {
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId);
@@ -892,11 +895,12 @@ export function CommentPanel({
 
   async function handleExport(format: ExportFormat, fps?: number) {
     setExportOpen(false);
-    if (!currentAsset || !currentVersion) return;
+    const versionId = exportVersionId ?? currentVersion?.id;
+    if (!currentAsset || !versionId) return;
     try {
       await exportComments({
         assetId: currentAsset.id,
-        versionId: currentVersion.id,
+        versionId,
         format,
         fps,
       });

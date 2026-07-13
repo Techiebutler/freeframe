@@ -41,19 +41,27 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const setCurrentVersion = useReviewStore((s) => s.setCurrentVersion)
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation)
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId)
+  const setIsDrawingMode = useReviewStore((s) => s.setIsDrawingMode)
+  const setPendingAnnotation = useReviewStore((s) => s.setPendingAnnotation)
   const { user } = useAuthStore()
 
-  // CommentPanel writes focusedCommentId/activeAnnotation to the shared store with
-  // no prop override; while compare is open nothing renders them, but the normal
-  // view's AnnotationOverlay would show the stale drawing on close. Clear both on
-  // unmount (covers ESC, the X button, and browser-back param stripping).
-  React.useEffect(
-    () => () => {
+  // Isolate compare from the shared review store's annotation/drawing signals:
+  // - on MOUNT clear isDrawingMode/pendingAnnotation so a stale unsubmitted
+  //   drawing from the normal viewer can't leak into compare;
+  // - on UNMOUNT clear everything CommentPanel may have written (it has no prop
+  //   override for focusedCommentId/activeAnnotation) so the normal view's
+  //   remounted AnnotationOverlay doesn't show a stale drawing. Unmount-scoped:
+  //   covers ESC, the X button, and browser-back param stripping.
+  React.useEffect(() => {
+    setIsDrawingMode(false)
+    setPendingAnnotation(null)
+    return () => {
       setActiveAnnotation(null)
       setFocusedCommentId(null)
-    },
-    [setActiveAnnotation, setFocusedCommentId],
-  )
+      setIsDrawingMode(false)
+      setPendingAnnotation(null)
+    }
+  }, [setActiveAnnotation, setFocusedCommentId, setIsDrawingMode, setPendingAnnotation])
 
   const ready = React.useMemo(
     () => versions.filter((v) => v.processing_status === 'ready').sort((a, b) => a.version_number - b.version_number),
@@ -239,6 +247,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 onReply={() => {}}
                 onSubmitReply={handleReplyA}
                 onSeekToTimecode={(tc) => transport.seekTo(tc + timingA.offset)}
+                exportVersionId={left.id}
               />
               {canComment && (
               <CommentInput
@@ -246,8 +255,12 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 projectId={asset.project_id}
                 assetType={asset.asset_type}
                 playheadTimeOverride={isVideo ? localTime(transport.t, timingA) : undefined}
+                disableAnnotations
+                onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
                 onSubmit={async (
                   body: string,
+                  // Pane-local already (via playheadTimeOverride); undefined when
+                  // the user detaches the timecode toggle — pass straight through.
                   timecodeStart?: number,
                   timecodeEnd?: number,
                   annotationData?: Record<string, unknown>,
@@ -257,7 +270,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 ) => {
                   await sideA.createComment(
                     body,
-                    isVideo ? localTime(transport.t, timingA) : timecodeStart,
+                    timecodeStart,
                     timecodeEnd,
                     annotationData,
                     parentId,
@@ -334,12 +347,18 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
             >
               <div className="relative flex min-w-0 flex-1 items-center justify-center">
                 <span className="absolute left-3 top-3 z-10 rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeA}</span>
-                {urlA && <img src={urlA} alt={badgeA} style={transform.styleFor()} className="max-h-full max-w-full object-contain" draggable={false} />}
+                {urlA && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={urlA} alt={badgeA} style={transform.styleFor()} className="max-h-full max-w-full object-contain" draggable={false} />
+                )}
               </div>
               <div className="w-px bg-border" />
               <div className="relative flex min-w-0 flex-1 items-center justify-center">
                 <span className="absolute right-3 top-3 z-10 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
-                {urlB && <img src={urlB} alt={badgeB} style={transform.styleFor()} className="max-h-full max-w-full object-contain" draggable={false} />}
+                {urlB && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={urlB} alt={badgeB} style={transform.styleFor()} className="max-h-full max-w-full object-contain" draggable={false} />
+                )}
               </div>
             </div>
           )}
@@ -359,6 +378,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 onReply={() => {}}
                 onSubmitReply={handleReplyB}
                 onSeekToTimecode={(tc) => transport.seekTo(tc + timingB.offset)}
+                exportVersionId={right.id}
               />
               {canComment && (
               <CommentInput
@@ -366,8 +386,12 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 projectId={asset.project_id}
                 assetType={asset.asset_type}
                 playheadTimeOverride={isVideo ? localTime(transport.t, timingB) : undefined}
+                disableAnnotations
+                onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
                 onSubmit={async (
                   body: string,
+                  // Pane-local already (via playheadTimeOverride); undefined when
+                  // the user detaches the timecode toggle — pass straight through.
                   timecodeStart?: number,
                   timecodeEnd?: number,
                   annotationData?: Record<string, unknown>,
@@ -377,7 +401,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 ) => {
                   await sideB.createComment(
                     body,
-                    isVideo ? localTime(transport.t, timingB) : timecodeStart,
+                    timecodeStart,
                     timecodeEnd,
                     annotationData,
                     parentId,

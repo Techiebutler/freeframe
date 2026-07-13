@@ -52,11 +52,13 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform }: WipeViewer
     >
       {/* Side A (left of divider) */}
       <div className="absolute inset-0 flex items-center justify-center" style={transform.styleFor()}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
       </div>
       {/* Side B on top, revealed right of the divider */}
       <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${split}%)` }}>
         <div className="absolute inset-0 flex items-center justify-center" style={transform.styleFor()}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
         </div>
       </div>

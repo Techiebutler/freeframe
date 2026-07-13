@@ -47,6 +47,8 @@ interface CommentInputProps {
   onPauseVideo?: () => void;
   /** Compare mode: pane-local playhead seconds; replaces the global store playheadTime. */
   playheadTimeOverride?: number;
+  /** Compare mode: hide drawing tools and never attach annotation payloads. */
+  disableAnnotations?: boolean;
   className?: string;
 }
 
@@ -186,6 +188,7 @@ export function CommentInput({
   onCancelReply,
   onPauseVideo,
   playheadTimeOverride,
+  disableAnnotations,
   className,
 }: CommentInputProps) {
   const {
@@ -249,7 +252,7 @@ export function CommentInput({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [visDropdownOpen, emojiOpen]);
 
-  const canAnnotate = assetType !== "audio";
+  const canAnnotate = assetType !== "audio" && !disableAnnotations;
   const hasTimecode = assetType === "video" || assetType === "audio";
 
   function displayTime(seconds: number): string {
@@ -321,41 +324,45 @@ export function CommentInput({
     setError(null);
 
     try {
-      // Grab canvas state: try live canvas first, then store, then prop
+      // Grab canvas state: try live canvas first, then store, then prop.
+      // Skipped entirely in compare mode (disableAnnotations) so a stale
+      // drawing from the normal viewer can never attach to a compare comment.
       let finalAnnotation: Record<string, unknown> | undefined = undefined;
 
-      if (isDrawingMode) {
-        try {
-          const json = getJSON();
-          const objects = (json as any)?.objects;
-          if (objects && Array.isArray(objects) && objects.length > 0) {
-            finalAnnotation = json;
+      if (!disableAnnotations) {
+        if (isDrawingMode) {
+          try {
+            const json = getJSON();
+            const objects = (json as any)?.objects;
+            if (objects && Array.isArray(objects) && objects.length > 0) {
+              finalAnnotation = json;
+            }
+          } catch {
+            /* canvas may not exist */
           }
-        } catch {
-          /* canvas may not exist */
-        }
-        exitDrawingMode();
-      } else {
-        try {
-          const json = getJSON();
-          const objects = (json as any)?.objects;
-          if (objects && Array.isArray(objects) && objects.length > 0) {
-            finalAnnotation = json;
+          exitDrawingMode();
+        } else {
+          try {
+            const json = getJSON();
+            const objects = (json as any)?.objects;
+            if (objects && Array.isArray(objects) && objects.length > 0) {
+              finalAnnotation = json;
+            }
+          } catch {
+            /* canvas may not exist */
           }
-        } catch {
-          /* canvas may not exist */
         }
-      }
 
-      if (!finalAnnotation && pendingAnnotation) {
-        const objs = (pendingAnnotation as any)?.objects;
-        if (objs && Array.isArray(objs) && objs.length > 0) {
-          finalAnnotation = pendingAnnotation;
+        if (!finalAnnotation && pendingAnnotation) {
+          const objs = (pendingAnnotation as any)?.objects;
+          if (objs && Array.isArray(objs) && objs.length > 0) {
+            finalAnnotation = pendingAnnotation;
+          }
         }
-      }
 
-      if (!finalAnnotation && annotationData) {
-        finalAnnotation = annotationData;
+        if (!finalAnnotation && annotationData) {
+          finalAnnotation = annotationData;
+        }
       }
 
       await onSubmit(
