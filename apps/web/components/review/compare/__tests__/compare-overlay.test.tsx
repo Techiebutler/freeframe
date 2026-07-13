@@ -352,4 +352,49 @@ describe('CompareOverlay per-pane annotation display', () => {
     const overlay = screen.getByTestId('annotation-overlay')
     expect(screen.getByTestId('wipe-stage')).toContainElement(overlay)
   })
+
+  it('starting playback clears the shown drawings (normal-player parity)', () => {
+    commentsByVersion['v-1'] = [
+      makeComment('c1', 'v-1', { annotation: { id: 'ann1', comment_id: 'c1', drawing_data: DRAWING } }),
+    ]
+    transportIsPlaying = false
+    const { rerender } = render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByTestId('marker-a-c1'))
+    expect(screen.getAllByTestId('annotation-overlay')).toHaveLength(1)
+
+    // Transport flips to playing (scrubber button / space key). Fresh JSX —
+    // an identical element reference would let React bail out of the render.
+    transportIsPlaying = true
+    rerender(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    expect(screen.queryByTestId('annotation-overlay')).not.toBeInTheDocument()
+  })
+})
+
+describe('CompareOverlay comment click pause parity', () => {
+  it('comment row click while playing seeks pane-local AND pauses via toggle', () => {
+    commentsByVersion['v-3'] = [makeComment('c3', 'v-3')]
+    transportIsPlaying = true
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    // Right panel is open by default — CommentItem's row click passes pause=true.
+    fireEvent.click(screen.getByText('Fix the color grade'))
+    expect(transportSeekTo).toHaveBeenCalledWith(5)
+    expect(transportToggle).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not pause when already paused', () => {
+    commentsByVersion['v-3'] = [makeComment('c3', 'v-3')]
+    transportIsPlaying = false
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByText('Fix the color grade'))
+    expect(transportSeekTo).toHaveBeenCalledWith(5)
+    expect(transportToggle).not.toHaveBeenCalled()
+  })
 })

@@ -169,6 +169,15 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     },
     [],
   )
+  // Normal-player parity: starting playback clears the shown drawing — a
+  // frame-anchored annotation must not sit over moving video. Every play
+  // trigger (scrubber button, space key) funnels through transport.isPlaying.
+  React.useEffect(() => {
+    if (!transport.isPlaying) return
+    setAnnotationA(null)
+    setAnnotationB(null)
+    setLastAnnotationSide(null)
+  }, [transport.isPlaying])
   // Exclusive-unmute audio: at most one side is ever audible. 'b' preserves
   // the pre-existing default (side B carried audio, hardcoded).
   const [audioSide, setAudioSide] = React.useState<'a' | 'b' | 'none'>('b')
@@ -309,7 +318,11 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 onRemoveReaction={async (id, e) => { await sideA.removeReaction(id, e) }}
                 onReply={() => {}}
                 onSubmitReply={handleReplyA}
-                onSeekToTimecode={(tc) => transport.seekTo(tc + timingA.offset)}
+                onSeekToTimecode={(tc, pause) => {
+                  transport.seekTo(tc + timingA.offset)
+                  // Normal-player parity: comment clicks pass pause=true.
+                  if (pause && transport.isPlaying) transport.toggle()
+                }}
                 onShowAnnotation={(d) => showAnnotationFor('a', d)}
                 exportVersionId={left.id}
               />
@@ -502,7 +515,10 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 onRemoveReaction={async (id, e) => { await sideB.removeReaction(id, e) }}
                 onReply={() => {}}
                 onSubmitReply={handleReplyB}
-                onSeekToTimecode={(tc) => transport.seekTo(tc + timingB.offset)}
+                onSeekToTimecode={(tc, pause) => {
+                  transport.seekTo(tc + timingB.offset)
+                  if (pause && transport.isPlaying) transport.toggle()
+                }}
                 onShowAnnotation={(d) => showAnnotationFor('b', d)}
                 exportVersionId={right.id}
               />
