@@ -58,7 +58,7 @@ def process_audio(s3_client, bucket: str, input_s3_key: str, output_prefix: str)
                 check=True, capture_output=True, text=True, timeout=120,
             )
             duration_seconds = float(json.loads(probe.stdout).get("format", {}).get("duration") or 0) or None
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError):
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError, OSError, AttributeError):
             pass  # a failed probe must not fail audio processing
         result["duration_seconds"] = duration_seconds
 
