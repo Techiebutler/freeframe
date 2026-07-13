@@ -25,7 +25,7 @@ export function applySideState(video: SlavableVideo, t: number, side: SideTiming
     if (driftedBeyond(expected, video.currentTime, 0.001)) video.currentTime = expected
     return
   }
-  if (video.paused) void video.play()
+  if (video.paused) Promise.resolve(video.play()).catch(() => {})
   if (driftedBeyond(expected, video.currentTime)) video.currentTime = expected
 }
 

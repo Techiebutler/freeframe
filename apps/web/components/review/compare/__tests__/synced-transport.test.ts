@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { applySideState, type SlavableVideo } from '../use-synced-transport'
 
 function fakeVideo(currentTime = 0, paused = true): SlavableVideo & { played: number; pausedCalls: number } {
