@@ -21,7 +21,7 @@ describe('CompareScrubber', () => {
     track.getBoundingClientRect = () =>
       ({ left: 0, width: 630, top: 0, height: 8, right: 630, bottom: 8, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
     fireEvent.click(track, { clientX: 63 })
-    expect(base.onSeek).toHaveBeenCalledWith(6.3)
+    expect(base.onSeek).toHaveBeenCalledWith((63 / 630) * 63)
   })
 
   it('positions markers at (tc + offset) / total and reports clicks per side', () => {

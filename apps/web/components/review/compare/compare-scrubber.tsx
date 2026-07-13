@@ -48,8 +48,7 @@ export function CompareScrubber(props: CompareScrubberProps) {
   const seekFromEvent = (clientX: number) => {
     const rect = trackRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0) return
-    const seekTime = ((clientX - rect.left) / rect.width) * total
-    onSeek(Math.round(seekTime * 100) / 100)
+    onSeek(((clientX - rect.left) / rect.width) * total)
   }
 
   return (
