@@ -24,7 +24,7 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 - **Drawing annotations** on any frame using canvas tools
 - **Threaded comments** with mentions, reactions, and attachments
 - **Approval workflows** with per-reviewer status tracking
-- **Version management** to compare iterations side-by-side
+- **Version compare** — put any two versions side-by-side or under a wipe slider, with per-version comments and annotations
 - **Folder organization** within projects
 - **Team collaboration** with role-based permissions (org, team, project levels)
 - **Share links** for external reviewers (password-protected, expiring)
@@ -32,6 +32,24 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 - **Due date tracking** with email reminders
 - **Real-time updates** via Server-Sent Events
 - **Self-hosted** with Docker Compose — runs on any server or cloud VM
+
+### Compare any two versions
+
+Put two cuts or revisions on screen at once and see exactly what changed. Video plays in frame-accurate sync with per-side audio and offset trim for re-edited cuts; images compare side-by-side or under a draggable wipe. Each version keeps its own comment thread and annotations, and the whole view is shareable by URL.
+
+![Version compare — two synced video versions side by side, each with its own timecoded comment thread, per-side audio, and frame-offset trim](docs/images/video-version-screen.png)
+
+| Images side-by-side | Wipe slider |
+|---|---|
+| ![Image version compare, side-by-side — v1 and v2 of an illustration, each with its own comments](docs/images/image-version-compare-sidebyside.png) | ![Image version compare, wipe — a draggable divider reveals v1 on the left and v2 on the right](docs/images/image-version-compare-wipe.png) |
+
+### Take comments straight into your edit
+
+Export a version's timecoded comments as timeline markers your editor can import — DaVinci Resolve (marker EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), or CSV — so notes land on the exact frame back in the timeline.
+
+<p align="center">
+  <img src="docs/images/comment-export.png" alt="Export comments menu — DaVinci Resolve (EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), and CSV" width="480">
+</p>
 
 ### Share with clients — no accounts needed
 
