@@ -236,6 +236,35 @@ describe('CompareOverlay per-side audio toggle', () => {
     expect(screen.getByLabelText('Unmute v1')).toBeInTheDocument()
     expect(screen.getByLabelText('Unmute v3')).toBeInTheDocument()
   })
+
+  it('re-enforces exclusive mute on the elements after external drift (React muted-prop quirk)', () => {
+    const { container } = render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    const [videoA, videoB] = Array.from(container.querySelectorAll('video')) as HTMLVideoElement[]
+
+    // Default enforcement right after mount + effects.
+    expect(videoA.muted).toBe(true)
+    expect(videoB.muted).toBe(false)
+
+    // Simulate external drift (React muted-prop update quirk, facebook/react#10389,
+    // or an HLS re-attachment resurrecting audio): BOTH sides audible.
+    videoA.muted = false
+    videoB.muted = false
+
+    // Any state-changing interaction must re-enforce the tri-state exclusively.
+    // Clicking B's toggle (audioSide 'b' → 'none') leaves A's muted PROP unchanged
+    // (true → true), so React's prop diff alone would never repair A's drifted
+    // element — only the imperative enforcement effect does.
+    fireEvent.click(screen.getByLabelText('Mute v3'))
+    expect(videoA.muted).toBe(true)
+    expect(videoB.muted).toBe(true)
+
+    // And never both audible after further toggling.
+    fireEvent.click(screen.getByLabelText('Unmute v1'))
+    expect(videoA.muted).toBe(false)
+    expect(videoB.muted).toBe(true)
+  })
 })
 
 describe('CompareOverlay marker click', () => {

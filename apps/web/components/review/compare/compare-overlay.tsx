@@ -182,6 +182,16 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   // the pre-existing default (side B carried audio, hardcoded).
   const [audioSide, setAudioSide] = React.useState<'a' | 'b' | 'none'>('b')
 
+  // Belt-and-braces: enforce exclusive audio directly on the elements every render.
+  // React's muted prop updates are unreliable in some browsers (facebook/react#10389),
+  // and HLS re-attachment must never resurrect audio on a muted side.
+  React.useEffect(() => {
+    const a = transport.playerA.videoRef.current
+    const b = transport.playerB.videoRef.current
+    if (a) a.muted = audioSide !== 'a'
+    if (b) b.muted = audioSide !== 'b'
+  })
+
   const markersA: ScrubberMarker[] = sideA.comments
     .filter((c) => c.timecode_start != null && !c.resolved)
     .map((c) => ({
