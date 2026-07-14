@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applySideState, computeNextT, type SlavableVideo } from '../use-synced-transport'
+import { applySideState, computeNextT, isMasterActive, type SlavableVideo } from '../use-synced-transport'
 
 function fakeVideo(currentTime = 0, paused = true): SlavableVideo & { played: number; pausedCalls: number } {
   const v = {
@@ -74,5 +74,36 @@ describe('computeNextT', () => {
     // Buffering audible side: currentTime stops, so T stops too — better than
     // running ahead on the wall clock and snapping back with an audible chop.
     expect(computeNextT(10, 0.5, { mediaTime: 8, offset: 2 }, 60)).toBe(10)
+  })
+})
+
+describe('isMasterActive', () => {
+  const live = { ended: false, error: null }
+
+  it('true for a live element inside its offset window', () => {
+    expect(isMasterActive(live, 10, side(2, 60))).toBe(true)
+  })
+
+  it('false when the element has ended (real HLS end can precede the recorded end)', () => {
+    // Recorded duration routinely overshoots real duration by milliseconds:
+    // an ended master would freeze T inside the recorded window, and play()
+    // on an ended element restarts from 0 → freeze/replay chatter.
+    expect(isMasterActive({ ended: true, error: null }, 10, side(2, 60))).toBe(false)
+  })
+
+  it('false when the element carries a media error', () => {
+    expect(isMasterActive({ ended: false, error: { code: 2 } }, 10, side(2, 60))).toBe(false)
+  })
+
+  it('false before the offset window', () => {
+    expect(isMasterActive(live, 1, side(2, 60))).toBe(false)
+  })
+
+  it('false past the recorded end', () => {
+    expect(isMasterActive(live, 63, side(2, 60))).toBe(false)
+  })
+
+  it('false without an element', () => {
+    expect(isMasterActive(null, 10, side(2, 60))).toBe(false)
   })
 })

@@ -45,6 +45,24 @@ export function computeNextT(prevT: number, dtWall: number, master: MasterSample
   return Math.min(Math.max(next, 0), total)
 }
 
+/** The element-liveness slice of HTMLVideoElement the master predicate needs. */
+export interface MasterCandidate { ended: boolean; error: unknown }
+
+/**
+ * The audible side may own the clock only while LIVE (not ended, no media
+ * error) and inside its recorded offset window. Liveness matters because the
+ * recorded duration routinely overshoots the real media duration by
+ * milliseconds: the element then fires `ended` while T is still inside the
+ * recorded window, and an ended master would freeze T — worse, play() on an
+ * ended element restarts it from 0, so the 50ms rule would seek it back and
+ * it would end again (freeze/replay chatter). An ended/errored master instead
+ * releases the clock to wall time, and the recorded-window freeze-last-frame
+ * semantics complete the end normally.
+ */
+export function isMasterActive(el: MasterCandidate | null, t: number, timing: SideTiming): boolean {
+  return !!el && !el.ended && !el.error && !sideNotStarted(t, timing) && !sideEnded(t, timing)
+}
+
 interface UseSyncedTransportArgs {
   urlA: string | null
   urlB: string | null
@@ -55,10 +73,13 @@ interface UseSyncedTransportArgs {
 }
 
 /**
- * One monotonic transport clock driving two detached players.
+ * One transport clock driving two detached players.
  * The clock advances via requestAnimationFrame while playing — following the
- * audible side's media clock when one is active (see computeNextT), the wall
- * clock otherwise; both videos are slaved to it every frame via applySideState
+ * audible side's media clock while that side is live and inside its window
+ * (see computeNextT / isMasterActive), the wall clock otherwise. T is
+ * therefore NEAR-monotonic: a master handoff (audible-side switch, end,
+ * error) may step it backward by a bounded amount — do not assume strict
+ * monotonicity. Both videos are slaved to T every frame via applySideState
  * (50ms drift rule).
  */
 export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide = null }: UseSyncedTransportArgs) {
@@ -94,13 +115,14 @@ export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide =
       const dt = (now - last) / 1000
       last = now
       if (playingRef.current) {
-        // Audible side = clock master while inside its offset window; before
-        // its start / past its end fall back to the wall clock so a short
-        // audible side never stalls the shared timeline.
+        // Audible side = clock master while live and inside its offset
+        // window; before its start / past its end / on ended or media error
+        // fall back to the wall clock so a short (or dead) audible side
+        // never stalls the shared timeline.
         const side = audibleSideRef.current
         const el = side === 'a' ? playerA.videoRef.current : side === 'b' ? playerB.videoRef.current : null
         const timing = side === 'a' ? timingARef.current : timingBRef.current
-        const masterActive = !!el && !!side && !sideNotStarted(tRef.current, timing) && !sideEnded(tRef.current, timing)
+        const masterActive = !!el && !!side && isMasterActive(el, tRef.current, timing)
         const next = computeNextT(
           tRef.current,
           dt,
