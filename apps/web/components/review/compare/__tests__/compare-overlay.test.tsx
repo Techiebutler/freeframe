@@ -372,7 +372,7 @@ describe('CompareOverlay per-pane annotation display', () => {
     expect(useReviewStore.getState().activeAnnotation).toBeNull()
   })
 
-  it('wipe: last activated side annotation renders inside the stage', () => {
+  it('wipe: a v2 (right) marker is clipped to the RIGHT of the divider — no bleed onto v1', () => {
     streamUrl = '/img.webp'
     commentsByVersion['v-3'] = [
       makeComment('c9', 'v-3', {
@@ -387,6 +387,30 @@ describe('CompareOverlay per-pane annotation display', () => {
 
     const overlay = screen.getByTestId('annotation-overlay')
     expect(screen.getByTestId('wipe-stage')).toContainElement(overlay)
+    // Side B is visible right of the divider (split defaults to 50%), so its
+    // annotation is clipped to that half — matching the B-image clip.
+    expect((screen.getByTestId('wipe-overlay-clip') as HTMLElement).style.clipPath).toBe('inset(0 0 0 50%)')
+  })
+
+  it('wipe: a v1 (left) marker is clipped to the LEFT of the divider — no bleed onto v2', () => {
+    streamUrl = '/img.webp'
+    commentsByVersion['v-1'] = [
+      makeComment('c1', 'v-1', {
+        timecode_start: null,
+        annotation: { id: 'ann1', comment_id: 'c1', drawing_data: DRAWING },
+      }),
+    ]
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    // Left panel is closed by default — open it, then click the v1 comment row.
+    fireEvent.click(screen.getByLabelText('Toggle left comments'))
+    fireEvent.click(screen.getByText('Fix the color grade'))
+
+    const overlay = screen.getByTestId('annotation-overlay')
+    expect(screen.getByTestId('wipe-stage')).toContainElement(overlay)
+    // Side A is visible left of the divider, so its annotation is clipped there.
+    expect((screen.getByTestId('wipe-overlay-clip') as HTMLElement).style.clipPath).toBe('inset(0 50% 0 0)')
   })
 
   it('starting playback clears the shown drawings (normal-player parity)', () => {

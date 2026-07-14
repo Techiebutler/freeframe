@@ -13,12 +13,14 @@ interface WipeViewerProps {
     onPointerDown(e: React.PointerEvent): void
   }
   /**
-   * Extra stage layer rendered ABOVE both image layers, UNCLIPPED, inside the
-   * shared transform (annotation display — both wipe layers share image
-   * coordinates, so one full-stage overlay is correct; clipping a drawing at
-   * the divider would be misleading).
+   * Extra stage layer rendered ABOVE both image layers, inside the shared
+   * transform (annotation display). It is CLIPPED in screen space to the region
+   * where its owning version is visible — side A left of the divider, side B
+   * right (matching the B-image clip) — so a version's annotation never bleeds
+   * onto the other version's half. `overlaySide` names that owning version.
    */
   overlay?: React.ReactNode
+  overlaySide?: 'a' | 'b' | null
 }
 
 /**
@@ -26,7 +28,7 @@ interface WipeViewerProps {
  * The clip lives in SCREEN space (outside the shared transform) so the divider
  * line always matches the visible split, regardless of zoom/pan.
  */
-export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay }: WipeViewerProps) {
+export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay, overlaySide }: WipeViewerProps) {
   const [split, setSplit] = React.useState(50)
   const stageRef = React.useRef<HTMLDivElement>(null)
   const dividerCleanup = React.useRef<(() => void) | null>(null)
@@ -69,10 +71,26 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay }: W
           <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
         </div>
       </div>
-      {/* Overlay layer — above both images, unclipped, tracks the shared transform */}
+      {/* Overlay layer — above both images. The clip lives in SCREEN space
+          (outside the transform, like the B image's) so the annotation is shown
+          only over its owning version's half: side A left of the divider, side B
+          right. The transform is applied on the inner layer so the drawing still
+          zooms/pans with the images. */}
       {overlay && (
-        <div className="pointer-events-none absolute inset-0" style={transform.styleFor()}>
-          {overlay}
+        <div
+          data-testid="wipe-overlay-clip"
+          className="pointer-events-none absolute inset-0"
+          style={
+            overlaySide === 'a'
+              ? { clipPath: `inset(0 ${100 - split}% 0 0)` }
+              : overlaySide === 'b'
+                ? { clipPath: `inset(0 0 0 ${split}%)` }
+                : undefined
+          }
+        >
+          <div className="absolute inset-0" style={transform.styleFor()}>
+            {overlay}
+          </div>
         </div>
       )}
       {/* Divider */}

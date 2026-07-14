@@ -501,11 +501,12 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 badgeA={badgeA}
                 badgeB={badgeB}
                 transform={transform}
+                overlaySide={lastAnnotationSide}
                 overlay={
-                  // Most recently activated side's drawing, across the whole
-                  // stage: both wipe layers share image coordinates, so one
-                  // unclipped overlay is correct (clipping at the divider
-                  // would be misleading).
+                  // Most recently activated side's drawing. WipeViewer clips it
+                  // (via overlaySide) to that version's visible half — a v1 marker
+                  // shows only left of the divider, a v2 marker only right — so it
+                  // never bleeds onto the other version.
                   <AnnotationOverlay
                     key={`${lastAnnotationSide ?? 'none'}-${focusedCommentId ?? 'none'}`}
                     annotation={lastAnnotationSide === 'a' ? annotationA : lastAnnotationSide === 'b' ? annotationB : null}

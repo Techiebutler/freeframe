@@ -51,6 +51,31 @@ describe('WipeViewer', () => {
       node = node.parentElement
     }
   })
+
+  it('clips the overlay to the owning version’s half (A left of the divider, B right)', () => {
+    const { result } = renderHook(() => useSharedTransform())
+    const { rerender } = render(
+      <WipeViewer
+        urlA="/a.webp" urlB="/b.webp" badgeA="v1" badgeB="v3"
+        transform={result.current}
+        overlay={<div data-testid="ov" />}
+        overlaySide="a"
+      />,
+    )
+    // Side A is visible LEFT of the divider (split defaults to 50%).
+    expect(screen.getByTestId('wipe-overlay-clip').style.clipPath).toBe('inset(0 50% 0 0)')
+
+    rerender(
+      <WipeViewer
+        urlA="/a.webp" urlB="/b.webp" badgeA="v1" badgeB="v3"
+        transform={result.current}
+        overlay={<div data-testid="ov" />}
+        overlaySide="b"
+      />,
+    )
+    // Side B is visible RIGHT of the divider — same clip as the B image layer.
+    expect(screen.getByTestId('wipe-overlay-clip').style.clipPath).toBe('inset(0 0 0 50%)')
+  })
 })
 
 describe('useSharedTransform', () => {
