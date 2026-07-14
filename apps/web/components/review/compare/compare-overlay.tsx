@@ -488,8 +488,13 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 timingA={timingA}
                 timingB={timingB}
                 onMarkerClick={handleMarkerClick}
+                labelA={badgeA}
+                labelB={badgeB}
                 onOffsetChange={(side, value) =>
                   writeParams((p) => p.set(side === 'a' ? 'offA' : 'offB', String(value)))
+                }
+                onResetOffsets={() =>
+                  writeParams((p) => { p.delete('offA'); p.delete('offB') })
                 }
               />
             </>

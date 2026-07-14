@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { Pause, Play } from 'lucide-react'
+import { Pause, Play, RotateCcw } from 'lucide-react'
 import { cn, formatTimecode } from '@/lib/utils'
 import { frameStep, markerPosition, type SideTiming } from '@/lib/compare-time'
 import { getAvatarColor, getInitials } from '@/components/review/progress-bar'
@@ -28,6 +28,11 @@ interface CompareScrubberProps {
   timingB: SideTiming
   onMarkerClick(side: 'a' | 'b', marker: ScrubberMarker): void
   onOffsetChange(side: 'a' | 'b', value: number): void
+  /** Version labels for the offset rows (e.g. "v1" / "v2"), shown instead of A/B. */
+  labelA: string
+  labelB: string
+  /** Reset both per-side offsets back to 0 (re-sync the two sides). */
+  onResetOffsets(): void
 }
 
 // ─── Marker dot + hover preview (mirrors progress-bar.tsx's CommentMarker) ────
@@ -131,8 +136,8 @@ function ScrubberCommentMarker({
   )
 }
 
-function OffsetStepper({ side, offset, fps, onOffsetChange }: {
-  side: 'a' | 'b'; offset: number; fps?: number | null
+function OffsetStepper({ side, label, offset, fps, onOffsetChange }: {
+  side: 'a' | 'b'; label: string; offset: number; fps?: number | null
   onOffsetChange(side: 'a' | 'b', value: number): void
 }) {
   const f = frameStep(fps)
@@ -140,7 +145,7 @@ function OffsetStepper({ side, offset, fps, onOffsetChange }: {
   const btn = 'rounded border border-border px-1 text-[10px] text-text-tertiary hover:bg-bg-hover'
   return (
     <div className="flex items-center gap-1 text-[11px] text-text-tertiary">
-      <span className={side === 'a' ? 'text-sky-400' : 'text-emerald-400'}>{side.toUpperCase()}</span>
+      <span className={cn('min-w-[1.75rem] text-right font-medium tabular-nums', side === 'a' ? 'text-sky-400' : 'text-emerald-400')}>{label}</span>
       <button type="button" data-testid={`off${side.toUpperCase()}-minus-second`} className={btn} onClick={() => nudge(-1)}>−1s</button>
       <button type="button" data-testid={`off${side.toUpperCase()}-minus-frame`} className={btn} onClick={() => nudge(-f)}>−1f</button>
       <span className="w-12 text-center tabular-nums">{offset.toFixed(2)}s</span>
@@ -151,7 +156,7 @@ function OffsetStepper({ side, offset, fps, onOffsetChange }: {
 }
 
 export function CompareScrubber(props: CompareScrubberProps) {
-  const { t, total, isPlaying, fps, onToggle, onSeek, markersA, markersB, timingA, timingB, onMarkerClick, onOffsetChange } = props
+  const { t, total, isPlaying, fps, onToggle, onSeek, markersA, markersB, timingA, timingB, onMarkerClick, onOffsetChange, labelA, labelB, onResetOffsets } = props
   const trackRef = React.useRef<HTMLDivElement>(null)
   const [hovered, setHovered] = React.useState<HoveredMarker | null>(null)
 
@@ -213,9 +218,23 @@ export function CompareScrubber(props: CompareScrubberProps) {
 
       <span className="font-mono text-[12px] tabular-nums text-text-secondary">{formatTimecode(t, fps ?? 24)}</span>
 
-      <div className={cn('flex flex-col gap-1')}>
-        <OffsetStepper side="a" offset={timingA.offset} fps={fps} onOffsetChange={onOffsetChange} />
-        <OffsetStepper side="b" offset={timingB.offset} fps={fps} onOffsetChange={onOffsetChange} />
+      <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-1">
+          <OffsetStepper side="a" label={labelA} offset={timingA.offset} fps={fps} onOffsetChange={onOffsetChange} />
+          <OffsetStepper side="b" label={labelB} offset={timingB.offset} fps={fps} onOffsetChange={onOffsetChange} />
+        </div>
+        <button
+          type="button"
+          data-testid="offset-reset"
+          onClick={onResetOffsets}
+          disabled={timingA.offset === 0 && timingB.offset === 0}
+          title="Reset offsets — re-sync both sides"
+          aria-label="Reset offsets"
+          className="flex items-center gap-1 rounded border border-border px-1.5 py-1 text-[10px] text-text-tertiary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <RotateCcw className="h-3 w-3" />
+          Sync
+        </button>
       </div>
     </div>
   )
