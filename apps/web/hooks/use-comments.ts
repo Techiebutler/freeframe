@@ -1,6 +1,6 @@
 'use client'
 
-import useSWR, { mutate as globalMutate } from 'swr'
+import useSWR from 'swr'
 import { api } from '@/lib/api'
 import type { Comment, Annotation, CommentReaction } from '@/types'
 
@@ -39,6 +39,27 @@ interface CreateCommentPayload {
 function buildSWRKey(assetId: string | null, versionId: string | null): string | null {
   if (!assetId || !versionId) return null
   return `/assets/${assetId}/comments?version_id=${versionId}`
+}
+
+/**
+ * Insert a freshly-created comment into the cached tree without a refetch:
+ * a top-level comment appends to the root, a reply nests under its parent.
+ * Pure — drives the optimistic cache update so the composer clears after one
+ * round-trip instead of blocking on a full re-fetch of every comment.
+ */
+export function insertCommentIntoTree(
+  comments: CommentWithReplies[],
+  newComment: CommentWithReplies,
+  parentId?: string,
+): CommentWithReplies[] {
+  if (!parentId) return [...comments, newComment]
+  return comments.map((c) =>
+    c.id === parentId
+      ? { ...c, replies: [...(c.replies ?? []), newComment] }
+      : c.replies?.length
+        ? { ...c, replies: insertCommentIntoTree(c.replies, newComment, parentId) }
+        : c,
+  )
 }
 
 export function useComments(assetId: string | null, versionId: string | null) {
@@ -81,7 +102,14 @@ export function useComments(assetId: string | null, versionId: string | null) {
       : `/assets/${assetId}/comments`
 
     const newComment = await api.post<CommentWithReplies>(endpoint, payload)
-    await mutate()
+    // Optimistically insert the authoritative POST response into the cache, then
+    // revalidate in the BACKGROUND (not awaited) — the composer clears after the
+    // single POST round-trip instead of also waiting on a full re-fetch of every
+    // comment. Server truth reconciles when the background revalidation lands.
+    void mutate(
+      (current) => insertCommentIntoTree(current ?? [], newComment, parentId),
+      { revalidate: true },
+    )
     return newComment
   }
 
