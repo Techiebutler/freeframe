@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-14
+
 ### Added
 - **Version compare** — a fullscreen split view for any two versions of an asset: synced side-by-side playback with per-side frame-accurate offset trim for video, wipe slider + side-by-side with shared zoom/pan for images, and a version-scoped comment panel on each side (comments land on the correct version at the correct frame). Deep-linkable via URL. Per-side audio control keeps one side audible at a time; each side's comments appear as markers with hover previews on the shared scrubber, and clicking one seeks to the frame, opens that side's panel with the comment focused, and shows the comment's drawing over that pane (video, side-by-side, and wipe). You can also **draw new annotations** while comparing — the pencil in either side's composer draws over that pane (video and image side-by-side; one side at a time), and the markup attaches to that version's comment.
 
