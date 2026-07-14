@@ -111,11 +111,18 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const timingA: SideTiming = { offset: offA, duration: mediaA.duration_seconds ?? elemDur.a ?? 0 }
   const timingB: SideTiming = { offset: offB, duration: mediaB.duration_seconds ?? elemDur.b ?? 0 }
 
+  // Exclusive-unmute audio: at most one side is ever audible. 'b' preserves
+  // the pre-existing default (side B carried audio, hardcoded). Declared
+  // before the transport: the audible side is the transport's clock master
+  // (its media clock owns T, so it never receives audible corrective seeks).
+  const [audioSide, setAudioSide] = React.useState<'a' | 'b' | 'none'>('b')
+
   const transport = useSyncedTransport({
     urlA: isVideo ? urlA : null,
     urlB: isVideo ? urlB : null,
     timingA,
     timingB,
+    audibleSide: isVideo ? (audioSide === 'none' ? null : audioSide) : null,
   })
 
   // Reactive element-duration fallback: re-render when metadata loads (a render-time
@@ -178,10 +185,6 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     setAnnotationB(null)
     setLastAnnotationSide(null)
   }, [transport.isPlaying])
-  // Exclusive-unmute audio: at most one side is ever audible. 'b' preserves
-  // the pre-existing default (side B carried audio, hardcoded).
-  const [audioSide, setAudioSide] = React.useState<'a' | 'b' | 'none'>('b')
-
   // Belt-and-braces: enforce exclusive audio directly on the elements every render.
   // React's muted prop updates are unreliable in some browsers (facebook/react#10389),
   // and HLS re-attachment must never resurrect audio on a muted side.
