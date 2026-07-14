@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Faster comment saving** — posting a comment no longer blocks on a full re-fetch of every comment on the asset; the new comment appears immediately (optimistic insert) while the list reconciles in the background. The comment-list endpoints (both the signed-in review view and public share links) also no longer issue a per-comment query cascade (N+1) — each now builds the whole thread in a fixed handful of queries — so loading and saving stay fast as a thread grows.
+- **Settings is now reachable for non-admin users** — the sidebar "Settings" menu item and the `/settings` index both routed everyone to the admin-only `/settings/admin`, which bounced normal users back to the home page. Non-admins now land on Appearance (their first accessible settings page); superadmins still land on the admin dashboard.
 - **Comments made at 0:00 keep their timecode** — the composer silently dropped the timecode when the playhead sat at the very start of a video/audio file (the badge showed `00:00:00:00` but the comment saved without it, sinking to the bottom of the timeline-ordered panel); drawings on video now always carry the frame's timecode, even with the clock toggle detached. Comment sort labels are now honest: the default is labeled "Timecode" (behavior unchanged) and "Oldest" now genuinely sorts by creation time.
 
 ## [1.5.0] - 2026-07-13
