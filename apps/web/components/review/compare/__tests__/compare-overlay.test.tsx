@@ -48,6 +48,13 @@ vi.mock('fabric', () => ({
 vi.mock('@/components/review/review-provider', () => ({
   useReview: () => ({ pauseVideo: vi.fn(), registerPauseHandler: vi.fn() }),
 }))
+// Authoring mounts a real AnnotationCanvas (Fabric) over the active pane; the
+// fabric stub above lacks the drawing API (PencilBrush/.on), so swap the canvas
+// for a sentinel — these tests assert the WIRING (which pane, one-at-a-time),
+// not Fabric drawing behavior.
+vi.mock('@/components/review/annotation-canvas', () => ({
+  AnnotationCanvas: () => <div data-testid="annotation-canvas" />,
+}))
 vi.mock('@/hooks/use-video-player', () => ({
   useVideoPlayer: () => ({
     videoRef: { current: null }, state: { duration: 60 },
@@ -425,5 +432,55 @@ describe('CompareOverlay comment click pause parity', () => {
     fireEvent.click(screen.getByText('Fix the color grade'))
     expect(transportSeekTo).toHaveBeenCalledWith(5)
     expect(transportToggle).not.toHaveBeenCalled()
+  })
+})
+
+describe('CompareOverlay annotation authoring', () => {
+  it('video: clicking a pane pencil enters drawing on that pane and mounts a canvas over it', () => {
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    expect(screen.queryByTestId('annotation-canvas')).not.toBeInTheDocument()
+    // Only the right panel is open by default → exactly one composer / pencil (pane B).
+    fireEvent.click(screen.getByTitle('Draw annotation'))
+    expect(screen.getByTestId('annotation-canvas')).toBeInTheDocument()
+    expect(screen.getByTitle('Exit drawing')).toBeInTheDocument()
+    // Exiting removes the canvas and restores the pencil.
+    fireEvent.click(screen.getByTitle('Exit drawing'))
+    expect(screen.queryByTestId('annotation-canvas')).not.toBeInTheDocument()
+    expect(screen.getByTitle('Draw annotation')).toBeInTheDocument()
+  })
+
+  it('video: only one pane draws at a time — clicking the other pane switches sides', () => {
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByLabelText('Toggle left comments')) // open pane A too
+    expect(screen.getAllByTitle('Draw annotation')).toHaveLength(2)
+    fireEvent.click(screen.getAllByTitle('Draw annotation')[0]) // pane A starts drawing
+    expect(screen.getAllByTestId('annotation-canvas')).toHaveLength(1)
+    expect(screen.getByTitle('Exit drawing')).toBeInTheDocument()
+    // Pane B still shows its pencil; clicking it moves drawing to B (still ONE canvas).
+    fireEvent.click(screen.getByTitle('Draw annotation'))
+    expect(screen.getAllByTestId('annotation-canvas')).toHaveLength(1)
+    expect(screen.getByTitle('Exit drawing')).toBeInTheDocument()
+  })
+
+  it('image wipe: authoring is disabled (single ambiguous stage) — no pencil', () => {
+    streamUrl = 'http://x/img' // wipe renders once both urls resolve
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    expect(screen.queryByTitle('Draw annotation')).not.toBeInTheDocument()
+  })
+
+  it('image side-by-side: authoring is enabled and mounts a canvas over the active pane', () => {
+    streamUrl = 'http://x/img'
+    searchParamsString = 'compare=v-1&mode=sbs'
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByTitle('Draw annotation')) // pane B (right panel open)
+    expect(screen.getByTestId('annotation-canvas')).toBeInTheDocument()
   })
 })

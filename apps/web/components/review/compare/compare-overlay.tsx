@@ -15,6 +15,7 @@ import { useSyncedTransport } from './use-synced-transport'
 import { useSharedTransform } from './use-shared-transform'
 import { WipeViewer } from './wipe-viewer'
 import { AnnotationOverlay } from '@/components/review/annotation-overlay'
+import { AnnotationCanvas } from '@/components/review/annotation-canvas'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
@@ -159,10 +160,40 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const [panelAOpen, setPanelAOpen] = React.useState(false)
   const [panelBOpen, setPanelBOpen] = React.useState(true)
 
-  // Per-side annotation DISPLAY (view-only — creation stays disabled in
-  // compare). Component-local so it dies with the overlay: never written to
-  // the store, whose activeAnnotation the normal view's overlay reads.
-  // lastAnnotationSide picks which drawing the single wipe stage shows.
+  // Annotation AUTHORING: at most one pane draws at a time (the Fabric canvas is
+  // a module-level singleton — a second mounted AnnotationCanvas disposes the
+  // first). `drawingSide` names that pane; the active pane's CommentInput shows
+  // the drawing toolbar and an AnnotationCanvas mounts over that pane, in the
+  // SAME VideoFrameConstraint / image container the display overlay uses, so the
+  // saved drawing aligns with how it later renders. Available for video and
+  // image side-by-side; image wipe stays display-only (one ambiguous stage).
+  const canAuthor = isVideo || mode === 'sbs'
+  const [drawingSide, setDrawingSide] = React.useState<'a' | 'b' | null>(null)
+  const toggleDrawing = React.useCallback(
+    (side: 'a' | 'b') => setDrawingSide((prev) => (prev === side ? null : side)),
+    [],
+  )
+  // Drive the shared drawing store from drawingSide (AnnotationCanvas/useDrawing
+  // read the store). Resetting pendingAnnotation on every change clears a stale
+  // drawing when switching panes or exiting — so it can't attach to the next
+  // comment on the other side.
+  React.useEffect(() => {
+    setIsDrawingMode(drawingSide !== null)
+    setPendingAnnotation(null)
+  }, [drawingSide, setIsDrawingMode, setPendingAnnotation])
+  // Exit authoring when the surface it lived on goes away: playback starts (the
+  // frame moves out from under a frame-anchored drawing), the active pane's panel
+  // closes, or the image mode flips to wipe (no per-pane canvas there).
+  React.useEffect(() => {
+    if (!canAuthor) setDrawingSide(null)
+    else if (drawingSide === 'a' && !panelAOpen) setDrawingSide(null)
+    else if (drawingSide === 'b' && !panelBOpen) setDrawingSide(null)
+  }, [canAuthor, drawingSide, panelAOpen, panelBOpen])
+
+  // Per-side annotation DISPLAY. Component-local so it dies with the overlay:
+  // never written to the store, whose activeAnnotation the normal view's overlay
+  // reads. lastAnnotationSide picks which drawing the single wipe stage shows.
+  // (Authoring is separate — see drawingSide above.)
   const [annotationA, setAnnotationA] = React.useState<Record<string, unknown> | null>(null)
   const [annotationB, setAnnotationB] = React.useState<Record<string, unknown> | null>(null)
   const [lastAnnotationSide, setLastAnnotationSide] = React.useState<'a' | 'b' | null>(null)
@@ -184,6 +215,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     setAnnotationA(null)
     setAnnotationB(null)
     setLastAnnotationSide(null)
+    setDrawingSide(null)
   }, [transport.isPlaying])
   // Belt-and-braces: enforce exclusive audio directly on the elements every render.
   // React's muted prop updates are unreliable in some browsers (facebook/react#10389),
@@ -345,7 +377,9 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 projectId={asset.project_id}
                 assetType={asset.asset_type}
                 playheadTimeOverride={isVideo ? localTime(transport.t, timingA) : undefined}
-                disableAnnotations
+                disableAnnotations={!canAuthor}
+                annotationActive={drawingSide === 'a'}
+                onToggleAnnotation={() => toggleDrawing('a')}
                 onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
                 onSubmit={async (
                   body: string,
@@ -417,6 +451,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                       video.parentElement = this pane container (relative). */}
                   <VideoFrameConstraint videoRef={transport.playerA.videoRef}>
                     <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
+                    {drawingSide === 'a' && <AnnotationCanvas />}
                   </VideoFrameConstraint>
                   {errA && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeA}</span>}
                 </div>
@@ -436,6 +471,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                   <video ref={transport.playerB.videoRef} className="max-h-full max-w-full" playsInline muted={audioSide !== 'b'} />
                   <VideoFrameConstraint videoRef={transport.playerB.videoRef}>
                     <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
+                    {drawingSide === 'b' && <AnnotationCanvas />}
                   </VideoFrameConstraint>
                   {errB && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeB}</span>}
                 </div>
@@ -497,6 +533,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
                     <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
+                    {drawingSide === 'a' && <AnnotationCanvas />}
                   </div>
                 )}
               </div>
@@ -508,6 +545,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
                     <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
+                    {drawingSide === 'b' && <AnnotationCanvas />}
                   </div>
                 )}
               </div>
@@ -541,7 +579,9 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 projectId={asset.project_id}
                 assetType={asset.asset_type}
                 playheadTimeOverride={isVideo ? localTime(transport.t, timingB) : undefined}
-                disableAnnotations
+                disableAnnotations={!canAuthor}
+                annotationActive={drawingSide === 'b'}
+                onToggleAnnotation={() => toggleDrawing('b')}
                 onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
                 onSubmit={async (
                   body: string,

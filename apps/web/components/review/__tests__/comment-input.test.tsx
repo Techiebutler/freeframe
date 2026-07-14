@@ -91,3 +91,114 @@ describe('CommentInput timecode at playhead 0', () => {
     expect(onSubmit.mock.calls[0][1]).toBeUndefined()
   })
 })
+
+describe('CommentInput compare drawing props (annotationActive / onToggleAnnotation)', () => {
+  it('routes the pencil through onToggleAnnotation, not the global drawing toggle', () => {
+    const onToggle = vi.fn()
+    render(
+      <CommentInput
+        assetId="a1"
+        projectId="p1"
+        assetType="video"
+        onSubmit={vi.fn()}
+        annotationActive={false}
+        onToggleAnnotation={onToggle}
+      />,
+    )
+    fireEvent.click(screen.getByTitle('Draw annotation'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    // The global store flag is left untouched — the parent owns drawing state.
+    expect(useReviewStore.getState().isDrawingMode).toBe(false)
+  })
+
+  it('shows the drawing toolbar (not the pencil) when annotationActive is true', () => {
+    render(
+      <CommentInput
+        assetId="a1"
+        projectId="p1"
+        assetType="video"
+        onSubmit={vi.fn()}
+        annotationActive
+        onToggleAnnotation={vi.fn()}
+      />,
+    )
+    expect(screen.getByTitle('Exit drawing')).toBeInTheDocument()
+    expect(screen.queryByTitle('Draw annotation')).not.toBeInTheDocument()
+  })
+
+  it('an INACTIVE pane never attaches the shared pending drawing (no cross-pane leak)', async () => {
+    // A drawing from the other pane sits in the shared store...
+    useReviewStore.getState().setPendingAnnotation({ objects: [{ type: 'path' }] })
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommentInput
+        assetId="a1"
+        projectId="p1"
+        assetType="video"
+        playheadTimeOverride={4}
+        onSubmit={onSubmit}
+        annotationActive={false}
+        onToggleAnnotation={vi.fn()}
+      />,
+    )
+    await typeAndSubmit('just text on this side')
+    // ...but this inactive pane must not pick it up: annotationData stays undefined.
+    expect(onSubmit.mock.calls[0][3]).toBeUndefined()
+  })
+
+  it('the ACTIVE pane attaches the pending drawing on submit', async () => {
+    const drawing = { objects: [{ type: 'path' }] }
+    useReviewStore.getState().setPendingAnnotation(drawing)
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommentInput
+        assetId="a1"
+        projectId="p1"
+        assetType="video"
+        playheadTimeOverride={4}
+        onSubmit={onSubmit}
+        annotationActive
+        onToggleAnnotation={vi.fn()}
+      />,
+    )
+    await typeAndSubmit('see my markup')
+    expect(onSubmit.mock.calls[0][3]).toEqual(drawing)
+  })
+
+  it('an INACTIVE pane submit leaves the shared drawing state intact (other pane keeps drawing)', async () => {
+    // The other pane is mid-draw: global drawing mode on, a drawing pending.
+    useReviewStore.getState().setIsDrawingMode(true)
+    useReviewStore.getState().setPendingAnnotation({ objects: [{ type: 'path' }] })
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommentInput
+        assetId="a1"
+        projectId="p1"
+        assetType="video"
+        playheadTimeOverride={4}
+        onSubmit={onSubmit}
+        annotationActive={false}
+        onToggleAnnotation={vi.fn()}
+      />,
+    )
+    await typeAndSubmit('text on the other side')
+    // Submitting on the inactive pane must NOT wipe the active pane's drawing/state.
+    expect(useReviewStore.getState().isDrawingMode).toBe(true)
+    expect(useReviewStore.getState().pendingAnnotation).toEqual({ objects: [{ type: 'path' }] })
+  })
+
+  it('an INACTIVE pane does not highlight its pencil from the other pane’s pending drawing', () => {
+    useReviewStore.getState().setPendingAnnotation({ objects: [{ type: 'path' }] })
+    render(
+      <CommentInput
+        assetId="a1"
+        projectId="p1"
+        assetType="video"
+        onSubmit={vi.fn()}
+        annotationActive={false}
+        onToggleAnnotation={vi.fn()}
+      />,
+    )
+    expect(screen.getByTitle('Draw annotation').className).not.toContain('text-accent')
+  })
+})
