@@ -2,11 +2,11 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 
-@patch("apps.api.routers.comments._build_comment_response")
+@patch("apps.api.routers.comments._build_comment_responses_batched")
 @patch("apps.api.routers.comments.validate_share_link")
 def test_share_comments_returns_array_for_asset_share(
     mock_validate,
-    mock_build_comment_response,
+    mock_batched,
     client,
     mock_db,
 ):
@@ -22,20 +22,21 @@ def test_share_comments_returns_array_for_asset_share(
     mock_validate.return_value = link
     mock_db.order_by.return_value = mock_db
     mock_db.all.return_value = [comment]
-    mock_build_comment_response.return_value = expected
+    mock_batched.return_value = [expected]
 
     response = client.get("/share/some-token/comments")
 
     assert response.status_code == 200
     assert response.json() == [expected]
-    mock_build_comment_response.assert_called_once_with(comment, mock_db)
+    # Batched builder, called once for the whole thread (no per-comment N+1).
+    mock_batched.assert_called_once_with(asset_id, [comment], mock_db)
 
 
-@patch("apps.api.routers.comments._build_comment_response")
+@patch("apps.api.routers.comments._build_comment_responses_batched")
 @patch("apps.api.routers.comments.validate_share_link")
 def test_share_comments_returns_array_for_folder_or_project_share_asset(
     mock_validate,
-    mock_build_comment_response,
+    mock_batched,
     client,
     mock_db,
 ):
@@ -51,13 +52,13 @@ def test_share_comments_returns_array_for_folder_or_project_share_asset(
     mock_validate.return_value = link
     mock_db.order_by.return_value = mock_db
     mock_db.all.return_value = [comment]
-    mock_build_comment_response.return_value = expected
+    mock_batched.return_value = [expected]
 
     response = client.get(f"/share/some-token/comments?asset_id={asset_id}")
 
     assert response.status_code == 200
     assert response.json() == [expected]
-    mock_build_comment_response.assert_called_once_with(comment, mock_db)
+    mock_batched.assert_called_once_with(asset_id, [comment], mock_db)
 
 
 @patch("apps.api.routers.comments.validate_share_link")

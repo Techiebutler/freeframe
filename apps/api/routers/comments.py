@@ -825,7 +825,8 @@ def list_share_comments(
         query = query.filter(Comment.version_id == version_id)
     top_level = query.order_by(Comment.created_at).all()
 
-    return [_build_comment_response(c, db) for c in top_level]
+    # Batched build (fixed query count) — guests have no user, so no current_user_id.
+    return _build_comment_responses_batched(asset_id, top_level, db)
 
 
 @router.post("/share/{token}/comment", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)

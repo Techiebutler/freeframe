@@ -85,6 +85,33 @@ def test_batched_uses_a_fixed_number_of_queries_regardless_of_comment_count():
     assert db.query.call_count == 5
 
 
+def test_batched_loads_guest_authors_and_skips_the_user_query():
+    # Share/public-link comments are authored by guests (no user row).
+    guest_id = uuid.uuid4()
+    parent = SimpleNamespace(
+        id=uuid.uuid4(), asset_id=ASSET, version_id=VER, parent_id=None,
+        author_id=None, guest_author_id=guest_id,
+        timecode_start=None, timecode_end=None, body="hi", resolved=False,
+        visibility="public", created_at=NOW, updated_at=NOW,
+    )
+    guest = SimpleNamespace(id=guest_id, name="Guest Reviewer", email="g@example.com")
+
+    # No author_ids → the User query is short-circuited; the guest query runs instead.
+    db = _mock_db([
+        [parent],  # all_comments
+        [],        # annotations
+        [],        # attachments
+        [],        # reactions
+        [guest],   # guests
+    ])
+
+    result = _build_comment_responses_batched(ASSET, [parent], db)
+
+    assert result[0].author is None
+    assert result[0].guest_author.name == "Guest Reviewer"
+    assert result[0].guest_author.email == "g@example.com"
+
+
 def test_batched_empty_top_level_returns_empty_without_querying():
     db = _mock_db([])
     assert _build_comment_responses_batched(ASSET, [], db) == []
