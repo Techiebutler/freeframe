@@ -76,6 +76,16 @@ describe('CommentInput timecode at playhead 0', () => {
     expect(onSubmit.mock.calls[0][1]).toBeUndefined()
   })
 
+  it('reads the playhead from the store when playheadTimeOverride is omitted (normal reviewer path)', async () => {
+    useReviewStore.getState().setPlayheadTime(26)
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommentInput assetId="a1" projectId="p1" assetType="video" onSubmit={onSubmit} />,
+    )
+    await typeAndSubmit('from store playhead')
+    expect(onSubmit.mock.calls[0][1]).toBe(26)
+  })
+
   it('never attaches a timecode for image assets, even at a non-zero playhead', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     render(

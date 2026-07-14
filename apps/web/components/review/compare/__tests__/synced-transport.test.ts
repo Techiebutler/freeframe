@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applySideState, computeNextT, isMasterActive, type SlavableVideo } from '../use-synced-transport'
+import { frameStep } from '@/lib/compare-time'
 
 function fakeVideo(currentTime = 0, paused = true): SlavableVideo & { played: number; pausedCalls: number } {
   const v = {
@@ -47,6 +48,21 @@ describe('applySideState', () => {
     const v = fakeVideo(8, false)
     applySideState(v, 10, side(2, 60), false)
     expect(v.paused).toBe(true)
+  })
+
+  it('leaves a paused video within one frame of expected ALONE (no re-seek thrash)', () => {
+    // A paused seek snaps currentTime to the nearest decodable frame, never
+    // exactly `expected`; with a sub-frame threshold that would re-seek every
+    // rAF forever. A ~half-frame offset (20ms @ ~30fps) must not correct.
+    const v = fakeVideo(8.02, true) // paused, expected local = 8
+    applySideState(v, 10, side(2, 60), false, frameStep(30))
+    expect(v.currentTime).toBe(8.02) // untouched
+  })
+
+  it('still snaps a paused video that is more than one frame off', () => {
+    const v = fakeVideo(8.2, true) // 200ms off, well past one frame
+    applySideState(v, 10, side(2, 60), false, frameStep(30))
+    expect(v.currentTime).toBe(8)
   })
 })
 

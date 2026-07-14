@@ -48,4 +48,14 @@ describe('CompareVersionSelect', () => {
     fireEvent.click(processing)
     expect(onChange).not.toHaveBeenCalled()
   })
+
+  it('disables the version shown on the other pane (excludeId) so both sides differ', () => {
+    const onChange = vi.fn()
+    render(<CompareVersionSelect versions={[v1, v3]} value="v-1" excludeId="v-3" onChange={onChange} accentClass="text-accent" />)
+    fireEvent.click(screen.getByRole('button', { name: /v1/ }))
+    const other = screen.getByRole('option', { name: /v3/ })
+    expect(other).toBeDisabled()
+    fireEvent.click(other)
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })

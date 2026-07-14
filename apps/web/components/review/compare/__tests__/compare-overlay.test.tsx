@@ -166,6 +166,14 @@ describe('CompareOverlay', () => {
     fireEvent.keyDown(textarea, { key: ' ' })
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('hides the comment composer for view-only users (canComment=false)', () => {
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} canComment={false} />,
+    )
+    // Panels still render (comments are readable), but neither side's composer does.
+    expect(screen.queryByPlaceholderText('Leave your comment...')).not.toBeInTheDocument()
+  })
 })
 
 describe('CompareOverlay per-side comment submission', () => {

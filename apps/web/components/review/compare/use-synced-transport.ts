@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { useVideoPlayer } from '@/hooks/use-video-player'
 import {
-  driftedBeyond, localTime, sideEnded, sideNotStarted, tMax, type SideTiming,
+  driftedBeyond, frameStep, localTime, sideEnded, sideNotStarted, tMax, type SideTiming,
 } from '@/lib/compare-time'
 
 export interface SlavableVideo {
@@ -17,12 +17,25 @@ export interface SlavableVideo {
  * Slave one side's <video> to transport time `t`.
  * Before its offset: paused on first frame. Past its end: paused on last frame.
  * Otherwise: playing (when the transport plays) with drift corrected past 50ms.
+ * `pausedTol` is the drift tolerance while paused/parked (default ~one frame).
  */
-export function applySideState(video: SlavableVideo, t: number, side: SideTiming, playing: boolean): void {
+export function applySideState(
+  video: SlavableVideo,
+  t: number,
+  side: SideTiming,
+  playing: boolean,
+  pausedTol: number = frameStep(),
+): void {
   const expected = localTime(t, side)
   if (sideNotStarted(t, side) || sideEnded(t, side) || !playing) {
     if (!video.paused) video.pause()
-    if (driftedBeyond(expected, video.currentTime, 0.001)) video.currentTime = expected
+    // Correct only past ~one frame. A paused seek snaps currentTime to the
+    // nearest decodable frame, which is essentially never exactly `expected`;
+    // a sub-frame threshold (the old 1ms) re-issued the seek on every rAF
+    // forever — decoder thrash on the exact paused-frame-inspection workflow
+    // compare exists for. One frame is display-accurate (you can't show a
+    // fractional frame) and lets a freshly-loaded pane still snap into place.
+    if (driftedBeyond(expected, video.currentTime, pausedTol)) video.currentTime = expected
     return
   }
   if (video.paused) Promise.resolve(video.play()).catch(() => {})
@@ -70,6 +83,8 @@ interface UseSyncedTransportArgs {
   timingB: SideTiming
   /** The side whose audio is unmuted — it becomes the clock master while active. */
   audibleSide?: 'a' | 'b' | null
+  /** Frame rate — sets the paused drift tolerance to ~one frame (see applySideState). */
+  fps?: number | null
 }
 
 /**
@@ -82,7 +97,7 @@ interface UseSyncedTransportArgs {
  * monotonicity. Both videos are slaved to T every frame via applySideState
  * (50ms drift rule).
  */
-export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide = null }: UseSyncedTransportArgs) {
+export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide = null, fps = null }: UseSyncedTransportArgs) {
   const playerA = useVideoPlayer(urlA, { detached: true })
   const playerB = useVideoPlayer(urlB, { detached: true })
 
@@ -99,12 +114,14 @@ export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide =
   timingBRef.current = timingB
   const audibleSideRef = React.useRef(audibleSide)
   audibleSideRef.current = audibleSide
+  const pausedTolRef = React.useRef(frameStep(fps))
+  pausedTolRef.current = frameStep(fps)
 
   const slaveBoth = React.useCallback((time: number, playing: boolean) => {
     const a = playerA.videoRef.current
     const b = playerB.videoRef.current
-    if (a) applySideState(a, time, timingARef.current, playing)
-    if (b) applySideState(b, time, timingBRef.current, playing)
+    if (a) applySideState(a, time, timingARef.current, playing, pausedTolRef.current)
+    if (b) applySideState(b, time, timingBRef.current, playing, pausedTolRef.current)
   }, [playerA.videoRef, playerB.videoRef])
 
   // rAF clock

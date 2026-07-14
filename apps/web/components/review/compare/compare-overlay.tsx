@@ -124,6 +124,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     timingA,
     timingB,
     audibleSide: isVideo ? (audioSide === 'none' ? null : audioSide) : null,
+    fps,
   })
 
   // Reactive element-duration fallback: re-render when metadata loads (a render-time
@@ -307,6 +308,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
             testId="compare-select-a"
             versions={versions}
             value={left.id}
+            excludeId={right.id}
             accentClass="text-sky-400"
             onChange={(v) => writeParams((p) => p.set('compare', v.id))}
           />
@@ -334,6 +336,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
             testId="compare-select-b"
             versions={versions}
             value={right.id}
+            excludeId={left.id}
             accentClass="text-emerald-400"
             onChange={(v) => setCurrentVersion(v)}
           />
