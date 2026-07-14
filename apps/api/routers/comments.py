@@ -155,6 +155,99 @@ def _get_annotations_map(comment_ids: list[uuid.UUID], db: Session) -> dict:
     return {a.comment_id: a for a in annotations}
 
 
+def _build_comment_responses_batched(
+    asset_id: uuid.UUID,
+    top_level: list[Comment],
+    db: Session,
+    current_user_id: uuid.UUID | None = None,
+    max_depth: int = 5,
+) -> list[CommentResponse]:
+    """Build the comment tree for `top_level` with a FIXED number of queries
+    instead of one-per-comment. Field-for-field equivalent to calling
+    _build_comment_response on each top-level comment, but ~6 queries total
+    regardless of how many comments the asset has (avoids the N+1 that made the
+    list endpoint slow — and it's re-fetched after every comment save)."""
+    if not top_level:
+        return []
+
+    # One query for every non-deleted comment on the asset → parent→children map.
+    all_comments = (
+        db.query(Comment)
+        .filter(Comment.asset_id == asset_id, Comment.deleted_at.is_(None))
+        .order_by(Comment.created_at)
+        .all()
+    )
+    children_map: dict[uuid.UUID, list[Comment]] = defaultdict(list)
+    for c in all_comments:
+        if c.parent_id is not None:
+            children_map[c.parent_id].append(c)
+
+    # Walk the subtree we will actually render (top-level + descendants to
+    # max_depth) to collect the ids whose related rows we must load.
+    included: list[Comment] = []
+
+    def _collect(comment: Comment, depth: int) -> None:
+        included.append(comment)
+        if depth > 0:
+            for child in children_map.get(comment.id, []):
+                _collect(child, depth - 1)
+
+    for c in top_level:
+        _collect(c, max_depth)
+    ids = [c.id for c in included]
+
+    # Batch-load related rows keyed by comment_id (one query each).
+    annotations = {
+        a.comment_id: a
+        for a in db.query(Annotation).filter(Annotation.comment_id.in_(ids)).all()
+    }
+    attachments_map: dict[uuid.UUID, list[CommentAttachment]] = defaultdict(list)
+    for a in db.query(CommentAttachment).filter(CommentAttachment.comment_id.in_(ids)).all():
+        attachments_map[a.comment_id].append(a)
+    reactions_map: dict[uuid.UUID, list[CommentReaction]] = defaultdict(list)
+    for r in db.query(CommentReaction).filter(CommentReaction.comment_id.in_(ids)).all():
+        reactions_map[r.comment_id].append(r)
+
+    author_ids = {c.author_id for c in included if c.author_id}
+    authors = (
+        {u.id: u for u in db.query(User).filter(User.id.in_(author_ids)).all()}
+        if author_ids else {}
+    )
+    guest_ids = {c.guest_author_id for c in included if c.guest_author_id}
+    guests = (
+        {g.id: g for g in db.query(GuestUser).filter(GuestUser.id.in_(guest_ids)).all()}
+        if guest_ids else {}
+    )
+
+    def _build(comment: Comment, depth: int) -> CommentResponse:
+        resp = CommentResponse.model_validate(comment)
+        author = authors.get(comment.author_id) if comment.author_id else None
+        resp.author = (
+            AuthorInfo(id=author.id, name=author.name, avatar_url=author.avatar_url)
+            if author else None
+        )
+        guest = guests.get(comment.guest_author_id) if comment.guest_author_id else None
+        resp.guest_author = (
+            GuestAuthorInfo(id=guest.id, name=guest.name, email=guest.email)
+            if guest else None
+        )
+        ann = annotations.get(comment.id)
+        resp.annotation = AnnotationResponse.model_validate(ann) if ann else None
+        resp.attachments = [
+            _build_attachment_response(a) for a in attachments_map.get(comment.id, [])
+        ]
+        resp.reactions = _build_reaction_responses(
+            reactions_map.get(comment.id, []), current_user_id
+        )
+        resp.replies = (
+            [_build(child, depth - 1) for child in children_map.get(comment.id, [])]
+            if depth > 0 else []
+        )
+        return resp
+
+    return [_build(c, max_depth) for c in top_level]
+
+
 def _parse_mentions(body: str) -> list[str]:
     """Extract @email mentions from comment body."""
     return re.findall(r"@([\w.+-]+@[\w.-]+\.\w+)", body)
@@ -226,7 +319,7 @@ def list_comments(
     if visibility and visibility in ("public", "internal"):
         query = query.filter(Comment.visibility == visibility)
     top_level = query.order_by(Comment.created_at).all()
-    return [_build_comment_response(c, db, current_user_id=current_user.id) for c in top_level]
+    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id)
 
 
 @router.post("/assets/{asset_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
