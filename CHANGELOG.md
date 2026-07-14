@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Settings is now reachable for non-admin users** — the sidebar "Settings" menu item and the `/settings` index both routed everyone to the admin-only `/settings/admin`, which bounced normal users back to the home page. Non-admins now land on Appearance (their first accessible settings page); superadmins still land on the admin dashboard.
+
 ## [1.5.0] - 2026-07-13
 
 ### Upgrade notes

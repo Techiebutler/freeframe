@@ -43,7 +43,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname()
-  const { user, logout } = useAuthStore()
+  const { user, logout, isSuperAdmin } = useAuthStore()
   const { files: uploadFiles, togglePanel, panelOpen } = useUploadStore()
   const { unreadCount, fetchNotifications } = useNotificationStore()
   const { orgName, orgLogoDark, orgLogoLight } = useBrandingStore()
@@ -259,7 +259,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               </DropdownMenu.Item>
               <DropdownMenu.Item asChild>
                 <Link
-                  href="/settings/admin"
+                  href={isSuperAdmin ? '/settings/admin' : '/settings/appearance'}
                   className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-text-secondary hover:bg-bg-hover hover:text-text-primary focus:outline-none"
                 >
                   <Settings className="h-4 w-4" />
