@@ -81,6 +81,28 @@ Open [http://localhost:3000](http://localhost:3000) to access FreeFrame. The fir
 | API Docs    | http://localhost:8000/docs    |
 | MinIO Console | http://localhost:9001       |
 
+### Access from other devices on your network (LAN)
+
+By default the dev stack is reachable only from the host machine (`localhost`). To open FreeFrame from a phone or another computer on the same network, point a few URLs at your machine's LAN IP — find it with `ipconfig getifaddr en0` (macOS) or `hostname -I` (Linux) — then recreate the containers.
+
+In `.env` (replace `192.168.1.50` with your IP):
+
+```env
+NEXT_PUBLIC_API_URL=http://192.168.1.50:8000   # web → API (baked into the browser bundle)
+FRONTEND_URL=http://192.168.1.50:3000           # links in invite/magic-code emails
+CORS_ALLOW_ORIGINS=*                            # API allows the LAN browser origin
+S3_PUBLIC_ENDPOINT=http://192.168.1.50:9000     # presigned upload/download URLs
+MINIO_CORS_ALLOW_ORIGIN=*                       # MinIO allows the LAN browser origin
+```
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --force-recreate
+```
+
+Then browse to `http://192.168.1.50:3000` from any device on the network. Server-side settings (`DATABASE_URL`, `S3_ENDPOINT`, …) stay on their docker-internal hostnames — only the browser-facing URLs above change.
+
+> The `*` wildcards are LAN-testing conveniences — don't use them in production. See [docs/deployment.md](docs/deployment.md) for a locked-down setup.
+
 ## Release channels
 
 Production self-hosters should run a **released** version, not `main`:
