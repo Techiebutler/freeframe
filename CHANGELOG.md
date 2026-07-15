@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **"Copy invite link" works over plain HTTP / LAN** — the admin users page called the browser Clipboard API directly, which only exists in a secure context (HTTPS or `localhost`); on a plain-HTTP LAN address the button threw. It now uses the shared clipboard helper (with an `execCommand` fallback) and only shows "Copied" on success.
+
 ## [1.6.0] - 2026-07-14
 
 ### Added
