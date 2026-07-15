@@ -4,7 +4,7 @@ import * as React from "react";
 import useSWR, { mutate } from "swr";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Users, Plus, X, Shield, Link2, Check } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, copyToClipboard } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -204,12 +204,15 @@ export default function AdminPage() {
 
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
 
-  const handleCopyInviteLink = (u: User) => {
+  const handleCopyInviteLink = async (u: User) => {
     if (!u.invite_token) return;
     const link = `${window.location.origin}/invite/${u.invite_token}`;
-    navigator.clipboard.writeText(link);
-    setCopiedId(u.id);
-    setTimeout(() => setCopiedId(null), 2000);
+    // copyToClipboard falls back to execCommand in insecure contexts (e.g. plain
+    // HTTP on a LAN IP), where navigator.clipboard is undefined and would throw.
+    if (await copyToClipboard(link)) {
+      setCopiedId(u.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
   };
 
   const handleToggleAdmin = async (
