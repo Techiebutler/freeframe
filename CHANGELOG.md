@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Configurable CORS origins** — a new `CORS_ALLOW_ORIGINS` setting (comma-separated) lets the API allow browser origins beyond the built-in frontend/localhost defaults; set it to `*` to allow any origin (handy when testing over a LAN IP — not recommended in production). The wildcard is served by echoing the request origin, so credentialed requests keep working.
+
 ## [1.6.0] - 2026-07-14
 
 ### Added

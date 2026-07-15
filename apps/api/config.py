@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     frontend_url: str = "http://localhost:3000"
+    # Extra browser origins allowed by CORS, comma-separated (in addition to the
+    # frontend + localhost defaults). Set to "*" to allow any origin — handy for
+    # testing on a LAN via a machine's IP; do not use "*" in production.
+    cors_allow_origins: str = ""
     transcoder_engine: str = "ffmpeg"
 
     # Maximum size (bytes) for a single uploaded file. 0 = unlimited (no per-file cap).
