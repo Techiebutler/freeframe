@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **First-time sign-in no longer breaks at the set-password step** — after verifying a magic code, a brand-new user (one who hasn't set a password yet) was advanced to the "set password" screen but the tokens issued by `verify-magic-code` were discarded, so the follow-up `POST /auth/set-password` (which requires an authenticated user) returned 401 and bounced the user back to the login screen — never able to finish onboarding. The tokens are now persisted before the set-password step. The password-login form also validates the email format client-side, so a malformed address shows a friendly "Enter a valid email address" instead of surfacing the raw backend validation message.
+
 ## [1.6.0] - 2026-07-14
 
 ### Added
