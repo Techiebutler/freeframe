@@ -61,7 +61,10 @@ def _get_presign_client():
     so presigned URLs are accessible from the browser (e.g. localhost:9000
     instead of minio:9000 in Docker).
     """
-    endpoint = settings.s3_public_endpoint or (None if _is_aws_s3() else settings.s3_endpoint)
+    # AWS S3 mode always uses native presigned URLs; s3_public_endpoint is a
+    # MinIO/dev concept (rewrite the internal endpoint to a browser-reachable one)
+    # and must never apply to AWS, or presigned URLs would point at the wrong host.
+    endpoint = None if _is_aws_s3() else (settings.s3_public_endpoint or settings.s3_endpoint)
     kwargs = {
         "aws_access_key_id": settings.s3_access_key,
         "aws_secret_access_key": settings.s3_secret_key,

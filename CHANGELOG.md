@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Presigned URLs are correct in AWS S3 mode** — with `S3_STORAGE=s3`, a configured `S3_PUBLIC_ENDPOINT` (a MinIO/dev-only concept) would override the AWS host and point presigned upload/download URLs at the wrong endpoint. AWS mode now always uses native presigned URLs and ignores `S3_PUBLIC_ENDPOINT`.
+
 ## [1.6.0] - 2026-07-14
 
 ### Added
