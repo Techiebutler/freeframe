@@ -38,13 +38,24 @@ app = FastAPI(
     openapi_url=None if _disable_docs else "/openapi.json",
 )
 
+_cors_extra = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
+if "*" in _cors_extra:
+    # Allow any origin. A literal "*" can't be combined with allow_credentials,
+    # so echo the request origin via regex instead (keeps credentialed requests working).
+    _cors_origin_kwargs = {"allow_origin_regex": ".*"}
+else:
+    _cors_origin_kwargs = {
+        "allow_origins": [
+            settings.frontend_url,
+            "http://localhost:3000",
+            "http://localhost:3001",
+            *_cors_extra,
+        ]
+    }
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.frontend_url,
-        "http://localhost:3000",
-        "http://localhost:3001",
-    ],
+    **_cors_origin_kwargs,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
