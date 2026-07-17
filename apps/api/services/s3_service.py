@@ -31,6 +31,12 @@ def _is_aws_s3() -> bool:
     """Check if using AWS S3 (vs MinIO/local). Controlled by S3_STORAGE env var."""
     return settings.s3_storage.lower() == "s3"
 
+# Self-hosted S3 backends (Garage, MinIO, …) commonly sit behind a reverse proxy
+# without wildcard bucket DNS, so virtual-host addressing can't resolve — and some
+# (Garage) reject SigV2 query auth outright. Path-style + SigV4 is the compatibility
+# baseline every S3-compatible provider accepts, so it's forced for non-AWS mode.
+_NON_AWS_COMPAT_CONFIG = Config(s3={"addressing_style": "path"}, signature_version="s3v4")
+
 def _build_s3_client(config=None):
     """Construct an S3 client. Selection is driven by S3_STORAGE (see _is_aws_s3):
     - "s3"   -> native AWS S3 (no endpoint_url; S3_ENDPOINT is not used)
@@ -44,6 +50,7 @@ def _build_s3_client(config=None):
     }
     if not _is_aws_s3():
         kwargs["endpoint_url"] = settings.s3_endpoint
+        config = _NON_AWS_COMPAT_CONFIG.merge(config) if config is not None else _NON_AWS_COMPAT_CONFIG
     if config is not None:
         kwargs["config"] = config
     return boto3.client("s3", **kwargs)
@@ -72,6 +79,7 @@ def _get_presign_client():
     }
     if endpoint:
         kwargs["endpoint_url"] = endpoint
+        kwargs["config"] = _NON_AWS_COMPAT_CONFIG
     return boto3.client("s3", **kwargs)
 
 def ensure_bucket_exists():
@@ -108,6 +116,13 @@ def ensure_bucket_exists():
     # Set CORS for browser-based uploads (presigned PUT)
     if not _is_aws_s3():
         try:
+            # One rule per origin: Garage joins a rule's AllowedOrigins into a single
+            # comma-separated Access-Control-Allow-Origin response header, which
+            # browsers reject — with both origins in one rule, every cross-origin
+            # request (HLS segments, presigned uploads) fails CORS in the browser.
+            # AWS-style backends echo only the matching origin either way, so
+            # per-origin rules behave identically everywhere.
+            origins = list(dict.fromkeys([settings.frontend_url, "http://localhost:3000"]))
             s3.put_bucket_cors(
                 Bucket=settings.s3_bucket,
                 CORSConfiguration={
@@ -115,10 +130,11 @@ def ensure_bucket_exists():
                         {
                             "AllowedHeaders": ["*"],
                             "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
-                            "AllowedOrigins": [settings.frontend_url, "http://localhost:3000"],
+                            "AllowedOrigins": [origin],
                             "ExposeHeaders": ["ETag", "Content-Length", "x-amz-request-id"],
                             "MaxAgeSeconds": 3600,
                         }
+                        for origin in origins
                     ]
                 },
             )

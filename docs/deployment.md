@@ -187,6 +187,9 @@ For **non-AWS S3-compatible providers** (R2, B2, Spaces, MinIO, Hetzner, …), s
 | Backblaze B2 | `https://s3.<region>.backblazeb2.com` |
 | DigitalOcean Spaces | `https://<region>.digitaloceanspaces.com` |
 | MinIO (self-hosted) | `http://your-minio-host:9000` |
+| Garage (self-hosted) | `http://your-garage-host:3900` (or your reverse-proxy URL) |
+
+In non-AWS mode FreeFrame always uses **path-style addressing** (`endpoint/bucket/key`) with **SigV4** signatures — the compatibility baseline every S3-compatible provider accepts. No wildcard bucket DNS is needed in front of a self-hosted store.
 
 #### Bucket CORS — required for uploads
 
