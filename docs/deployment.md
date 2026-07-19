@@ -207,6 +207,8 @@ Uploads go **directly from the browser to your bucket** via presigned URLs, so t
 }
 ```
 
+If you allow **more than one origin**, give each origin its own rule rather than listing them all in one. Some backends (Garage) answer a multi-origin rule by joining every entry into a single comma-separated `Access-Control-Allow-Origin` header, which browsers reject — every upload and HLS segment fetch then fails CORS. FreeFrame's automatic startup config already emits one rule per origin.
+
 FreeFrame applies this automatically to **non-AWS** buckets at startup when it has permission (and logs a warning if it can't). Set it yourself for **AWS S3**, or wherever FreeFrame lacks CORS permission. **Hetzner Object Storage** exposes CORS only via API/CLI (not the Console UI), so it's easy to miss — apply the JSON above with `aws s3api put-bucket-cors`.
 
 ### External SMTP

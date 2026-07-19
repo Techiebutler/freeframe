@@ -66,6 +66,23 @@ def test_non_aws_compat_config_merges_with_caller_config(monkeypatch, captured_c
     assert cfg.s3["addressing_style"] == "path"
 
 
+def test_compat_config_wins_over_conflicting_caller_config(monkeypatch, captured_client):
+    """The compat baseline is authoritative: a caller cannot downgrade it.
+
+    botocore's `Config.merge` lets the argument win and replaces the `s3` sub-dict
+    wholesale, so the merge direction is what makes this hold.
+    """
+    monkeypatch.setattr(settings, "s3_storage", "minio")
+
+    _build_s3_client(
+        config=Config(signature_version="s3", s3={"addressing_style": "virtual"})
+    )
+
+    cfg = _client_config(captured_client)
+    assert cfg.signature_version == "s3v4"
+    assert cfg.s3["addressing_style"] == "path"
+
+
 def test_aws_client_is_untouched(monkeypatch, captured_client):
     monkeypatch.setattr(settings, "s3_storage", "s3")
 

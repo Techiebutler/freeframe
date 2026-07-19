@@ -50,7 +50,10 @@ def _build_s3_client(config=None):
     }
     if not _is_aws_s3():
         kwargs["endpoint_url"] = settings.s3_endpoint
-        config = _NON_AWS_COMPAT_CONFIG.merge(config) if config is not None else _NON_AWS_COMPAT_CONFIG
+        # botocore's Config.merge lets the *argument* win, so merge onto the caller's
+        # config to keep the compat baseline authoritative (a caller can still add
+        # non-conflicting options like the startup timeouts).
+        config = config.merge(_NON_AWS_COMPAT_CONFIG) if config is not None else _NON_AWS_COMPAT_CONFIG
     if config is not None:
         kwargs["config"] = config
     return boto3.client("s3", **kwargs)
