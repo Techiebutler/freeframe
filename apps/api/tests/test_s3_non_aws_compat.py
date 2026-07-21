@@ -83,13 +83,53 @@ def test_compat_config_wins_over_conflicting_caller_config(monkeypatch, captured
     assert cfg.s3["addressing_style"] == "path"
 
 
-def test_aws_client_is_untouched(monkeypatch, captured_client):
+def test_aws_client_has_no_endpoint_and_no_path_style(monkeypatch, captured_client):
+    """AWS mode must not get an endpoint_url (#175) nor path-style addressing.
+
+    It does get a config now — SigV4 is pinned in every mode (#190) — so this
+    asserts the real invariant rather than the absence of a config.
+    """
     monkeypatch.setattr(settings, "s3_storage", "s3")
 
     _build_s3_client()
 
     assert "endpoint_url" not in captured_client
-    assert "config" not in captured_client
+    cfg = _client_config(captured_client)
+    assert cfg.signature_version == "s3v4"
+    assert not (cfg.s3 or {}).get("addressing_style")
+
+
+def test_aws_presign_client_pins_sigv4(monkeypatch, captured_client):
+    monkeypatch.setattr(settings, "s3_storage", "s3")
+
+    _get_presign_client()
+
+    assert "endpoint_url" not in captured_client
+    cfg = _client_config(captured_client)
+    assert cfg.signature_version == "s3v4"
+
+
+@pytest.mark.parametrize("region", ["us-east-1", "eu-central-1"])
+def test_aws_presigned_url_is_sigv4_in_every_region(monkeypatch, region):
+    """The regression #190 is about: in us-east-1 botocore silently downgrades
+    *presigned* URLs to SigV2 unless signature_version is pinned.
+
+    This must assert on the generated URL, not the config — the config reports
+    "s3v4" either way, because the downgrade happens at the signer.
+    """
+    monkeypatch.setattr(settings, "s3_storage", "s3")
+    monkeypatch.setattr(settings, "s3_region", region)
+    monkeypatch.setattr(settings, "s3_access_key", "AKIAIOSFODNN7EXAMPLE")
+    monkeypatch.setattr(settings, "s3_secret_key", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+
+    url = _get_presign_client().generate_presigned_url(
+        "put_object",
+        Params={"Bucket": "example-bucket", "Key": "some/object.mp4"},
+        ExpiresIn=900,
+    )
+
+    assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in url, url
+    assert "AWSAccessKeyId=" not in url, f"SigV2 presigned URL in {region}: {url}"
 
 
 def test_presign_client_forces_path_style_and_sigv4(monkeypatch, captured_client):

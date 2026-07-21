@@ -31,10 +31,18 @@ def _is_aws_s3() -> bool:
     """Check if using AWS S3 (vs MinIO/local). Controlled by S3_STORAGE env var."""
     return settings.s3_storage.lower() == "s3"
 
+# SigV4 everywhere. us-east-1 is the only region whose endpoint metadata lists "s3"
+# alongside "s3v4", so with no explicit signature_version botocore registers
+# _default_s3_presign_to_sigv2 and silently downgrades *presigned* URLs to SigV2 —
+# server-side calls stay SigV4, and client.meta.config.signature_version still reads
+# "s3v4", which makes it easy to miss. SigV2 breaks presigned PUTs that carry any
+# Content-Type, and modern buckets reject it outright.
+_SIGV4_CONFIG = Config(signature_version="s3v4")
+
 # Self-hosted S3 backends (Garage, MinIO, …) commonly sit behind a reverse proxy
 # without wildcard bucket DNS, so virtual-host addressing can't resolve — and some
-# (Garage) reject SigV2 query auth outright. Path-style + SigV4 is the compatibility
-# baseline every S3-compatible provider accepts, so it's forced for non-AWS mode.
+# (Garage) reject SigV2 query auth outright. Path-style is layered on top of the
+# SigV4 baseline for non-AWS mode.
 _NON_AWS_COMPAT_CONFIG = Config(s3={"addressing_style": "path"}, signature_version="s3v4")
 
 def _build_s3_client(config=None):
@@ -48,14 +56,15 @@ def _build_s3_client(config=None):
         "aws_secret_access_key": settings.s3_secret_key,
         "region_name": settings.s3_region,
     }
+    baseline = _SIGV4_CONFIG
     if not _is_aws_s3():
         kwargs["endpoint_url"] = settings.s3_endpoint
-        # botocore's Config.merge lets the *argument* win, so merge onto the caller's
-        # config to keep the compat baseline authoritative (a caller can still add
-        # non-conflicting options like the startup timeouts).
-        config = config.merge(_NON_AWS_COMPAT_CONFIG) if config is not None else _NON_AWS_COMPAT_CONFIG
-    if config is not None:
-        kwargs["config"] = config
+        baseline = _NON_AWS_COMPAT_CONFIG
+    # botocore's Config.merge lets the *argument* win, so merge onto the caller's
+    # config to keep the baseline authoritative (a caller can still add
+    # non-conflicting options like the startup timeouts).
+    config = config.merge(baseline) if config is not None else baseline
+    kwargs["config"] = config
     return boto3.client("s3", **kwargs)
 
 
@@ -83,6 +92,8 @@ def _get_presign_client():
     if endpoint:
         kwargs["endpoint_url"] = endpoint
         kwargs["config"] = _NON_AWS_COMPAT_CONFIG
+    else:
+        kwargs["config"] = _SIGV4_CONFIG
     return boto3.client("s3", **kwargs)
 
 def ensure_bucket_exists():
