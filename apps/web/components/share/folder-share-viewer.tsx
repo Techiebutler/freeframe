@@ -1048,7 +1048,7 @@ export function FolderShareViewer({
   const [searchQuery, setSearchQuery] = React.useState('')
   const [foldersExpanded, setFoldersExpanded] = React.useState(true)
   const [assetsExpanded, setAssetsExpanded] = React.useState(true)
-  const [panelOpen, setPanelOpen] = React.useState(true)
+  const [panelOpen, setPanelOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   // Set page title
@@ -1349,7 +1349,7 @@ export function FolderShareViewer({
       </header>
 
       {/* ─── Content area ──────────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {/* ─── Left: folder contents ─────────────────────────────────── */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Sub-header: title, summary, breadcrumb, search */}
@@ -1578,7 +1578,7 @@ export function FolderShareViewer({
 
         {/* ─── Right Panel ───────────────────────────────────────────── */}
         {panelOpen && (
-          <div className="w-[320px] shrink-0 border-l border-border bg-bg-secondary flex flex-col overflow-hidden">
+          <div className="w-full md:w-[320px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto flex flex-col border-l-0 md:border-l border-border bg-bg-secondary shrink-0 overflow-hidden">
             <RightPanel
               selectedAsset={selectedAsset}
               token={token}
