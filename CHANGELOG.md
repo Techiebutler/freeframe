@@ -7,12 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-21
+
+### Upgrade notes
+- **AWS S3 users in `us-east-1`: no action needed, but presigned URLs change signature.** They are now SigV4 rather than SigV2. If browser uploads were failing with an opaque 403 (`SignatureDoesNotMatch`), this release fixes it — any workaround you added can be removed.
+- **Self-hosted S3 (Garage, MinIO, Ceph, R2/B2/Spaces): path-style addressing and SigV4 are now forced** in non-AWS mode (`S3_STORAGE` ≠ `s3`). This is what makes Garage work out of the box. If you deliberately relied on virtual-host-style addressing against a backend that supports it, be aware the request shape changes.
+- **`uvicorn` 0.30.6 → 0.51.0** is a large jump. If you override the server command or its flags in your own compose file or image, re-check them against the upstream changelog. The bundled `apps/api/Dockerfile` invocation is unchanged and verified.
+
 ### Added
 - **Configurable CORS origins** — a new `CORS_ALLOW_ORIGINS` setting (comma-separated) lets the API allow browser origins beyond the built-in frontend/localhost defaults; set it to `*` to allow any origin (handy when testing over a LAN IP — not recommended in production). The wildcard is served by echoing the request origin, so credentialed requests keep working.
 
 ### Changed
 - **Dev compose honors the environment for LAN/self-host testing** — `docker-compose.dev.yml` now reads `NEXT_PUBLIC_API_URL`, the S3 storage credentials/bucket/region, `S3_PUBLIC_ENDPOINT`, and `MINIO_CORS_ALLOW_ORIGIN` from the environment (falling back to the previous defaults), so the dev stack can point at a LAN IP or external storage without editing the compose file.
 - **Uploads panel now defaults to the Active tab** — opening the panel after an upload shows only in-progress items instead of dumping the full upload history on screen. Switch to the All/Complete/Failed tabs to view history as before.
+- **Dependency updates** — uvicorn 0.30.6 → 0.51.0, alembic 1.13.3 → 1.18.5, httpx 0.27.2 → 0.28.1, bcrypt 4.2.0 → 4.3.0, psycopg2-binary 2.9.11 → 2.9.12 (plus frontend/dev: `@types/node`, `@vitejs/plugin-react`, and three `@radix-ui` packages).
 
 ### Fixed
 - **First-time sign-in no longer breaks at the set-password step** — after verifying a magic code, a brand-new user (one who hasn't set a password yet) was advanced to the "set password" screen but the tokens issued by `verify-magic-code` were discarded, so the follow-up `POST /auth/set-password` (which requires an authenticated user) returned 401 and bounced the user back to the login screen — never able to finish onboarding. The tokens are now persisted before the set-password step. The password-login form also validates the email format client-side, so a malformed address shows a friendly "Enter a valid email address" instead of surfacing the raw backend validation message.
@@ -22,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Garage and other self-hosted S3 backends work out of the box** — non-AWS mode (`S3_STORAGE` ≠ `s3`) now forces **path-style addressing** and **SigV4** on both the server-side and presign S3 clients. Without this, boto3 could emit virtual-host-style URLs (which fail when the store sits behind a reverse proxy without wildcard bucket DNS) and SigV2 presigned URLs (which Garage rejects with `Received an unknown query parameter: 'AWSAccessKeyId'`). AWS mode is unchanged.
 - **Startup bucket CORS is applied as one rule per origin** — both allowed origins used to share a single CORS rule; Garage answers such a rule by joining all its `AllowedOrigins` into one comma-separated `Access-Control-Allow-Origin` header, which browsers hard-reject, so every cross-origin request (HLS segment fetches, presigned uploads) failed CORS with e.g. `HLS error: networkError`. Per-origin rules behave identically on AWS-style backends, which echo only the matching origin either way.
 - **Presigned URLs use SigV4 on AWS S3 in `us-east-1`** — `us-east-1` is the only region whose endpoint metadata still advertises SigV2, so with no explicit signature version botocore silently downgraded *presigned* URLs (uploads and playback) to SigV2 there, while server-side calls and the reported client config both still looked like SigV4. SigV2 presigned PUTs fail as soon as the browser sends a `Content-Type`, and buckets created after June 2020 reject SigV2 outright — so an operator on the default `S3_STORAGE=s3` + `S3_REGION=us-east-1` could see uploads fail with an opaque 403. SigV4 is now pinned in every mode; other regions were already unaffected.
+- **Profile avatar uploads work when `S3_PUBLIC_ENDPOINT` is set** — the upload URL was presigned against the *internal* S3 endpoint, so on the usual MinIO/reverse-proxy setup the browser could not reach it. Avatars are now also stored as an S3 key instead of a long-lived presigned URL (a persisted URL started returning 403 once it expired), with a fresh short-lived URL generated per response, and the confirm step rejects keys outside the caller's own avatar prefix.
 
 ## [1.6.0] - 2026-07-14
 
