@@ -19,6 +19,8 @@ import {
   ArrowLeft,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
+import { useReviewStore } from '@/stores/review-store'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -791,11 +793,6 @@ function ShareReviewInner({
   token, shareSession, assetName, permission, allowDownload, showVersions, onBack,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
-  // Import hooks from the review system
-  const { useReview } = require('@/components/review/review-provider')
-  const { useReviewStore } = require('@/stores/review-store')
-  const { useComments } = require('@/hooks/use-comments')
-
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId } = useReviewStore()
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
@@ -829,7 +826,7 @@ function ShareReviewInner({
   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
   const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
-    const payload: Record<string, unknown> = { body }
+    const payload: CreateCommentPayload = { body }
     if (currentVersion?.id) payload.version_id = currentVersion.id
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd

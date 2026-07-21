@@ -15,7 +15,7 @@ import type { AssetResponse, AssetVersion, Comment } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface CreateCommentPayload {
+export interface CreateCommentPayload {
   body: string;
   version_id?: string;
   parent_id?: string;
