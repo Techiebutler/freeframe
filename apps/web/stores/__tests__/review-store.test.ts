@@ -63,4 +63,35 @@ describe('Review store', () => {
     expect(state.drawingColor).toBe('#FF3B30')
     expect(state.brushSize).toBe(4)
   })
+
+  it('setCurrentVersion clears activeAnnotation and focusedCommentId on version change', () => {
+    const v1 = { id: 'v1', version_number: 1 } as any
+    const v2 = { id: 'v2', version_number: 2 } as any
+
+    useReviewStore.getState().setCurrentVersion(v1)
+    useReviewStore.getState().setActiveAnnotation({ strokes: [] })
+    useReviewStore.getState().setFocusedCommentId('c1')
+
+    useReviewStore.getState().setCurrentVersion(v2)
+
+    const state = useReviewStore.getState()
+    expect(state.currentVersion).toEqual(v2)
+    expect(state.activeAnnotation).toBeNull()
+    expect(state.focusedCommentId).toBeNull()
+  })
+
+  it('setCurrentVersion does not clear activeAnnotation on initial set or same version re-selection', () => {
+    const v1 = { id: 'v1', version_number: 1 } as any
+
+    useReviewStore.getState().setCurrentVersion(v1)
+    useReviewStore.getState().setActiveAnnotation({ strokes: [] })
+    useReviewStore.getState().setFocusedCommentId('c1')
+
+    useReviewStore.getState().setCurrentVersion(v1)
+
+    const state = useReviewStore.getState()
+    expect(state.currentVersion).toEqual(v1)
+    expect(state.activeAnnotation).toEqual({ strokes: [] })
+    expect(state.focusedCommentId).toBe('c1')
+  })
 })
