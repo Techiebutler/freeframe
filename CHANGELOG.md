@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-07-23
+
 ### Fixed
 - **Sign-in codes are no longer issued to uninvited emails** — `POST /auth/send-magic-code` used to create and, on verification, fully activate an account for any email address, whether or not an admin had invited it. Only an existing user (already active, or already invited via `POST /users/invite`) can now receive a working code; an unrecognized email gets the same generic response, so the endpoint still doesn't reveal which emails are registered.
 
