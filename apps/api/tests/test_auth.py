@@ -122,6 +122,38 @@ def test_login_nonexistent_user(client, mock_db):
     assert resp.status_code == 401
 
 
+def test_send_magic_code_unknown_email_does_not_create_user(client, mock_db):
+    """POST /auth/send-magic-code — unknown email gets a generic response; no account is created.
+
+    Regression test: this endpoint used to auto-create and later auto-activate an account for
+    any email, bypassing the /users/invite gate entirely (GHSA-9m78-fww2-p89h).
+    """
+    mock_db.first.return_value = None  # no existing (i.e. no invited) user for this email
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)):
+        resp = client.post("/auth/send-magic-code", json={"email": "uninvited@example.com"})
+
+    assert resp.status_code == 200
+    assert resp.json()["email"] == "uninvited@example.com"
+    mock_db.add.assert_not_called()
+    mock_db.commit.assert_not_called()
+
+
+def test_send_magic_code_existing_user_sends_code(client, mock_db):
+    """POST /auth/send-magic-code — an existing (e.g. already-invited) user gets a real code issued."""
+    user = _mock_user("invited@example.com")
+    mock_db.first.return_value = user
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)), \
+         patch("apps.api.routers.auth.store_magic_code") as mock_store, \
+         patch("apps.api.routers.auth.send_task_safe") as mock_send:
+        resp = client.post("/auth/send-magic-code", json={"email": "invited@example.com"})
+
+    assert resp.status_code == 200
+    mock_store.assert_called_once()
+    mock_send.assert_called_once()
+
+
 def test_get_me(client, auth_headers, test_user):
     """GET /auth/me — returns current user profile."""
     resp = client.get("/auth/me", headers=auth_headers)

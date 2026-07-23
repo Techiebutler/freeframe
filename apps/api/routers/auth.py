@@ -40,28 +40,21 @@ def _generate_invite_token() -> str:
 @router.post("/send-magic-code", response_model=SendMagicCodeResponse, dependencies=[Depends(rate_limit("send_magic_code", 5, 600))])
 def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
     """
-    Send magic code to email.
-    - If user exists: send code for login
-    - If user doesn't exist: create pending user and send code
+    Send magic code to an existing user's email, for login.
+
+    Does not create accounts: only an admin invite (/users/invite) or
+    /setup/create-superadmin may provision a new user. An unrecognized email
+    gets the same response as a known one, so this endpoint can't be used to
+    enumerate registered emails.
     """
     user = get_user_by_email(db, body.email)
-    
+
     if not user:
-        # Check if this is the first user (becomes super admin)
-        user_count = db.query(User).filter(User.deleted_at.is_(None)).count()
-        is_first_user = user_count == 0
-        
-        # Create new user in pending_verification status
-        user = User(
+        return SendMagicCodeResponse(
+            message="Magic code sent to your email",
             email=body.email,
-            name=body.email.split("@")[0],  # Temporary name from email
-            status=UserStatus.pending_verification,
-            email_verified=False,
-            is_superadmin=is_first_user,  # First user becomes super admin
         )
-        db.add(user)
-        db.commit()
-    
+
     # Generate and store magic code in Redis
     code = generate_magic_code()
     store_magic_code(body.email, code)
