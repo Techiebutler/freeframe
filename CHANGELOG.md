@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-07-23
+
 ### Fixed
 - **Version switch clears active comment annotation** — switching versions in the single-asset review view now clears the focused comment and active drawing overlay, preventing drawings from previous versions from lingering on top of the newly selected version. (#198 by @Vrindakr3300)
 - **HLS renditions no longer upscale past the source resolution** — `force_original_aspect_ratio=decrease` preserved aspect ratio but not scale, so a 640×360 source was still producing padded, blurry 1080p/720p renditions. The quality ladder is now filtered against the actual source height (ffprobe'd before transcoding), falling back to the smallest requested rendition rather than an empty ladder if the source is smaller than everything requested. (#204 by @siddharthgoyal00)
