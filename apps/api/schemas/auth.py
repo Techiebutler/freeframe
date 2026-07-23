@@ -2,11 +2,6 @@ from pydantic import BaseModel, EmailStr, field_validator
 import uuid
 from ..models.user import UserStatus
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    name: str
-    password: str
-
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -28,7 +23,6 @@ class UserResponse(BaseModel):
     status: UserStatus
     email_verified: bool = False
     is_superadmin: bool = False
-    invite_token: str | None = None
     preferences: dict = {}
 
     model_config = {"from_attributes": True}
@@ -40,6 +34,14 @@ class UserResponse(BaseModel):
             from ..services import s3_service
             return s3_service.generate_presigned_get_url(v)
         return v
+
+class AdminUserResponse(UserResponse):
+    """UserResponse plus the pending invite token.
+
+    Only for admin-gated endpoints: exposing invite_token to any authenticated
+    caller lets them hijack a pending invite before the invitee accepts it.
+    """
+    invite_token: str | None = None
 
 class InviteRequest(BaseModel):
     email: EmailStr

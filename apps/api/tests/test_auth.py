@@ -34,50 +34,8 @@ def _mock_user(
     return u
 
 
-# Patch bcrypt hashing so tests don't depend on the local bcrypt installation.
-_HASH_PATCH = "apps.api.routers.auth.hash_password"
+# Patch bcrypt verification so tests don't depend on the local bcrypt installation.
 _VERIFY_PATCH = "apps.api.routers.auth.verify_password"
-
-
-def test_register_success(client, mock_db):
-    """POST /auth/register — happy path creates a user and returns 201."""
-    mock_db.first.return_value = None  # no duplicate email
-
-    def _refresh_side_effect(obj):
-        obj.id = uuid.uuid4()
-        obj.created_at = datetime.now(timezone.utc)
-        obj.deleted_at = None
-        obj.avatar_url = None
-        obj.status = UserStatus.active
-        obj.is_superadmin = False
-        obj.email_verified = False
-        obj.preferences = {}
-        obj.invite_token = None
-
-    mock_db.refresh.side_effect = _refresh_side_effect
-
-    with patch(_HASH_PATCH, return_value=_FAKE_HASH):
-        resp = client.post(
-            "/auth/register",
-            json={"email": "newuser@example.com", "name": "New User", "password": "securepassword"},
-        )
-
-    assert resp.status_code == 201
-    assert resp.json()["email"] == "newuser@example.com"
-
-
-def test_register_duplicate_email(client, mock_db):
-    """POST /auth/register — returns 400 when email already exists."""
-    existing = _mock_user("dup@example.com")
-    mock_db.first.return_value = existing
-
-    with patch(_HASH_PATCH, return_value=_FAKE_HASH):
-        resp = client.post(
-            "/auth/register",
-            json={"email": "dup@example.com", "name": "A", "password": "pw123456"},
-        )
-
-    assert resp.status_code == 400
 
 
 def test_login_success(client, mock_db):
@@ -152,6 +110,60 @@ def test_send_magic_code_existing_user_sends_code(client, mock_db):
     assert resp.status_code == 200
     mock_store.assert_called_once()
     mock_send.assert_called_once()
+
+
+def test_register_endpoint_removed(client):
+    """POST /auth/register — endpoint has been removed (was an unauthenticated, un-invite-gated
+    account creation path; GHSA-9m78-fww2-p89h). 404, not 405: the route no longer exists."""
+    resp = client.post(
+        "/auth/register",
+        json={"email": "newuser@example.com", "name": "New User", "password": "securepassword"},
+    )
+    assert resp.status_code == 404
+
+
+def test_users_batch_does_not_leak_invite_token(client, auth_headers, mock_db, test_user):
+    """GET /users — never includes invite_token, even for a caller with no admin rights.
+
+    Regression test: GET /users and GET /users/search reused UserResponse (which included
+    invite_token) behind only get_current_user, so any authenticated user could read a
+    pending invitee's live token and hijack the invite via /auth/accept-invite before the
+    real invitee acted (GHSA-9m78-fww2-p89h).
+    """
+    test_user.is_superadmin = False
+    target = _mock_user("invitee@example.com")
+    target.status = UserStatus.pending_invite
+    target.is_superadmin = False
+    target.email_verified = False
+    target.preferences = {}
+    target.invite_token = "super-secret-invite-token"
+    mock_db.all.return_value = [target]
+
+    resp = client.get(f"/users?ids={target.id}", headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert "invite_token" not in body[0]
+
+
+def test_admin_list_users_still_includes_invite_token(client, auth_headers, mock_db, test_user):
+    """GET /admin/users — admin-gated, so it may still expose invite_token (needed for the
+    admin "copy invite link" UI); this endpoint's own is_superadmin check is the gate."""
+    test_user.is_superadmin = True
+    target = _mock_user("invitee@example.com")
+    target.status = UserStatus.pending_invite
+    target.is_superadmin = False
+    target.email_verified = False
+    target.preferences = {}
+    target.invite_token = "super-secret-invite-token"
+    mock_db.all.return_value = [target]
+
+    resp = client.get("/admin/users", headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["invite_token"] == "super-secret-invite-token"
 
 
 def test_get_me(client, auth_headers, test_user):

@@ -5,7 +5,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from ..database import get_db
 from ..schemas.auth import (
-    RegisterRequest, LoginRequest, TokenResponse,
+    LoginRequest, TokenResponse,
     RefreshRequest, UserResponse, InviteRequest,
     SendMagicCodeRequest, SendMagicCodeResponse,
     VerifyMagicCodeRequest, SetPasswordRequest,
@@ -169,24 +169,6 @@ def accept_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
         refresh_token=create_refresh_token(str(user.id)),
         needs_password=False,
     )
-
-
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
-    """Register with email + password (legacy, prefer magic code flow)."""
-    if get_user_by_email(db, body.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user = User(
-        email=body.email,
-        name=body.name,
-        password_hash=hash_password(body.password),
-        status=UserStatus.active,
-        email_verified=False,  # Not verified until magic code
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
 
 
 @router.post("/login", response_model=TokenResponse)
