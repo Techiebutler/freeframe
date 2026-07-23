@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-07-23
+
 ### Fixed
 - **`GET /users` and `GET /users/search` no longer expose pending invite tokens** — both endpoints reused the same response shape as the admin user list, which includes a pending invitee's live `invite_token`. Since either endpoint only required being logged in (not an admin), any authenticated user could look up a pending invitee and read their token, then complete the invite themselves via `/auth/accept-invite` before the real invitee did. The token is now only ever returned by the admin-gated `GET /admin/users` and `POST /users/invite` responses.
 - **Removed the legacy `POST /auth/register` endpoint** — it created an immediately-active, loginable account for any email with no auth and no invite check, bypassing the invite-only model this platform is built around. It had no frontend caller; account creation now only happens via an admin invite (`/users/invite` → `/auth/accept-invite`), first-time setup (`/setup/create-superadmin`), or a sign-in code sent to an already-known email (`/auth/send-magic-code`).
