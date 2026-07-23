@@ -142,28 +142,10 @@ def confirm_avatar_upload(
     return user
 
 
-@router.patch("/{user_id}/deactivate", response_model=UserResponse)
-def deactivate_user(user_id: uuid.UUID, db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    user.status = UserStatus.deactivated
-    db.commit()
-    db.refresh(user)
-    return user
-
-@router.patch("/{user_id}/reactivate", response_model=UserResponse)
-def reactivate_user(user_id: uuid.UUID, db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    user.status = UserStatus.active
-    db.commit()
-    db.refresh(user)
-    return user
-
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot delete yourself")
     user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

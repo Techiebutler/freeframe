@@ -166,6 +166,48 @@ def test_admin_list_users_still_includes_invite_token(client, auth_headers, mock
     assert body[0]["invite_token"] == "super-secret-invite-token"
 
 
+def test_verify_magic_code_unknown_user_generic_401(client, mock_db):
+    """POST /auth/verify-magic-code — an unregistered email gets the same generic failure as a
+    wrong code (401), not a distinguishing 404. Otherwise the endpoint lets a caller enumerate
+    which emails are registered."""
+    mock_db.first.return_value = None
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)):
+        resp = client.post("/auth/verify-magic-code", json={"email": "nobody@example.com", "code": "000000"})
+
+    assert resp.status_code == 401
+
+
+def test_verify_magic_code_deactivated_user_generic_401(client, mock_db):
+    """POST /auth/verify-magic-code — a deactivated account gets the same generic 401 as an
+    unregistered email or a wrong code, not a distinguishing "Account deactivated" message."""
+    user = _mock_user("deactivated@example.com")
+    user.status = UserStatus.deactivated
+    mock_db.first.return_value = user
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)):
+        resp = client.post("/auth/verify-magic-code", json={"email": "deactivated@example.com", "code": "000000"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid or expired code"
+
+
+def test_verify_magic_code_success(client, mock_db):
+    """POST /auth/verify-magic-code — correct code for an active user returns tokens."""
+    user = _mock_user("verify@example.com")
+    user.status = UserStatus.active
+    mock_db.first.return_value = user
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)), \
+         patch("apps.api.routers.auth.redis_verify_magic_code", return_value=(True, "")):
+        resp = client.post("/auth/verify-magic-code", json={"email": "verify@example.com", "code": "123456"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
+
+
 def test_get_me(client, auth_headers, test_user):
     """GET /auth/me — returns current user profile."""
     resp = client.get("/auth/me", headers=auth_headers)
@@ -196,3 +238,13 @@ def test_get_me_no_auth(client):
     """GET /auth/me without token should return 401 or 403 (no bearer scheme)."""
     resp = client.get("/auth/me")
     assert resp.status_code in (401, 403)
+
+
+def test_delete_user_rejects_self(client, auth_headers, test_user):
+    """DELETE /users/{id} — an admin can't delete their own account. Matches the
+    self-protection already on /admin/users/{id}/deactivate; without it, a superadmin
+    (accidentally or via a compromised session) could lock themselves out irrecoverably,
+    since /setup/create-superadmin only checks is_superadmin, not soft-deletion."""
+    test_user.is_superadmin = True
+    resp = client.delete(f"/users/{test_user.id}", headers=auth_headers)
+    assert resp.status_code == 400

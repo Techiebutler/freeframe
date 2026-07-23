@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A superadmin can no longer delete or deactivate their own account and get irrecoverably locked out** — `DELETE /users/{id}` gained the same self-protection `PATCH /admin/users/{id}/deactivate` already had. Removed two duplicate, unused endpoints (`/users/{id}/deactivate`, `/users/{id}/reactivate`) that had no such guard and no frontend caller — the admin dashboard already uses the correctly-guarded `/admin/users/{id}/...` versions.
+- **`/auth/login` is now rate-limited** (10 attempts / 10 minutes per IP) — previously only the generic global write limiter (300/minute) backed password login.
+- **`/auth/verify-magic-code` no longer reveals whether an email is registered or deactivated** — an unknown email, a deactivated account, and a wrong code now all return the same generic 401, matching how `/auth/login` already avoids this.
+- **Internal-visibility comments no longer reach public share links** — a comment (or reply, at any thread depth) marked "internal" is team-only by design, but the guest share endpoints didn't filter on visibility at all.
+- **`@mention`ing a user in a comment now requires that user to actually have access to the asset** — previously any mentioned user id (or parsed `@email`) got a real notification and email with the asset name and a comment preview, regardless of whether they could see the asset at all.
+- **Replying to a comment now checks the parent comment belongs to the same asset** — `POST /assets/{id}/comments/{comment_id}/replies` looked up the parent by id alone, so a comment id from an unrelated asset (including one the caller has no access to) would be accepted, letting a caller both probe whether an arbitrary comment id exists and inject a reply into a thread on an asset they can't see.
+- **`POST /assets/{id}/comments` now validates that `version_id` actually belongs to the asset** — previously accepted unchecked, which could create a comment whose `asset_id` and `version_id` referred to two different assets.
+
 ## [1.7.3] - 2026-07-23
 
 ### Fixed

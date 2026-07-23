@@ -36,7 +36,7 @@ def test_share_comments_returns_array_for_asset_share(
     assert response.status_code == 200
     assert response.json() == [expected]
     # Batched builder, called once for the whole thread (no per-comment N+1).
-    mock_batched.assert_called_once_with(asset_id, [comment], mock_db)
+    mock_batched.assert_called_once_with(asset_id, [comment], mock_db, exclude_internal=True)
 
 
 @patch("apps.api.routers.comments.validate_asset_in_share")
@@ -70,7 +70,7 @@ def test_share_comments_returns_array_for_folder_or_project_share_asset(
 
     assert response.status_code == 200
     assert response.json() == [expected]
-    mock_batched.assert_called_once_with(asset_id, [comment], mock_db)
+    mock_batched.assert_called_once_with(asset_id, [comment], mock_db, exclude_internal=True)
     # Regression: the client-supplied asset_id must be checked against the link's scope
     # (GHSA-5x82-5pxm-x2q7), not trusted outright.
     mock_validate_asset.assert_called_once_with(mock_db, link, asset)

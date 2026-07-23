@@ -36,7 +36,7 @@ from ..schemas.comment import (
 from ..services import s3_service
 from ..services import comment_export
 from ..services.permissions import (
-    require_asset_access, validate_share_link_with_session, validate_asset_in_share,
+    require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
 )
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
@@ -163,22 +163,27 @@ def _build_comment_responses_batched(
     db: Session,
     current_user_id: uuid.UUID | None = None,
     max_depth: int = 5,
+    exclude_internal: bool = False,
 ) -> list[CommentResponse]:
     """Build the comment tree for `top_level` with a FIXED number of queries
     instead of one-per-comment. Field-for-field equivalent to calling
     _build_comment_response on each top-level comment, but ~6 queries total
     regardless of how many comments the asset has (avoids the N+1 that made the
-    list endpoint slow — and it's re-fetched after every comment save)."""
+    list endpoint slow — and it's re-fetched after every comment save).
+
+    exclude_internal drops visibility="internal" comments (and their whole subtree, since a
+    reply to a team-only comment is team-only too) — set for guest/public callers so an
+    internal note never reaches a share link, no matter how deep in the thread it is."""
     if not top_level:
         return []
 
     # One query for every non-deleted comment on the asset → parent→children map.
-    all_comments = (
-        db.query(Comment)
-        .filter(Comment.asset_id == asset_id, Comment.deleted_at.is_(None))
-        .order_by(Comment.created_at)
-        .all()
+    all_comments_query = db.query(Comment).filter(
+        Comment.asset_id == asset_id, Comment.deleted_at.is_(None),
     )
+    if exclude_internal:
+        all_comments_query = all_comments_query.filter(Comment.visibility != "internal")
+    all_comments = all_comments_query.order_by(Comment.created_at).all()
     children_map: dict[uuid.UUID, list[Comment]] = defaultdict(list)
     for c in all_comments:
         if c.parent_id is not None:
@@ -277,6 +282,11 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
             if user and user.id != comment.author_id:
                 mentioned_users.append(user)
 
+    # A mention must only reach someone who can actually see the asset — otherwise any user
+    # (or a guest via a share link) could @mention an arbitrary user id/email and have their
+    # name, the asset name, and a comment preview emailed to someone with no access to either.
+    mentioned_users = [u for u in mentioned_users if can_access_asset(db, asset, u)]
+
     for user in mentioned_users:
         mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
         db.add(mention)
@@ -334,6 +344,13 @@ def create_comment(
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
 
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == body.version_id, AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
+
     comment = Comment(
         asset_id=asset_id,
         version_id=body.version_id,
@@ -386,7 +403,9 @@ def reply_to_comment(
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
-    parent = db.query(Comment).filter(Comment.id == comment_id, Comment.deleted_at.is_(None)).first()
+    parent = db.query(Comment).filter(
+        Comment.id == comment_id, Comment.asset_id == asset_id, Comment.deleted_at.is_(None),
+    ).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Parent comment not found")
 
@@ -823,18 +842,20 @@ def list_share_comments(
         ).order_by(AssetVersion.version_number.desc()).first()
         version_id = latest.id if latest else version_id
 
-    # Get top-level comments — reuse same format as authenticated endpoint
+    # Get top-level comments — reuse same format as authenticated endpoint. Internal-visibility
+    # comments are team-only and must never reach a public share link.
     query = db.query(Comment).filter(
         Comment.asset_id == asset_id,
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
+        Comment.visibility != "internal",
     )
     if version_id:
         query = query.filter(Comment.version_id == version_id)
     top_level = query.order_by(Comment.created_at).all()
 
     # Batched build (fixed query count) — guests have no user, so no current_user_id.
-    return _build_comment_responses_batched(asset_id, top_level, db)
+    return _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=True)
 
 
 @router.post("/share/{token}/comment", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)

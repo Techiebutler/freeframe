@@ -79,12 +79,11 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
     """
     user = get_user_by_email(db, body.email)
     
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user.status == UserStatus.deactivated:
-        raise HTTPException(status_code=401, detail="Account deactivated")
-    
+    # "No such user" and "deactivated" get the same generic failure as a wrong/expired code —
+    # distinguishing them would let a caller enumerate registered or deactivated emails.
+    if not user or user.status == UserStatus.deactivated:
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+
     # Verify magic code from Redis
     success, error = redis_verify_magic_code(body.email, body.code)
     if not success:
@@ -171,7 +170,7 @@ def accept_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, dependencies=[Depends(rate_limit("login", 10, 600))])
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     """Login with email + password."""
     user = get_user_by_email(db, body.email)
