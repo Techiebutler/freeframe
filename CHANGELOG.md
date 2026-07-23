@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-07-23
+
 ### Fixed
 - **A superadmin can no longer delete or deactivate their own account and get irrecoverably locked out** — `DELETE /users/{id}` gained the same self-protection `PATCH /admin/users/{id}/deactivate` already had. Removed two duplicate, unused endpoints (`/users/{id}/deactivate`, `/users/{id}/reactivate`) that had no such guard and no frontend caller — the admin dashboard already uses the correctly-guarded `/admin/users/{id}/...` versions.
 - **`/auth/login` is now rate-limited** (10 attempts / 10 minutes per IP) — previously only the generic global write limiter (300/minute) backed password login.
