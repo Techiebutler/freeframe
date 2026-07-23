@@ -55,7 +55,7 @@ export function ForgotPasswordForm() {
       ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {error && (
-            <div className="rounded border border-accent-line bg-accent-muted px-3 py-2.5 font-mono text-[12px] text-accent">
+            <div className="animate-shake rounded border border-accent-line bg-accent-muted px-3 py-2.5 font-mono text-[12px] text-accent">
               {error}
             </div>
           )}

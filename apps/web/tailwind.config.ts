@@ -1,5 +1,6 @@
 import type { Config } from 'tailwindcss'
 import plugin from 'tailwindcss/plugin'
+import animate from 'tailwindcss-animate'
 
 const config: Config = {
   darkMode: 'class',
@@ -86,6 +87,7 @@ const config: Config = {
         'pulse-soft': 'pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'blink': 'blink 1.4s steps(1) infinite',
         'indeterminate-slide': 'indeterminate-slide 1.3s ease-in-out infinite',
+        'shake': 'shake 280ms linear',
       },
       keyframes: {
         'fade-in': {
@@ -127,6 +129,16 @@ const config: Config = {
           '0%': { transform: 'translateX(-120%)' },
           '100%': { transform: 'translateX(360%)' },
         },
+        // transitions.dev error-state-shake, tuned values. Cumulative-duration
+        // %-stops for legs 80/60/80/60ms = 280ms total; per-stop easing shapes
+        // each leg. Recompute stops if durations change.
+        'shake': {
+          '0%': { transform: 'translateX(0)', animationTimingFunction: 'cubic-bezier(0.22,1,0.36,1)' },
+          '28.57%': { transform: 'translateX(6px)', animationTimingFunction: 'cubic-bezier(0.22,1,0.36,1)' },
+          '57.14%': { transform: 'translateX(-6px)', animationTimingFunction: 'cubic-bezier(0.22,1,0.36,1)' },
+          '78.57%': { transform: 'translateX(4px)', animationTimingFunction: 'cubic-bezier(0.22,1,0.36,1)' },
+          '100%': { transform: 'translateX(0)' },
+        },
       },
       transitionTimingFunction: {
         'spring': 'cubic-bezier(0.16, 1, 0.3, 1)',
@@ -138,6 +150,7 @@ const config: Config = {
     plugin(({ addVariant }) => {
       addVariant('pointer-coarse', '@media (pointer: coarse)')
     }),
+    animate,
   ],
 }
 

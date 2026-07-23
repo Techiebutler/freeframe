@@ -26,7 +26,10 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
             {label}
           </label>
         )}
-        <div className="relative">
+        {/* ponytail: shake replays when error goes falsy→truthy; a repeat
+            submit with the same error still showing won't re-fire. Forms here
+            clear error onChange, so a resubmit does replay. Good enough. */}
+        <div className={cn('relative', error && 'animate-shake')}>
           {icon && (
             <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-text-tertiary">
               {icon}
