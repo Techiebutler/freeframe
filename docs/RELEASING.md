@@ -14,12 +14,21 @@ self-hosters can track a known-good version instead of `main`.
 
 1. Make sure `main` is green and the `CHANGELOG.md` `[Unreleased]` section is
    complete. Move those entries under a new `## [X.Y.Z] - YYYY-MM-DD` heading.
+   - **Credit external contributors.** For every PR in this release authored by
+     someone other than the maintainer, check the entry it added has a trailing
+     `(#NNN by @handle)`, and make sure that handle appears in a `### Contributors`
+     line at the end of the version's section — *every* contributor from this
+     release goes there, even ones whose PR had no user-facing entry of its own
+     (test infra, internal refactors, etc.). Nobody who had a PR merged this
+     release should be invisible in the CHANGELOG.
 2. Tag the release commit and push the tag:
    ```bash
    git tag vX.Y.Z <commit>      # usually main's HEAD
    git push origin vX.Y.Z
    ```
-3. Publish a **GitHub Release** for `vX.Y.Z` with notes (the CHANGELOG section).
+3. Publish a **GitHub Release** for `vX.Y.Z` with notes (the CHANGELOG section,
+   `### Contributors` line included — the release notes are where a contributor's
+   name actually gets seen, so don't drop it here even if you trim anything else).
    - Publishing it triggers `release-pointers.yml`, which **auto-moves `latest`**
      to `vX.Y.Z`. (Mark it a *pre-release* to keep `latest` where it is.)
 
