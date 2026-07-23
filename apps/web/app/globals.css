@@ -194,3 +194,22 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* transitions.dev avatar-group hover-comb (tuned values).
+   .t-avatar reads --shift / --scale-active written inline by the
+   group's mouseenter/leave handlers. Global reduced-motion guard
+   above zeroes the transition. */
+:root {
+  --avatar-lift: -4px;
+  --avatar-dur: 320ms;
+  --avatar-scale: 1.05;
+  --avatar-falloff: 0.45;
+  --avatar-ease-in: cubic-bezier(0.22, 1, 0.36, 1);
+  --avatar-ease-out: cubic-bezier(0.34, 3.85, 0.64, 1);
+}
+.t-avatar {
+  transform-origin: center;
+  transform: translateY(var(--shift, 0px)) scale(var(--scale-active, 1));
+  transition: transform var(--avatar-dur) var(--avatar-ease-in);
+  will-change: transform;
+}

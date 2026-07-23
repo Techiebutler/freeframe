@@ -38,6 +38,54 @@ function roleLabelFor(role: ProjectRole) {
   return ROLES.find((r) => r.value === role)?.label ?? role
 }
 
+// ─── Avatar comb (hover-spring row) ─────────────────────────────────────────
+
+// transitions.dev avatar-group hover: lift the hovered avatar, lift neighbors
+// with a power-falloff, snap back with a spring on leave. Timing-function is set
+// inline before the var writes so hover-in and return use different curves.
+function AvatarComb({ members }: { members: MemberWithUser[] }) {
+  const rootRef = React.useRef<HTMLDivElement>(null)
+
+  const setShifts = (activeIdx: number | null, phase: 'in' | 'out') => {
+    const root = rootRef.current
+    if (!root) return
+    const cs = getComputedStyle(document.documentElement)
+    const num = (name: string, fb: number) => {
+      const v = parseFloat(cs.getPropertyValue(name))
+      return Number.isFinite(v) ? v : fb
+    }
+    const ease = (name: string, fb: string) => cs.getPropertyValue(name).trim() || fb
+    const lift = num('--avatar-lift', -4)
+    const falloff = num('--avatar-falloff', 0.45)
+    const scale = num('--avatar-scale', 1.05)
+    const tf =
+      phase === 'out'
+        ? ease('--avatar-ease-out', 'cubic-bezier(0.34,3.85,0.64,1)')
+        : ease('--avatar-ease-in', 'cubic-bezier(0.22,1,0.36,1)')
+    root.querySelectorAll<HTMLElement>('.t-avatar').forEach((el, i) => {
+      el.style.transitionTimingFunction = tf
+      if (activeIdx == null) {
+        el.style.setProperty('--shift', '0px')
+        el.style.setProperty('--scale-active', '1')
+        return
+      }
+      const d = Math.abs(i - activeIdx)
+      el.style.setProperty('--shift', (lift * Math.pow(falloff, d)).toFixed(3) + 'px')
+      el.style.setProperty('--scale-active', i === activeIdx ? String(scale) : '1')
+    })
+  }
+
+  return (
+    <div ref={rootRef} className="flex -space-x-2" onMouseLeave={() => setShifts(null, 'out')}>
+      {members.slice(0, 5).map((m, i) => (
+        <div key={m.id} className="t-avatar" onMouseEnter={() => setShifts(i, 'in')}>
+          <Avatar name={m.user.name} src={m.user.avatar_url} size="sm" className="ring-2 ring-bg-secondary" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ─── Role Dropdown ──────────────────────────────────────────────────────────
 
 function RoleDropdown({
@@ -266,13 +314,7 @@ function AddView({
       {/* Footer: member avatars + count + manage */}
       <div className="flex items-center justify-between px-6 py-3 border-t border-border bg-bg-tertiary/50 rounded-b-xl">
         <div className="flex items-center gap-2">
-          {membersList.length > 0 && (
-            <div className="flex -space-x-2">
-              {membersList.slice(0, 5).map((m) => (
-                <Avatar key={m.id} name={m.user.name} src={m.user.avatar_url} size="sm" className="ring-2 ring-bg-secondary" />
-              ))}
-            </div>
-          )}
+          {membersList.length > 0 && <AvatarComb members={membersList} />}
           <span className="text-sm text-text-secondary font-medium">
             {membersList.length} Member{membersList.length !== 1 ? 's' : ''}
           </span>

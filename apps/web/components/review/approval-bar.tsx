@@ -252,7 +252,7 @@ export function ApprovalBar({ assetId, versionId, currentUserId, versionCreatedB
           <div className="flex items-center gap-2 shrink-0 ml-auto">
             {myApproval?.status === 'approved' && (
               <span className="inline-flex items-center gap-1 text-xs text-text-primary font-medium">
-                <CheckCircle2 className="h-4 w-4" />
+                <CheckCircle2 className="h-4 w-4 animate-check-pop" />
                 You approved
               </span>
             )}

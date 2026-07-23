@@ -88,6 +88,7 @@ const config: Config = {
         'blink': 'blink 1.4s steps(1) infinite',
         'indeterminate-slide': 'indeterminate-slide 1.3s ease-in-out infinite',
         'shake': 'shake 280ms linear',
+        'check-pop': 'check-pop 450ms cubic-bezier(0.34,1.35,0.64,1)',
       },
       keyframes: {
         'fade-in': {
@@ -138,6 +139,14 @@ const config: Config = {
           '57.14%': { transform: 'translateX(-6px)', animationTimingFunction: 'cubic-bezier(0.22,1,0.36,1)' },
           '78.57%': { transform: 'translateX(4px)', animationTimingFunction: 'cubic-bezier(0.22,1,0.36,1)' },
           '100%': { transform: 'translateX(0)' },
+        },
+        // Right-sized success-check: rotate-in + settle overshoot on the
+        // confirmation icon (transitions.dev success-check, minus the SVG
+        // stroke-draw that a lucide line icon can't carry).
+        'check-pop': {
+          '0%': { opacity: '0', transform: 'scale(0.25) rotate(-80deg)' },
+          '60%': { transform: 'scale(1.08) rotate(4deg)' },
+          '100%': { opacity: '1', transform: 'scale(1) rotate(0)' },
         },
       },
       transitionTimingFunction: {
