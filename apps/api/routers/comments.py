@@ -35,7 +35,9 @@ from ..schemas.comment import (
 )
 from ..services import s3_service
 from ..services import comment_export
-from ..services.permissions import require_asset_access, validate_share_link
+from ..services.permissions import (
+    require_asset_access, validate_share_link_with_session, validate_asset_in_share,
+)
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
 
@@ -790,20 +792,26 @@ def list_share_comments(
     asset_id: Optional[uuid.UUID] = None,
     version_id: Optional[uuid.UUID] = None,
     latest_only: bool = False,
+    share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Public endpoint — list comments for a shared asset. No auth required.
-    For folder/project shares, pass asset_id as query param to get comments for a specific asset.
+    """Public endpoint — list comments for a shared asset. Enforces the share link's password
+    (if any) via share_session, same as the other public share endpoints.
+    For folder/project shares, pass asset_id as query param to get comments for a specific asset —
+    it's validated against the link's scope, so it can't be used to read another asset's comments.
     Pass version_id to scope comments to a single version (matches the authenticated review view).
     Pass latest_only=true to scope to the latest ready version — used by the folder/grid preview,
     which has no version picker."""
-    link = validate_share_link(db, token)
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     # Determine the asset_id to list comments for
     target_asset_id = link.asset_id or asset_id
     if not target_asset_id:
         return []
-    asset_id = target_asset_id
+    asset = _get_asset(db, target_asset_id)
+    validate_asset_in_share(db, link, asset)
+    asset_id = asset.id
 
     # The folder/grid preview has no version switcher, so it scopes to the latest ready version.
     if latest_only and not version_id:
@@ -833,20 +841,24 @@ def list_share_comments(
 def guest_comment(
     token: str,
     body: GuestCommentCreate,
+    share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
-    link = validate_share_link(db, token)
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     # Check share link permission allows commenting
     if link.permission == SharePermission.view:
         raise HTTPException(status_code=403, detail="This share link does not allow commenting")
 
-    # Resolve asset_id: from body, link, or error
-    target_asset_id = body.asset_id or link.asset_id
+    # Resolve asset_id: from the link when it's scoped to one asset; otherwise from the request
+    # body (folder/project shares only), validated against the link's actual scope below — the
+    # link's own asset_id always wins so a single-asset link can't be redirected to another asset.
+    target_asset_id = link.asset_id or body.asset_id
     if not target_asset_id:
         raise HTTPException(status_code=400, detail="asset_id is required for folder/project shares")
     asset = _get_asset(db, target_asset_id)
+    validate_asset_in_share(db, link, asset)
 
     # Resolve version_id: use provided or get latest ready version
     version_id = body.version_id

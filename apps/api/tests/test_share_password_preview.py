@@ -61,7 +61,7 @@ def test_folder_share_assets_creator_bypasses_password(
 
 @patch("apps.api.routers.share.generate_presigned_get_url")
 @patch("apps.api.routers.share._get_latest_media_file")
-@patch("apps.api.routers.share._validate_asset_in_share")
+@patch("apps.api.routers.share.validate_asset_in_share")
 @patch("apps.api.routers.share._get_asset")
 @patch("apps.api.services.permissions.verify_share_session")
 @patch("apps.api.services.permissions.validate_share_link")

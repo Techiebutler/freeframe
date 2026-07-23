@@ -35,7 +35,10 @@ from ..schemas.share import (
     ShareLinkUpdate,
     ShareLinkValidateResponse,
 )
-from ..services.permissions import require_project_role, validate_share_link, validate_share_link_with_session
+from ..services.permissions import (
+    require_project_role, validate_share_link, validate_share_link_with_session,
+    validate_asset_in_share, _is_descendant_of,
+)
 from ..services.redis_service import create_share_session
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.crypto_service import encrypt_password, decrypt_password
@@ -65,31 +68,6 @@ def _get_folder(db: Session, folder_id: uuid.UUID) -> Folder:
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     return folder
-
-
-def _validate_asset_in_share(db: Session, link: ShareLink, asset: Asset) -> None:
-    """Validate that an asset belongs to a share link (folder, asset, project, or multi-share)."""
-    if link.folder_id:
-        if asset.folder_id != link.folder_id:
-            if not asset.folder_id or not _is_descendant_of(db, asset.folder_id, link.folder_id):
-                raise HTTPException(status_code=403, detail="Asset is not within the shared folder")
-    elif link.asset_id:
-        if asset.id != link.asset_id:
-            raise HTTPException(status_code=403, detail="Asset does not match share link")
-    elif link.project_id:
-        if asset.project_id != link.project_id:
-            raise HTTPException(status_code=403, detail="Asset is not within the shared project")
-        # For multi-share links, also check ShareLinkItem entries
-        multi_items = db.query(ShareLinkItem).filter(ShareLinkItem.share_link_id == link.id).all()
-        if multi_items:
-            multi_asset_ids = {item.asset_id for item in multi_items if item.asset_id}
-            multi_folder_ids = {item.folder_id for item in multi_items if item.folder_id}
-            if asset.id not in multi_asset_ids:
-                # Check if asset is in one of the shared folders
-                if not any(asset.folder_id == fid or (asset.folder_id and _is_descendant_of(db, asset.folder_id, fid)) for fid in multi_folder_ids):
-                    raise HTTPException(status_code=403, detail="Asset is not in the shared items")
-    else:
-        raise HTTPException(status_code=400, detail="Invalid share link")
 
 
 def _get_project_id_from_link(db: Session, link: ShareLink) -> uuid.UUID:
@@ -140,19 +118,6 @@ def _log_share_activity(
         db.commit()
     except Exception:
         db.rollback()
-
-
-def _is_descendant_of(db: Session, folder_id: uuid.UUID, ancestor_id: uuid.UUID) -> bool:
-    """Check if folder_id is a descendant of ancestor_id via parent chain traversal."""
-    current_id = folder_id
-    visited = set()
-    while current_id and current_id not in visited:
-        if current_id == ancestor_id:
-            return True
-        visited.add(current_id)
-        folder = db.query(Folder.parent_id).filter(Folder.id == current_id).first()
-        current_id = folder.parent_id if folder else None
-    return False
 
 
 def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFile]:
@@ -1402,7 +1367,7 @@ def get_share_stream_url(
     asset = _get_asset(db, asset_id)
 
     # Validate asset belongs to this share
-    _validate_asset_in_share(db, link, asset)
+    validate_asset_in_share(db, link, asset)
 
     media_file = None
     if version_id and link.show_versions:
@@ -1479,7 +1444,7 @@ def get_share_thumbnail_url(
     asset = _get_asset(db, asset_id)
 
     # Validate asset belongs to this share
-    _validate_asset_in_share(db, link, asset)
+    validate_asset_in_share(db, link, asset)
 
     media_file = _get_latest_media_file(db, asset.id)
     if not media_file or not media_file.s3_key_thumbnail:
@@ -1505,7 +1470,7 @@ def get_share_asset_versions(
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     asset = _get_asset(db, asset_id)
-    _validate_asset_in_share(db, link, asset)
+    validate_asset_in_share(db, link, asset)
 
     versions = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset.id,
