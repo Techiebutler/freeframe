@@ -7,12 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Version switch clears active comment annotation** — switching versions in the single-asset review view now clears the focused comment and active drawing overlay, preventing drawings from previous versions from lingering on top of the newly selected version.
+- Server-side password length validation on change-password endpoint.
+
+### Changed
+- Password changes now revoke all other sessions by incrementing token version; current session receives fresh tokens to stay logged in.
+
+## [1.7.4] - 2026-07-23
+
+### Fixed
+- **A superadmin can no longer delete or deactivate their own account and get irrecoverably locked out** — `DELETE /users/{id}` gained the same self-protection `PATCH /admin/users/{id}/deactivate` already had. Removed two duplicate, unused endpoints (`/users/{id}/deactivate`, `/users/{id}/reactivate`) that had no such guard and no frontend caller — the admin dashboard already uses the correctly-guarded `/admin/users/{id}/...` versions.
+- **`/auth/login` is now rate-limited** (10 attempts / 10 minutes per IP) — previously only the generic global write limiter (300/minute) backed password login.
+- **`/auth/verify-magic-code` no longer reveals whether an email is registered or deactivated** — an unknown email, a deactivated account, and a wrong code now all return the same generic 401, matching how `/auth/login` already avoids this.
+- **Internal-visibility comments no longer reach public share links** — a comment (or reply, at any thread depth) marked "internal" is team-only by design, but the guest share endpoints didn't filter on visibility at all.
+- **`@mention`ing a user in a comment now requires that user to actually have access to the asset** — previously any mentioned user id (or parsed `@email`) got a real notification and email with the asset name and a comment preview, regardless of whether they could see the asset at all.
+- **Replying to a comment now checks the parent comment belongs to the same asset** — `POST /assets/{id}/comments/{comment_id}/replies` looked up the parent by id alone, so a comment id from an unrelated asset (including one the caller has no access to) would be accepted, letting a caller both probe whether an arbitrary comment id exists and inject a reply into a thread on an asset they can't see.
+- **`POST /assets/{id}/comments` now validates that `version_id` actually belongs to the asset** — previously accepted unchecked, which could create a comment whose `asset_id` and `version_id` referred to two different assets.
+
+## [1.7.3] - 2026-07-23
+
+### Fixed
+- **Public share-link comments can no longer read or write outside the shared scope** — both `GET /share/{token}/comments` and `POST /share/{token}/comment` trusted a client-supplied `asset_id` for folder/project-scoped links (and, for the write endpoint, even for a single-asset link — a request body could name a different asset entirely) with no check that the asset was actually within the link's scope. A holder of any comment/approve-permission share link could read or post comments on assets never shared with them. Both endpoints now validate the resolved asset against the share link the same way every other public share endpoint already does.
+- **Password-protected share links now actually gate comments** — the two comment endpoints were the only public share routes that skipped password/session verification, so a password-protected link's comments were fully readable and writable with just the token.
+
+## [1.7.2] - 2026-07-23
+
+### Fixed
+- **`GET /users` and `GET /users/search` no longer expose pending invite tokens** — both endpoints reused the same response shape as the admin user list, which includes a pending invitee's live `invite_token`. Since either endpoint only required being logged in (not an admin), any authenticated user could look up a pending invitee and read their token, then complete the invite themselves via `/auth/accept-invite` before the real invitee did. The token is now only ever returned by the admin-gated `GET /admin/users` and `POST /users/invite` responses.
+- **Removed the legacy `POST /auth/register` endpoint** — it created an immediately-active, loginable account for any email with no auth and no invite check, bypassing the invite-only model this platform is built around. It had no frontend caller; account creation now only happens via an admin invite (`/users/invite` → `/auth/accept-invite`), first-time setup (`/setup/create-superadmin`), or a sign-in code sent to an already-known email (`/auth/send-magic-code`).
+
+## [1.7.1] - 2026-07-23
+
+### Fixed
+- **Sign-in codes are no longer issued to uninvited emails** — `POST /auth/send-magic-code` used to create and, on verification, fully activate an account for any email address, whether or not an admin had invited it. Only an existing user (already active, or already invited via `POST /users/invite`) can now receive a working code; an unrecognized email gets the same generic response, so the endpoint still doesn't reveal which emails are registered.
+
+## [1.7.0] - 2026-07-21
+
+### Upgrade notes
+- **AWS S3 users in `us-east-1`: no action needed, but presigned URLs change signature.** They are now SigV4 rather than SigV2. If browser uploads were failing with an opaque 403 (`SignatureDoesNotMatch`), this release fixes it — any workaround you added can be removed.
+- **Self-hosted S3 (Garage, MinIO, Ceph, R2/B2/Spaces): path-style addressing and SigV4 are now forced** in non-AWS mode (`S3_STORAGE` ≠ `s3`). This is what makes Garage work out of the box. If you deliberately relied on virtual-host-style addressing against a backend that supports it, be aware the request shape changes.
+- **`uvicorn` 0.30.6 → 0.51.0** is a large jump. If you override the server command or its flags in your own compose file or image, re-check them against the upstream changelog. The bundled `apps/api/Dockerfile` invocation is unchanged and verified.
+
 ### Added
 - **Configurable CORS origins** — a new `CORS_ALLOW_ORIGINS` setting (comma-separated) lets the API allow browser origins beyond the built-in frontend/localhost defaults; set it to `*` to allow any origin (handy when testing over a LAN IP — not recommended in production). The wildcard is served by echoing the request origin, so credentialed requests keep working.
 
 ### Changed
 - **Dev compose honors the environment for LAN/self-host testing** — `docker-compose.dev.yml` now reads `NEXT_PUBLIC_API_URL`, the S3 storage credentials/bucket/region, `S3_PUBLIC_ENDPOINT`, and `MINIO_CORS_ALLOW_ORIGIN` from the environment (falling back to the previous defaults), so the dev stack can point at a LAN IP or external storage without editing the compose file.
 - **Uploads panel now defaults to the Active tab** — opening the panel after an upload shows only in-progress items instead of dumping the full upload history on screen. Switch to the All/Complete/Failed tabs to view history as before.
+- **Dependency updates** — uvicorn 0.30.6 → 0.51.0, alembic 1.13.3 → 1.18.5, httpx 0.27.2 → 0.28.1, bcrypt 4.2.0 → 4.3.0, psycopg2-binary 2.9.11 → 2.9.12 (plus frontend/dev: `@types/node`, `@vitejs/plugin-react`, and three `@radix-ui` packages).
 
 ### Fixed
 - **First-time sign-in no longer breaks at the set-password step** — after verifying a magic code, a brand-new user (one who hasn't set a password yet) was advanced to the "set password" screen but the tokens issued by `verify-magic-code` were discarded, so the follow-up `POST /auth/set-password` (which requires an authenticated user) returned 401 and bounced the user back to the login screen — never able to finish onboarding. The tokens are now persisted before the set-password step. The password-login form also validates the email format client-side, so a malformed address shows a friendly "Enter a valid email address" instead of surfacing the raw backend validation message.
@@ -22,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Garage and other self-hosted S3 backends work out of the box** — non-AWS mode (`S3_STORAGE` ≠ `s3`) now forces **path-style addressing** and **SigV4** on both the server-side and presign S3 clients. Without this, boto3 could emit virtual-host-style URLs (which fail when the store sits behind a reverse proxy without wildcard bucket DNS) and SigV2 presigned URLs (which Garage rejects with `Received an unknown query parameter: 'AWSAccessKeyId'`). AWS mode is unchanged.
 - **Startup bucket CORS is applied as one rule per origin** — both allowed origins used to share a single CORS rule; Garage answers such a rule by joining all its `AllowedOrigins` into one comma-separated `Access-Control-Allow-Origin` header, which browsers hard-reject, so every cross-origin request (HLS segment fetches, presigned uploads) failed CORS with e.g. `HLS error: networkError`. Per-origin rules behave identically on AWS-style backends, which echo only the matching origin either way.
 - **Presigned URLs use SigV4 on AWS S3 in `us-east-1`** — `us-east-1` is the only region whose endpoint metadata still advertises SigV2, so with no explicit signature version botocore silently downgraded *presigned* URLs (uploads and playback) to SigV2 there, while server-side calls and the reported client config both still looked like SigV4. SigV2 presigned PUTs fail as soon as the browser sends a `Content-Type`, and buckets created after June 2020 reject SigV2 outright — so an operator on the default `S3_STORAGE=s3` + `S3_REGION=us-east-1` could see uploads fail with an opaque 403. SigV4 is now pinned in every mode; other regions were already unaffected.
-- **Version switch clears active comment annotation** — switching versions in the single-asset review view now clears the focused comment and active drawing overlay, preventing drawings from previous versions from lingering on top of the newly selected version.
+- **Profile avatar uploads work when `S3_PUBLIC_ENDPOINT` is set** — the upload URL was presigned against the *internal* S3 endpoint, so on the usual MinIO/reverse-proxy setup the browser could not reach it. Avatars are now also stored as an S3 key instead of a long-lived presigned URL (a persisted URL started returning 403 once it expired), with a fresh short-lived URL generated per response, and the confirm step rejects keys outside the caller's own avatar prefix.
 
 ## [1.6.0] - 2026-07-14
 

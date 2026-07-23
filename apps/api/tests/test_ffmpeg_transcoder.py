@@ -25,7 +25,39 @@ def _make_job(qualities: list[str] | None = None) -> TranscodeJob:
         output_s3_prefix="hls/media-1/v1",
         qualities=qualities or ["1080p", "720p", "360p"],
     )
+def _mock_probe_side_effect(width: int, height: int):
+    """Build a subprocess.run side_effect returning a fixed video probe
+    (given width/height) and no audio stream, then a generic success
+    result for the main ffmpeg transcode call."""
+    def mock_run_side_effect(cmd, **_kwargs):
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+            mock = MagicMock()
+            mock.returncode = 0
+            mock.stderr = ""
+            mock.stdout = json.dumps({
+                "streams": [{"r_frame_rate": "30/1", "duration": 6.0, "width": width, "height": height}],
+            })
+            return mock
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "a":
+            mock = MagicMock()
+            mock.returncode = 0
+            mock.stderr = ""
+            mock.stdout = json.dumps({"streams": []})
+            return mock
+        mock = MagicMock()
+        mock.returncode = 0
+        mock.stderr = ""
+        return mock
+    return mock_run_side_effect
 
+
+def _get_ffmpeg_cmd(mock_run):
+    """Pull the main ffmpeg transcode command (the one with -filter_complex)
+    out of a mocked subprocess.run's call list."""
+    ffmpeg_calls = [c for c in mock_run.call_args_list
+                    if any("filter_complex" in str(a) for a in c[0][0])]
+    assert len(ffmpeg_calls) > 0, "no -filter_complex call was made"
+    return ffmpeg_calls[0][0][0]
 
 # ─── _run() error handling ────────────────────────────────────────────────────
 
@@ -173,6 +205,92 @@ def test_transcode_without_audio_excludes_audio_map():
         var_stream_idx = ffmpeg_cmd.index("-var_stream_map")
         stream_map = ffmpeg_cmd[var_stream_idx + 1]
         assert ",a:" not in stream_map, f"Expected no audio tracks in var_stream_map, got: {stream_map}"
+
+
+def test_source_smaller_than_ladder_drops_upscaled_renditions():
+    """640x360 source requesting the full ladder must produce only the
+    360p rendition — mirrors the exact v1.7.0 smoke-test repro."""
+    with patch("subprocess.run", side_effect=_mock_probe_side_effect(640, 360)) as mock_run:
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        s3_mock.upload_file = MagicMock()
+
+        with patch("builtins.open", MagicMock()), \
+             patch("pathlib.Path.glob", return_value=[]), \
+             patch("pathlib.Path.rglob", return_value=[]), \
+             patch("pathlib.Path.mkdir"), \
+             patch("shutil.rmtree"):
+                transcoder = FFmpegTranscoder(s3_mock, "test-bucket")
+                job = _make_job(["1080p", "720p", "360p"])
+                result = asyncio.run(transcoder.transcode(job))
+
+        assert result.success is True
+        ffmpeg_cmd = _get_ffmpeg_cmd(mock_run)
+
+        filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
+        assert "1920:1080" not in filter_complex, "1080p rendition should have been dropped"
+        assert "1280:720" not in filter_complex, "720p rendition should have been dropped"
+        assert "640:360" in filter_complex, "360p rendition should still be present"
+
+        # split=1 → exactly one rendition survived
+        assert "split=1" in filter_complex
+
+        var_stream_idx = ffmpeg_cmd.index("-var_stream_map")
+        stream_map = ffmpeg_cmd[var_stream_idx + 1]
+        assert stream_map.strip() == "v:0", f"expected a single video-only stream, got: {stream_map}"
+
+
+def test_source_smaller_than_all_requested_keeps_smallest():
+    """A source below every requested quality must still yield exactly one
+    rendition (the smallest requested), never zero."""
+    with patch("subprocess.run", side_effect=_mock_probe_side_effect(426, 240)) as mock_run:
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        s3_mock.upload_file = MagicMock()
+
+        with patch("builtins.open", MagicMock()), \
+             patch("pathlib.Path.glob", return_value=[]), \
+             patch("pathlib.Path.rglob", return_value=[]), \
+             patch("pathlib.Path.mkdir"), \
+             patch("shutil.rmtree"):
+                transcoder = FFmpegTranscoder(s3_mock, "test-bucket")
+                job = _make_job(["1080p", "720p"])  # note: no 360p requested
+                result = asyncio.run(transcoder.transcode(job))
+
+        assert result.success is True
+        ffmpeg_cmd = _get_ffmpeg_cmd(mock_run)
+        filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
+
+        assert "1920:1080" not in filter_complex
+        assert "1280:720" in filter_complex, "smallest requested quality (720p) must survive as fallback"
+        assert "split=1" in filter_complex
+
+
+def test_source_larger_than_ladder_keeps_full_ladder():
+    """Regression check: a source at/above the top rendition must still
+    produce the full requested ladder, unchanged from before the fix."""
+    with patch("subprocess.run", side_effect=_mock_probe_side_effect(1920, 1080)) as mock_run:
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        s3_mock.upload_file = MagicMock()
+
+        with patch("builtins.open", MagicMock()), \
+             patch("pathlib.Path.glob", return_value=[]), \
+             patch("pathlib.Path.rglob", return_value=[]), \
+             patch("pathlib.Path.mkdir"), \
+             patch("shutil.rmtree"):
+                transcoder = FFmpegTranscoder(s3_mock, "test-bucket")
+                job = _make_job(["1080p", "720p", "360p"])
+                result = asyncio.run(transcoder.transcode(job))
+
+        assert result.success is True
+        ffmpeg_cmd = _get_ffmpeg_cmd(mock_run)
+        filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
+
+        assert "1920:1080" in filter_complex
+        assert "1280:720" in filter_complex
+        assert "640:360" in filter_complex
+        assert "split=3" in filter_complex
 
 
 # ─── _run() returns stdout on success ──────────────────────────────────────────

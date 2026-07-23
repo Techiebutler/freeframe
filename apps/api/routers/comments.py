@@ -35,7 +35,9 @@ from ..schemas.comment import (
 )
 from ..services import s3_service
 from ..services import comment_export
-from ..services.permissions import require_asset_access, validate_share_link
+from ..services.permissions import (
+    require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
+)
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
 
@@ -161,22 +163,27 @@ def _build_comment_responses_batched(
     db: Session,
     current_user_id: uuid.UUID | None = None,
     max_depth: int = 5,
+    exclude_internal: bool = False,
 ) -> list[CommentResponse]:
     """Build the comment tree for `top_level` with a FIXED number of queries
     instead of one-per-comment. Field-for-field equivalent to calling
     _build_comment_response on each top-level comment, but ~6 queries total
     regardless of how many comments the asset has (avoids the N+1 that made the
-    list endpoint slow — and it's re-fetched after every comment save)."""
+    list endpoint slow — and it's re-fetched after every comment save).
+
+    exclude_internal drops visibility="internal" comments (and their whole subtree, since a
+    reply to a team-only comment is team-only too) — set for guest/public callers so an
+    internal note never reaches a share link, no matter how deep in the thread it is."""
     if not top_level:
         return []
 
     # One query for every non-deleted comment on the asset → parent→children map.
-    all_comments = (
-        db.query(Comment)
-        .filter(Comment.asset_id == asset_id, Comment.deleted_at.is_(None))
-        .order_by(Comment.created_at)
-        .all()
+    all_comments_query = db.query(Comment).filter(
+        Comment.asset_id == asset_id, Comment.deleted_at.is_(None),
     )
+    if exclude_internal:
+        all_comments_query = all_comments_query.filter(Comment.visibility != "internal")
+    all_comments = all_comments_query.order_by(Comment.created_at).all()
     children_map: dict[uuid.UUID, list[Comment]] = defaultdict(list)
     for c in all_comments:
         if c.parent_id is not None:
@@ -275,6 +282,11 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
             if user and user.id != comment.author_id:
                 mentioned_users.append(user)
 
+    # A mention must only reach someone who can actually see the asset — otherwise any user
+    # (or a guest via a share link) could @mention an arbitrary user id/email and have their
+    # name, the asset name, and a comment preview emailed to someone with no access to either.
+    mentioned_users = [u for u in mentioned_users if can_access_asset(db, asset, u)]
+
     for user in mentioned_users:
         mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
         db.add(mention)
@@ -332,6 +344,13 @@ def create_comment(
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
 
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == body.version_id, AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
+
     comment = Comment(
         asset_id=asset_id,
         version_id=body.version_id,
@@ -384,7 +403,9 @@ def reply_to_comment(
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
-    parent = db.query(Comment).filter(Comment.id == comment_id, Comment.deleted_at.is_(None)).first()
+    parent = db.query(Comment).filter(
+        Comment.id == comment_id, Comment.asset_id == asset_id, Comment.deleted_at.is_(None),
+    ).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Parent comment not found")
 
@@ -790,20 +811,26 @@ def list_share_comments(
     asset_id: Optional[uuid.UUID] = None,
     version_id: Optional[uuid.UUID] = None,
     latest_only: bool = False,
+    share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Public endpoint — list comments for a shared asset. No auth required.
-    For folder/project shares, pass asset_id as query param to get comments for a specific asset.
+    """Public endpoint — list comments for a shared asset. Enforces the share link's password
+    (if any) via share_session, same as the other public share endpoints.
+    For folder/project shares, pass asset_id as query param to get comments for a specific asset —
+    it's validated against the link's scope, so it can't be used to read another asset's comments.
     Pass version_id to scope comments to a single version (matches the authenticated review view).
     Pass latest_only=true to scope to the latest ready version — used by the folder/grid preview,
     which has no version picker."""
-    link = validate_share_link(db, token)
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     # Determine the asset_id to list comments for
     target_asset_id = link.asset_id or asset_id
     if not target_asset_id:
         return []
-    asset_id = target_asset_id
+    asset = _get_asset(db, target_asset_id)
+    validate_asset_in_share(db, link, asset)
+    asset_id = asset.id
 
     # The folder/grid preview has no version switcher, so it scopes to the latest ready version.
     if latest_only and not version_id:
@@ -815,38 +842,44 @@ def list_share_comments(
         ).order_by(AssetVersion.version_number.desc()).first()
         version_id = latest.id if latest else version_id
 
-    # Get top-level comments — reuse same format as authenticated endpoint
+    # Get top-level comments — reuse same format as authenticated endpoint. Internal-visibility
+    # comments are team-only and must never reach a public share link.
     query = db.query(Comment).filter(
         Comment.asset_id == asset_id,
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
+        Comment.visibility != "internal",
     )
     if version_id:
         query = query.filter(Comment.version_id == version_id)
     top_level = query.order_by(Comment.created_at).all()
 
     # Batched build (fixed query count) — guests have no user, so no current_user_id.
-    return _build_comment_responses_batched(asset_id, top_level, db)
+    return _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=True)
 
 
 @router.post("/share/{token}/comment", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
 def guest_comment(
     token: str,
     body: GuestCommentCreate,
+    share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
-    link = validate_share_link(db, token)
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     # Check share link permission allows commenting
     if link.permission == SharePermission.view:
         raise HTTPException(status_code=403, detail="This share link does not allow commenting")
 
-    # Resolve asset_id: from body, link, or error
-    target_asset_id = body.asset_id or link.asset_id
+    # Resolve asset_id: from the link when it's scoped to one asset; otherwise from the request
+    # body (folder/project shares only), validated against the link's actual scope below — the
+    # link's own asset_id always wins so a single-asset link can't be redirected to another asset.
+    target_asset_id = link.asset_id or body.asset_id
     if not target_asset_id:
         raise HTTPException(status_code=400, detail="asset_id is required for folder/project shares")
     asset = _get_asset(db, target_asset_id)
+    validate_asset_in_share(db, link, asset)
 
     # Resolve version_id: use provided or get latest ready version
     version_id = body.version_id

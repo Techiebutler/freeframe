@@ -142,8 +142,16 @@ class FFmpegTranscoder(BaseTranscoder):
                 "720p": ("1280:720", 22),
                 "360p": ("640:360", 26),
             }
-            qualities = [q for q in job.qualities if q in QUALITY_MAP]
+            # qualities = [q for q in job.qualities if q in QUALITY_MAP]
+            requested = [q for q in job.qualities if q in QUALITY_MAP]
+            source_height = meta.height if meta else 0
 
+            qualities = [
+                q for q in requested
+                if int(QUALITY_MAP[q][0].split(":")[1]) <= source_height
+            ]
+            if not qualities and requested:
+                qualities = [min(requested, key=lambda q: int(QUALITY_MAP[q][0].split(":")[1]))]
             hls_dir = work_dir / "hls"
             hls_dir.mkdir()
 
