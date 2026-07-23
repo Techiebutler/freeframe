@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-07-23
+
 ### Fixed
 - **Public share-link comments can no longer read or write outside the shared scope** — both `GET /share/{token}/comments` and `POST /share/{token}/comment` trusted a client-supplied `asset_id` for folder/project-scoped links (and, for the write endpoint, even for a single-asset link — a request body could name a different asset entirely) with no check that the asset was actually within the link's scope. A holder of any comment/approve-permission share link could read or post comments on assets never shared with them. Both endpoints now validate the resolved asset against the share link the same way every other public share endpoint already does.
 - **Password-protected share links now actually gate comments** — the two comment endpoints were the only public share routes that skipped password/session verification, so a password-protected link's comments were fully readable and writable with just the token.
