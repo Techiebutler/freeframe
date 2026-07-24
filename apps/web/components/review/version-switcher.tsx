@@ -64,7 +64,7 @@ export function VersionSwitcher({ versions, className }: VersionSwitcherProps) {
             <DropdownMenu.Content
               align="end"
               sideOffset={6}
-              className="z-[100] min-w-[160px] rounded-lg border border-border bg-bg-elevated py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+              className="z-[100] min-w-[160px] rounded-lg border border-border bg-bg-elevated shadow-xl py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
             >
               {sorted.map((version) => {
                 const isActive = currentVersion?.id === version.id

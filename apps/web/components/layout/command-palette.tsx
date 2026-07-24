@@ -183,10 +183,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-200" />
-        <Dialog.Content className="fixed left-1/2 top-[20%] z-50 w-full max-w-lg -translate-x-1/2 -translate-y-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:duration-200">
+        <Dialog.Content className="fixed left-1/2 top-[20%] z-50 w-full max-w-lg -translate-x-1/2 -translate-y-0">
           <Dialog.Title className="sr-only">Command Palette</Dialog.Title>
           <Command
-            className="overflow-hidden rounded border border-border bg-bg-elevated"
+            className="overflow-hidden rounded border border-border bg-bg-elevated shadow-2xl animate-scale-in"
             loop
             shouldFilter={true}
           >

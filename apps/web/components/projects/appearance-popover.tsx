@@ -99,7 +99,7 @@ export function AppearancePopover() {
           side="bottom"
           align="start"
           sideOffset={6}
-          className="z-50 w-72 rounded border border-border bg-bg-elevated p-4 space-y-4
+          className="z-50 w-72 rounded border border-border bg-bg-elevated shadow-xl p-4 space-y-4
             data-[state=open]:animate-in data-[state=closed]:animate-out
             data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0
             data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"

@@ -4,6 +4,7 @@ import * as React from "react";
 import { ChevronDown, Share2, Users } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useDelayedUnmount } from "@/hooks/use-delayed-unmount";
 import { Button } from "@/components/ui/button";
 import { DirectTab } from "./share-direct-panel";
 import { SingleLinkSection } from "./share-link-section";
@@ -102,6 +103,8 @@ export function ShareDialog({
     return () => document.removeEventListener("keydown", handleKey);
   }, [dropdownOpen]);
 
+  const { mounted, state } = useDelayedUnmount(dropdownOpen);
+
   return (
     <div className="relative" ref={dropdownRef}>
       <Button
@@ -114,13 +117,20 @@ export function ShareDialog({
         Share
       </Button>
 
-      {dropdownOpen && (
+      {mounted && (
+        <>
+          <div
+            data-state={state}
+            className="fixed inset-x-0 bottom-0 top-14 z-40 bg-black/40 duration-150 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0"
+            onClick={() => setDropdownOpen(false)}
+          />
         <div
+          data-state={state}
           className={cn(
-            "fixed left-2 right-2 top-12 z-50 w-auto sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-1.5 sm:w-[460px]",
+            "fixed left-2 right-2 top-16 z-50 w-auto sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-1.5 sm:w-[460px]",
             "max-h-[calc(100dvh-4.5rem)] sm:max-h-[min(calc(100dvh-8rem),42rem)] overflow-y-auto overscroll-contain",
-            "rounded-xl border border-border bg-bg-secondary overflow-x-hidden",
-            "animate-in fade-in-0 zoom-in-95 duration-150",
+            "rounded-xl border border-border bg-bg-elevated shadow-xl overflow-x-hidden",
+            "duration-150 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           )}
         >
           <div className="flex items-center justify-between gap-3 border-b border-border bg-bg-tertiary px-5 py-3.5">
@@ -134,6 +144,7 @@ export function ShareDialog({
             withPeople
           />
         </div>
+        </>
       )}
     </div>
   );

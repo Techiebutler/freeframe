@@ -13,6 +13,7 @@ import { useNotificationStore } from '@/stores/notification-store'
 import { useBrandingStore } from '@/stores/branding-store'
 import { useThemeStore } from '@/stores/theme-store'
 import { Avatar } from '@/components/shared/avatar'
+import { useDelayedUnmount } from '@/hooks/use-delayed-unmount'
 import { NotificationDrawer } from './notification-drawer'
 
 interface HeaderProps {
@@ -65,11 +66,15 @@ export function Header({ onSearchOpen }: HeaderProps) {
   const isProjectLibrary = /^\/projects\/[^/]+$/.test(pathname ?? '')
   const { labels, extraCrumbs } = useBreadcrumbStore()
   const { user, logout } = useAuthStore()
-  const { files: uploadFiles, togglePanel, panelOpen } = useUploadStore()
+  const { files: uploadFiles, togglePanel, panelOpen, setPanelOpen } = useUploadStore()
   const { unreadCount, fetchNotifications } = useNotificationStore()
   const { orgName, orgLogoDark, orgLogoLight } = useBrandingStore()
   const { theme, setTheme } = useThemeStore()
   const [notifOpen, setNotifOpen] = React.useState(false)
+  // One shared scrim for both header popovers: stays mounted while either is
+  // open, so switching between them keeps the dim steady instead of two
+  // per-panel scrims cross-fading (which flickered the background).
+  const { mounted: scrimMounted, state: scrimState } = useDelayedUnmount(notifOpen || panelOpen)
   const [resolvedTheme, setResolvedTheme] = React.useState<'dark' | 'light'>(
     theme === 'light' ? 'light' : 'dark',
   )
@@ -160,7 +165,7 @@ export function Header({ onSearchOpen }: HeaderProps) {
         <div className="flex items-center gap-1.5 shrink-0">
           {/* Notifications bell */}
           <button
-            onClick={() => setNotifOpen((v) => !v)}
+            onClick={() => { setPanelOpen(false); setNotifOpen((v) => !v) }}
             className={cn(
               'relative flex h-[34px] w-[34px] items-center justify-center rounded border transition-colors',
               notifOpen
@@ -244,7 +249,7 @@ export function Header({ onSearchOpen }: HeaderProps) {
                 side="bottom"
                 align="end"
                 sideOffset={8}
-                className="z-50 min-w-[180px] rounded border border-border bg-bg-elevated p-1 animate-slide-up"
+                className="z-50 min-w-[180px] rounded border border-border bg-bg-elevated shadow-xl p-1 animate-slide-up"
               >
                 <DropdownMenu.Item asChild>
                   <Link
@@ -277,6 +282,14 @@ export function Header({ onSearchOpen }: HeaderProps) {
           </DropdownMenu.Root>
         </div>
       </header>
+
+      {scrimMounted && (
+        <div
+          data-state={scrimState}
+          onClick={() => { setNotifOpen(false); setPanelOpen(false) }}
+          className="fixed inset-x-0 bottom-0 top-14 z-40 bg-black/40 duration-150 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0"
+        />
+      )}
 
       <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
     </>

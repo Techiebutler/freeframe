@@ -28,6 +28,12 @@
   --dot: #1c1c1c;
   --scrim: rgba(0, 0, 0, 0.72);
 
+  /* Overlay elevation (floating surfaces only — shadow-xl / shadow-2xl).
+     Flat/mono keeps inline surfaces shadowless; overlays get a crisp
+     hairline ring so they separate from the near-black page after opening. */
+  --shadow-overlay: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 18px 44px -22px rgba(0, 0, 0, 0.85);
+  --shadow-overlay-lg: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 28px 64px -28px rgba(0, 0, 0, 0.9);
+
   --status-success: #f4f4f4;
   --status-warning: #9b9b9b;
   --status-error: #D71921;
@@ -82,6 +88,9 @@
 
   --dot: #d4cfc0;
   --scrim: rgba(20, 18, 14, 0.55);
+
+  --shadow-overlay: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 12px 28px -12px rgba(20, 18, 14, 0.20);
+  --shadow-overlay-lg: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 20px 44px -16px rgba(20, 18, 14, 0.26);
 
   --status-success: #0a0a0a;
   --status-warning: #57544c;

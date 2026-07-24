@@ -110,12 +110,10 @@ export function NotificationDrawer({ open, onClose }: NotificationDrawerProps) {
 
   if (!open) return null
 
+  // Dim scrim is a single shared element in the header (covers both popovers);
+  // this drawer just unmounts on close, so switching never ghosts.
   return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-
-      {/* Drawer */}
-      <div className="fixed right-2 top-12 z-50 w-[380px] max-w-[calc(100vw-1rem)] max-h-[min(70dvh,560px)] rounded border border-border bg-bg-secondary flex flex-col overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-1 duration-150">
+    <div className="fixed right-2 top-16 z-50 w-[380px] max-w-[calc(100vw-1rem)] max-h-[min(70dvh,560px)] rounded border border-border bg-bg-elevated shadow-xl flex flex-col overflow-hidden animate-scale-in">
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
           <span className="font-mono text-[11px] font-normal uppercase tracking-[0.16em] text-text-tertiary">Notifications</span>
@@ -194,6 +192,5 @@ export function NotificationDrawer({ open, onClose }: NotificationDrawerProps) {
           )}
         </div>
       </div>
-    </>
   )
 }

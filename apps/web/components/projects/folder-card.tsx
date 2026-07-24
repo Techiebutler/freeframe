@@ -188,7 +188,7 @@ export function FolderCard({
               </button>
 
               {menuOpen && (
-                <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded border border-border bg-bg-elevated py-1">
+                <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded border border-border bg-bg-elevated shadow-xl py-1">
                   <button
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover"
                     onClick={(e) => {

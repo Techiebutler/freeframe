@@ -131,7 +131,7 @@ export function ProjectCard({
 
             <DropdownMenu.Portal>
               <DropdownMenu.Content
-                className="z-50 min-w-[180px] rounded border border-border bg-bg-elevated p-1"
+                className="z-50 min-w-[180px] rounded border border-border bg-bg-elevated shadow-xl p-1"
                 sideOffset={4}
                 align="end"
               >

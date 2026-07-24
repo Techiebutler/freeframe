@@ -25,8 +25,10 @@ const config: Config = {
       DEFAULT: '0 0 #0000',
       md: '0 0 #0000',
       lg: '0 0 #0000',
-      xl: '0 0 #0000',
-      '2xl': '0 0 #0000',
+      // xl / 2xl carry overlay elevation (floating surfaces); inline tiers
+      // stay flat per the mono system. Theme-aware via globals.css tokens.
+      xl: 'var(--shadow-overlay)',
+      '2xl': 'var(--shadow-overlay-lg)',
       inner: '0 0 #0000',
       none: '0 0 #0000',
     },
