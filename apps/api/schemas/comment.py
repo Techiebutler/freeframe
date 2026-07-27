@@ -83,6 +83,14 @@ class AuthorInfo(BaseModel):
     name: str
     avatar_url: Optional[str] = None
 
+    @field_validator("avatar_url", mode="after")
+    @classmethod
+    def resolve_avatar_url(cls, v: Optional[str]) -> Optional[str]:
+        if v and not v.startswith("http"):
+            from ..services import s3_service
+            return s3_service.generate_presigned_get_url(v)
+        return v
+
 class GuestAuthorInfo(BaseModel):
     id: uuid.UUID
     name: str

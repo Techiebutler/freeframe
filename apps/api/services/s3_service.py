@@ -1,9 +1,19 @@
 import json
+import logging
 import os
 import re
+import time
+from functools import lru_cache
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from ..config import settings
+
+logger = logging.getLogger(__name__)
+
+# Short timeouts for the one-off startup bucket check, so a slow or unreachable
+# store can't hang app startup for boto3's default ~60s (deploy-test finding #6).
+_STARTUP_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2})
 
 # S3 Content-Type and Cache-Control mappings
 CONTENT_TYPE_MAP = {
@@ -21,37 +31,59 @@ def _is_aws_s3() -> bool:
     """Check if using AWS S3 (vs MinIO/local). Controlled by S3_STORAGE env var."""
     return settings.s3_storage.lower() == "s3"
 
-def get_s3_client():
-    """
-    Create S3 client. Auto-detects AWS vs MinIO:
-    - If access_key starts with 'AKIA' -> use AWS S3 (no endpoint_url)
-    - Otherwise -> use custom endpoint (MinIO or S3-compatible)
-    """
-    if _is_aws_s3():
-        # Real AWS S3 - don't pass endpoint_url
-        return boto3.client(
-            "s3",
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-        )
-    else:
-        # MinIO or S3-compatible storage
-        return boto3.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint,
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-        )
+# SigV4 everywhere. us-east-1 is the only region whose endpoint metadata lists "s3"
+# alongside "s3v4", so with no explicit signature_version botocore registers
+# _default_s3_presign_to_sigv2 and silently downgrades *presigned* URLs to SigV2 —
+# server-side calls stay SigV4, and client.meta.config.signature_version still reads
+# "s3v4", which makes it easy to miss. SigV2 breaks presigned PUTs that carry any
+# Content-Type, and modern buckets reject it outright.
+_SIGV4_CONFIG = Config(signature_version="s3v4")
 
+# Self-hosted S3 backends (Garage, MinIO, …) commonly sit behind a reverse proxy
+# without wildcard bucket DNS, so virtual-host addressing can't resolve — and some
+# (Garage) reject SigV2 query auth outright. Path-style is layered on top of the
+# SigV4 baseline for non-AWS mode.
+_NON_AWS_COMPAT_CONFIG = Config(s3={"addressing_style": "path"}, signature_version="s3v4")
+
+def _build_s3_client(config=None):
+    """Construct an S3 client. Selection is driven by S3_STORAGE (see _is_aws_s3):
+    - "s3"   -> native AWS S3 (no endpoint_url; S3_ENDPOINT is not used)
+    - other  -> S3_ENDPOINT for MinIO or another S3-compatible backend
+    Pass `config` (a botocore Config) when you need bounded timeouts (startup check).
+    """
+    kwargs = {
+        "aws_access_key_id": settings.s3_access_key,
+        "aws_secret_access_key": settings.s3_secret_key,
+        "region_name": settings.s3_region,
+    }
+    baseline = _SIGV4_CONFIG
+    if not _is_aws_s3():
+        kwargs["endpoint_url"] = settings.s3_endpoint
+        baseline = _NON_AWS_COMPAT_CONFIG
+    # botocore's Config.merge lets the *argument* win, so merge onto the caller's
+    # config to keep the baseline authoritative (a caller can still add
+    # non-conflicting options like the startup timeouts).
+    config = config.merge(baseline) if config is not None else baseline
+    kwargs["config"] = config
+    return boto3.client("s3", **kwargs)
+
+
+@lru_cache(maxsize=1)
+def get_s3_client():
+    """The shared, cached S3 client for server-side operations (see _build_s3_client)."""
+    return _build_s3_client()
+
+@lru_cache(maxsize=1)
 def _get_presign_client():
     """
     Client for generating presigned URLs. Uses s3_public_endpoint if set,
     so presigned URLs are accessible from the browser (e.g. localhost:9000
     instead of minio:9000 in Docker).
     """
-    endpoint = settings.s3_public_endpoint or (None if _is_aws_s3() else settings.s3_endpoint)
+    # AWS S3 mode always uses native presigned URLs; s3_public_endpoint is a
+    # MinIO/dev concept (rewrite the internal endpoint to a browser-reachable one)
+    # and must never apply to AWS, or presigned URLs would point at the wrong host.
+    endpoint = None if _is_aws_s3() else (settings.s3_public_endpoint or settings.s3_endpoint)
     kwargs = {
         "aws_access_key_id": settings.s3_access_key,
         "aws_secret_access_key": settings.s3_secret_key,
@@ -59,11 +91,19 @@ def _get_presign_client():
     }
     if endpoint:
         kwargs["endpoint_url"] = endpoint
+        kwargs["config"] = _NON_AWS_COMPAT_CONFIG
+    else:
+        kwargs["config"] = _SIGV4_CONFIG
     return boto3.client("s3", **kwargs)
 
 def ensure_bucket_exists():
-    """Create the S3 bucket if it does not exist. Called on app startup."""
-    s3 = get_s3_client()
+    """Create the S3 bucket if it does not exist (+ configure CORS/policy on non-AWS).
+
+    Uses a short-timeout client so it fails fast rather than blocking for boto3's
+    default ~60s if the store is slow/unreachable. Run via run_startup_bucket_setup()
+    off the request path at startup — see main.py.
+    """
+    s3 = _build_s3_client(config=_STARTUP_S3_CONFIG)
     try:
         s3.head_bucket(Bucket=settings.s3_bucket)
     except ClientError as e:
@@ -90,6 +130,13 @@ def ensure_bucket_exists():
     # Set CORS for browser-based uploads (presigned PUT)
     if not _is_aws_s3():
         try:
+            # One rule per origin: Garage joins a rule's AllowedOrigins into a single
+            # comma-separated Access-Control-Allow-Origin response header, which
+            # browsers reject — with both origins in one rule, every cross-origin
+            # request (HLS segments, presigned uploads) fails CORS in the browser.
+            # AWS-style backends echo only the matching origin either way, so
+            # per-origin rules behave identically everywhere.
+            origins = list(dict.fromkeys([settings.frontend_url, "http://localhost:3000"]))
             s3.put_bucket_cors(
                 Bucket=settings.s3_bucket,
                 CORSConfiguration={
@@ -97,15 +144,27 @@ def ensure_bucket_exists():
                         {
                             "AllowedHeaders": ["*"],
                             "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
-                            "AllowedOrigins": [settings.frontend_url, "http://localhost:3000"],
+                            "AllowedOrigins": [origin],
                             "ExposeHeaders": ["ETag", "Content-Length", "x-amz-request-id"],
                             "MaxAgeSeconds": 3600,
                         }
+                        for origin in origins
                     ]
                 },
             )
-        except ClientError:
-            pass  # CORS config failed, non-critical
+        except ClientError as e:
+            # Non-fatal, but surfaced: browser multipart uploads assemble the
+            # CompleteMultipartUpload from each part's ETag response header,
+            # which the browser only exposes when the bucket's CORS
+            # ExposeHeaders includes "ETag". If we can't set CORS here, uploads
+            # may fail client-side with a generic error and no server log —
+            # so warn and point the operator at the docs (issue #131).
+            logger.warning(
+                "Could not set bucket CORS on %r (%s). Browser multipart uploads "
+                "need the bucket CORS ExposeHeaders to include 'ETag'; configure it "
+                "manually on your S3 provider — see docs/deployment.md (External S3 Storage).",
+                settings.s3_bucket, e,
+            )
 
         # Set public-read policy on processed/ prefix so HLS sub-playlists
         # and .ts segments can be fetched without presigned URLs
@@ -128,6 +187,41 @@ def ensure_bucket_exists():
             )
         except ClientError:
             pass  # Policy config failed, non-critical
+
+
+def run_startup_bucket_setup(attempts: int = 5, base_delay: float = 3.0, _sleep=time.sleep) -> None:
+    """App-startup entrypoint for bucket setup that NEVER raises.
+
+    A slow or unreachable object store must not crash or block app startup, so this
+    swallows every error and logs a clear warning instead. It retries a transient
+    failure a few times with linear backoff, so a store that comes up shortly after
+    the app self-heals without a manual restart (that self-heal was previously a
+    side effect of the crash-loop that finding #6 intentionally removed). Call it off
+    the request path (a daemon thread from the FastAPI lifespan) — see main.py.
+
+    `_sleep` is injectable so tests can run the retry loop without real delays.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            ensure_bucket_exists()
+            return
+        except Exception as e:  # noqa: BLE001 - startup must survive any storage failure
+            where = "AWS" if _is_aws_s3() else settings.s3_endpoint
+            if attempt < attempts:
+                delay = base_delay * attempt
+                logger.warning(
+                    "S3/object-storage setup attempt %d/%d failed (S3_STORAGE=%s, endpoint=%s); "
+                    "retrying in %.0fs: %s",
+                    attempt, attempts, settings.s3_storage, where, delay, e,
+                )
+                _sleep(delay)
+            else:
+                logger.warning(
+                    "S3/object-storage setup failed after %d attempts — uploads and streaming "
+                    "will not work until storage is reachable and the app is restarted "
+                    "(S3_STORAGE=%s, endpoint=%s): %s",
+                    attempts, settings.s3_storage, where, e,
+                )
 
 
 def get_content_type(key: str) -> tuple[str, str]:
@@ -194,6 +288,19 @@ def build_download_filename(display_name: str, source: str | None) -> str:
     if display_name.lower().endswith(ext.lower()):
         return display_name
     return f"{display_name}{ext}"
+
+
+def generate_presigned_put_url(s3_key: str, content_type: str | None = None, expires_in: int = 3600) -> str:
+    """Generate a presigned PUT URL for browser-based upload.
+
+    Uses s3_public_endpoint so the URL is reachable from the browser
+    (e.g. https://public-host instead of http://localhost:9000).
+    """
+    s3 = _get_presign_client()
+    params: dict = {"Bucket": settings.s3_bucket, "Key": s3_key}
+    if content_type:
+        params["ContentType"] = content_type
+    return s3.generate_presigned_url("put_object", Params=params, ExpiresIn=expires_in)
 
 
 def generate_presigned_get_url(s3_key: str, expires_in: int = 3600, download_filename: str | None = None) -> str:
@@ -273,7 +380,19 @@ def delete_prefix(prefix: str) -> None:
         resp = s3.list_objects_v2(**kwargs)
         objects = [{"Key": o["Key"]} for o in resp.get("Contents", [])]
         if objects:
-            s3.delete_objects(Bucket=settings.s3_bucket, Delete={"Objects": objects})
+            try:
+                s3.delete_objects(Bucket=settings.s3_bucket, Delete={"Objects": objects})
+            except ClientError as e:
+                # botocore >=1.36 sends a CRC32 data-integrity checksum on batch DeleteObjects
+                # instead of the legacy Content-MD5 header. S3-compatible backends that predate
+                # AWS flexible checksums (older MinIO/Ceph/etc.) reject it with MissingContentMD5.
+                # Fall back to per-key deletes, which require no checksum, so cleanup still works.
+                err = e.response.get("Error", {})
+                if err.get("Code") == "MissingContentMD5" or "content-md5" in err.get("Message", "").lower():
+                    for obj in objects:
+                        s3.delete_object(Bucket=settings.s3_bucket, Key=obj["Key"])
+                else:
+                    raise
         if resp.get("IsTruncated"):
             kwargs["ContinuationToken"] = resp.get("NextContinuationToken")
         else:

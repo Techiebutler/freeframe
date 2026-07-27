@@ -26,6 +26,7 @@ from ..schemas.share import (
     FolderShareAssetItem,
     FolderShareAssetsResponse,
     FolderShareSubfolder,
+    ShareAssetVersionItem,
     MultiShareCreate,
     ShareLinkActivityResponse,
     ShareLinkCreate,
@@ -34,7 +35,10 @@ from ..schemas.share import (
     ShareLinkUpdate,
     ShareLinkValidateResponse,
 )
-from ..services.permissions import require_project_role, validate_share_link, validate_share_link_with_session
+from ..services.permissions import (
+    require_project_role, validate_share_link, validate_share_link_with_session,
+    validate_asset_in_share, _is_descendant_of,
+)
 from ..services.redis_service import create_share_session
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.crypto_service import encrypt_password, decrypt_password
@@ -64,31 +68,6 @@ def _get_folder(db: Session, folder_id: uuid.UUID) -> Folder:
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     return folder
-
-
-def _validate_asset_in_share(db: Session, link: ShareLink, asset: Asset) -> None:
-    """Validate that an asset belongs to a share link (folder, asset, project, or multi-share)."""
-    if link.folder_id:
-        if asset.folder_id != link.folder_id:
-            if not asset.folder_id or not _is_descendant_of(db, asset.folder_id, link.folder_id):
-                raise HTTPException(status_code=403, detail="Asset is not within the shared folder")
-    elif link.asset_id:
-        if asset.id != link.asset_id:
-            raise HTTPException(status_code=403, detail="Asset does not match share link")
-    elif link.project_id:
-        if asset.project_id != link.project_id:
-            raise HTTPException(status_code=403, detail="Asset is not within the shared project")
-        # For multi-share links, also check ShareLinkItem entries
-        multi_items = db.query(ShareLinkItem).filter(ShareLinkItem.share_link_id == link.id).all()
-        if multi_items:
-            multi_asset_ids = {item.asset_id for item in multi_items if item.asset_id}
-            multi_folder_ids = {item.folder_id for item in multi_items if item.folder_id}
-            if asset.id not in multi_asset_ids:
-                # Check if asset is in one of the shared folders
-                if not any(asset.folder_id == fid or (asset.folder_id and _is_descendant_of(db, asset.folder_id, fid)) for fid in multi_folder_ids):
-                    raise HTTPException(status_code=403, detail="Asset is not in the shared items")
-    else:
-        raise HTTPException(status_code=400, detail="Invalid share link")
 
 
 def _get_project_id_from_link(db: Session, link: ShareLink) -> uuid.UUID:
@@ -141,19 +120,6 @@ def _log_share_activity(
         db.rollback()
 
 
-def _is_descendant_of(db: Session, folder_id: uuid.UUID, ancestor_id: uuid.UUID) -> bool:
-    """Check if folder_id is a descendant of ancestor_id via parent chain traversal."""
-    current_id = folder_id
-    visited = set()
-    while current_id and current_id not in visited:
-        if current_id == ancestor_id:
-            return True
-        visited.add(current_id)
-        folder = db.query(Folder.parent_id).filter(Folder.id == current_id).first()
-        current_id = folder.parent_id if folder else None
-    return False
-
-
 def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFile]:
     """Get the first media file from the latest ready version of an asset."""
     version = db.query(AssetVersion).filter(
@@ -164,6 +130,32 @@ def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFi
     if not version:
         return None
     return db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+
+
+def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
+    """Count comments on an asset's latest ready version — matches the version-scoped
+    folder/grid preview, which has no version picker."""
+    version = db.query(AssetVersion).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+        AssetVersion.processing_status == ProcessingStatus.ready,
+    ).order_by(AssetVersion.version_number.desc()).first()
+    if not version:
+        return 0
+    return db.query(sa_func.count(Comment.id)).filter(
+        Comment.asset_id == asset_id,
+        Comment.version_id == version.id,
+        Comment.deleted_at.is_(None),
+    ).scalar() or 0
+
+
+def _ready_version_count(db: Session, asset_id: uuid.UUID) -> int:
+    """Number of ready versions available for an asset (shown on the share preview card)."""
+    return db.query(sa_func.count(AssetVersion.id)).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+        AssetVersion.processing_status == ProcessingStatus.ready,
+    ).scalar() or 0
 
 
 # ── Share links ───────────────────────────────────────────────────────────────
@@ -1158,9 +1150,14 @@ def get_folder_share_assets(
     per_page: int = 50,
     share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Public endpoint — no auth required. Returns assets and subfolders for a folder or project share link."""
-    link = validate_share_link_with_session(db, token, share_session=share_session)
+    """Public endpoint — optional auth. Returns assets and subfolders for a folder or project share link.
+
+    The authenticated link creator bypasses the passphrase (e.g. the dashboard settings preview),
+    matching `/share/{token}/stream/{asset_id}`.
+    """
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     is_project_share = link.project_id is not None
     if not link.folder_id and not is_project_share:
@@ -1212,13 +1209,14 @@ def get_folder_share_assets(
             for a in shared_assets:
                 mf = _get_latest_media_file(db, a.id)
                 thumbnail_url = generate_presigned_get_url(mf.s3_key_thumbnail) if mf and mf.s3_key_thumbnail else None
-                comment_count = db.query(sa_func.count(Comment.id)).filter(
-                    Comment.asset_id == a.id, Comment.deleted_at.is_(None),
-                ).scalar() or 0
+                comment_count = _latest_version_comment_count(db, a.id)
                 asset_items.append(FolderShareAssetItem(
                     id=a.id, name=a.name, asset_type=a.asset_type.value if hasattr(a.asset_type, 'value') else str(a.asset_type),
                     thumbnail_url=thumbnail_url, created_at=a.created_at.isoformat() if a.created_at else "",
-                    file_size_bytes=mf.file_size_bytes if mf else 0, comment_count=comment_count,
+                    file_size=mf.file_size_bytes if mf else None,
+                    duration_seconds=mf.duration_seconds if mf else None,
+                    comment_count=comment_count,
+                    version_count=(_ready_version_count(db, a.id) if link.show_versions else 1),
                 ))
         else:
             total = 0
@@ -1318,10 +1316,7 @@ def get_folder_share_assets(
             file_size = media_file.file_size_bytes
             duration_seconds = media_file.duration_seconds
 
-        comment_count = db.query(sa_func.count(Comment.id)).filter(
-            Comment.asset_id == asset.id,
-            Comment.deleted_at.is_(None),
-        ).scalar() or 0
+        comment_count = _latest_version_comment_count(db, asset.id)
 
         # Get creator name
         creator = db.query(User).filter(User.id == asset.created_by).first() if asset.created_by else None
@@ -1334,6 +1329,7 @@ def get_folder_share_assets(
             file_size=file_size,
             duration_seconds=duration_seconds,
             comment_count=comment_count,
+            version_count=(_ready_version_count(db, asset.id) if link.show_versions else 1),
             created_by_name=creator.name if creator else None,
             created_at=asset.created_at,
         ))
@@ -1351,12 +1347,17 @@ def get_folder_share_assets(
 def get_share_stream_url(
     token: str,
     asset_id: uuid.UUID,
+    version_id: Optional[uuid.UUID] = Query(default=None),
     share_session: Optional[str] = Query(None, alias="share_session"),
     download: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Public endpoint — optional auth. Returns presigned stream URL for an asset in a share link."""
+    """Public endpoint — optional auth. Returns presigned stream URL for an asset in a share link.
+
+    When the share link enables "Show all versions", `version_id` selects a specific ready
+    version; otherwise (or when omitted/invalid) the latest ready version is served.
+    """
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     # Enforce allow_download when explicit download is requested
@@ -1366,9 +1367,21 @@ def get_share_stream_url(
     asset = _get_asset(db, asset_id)
 
     # Validate asset belongs to this share
-    _validate_asset_in_share(db, link, asset)
+    validate_asset_in_share(db, link, asset)
 
-    media_file = _get_latest_media_file(db, asset.id)
+    media_file = None
+    if version_id and link.show_versions:
+        version = db.query(AssetVersion).filter(
+            AssetVersion.id == version_id,
+            AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+            AssetVersion.processing_status == ProcessingStatus.ready,
+        ).first()
+        if version:
+            media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+    if not media_file:
+        # No (or non-visible) version requested — fall back to the latest ready version.
+        media_file = _get_latest_media_file(db, asset.id)
     if not media_file:
         raise HTTPException(status_code=404, detail="No ready media file found")
 
@@ -1420,14 +1433,18 @@ def get_share_thumbnail_url(
     asset_id: uuid.UUID,
     share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Public endpoint — no auth required. Returns presigned thumbnail URL for an asset in a share link."""
-    link = validate_share_link_with_session(db, token, share_session=share_session)
+    """Public endpoint — optional auth. Returns presigned thumbnail URL for an asset in a share link.
+
+    The authenticated link creator bypasses the passphrase, matching the other share endpoints.
+    """
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     asset = _get_asset(db, asset_id)
 
     # Validate asset belongs to this share
-    _validate_asset_in_share(db, link, asset)
+    validate_asset_in_share(db, link, asset)
 
     media_file = _get_latest_media_file(db, asset.id)
     if not media_file or not media_file.s3_key_thumbnail:
@@ -1435,3 +1452,34 @@ def get_share_thumbnail_url(
 
     url = generate_presigned_get_url(media_file.s3_key_thumbnail)
     return {"url": url}
+
+
+@router.get("/share/{token}/assets/{asset_id}/versions", response_model=list[ShareAssetVersionItem])
+def get_share_asset_versions(
+    token: str,
+    asset_id: uuid.UUID,
+    share_session: Optional[str] = Query(None, alias="share_session"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Public endpoint — optional auth. Lists a shared asset's ready versions for the viewer.
+
+    Only returns multiple versions when the share link enables "Show all versions"; otherwise
+    only the latest ready version is exposed to the guest.
+    """
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+
+    asset = _get_asset(db, asset_id)
+    validate_asset_in_share(db, link, asset)
+
+    versions = db.query(AssetVersion).filter(
+        AssetVersion.asset_id == asset.id,
+        AssetVersion.deleted_at.is_(None),
+        AssetVersion.processing_status == ProcessingStatus.ready,
+    ).order_by(AssetVersion.version_number.desc()).all()
+
+    if not link.show_versions:
+        # Version history hidden — expose only the latest ready version.
+        versions = versions[:1]
+
+    return versions

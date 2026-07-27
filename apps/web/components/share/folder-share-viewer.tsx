@@ -13,11 +13,14 @@ import {
   Music,
   Loader2,
   MessageSquare,
+  Layers,
   PanelRightClose,
   PanelRightOpen,
   ArrowLeft,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
+import { useReviewStore } from '@/stores/review-store'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -305,6 +308,14 @@ function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, 
           </div>
         )}
 
+        {/* Version count badge — top left (only when multiple versions exist) */}
+        {(asset.version_count ?? 1) > 1 && (
+          <div className="absolute top-2 left-2 flex items-center gap-1 bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5" title={`${asset.version_count} versions`}>
+            <Layers className="h-3 w-3 text-text-primary" />
+            <span className="text-[10px] font-medium text-text-primary tabular-nums">{asset.version_count}</span>
+          </div>
+        )}
+
         {/* Comment count badge — bottom left */}
         {asset.comment_count > 0 && (
           <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5">
@@ -413,7 +424,9 @@ function RightPanel({ selectedAsset, token, permission, allowDownload, onOpenAss
       return
     }
     setLoadingComments(true)
-    fetch(`${API_URL}/share/${token}/comments?asset_id=${selectedAsset.id}`)
+    // The grid preview has no version switcher — scope to the latest ready version
+    // so it doesn't mix comments from every version.
+    fetch(`${API_URL}/share/${token}/comments?asset_id=${selectedAsset.id}&latest_only=true`)
       .then((r) => (r.ok ? r.json() : Promise.resolve([])))
       .then((data) => setComments(Array.isArray(data) ? data : (data.comments ?? [])))
       .catch(() => setComments([]))
@@ -661,6 +674,7 @@ interface AssetViewerProps {
   asset: FolderShareAssetItem
   permission: SharePermission
   allowDownload: boolean
+  showVersions: boolean
   onBack: () => void
 }
 
@@ -694,7 +708,7 @@ function HlsVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={videoRef} controls className={className} />
 }
 
-function AssetViewer({ token, shareSession, asset, permission, allowDownload, onBack }: AssetViewerProps) {
+function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, onBack }: AssetViewerProps) {
   // Use the same ReviewProvider as the project review page, but with shareToken
   // This gives us the same video player, image viewer, comment panel, etc.
   return (
@@ -706,6 +720,7 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, on
         assetName={asset.name}
         permission={permission}
         allowDownload={allowDownload}
+        showVersions={showVersions}
         onBack={onBack}
       />
     </div>
@@ -714,9 +729,9 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, on
 
 /** Lazy-imported review components to avoid circular deps */
 function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, onBack,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack,
 }: {
-  token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; onBack: () => void
+  token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; onBack: () => void
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
   const [VideoPlayer, setVideoPlayer] = React.useState<any>(null)
@@ -724,6 +739,7 @@ function ShareReviewScreen({
   const [AudioPlayer, setAudioPlayer] = React.useState<any>(null)
   const [CommentPanel, setCommentPanel] = React.useState<any>(null)
   const [CommentInput, setCommentInput] = React.useState<any>(null)
+  const [VersionSwitcher, setVersionSwitcher] = React.useState<any>(null)
   const [loaded, setLoaded] = React.useState(false)
 
   React.useEffect(() => {
@@ -735,13 +751,15 @@ function ShareReviewScreen({
       import('@/components/review/audio-player'),
       import('@/components/review/comment-panel'),
       import('@/components/review/comment-input'),
-    ]).then(([provider, video, image, audio, comments, input]) => {
+      import('@/components/review/version-switcher'),
+    ]).then(([provider, video, image, audio, comments, input, versionSwitcher]) => {
       setProvider(() => provider.ReviewProvider)
       setVideoPlayer(() => video.VideoPlayer)
       setImageViewer(() => image.ImageViewer)
       setAudioPlayer(() => audio.AudioPlayer)
       setCommentPanel(() => comments.CommentPanel)
       setCommentInput(() => input.CommentInput)
+      setVersionSwitcher(() => versionSwitcher.VersionSwitcher)
       setLoaded(true)
     })
   }, [])
@@ -758,29 +776,26 @@ function ShareReviewScreen({
         assetName={assetName}
         permission={permission}
         allowDownload={allowDownload}
+        showVersions={showVersions}
         onBack={onBack}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
         AudioPlayer={AudioPlayer}
         CommentPanel={CommentPanel}
         CommentInput={CommentInput}
+        VersionSwitcher={VersionSwitcher}
       />
     </ReviewProvider>
   )
 }
 
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, onBack,
-  VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput,
+  token, shareSession, assetName, permission, allowDownload, showVersions, onBack,
+  VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
-  // Import hooks from the review system
-  const { useReview } = require('@/components/review/review-provider')
-  const { useReviewStore } = require('@/stores/review-store')
-  const { useComments } = require('@/hooks/use-comments')
-
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId } = useReviewStore()
-  const [sidebarOpen, setSidebarOpen] = React.useState(true)
+  const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
   const [AnnotationCanvas, setAnnotationCanvas] = React.useState<any>(null)
@@ -811,7 +826,7 @@ function ShareReviewInner({
   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
   const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
-    const payload: Record<string, unknown> = { body }
+    const payload: CreateCommentPayload = { body }
     if (currentVersion?.id) payload.version_id = currentVersion.id
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
@@ -849,6 +864,9 @@ function ShareReviewInner({
           <span className="text-[13px] font-medium text-text-primary truncate">{assetName}</span>
         </div>
         <div className="flex items-center gap-2">
+          {showVersions && VersionSwitcher && versions.length > 0 && (
+            <VersionSwitcher versions={versions} />
+          )}
           {allowDownload && (
             <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
               <Download className="h-3 w-3" /> Download
@@ -861,7 +879,7 @@ function ShareReviewInner({
       </div>
 
       {/* Main: viewer + sidebar */}
-      <div className="flex flex-1 overflow-hidden min-h-0">
+      <div className="relative flex flex-1 overflow-hidden min-h-0">
         {/* Media viewer — reuses project components */}
         <div className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0">
           {asset.asset_type === 'video' && versionReady && VideoPlayer ? (
@@ -901,7 +919,7 @@ function ShareReviewInner({
 
         {/* Right sidebar — reuses project comment panel */}
         {sidebarOpen && (
-          <div className="w-[360px] flex flex-col border-l border-border bg-bg-secondary shrink-0">
+          <div className="w-full md:w-[360px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto flex flex-col border-l-0 md:border-l border-border bg-bg-secondary shrink-0">
             <div className="px-4 pt-3 pb-2 shrink-0">
               <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
                 <button onClick={() => setActiveTab('comments')} className={`flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all ${activeTab === 'comments' ? 'bg-bg-hover text-text-primary shadow-sm' : 'text-text-tertiary'}`}>
@@ -1015,7 +1033,7 @@ export function FolderShareViewer({
   viewerName,
   permission,
   allowDownload,
-  showVersions: _showVersions,
+  showVersions,
   appearance,
   branding,
   onAssetClick,
@@ -1027,7 +1045,7 @@ export function FolderShareViewer({
   const [searchQuery, setSearchQuery] = React.useState('')
   const [foldersExpanded, setFoldersExpanded] = React.useState(true)
   const [assetsExpanded, setAssetsExpanded] = React.useState(true)
-  const [panelOpen, setPanelOpen] = React.useState(true)
+  const [panelOpen, setPanelOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   // Set page title
@@ -1233,6 +1251,7 @@ export function FolderShareViewer({
         asset={viewingAsset}
         permission={permission}
         allowDownload={allowDownload}
+        showVersions={showVersions}
         onBack={() => setViewingAsset(null)}
       />
     )
@@ -1327,7 +1346,7 @@ export function FolderShareViewer({
       </header>
 
       {/* ─── Content area ──────────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {/* ─── Left: folder contents ─────────────────────────────────── */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Sub-header: title, summary, breadcrumb, search */}
@@ -1556,7 +1575,7 @@ export function FolderShareViewer({
 
         {/* ─── Right Panel ───────────────────────────────────────────── */}
         {panelOpen && (
-          <div className="w-[320px] shrink-0 border-l border-border bg-bg-secondary flex flex-col overflow-hidden">
+          <div className="w-full md:w-[320px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto flex flex-col border-l-0 md:border-l border-border bg-bg-secondary shrink-0 overflow-hidden">
             <RightPanel
               selectedAsset={selectedAsset}
               token={token}

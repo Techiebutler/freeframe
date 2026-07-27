@@ -138,6 +138,7 @@ class FolderShareAssetItem(BaseModel):
     file_size: Optional[int] = None
     duration_seconds: Optional[float] = None
     comment_count: int = 0
+    version_count: int = 1
     created_by_name: Optional[str] = None
     created_at: datetime
 
@@ -155,6 +156,15 @@ class FolderShareAssetsResponse(BaseModel):
     total: int
     page: int
     per_page: int
+
+
+class ShareAssetVersionItem(BaseModel):
+    """A ready version of a shared asset, exposed to guests on the public share player."""
+    id: uuid.UUID
+    version_number: int
+    processing_status: str
+    created_at: datetime
+    model_config = {"from_attributes": True}
 
 
 class DirectShareCreate(BaseModel):

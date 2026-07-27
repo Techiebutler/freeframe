@@ -62,7 +62,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -125,8 +125,12 @@ jobs:
         run: |
           python -c "
           from apps.api.main import app
-          print(f'FastAPI app loaded: {len(app.routes)} routes')
-          assert len(app.routes) >= 30, f'Expected 30+ routes but got {len(app.routes)} — routers may have been removed'
+          # Count API paths from the OpenAPI schema instead of len(app.routes): recent
+          # FastAPI versions store lazy included-router wrappers, so app.routes no longer
+          # reflects the real endpoint count (it drops sharply) while the schema still does.
+          paths = len(app.openapi()['paths'])
+          print(f'FastAPI app loaded: {paths} API paths')
+          assert paths >= 30, f'Expected 30+ API paths but got {paths} — routers may have been removed'
           "
 
   # ─── Frontend ─────────────────────────────────────────────────────────────────
@@ -138,7 +142,7 @@ jobs:
         working-directory: apps/web
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -147,8 +151,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - name: Verify critical frontend files exist
         run: |
@@ -203,7 +205,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -225,8 +227,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
@@ -243,7 +243,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build API image (dev)
         run: docker build -t freeframe-api:test -f apps/api/Dockerfile .

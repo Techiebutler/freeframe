@@ -1,11 +1,6 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator, Field
 import uuid
 from ..models.user import UserStatus
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    name: str
-    password: str
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -28,10 +23,25 @@ class UserResponse(BaseModel):
     status: UserStatus
     email_verified: bool = False
     is_superadmin: bool = False
-    invite_token: str | None = None
     preferences: dict = {}
 
     model_config = {"from_attributes": True}
+
+    @field_validator("avatar_url", mode="after")
+    @classmethod
+    def resolve_avatar_url(cls, v: str | None) -> str | None:
+        if v and not v.startswith("http"):
+            from ..services import s3_service
+            return s3_service.generate_presigned_get_url(v)
+        return v
+
+class AdminUserResponse(UserResponse):
+    """UserResponse plus the pending invite token.
+
+    Only for admin-gated endpoints: exposing invite_token to any authenticated
+    caller lets them hijack a pending invite before the invitee accepts it.
+    """
+    invite_token: str | None = None
 
 class InviteRequest(BaseModel):
     email: EmailStr
@@ -61,6 +71,10 @@ class InviteInfoResponse(BaseModel):
     email: str
     name: str
     org_name: str | None = None
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=72)
 
 class UpdateProfileRequest(BaseModel):
     name: str | None = None

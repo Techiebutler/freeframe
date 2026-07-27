@@ -183,7 +183,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
 
 export function UploadsPanel() {
   const { files, panelOpen, setPanelOpen, clearCompleted, fetchHistory, fetchMoreHistory, historyHasMore, historyLoading } = useUploadStore()
-  const [filter, setFilter] = React.useState<FilterTab>('all')
+  const [filter, setFilter] = React.useState<FilterTab>('active')
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const sentinelRef = React.useRef<HTMLDivElement>(null)
 
@@ -194,9 +194,10 @@ export function UploadsPanel() {
     }
   }, [panelOpen, fetchHistory])
 
-  // Infinite scroll — IntersectionObserver on sentinel
+  // Infinite scroll — IntersectionObserver on sentinel (skip on Active tab
+  // since its items come from the live upload store, not paginated history)
   React.useEffect(() => {
-    if (!panelOpen) return
+    if (!panelOpen || filter === 'active') return
     const sentinel = sentinelRef.current
     if (!sentinel) return
 
@@ -210,7 +211,7 @@ export function UploadsPanel() {
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [panelOpen, historyHasMore, historyLoading, fetchMoreHistory])
+  }, [panelOpen, filter, historyHasMore, historyLoading, fetchMoreHistory])
 
   if (!panelOpen) return null
 
@@ -330,8 +331,8 @@ export function UploadsPanel() {
                 </div>
               ))}
 
-              {/* Sentinel for infinite scroll + loading indicator */}
-              <div ref={sentinelRef} className="h-1" />
+              {/* Sentinel for infinite scroll + loading indicator (skip on Active tab) */}
+              {filter !== 'active' && <div ref={sentinelRef} className="h-1" />}
               {historyLoading && (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-4 w-4 animate-spin text-text-tertiary" />

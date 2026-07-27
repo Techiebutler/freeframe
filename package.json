@@ -1,6 +1,7 @@
 {
   "name": "freeframe",
   "private": true,
+  "packageManager": "pnpm@10.15.0",
   "workspaces": [
     "apps/*",
     "packages/*"

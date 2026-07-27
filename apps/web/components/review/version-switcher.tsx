@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import type { AssetVersion, AssetVersionStatus } from '@/types'
 
-const versionStatusConfig: Record<
+export const versionStatusConfig: Record<
   AssetVersionStatus,
   { label: string; className: string; icon: React.ReactNode }
 > = {
@@ -49,13 +49,32 @@ export function VersionSwitcher({ versions, className }: VersionSwitcherProps) {
 
   if (sorted.length === 0) return null
 
+  // Surface an in-flight new version (uploading/transcoding) on the always-visible
+  // trigger — otherwise its status is only visible after opening the dropdown (#118).
+  const latest = sorted[sorted.length - 1]
+  const latestStatus = latest?.processing_status
+  const inFlightCfg =
+    latestStatus === 'uploading' || latestStatus === 'processing'
+      ? versionStatusConfig[latestStatus]
+      : null
+
   return (
     <div className={cn('flex items-center gap-1.5', className)}>
       <span className="text-xs text-text-tertiary shrink-0">Version:</span>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
-          <button className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors outline-none">
-            v{currentVersion?.version_number ?? sorted[sorted.length - 1].version_number}
+          <button className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors outline-none">
+            <span>v{currentVersion?.version_number ?? latest.version_number}</span>
+            {inFlightCfg && (
+              <span
+                data-testid="version-status-indicator"
+                className="inline-flex items-center gap-1 text-[11px] text-white/90"
+                title={`v${latest.version_number} — ${inFlightCfg.label}`}
+              >
+                {inFlightCfg.icon}
+                {inFlightCfg.label}
+              </span>
+            )}
             {sorted.length > 1 && <ChevronDown className="h-3 w-3 opacity-70" />}
           </button>
         </DropdownMenu.Trigger>

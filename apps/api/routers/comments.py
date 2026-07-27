@@ -1,17 +1,19 @@
+import logging
 import re
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
 from ..middleware.auth import get_current_user, get_optional_user
 from ..middleware.share_auth import get_share_link
-from ..models.asset import Asset
+from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
 from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
@@ -32,11 +34,24 @@ from ..schemas.comment import (
     ReactionResponse,
 )
 from ..services import s3_service
-from ..services.permissions import require_asset_access, validate_share_link
+from ..services import comment_export
+from ..services.permissions import (
+    require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
+)
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(tags=["comments"])
+
+EXPORT_FORMATS = {
+    "edl": ("text/plain; charset=utf-8", "edl"),
+    "fcpxml": ("application/xml", "fcpxml"),
+    "premiere_xml": ("application/xml", "xml"),
+    "csv": ("text/csv; charset=utf-8", "csv"),
+}
+_START_TC_RE = re.compile(r"^\d{2}[:;]\d{2}[:;]\d{2}[:;]\d{2}$")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -142,6 +157,104 @@ def _get_annotations_map(comment_ids: list[uuid.UUID], db: Session) -> dict:
     return {a.comment_id: a for a in annotations}
 
 
+def _build_comment_responses_batched(
+    asset_id: uuid.UUID,
+    top_level: list[Comment],
+    db: Session,
+    current_user_id: uuid.UUID | None = None,
+    max_depth: int = 5,
+    exclude_internal: bool = False,
+) -> list[CommentResponse]:
+    """Build the comment tree for `top_level` with a FIXED number of queries
+    instead of one-per-comment. Field-for-field equivalent to calling
+    _build_comment_response on each top-level comment, but ~6 queries total
+    regardless of how many comments the asset has (avoids the N+1 that made the
+    list endpoint slow — and it's re-fetched after every comment save).
+
+    exclude_internal drops visibility="internal" comments (and their whole subtree, since a
+    reply to a team-only comment is team-only too) — set for guest/public callers so an
+    internal note never reaches a share link, no matter how deep in the thread it is."""
+    if not top_level:
+        return []
+
+    # One query for every non-deleted comment on the asset → parent→children map.
+    all_comments_query = db.query(Comment).filter(
+        Comment.asset_id == asset_id, Comment.deleted_at.is_(None),
+    )
+    if exclude_internal:
+        all_comments_query = all_comments_query.filter(Comment.visibility != "internal")
+    all_comments = all_comments_query.order_by(Comment.created_at).all()
+    children_map: dict[uuid.UUID, list[Comment]] = defaultdict(list)
+    for c in all_comments:
+        if c.parent_id is not None:
+            children_map[c.parent_id].append(c)
+
+    # Walk the subtree we will actually render (top-level + descendants to
+    # max_depth) to collect the ids whose related rows we must load.
+    included: list[Comment] = []
+
+    def _collect(comment: Comment, depth: int) -> None:
+        included.append(comment)
+        if depth > 0:
+            for child in children_map.get(comment.id, []):
+                _collect(child, depth - 1)
+
+    for c in top_level:
+        _collect(c, max_depth)
+    ids = [c.id for c in included]
+
+    # Batch-load related rows keyed by comment_id (one query each).
+    annotations = {
+        a.comment_id: a
+        for a in db.query(Annotation).filter(Annotation.comment_id.in_(ids)).all()
+    }
+    attachments_map: dict[uuid.UUID, list[CommentAttachment]] = defaultdict(list)
+    for a in db.query(CommentAttachment).filter(CommentAttachment.comment_id.in_(ids)).all():
+        attachments_map[a.comment_id].append(a)
+    reactions_map: dict[uuid.UUID, list[CommentReaction]] = defaultdict(list)
+    for r in db.query(CommentReaction).filter(CommentReaction.comment_id.in_(ids)).all():
+        reactions_map[r.comment_id].append(r)
+
+    author_ids = {c.author_id for c in included if c.author_id}
+    authors = (
+        {u.id: u for u in db.query(User).filter(User.id.in_(author_ids)).all()}
+        if author_ids else {}
+    )
+    guest_ids = {c.guest_author_id for c in included if c.guest_author_id}
+    guests = (
+        {g.id: g for g in db.query(GuestUser).filter(GuestUser.id.in_(guest_ids)).all()}
+        if guest_ids else {}
+    )
+
+    def _build(comment: Comment, depth: int) -> CommentResponse:
+        resp = CommentResponse.model_validate(comment)
+        author = authors.get(comment.author_id) if comment.author_id else None
+        resp.author = (
+            AuthorInfo(id=author.id, name=author.name, avatar_url=author.avatar_url)
+            if author else None
+        )
+        guest = guests.get(comment.guest_author_id) if comment.guest_author_id else None
+        resp.guest_author = (
+            GuestAuthorInfo(id=guest.id, name=guest.name, email=guest.email)
+            if guest else None
+        )
+        ann = annotations.get(comment.id)
+        resp.annotation = AnnotationResponse.model_validate(ann) if ann else None
+        resp.attachments = [
+            _build_attachment_response(a) for a in attachments_map.get(comment.id, [])
+        ]
+        resp.reactions = _build_reaction_responses(
+            reactions_map.get(comment.id, []), current_user_id
+        )
+        resp.replies = (
+            [_build(child, depth - 1) for child in children_map.get(comment.id, [])]
+            if depth > 0 else []
+        )
+        return resp
+
+    return [_build(c, max_depth) for c in top_level]
+
+
 def _parse_mentions(body: str) -> list[str]:
     """Extract @email mentions from comment body."""
     return re.findall(r"@([\w.+-]+@[\w.-]+\.\w+)", body)
@@ -168,6 +281,11 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
             user = get_user_by_email(db, email)
             if user and user.id != comment.author_id:
                 mentioned_users.append(user)
+
+    # A mention must only reach someone who can actually see the asset — otherwise any user
+    # (or a guest via a share link) could @mention an arbitrary user id/email and have their
+    # name, the asset name, and a comment preview emailed to someone with no access to either.
+    mentioned_users = [u for u in mentioned_users if can_access_asset(db, asset, u)]
 
     for user in mentioned_users:
         mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
@@ -213,7 +331,7 @@ def list_comments(
     if visibility and visibility in ("public", "internal"):
         query = query.filter(Comment.visibility == visibility)
     top_level = query.order_by(Comment.created_at).all()
-    return [_build_comment_response(c, db, current_user_id=current_user.id) for c in top_level]
+    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id)
 
 
 @router.post("/assets/{asset_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
@@ -225,6 +343,13 @@ def create_comment(
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
+
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == body.version_id, AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
 
     comment = Comment(
         asset_id=asset_id,
@@ -278,7 +403,9 @@ def reply_to_comment(
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
-    parent = db.query(Comment).filter(Comment.id == comment_id, Comment.deleted_at.is_(None)).first()
+    parent = db.query(Comment).filter(
+        Comment.id == comment_id, Comment.asset_id == asset_id, Comment.deleted_at.is_(None),
+    ).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Parent comment not found")
 
@@ -539,52 +666,220 @@ def comment_deep_link(
     return {"url": url}
 
 
+@router.get("/assets/{asset_id}/comments/export")
+def export_comments(
+    asset_id: uuid.UUID,
+    format: str = Query(...),
+    version_id: Optional[uuid.UUID] = Query(default=None),
+    fps: Optional[float] = Query(default=None, gt=0),
+    start_tc: str = Query(default="01:00:00:00"),
+    include_resolved: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export a version's comments as NLE timeline markers (#84):
+    Resolve marker EDL, FCPXML (Final Cut), FCP7 XML (Premiere), or CSV."""
+    if format not in EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported format '{format}'. Use one of: {', '.join(EXPORT_FORMATS)}",
+        )
+
+    asset = _get_asset(db, asset_id)
+    require_asset_access(db, asset, current_user)
+
+    if version_id is not None:
+        version = db.query(AssetVersion).filter(
+            AssetVersion.id == version_id,
+            AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+        ).first()
+    else:
+        version = db.query(AssetVersion).filter(
+            AssetVersion.asset_id == asset.id,
+            AssetVersion.processing_status == ProcessingStatus.ready,
+            AssetVersion.deleted_at.is_(None),
+        ).order_by(AssetVersion.version_number.desc()).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    spec = None
+    if format == "csv":
+        media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+        stored_fps = media_file.fps if media_file else None
+        if fps or stored_fps:
+            spec = comment_export.snap_fps(fps or stored_fps)  # None is fine for CSV
+    else:
+        if asset.asset_type != AssetType.video:
+            raise HTTPException(
+                status_code=422,
+                detail="EDL/FCPXML/Premiere XML export is only available for video assets; use format=csv",
+            )
+        media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+        effective_fps = fps or (media_file.fps if media_file else None)
+        if not effective_fps:
+            raise HTTPException(status_code=422, detail={
+                "code": "fps_required",
+                "message": "Frame rate unknown for this version; pass ?fps= "
+                           "(e.g. 23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60)",
+            })
+        spec = comment_export.snap_fps(effective_fps)
+        if spec is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported frame rate {effective_fps}; supported: "
+                       + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
+            )
+        if format == "edl":
+            if not _START_TC_RE.match(start_tc):
+                raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
+            hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
+            if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
+                raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
+
+    comments = db.query(Comment).filter(
+        Comment.version_id == version.id,
+        Comment.deleted_at.is_(None),
+    ).order_by(Comment.created_at.asc()).all()
+
+    user_ids = {c.author_id for c in comments if c.author_id}
+    guest_ids = {c.guest_author_id for c in comments if c.guest_author_id}
+    users = {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()} if user_ids else {}
+    guests = {g.id: g for g in db.query(GuestUser).filter(GuestUser.id.in_(guest_ids)).all()} if guest_ids else {}
+
+    rows = []
+    for c in comments:
+        author = users.get(c.author_id) or guests.get(c.guest_author_id)
+        rows.append(comment_export.CommentRow(
+            id=str(c.id),
+            parent_id=str(c.parent_id) if c.parent_id else None,
+            author_name=(author.name or author.email) if author else "Unknown",
+            author_email=author.email if author else "",
+            body=c.body,
+            timecode_start=c.timecode_start,
+            timecode_end=c.timecode_end,
+            resolved=bool(c.resolved),
+            created_at=c.created_at,
+            version_number=version.version_number,
+        ))
+
+    duration_frames = 0
+    if spec is not None and media_file is not None and media_file.duration_seconds:
+        duration_frames = comment_export.seconds_to_frames(media_file.duration_seconds, spec)
+
+    if format == "csv":
+        if not include_resolved:
+            rows = [r for r in rows if not r.resolved]
+        content = "\ufeff" + comment_export.to_csv(rows, spec)  # BOM for Excel
+    else:
+        markers = comment_export.build_markers(rows, spec, include_resolved)
+        if format == "edl":
+            if len(markers) > comment_export.EDL_MAX_EVENTS:
+                log.warning(
+                    "EDL export for asset %s truncated: %d markers exceed EDL_MAX_EVENTS=%d, "
+                    "%d dropped",
+                    asset_id, len(markers), comment_export.EDL_MAX_EVENTS,
+                    len(markers) - comment_export.EDL_MAX_EVENTS,
+                )
+            content = comment_export.to_edl(
+                markers, spec, comment_export.tc_to_frames(start_tc, spec), asset.name)
+        elif format == "fcpxml":
+            content = comment_export.to_fcpxml(markers, spec, asset.name, duration_frames)
+        else:
+            content = comment_export.to_premiere_xml(markers, spec, asset.name, duration_frames)
+
+    media_type, ext = EXPORT_FORMATS[format]
+    safe_name = re.sub(r"[^\w\-. ]", "_", asset.name, flags=re.ASCII).strip() or "asset"
+    filename = f"{safe_name}_v{version.version_number}_comments.{ext}"
+    utf8_name = quote(f"{asset.name}_v{version.version_number}_comments.{ext}", safe="")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"; filename*=UTF-8\'\'{utf8_name}'
+            )
+        },
+    )
+
+
 # ── Guest comments (via share link) ───────────────────────────────────────────
 
 @router.get("/share/{token}/comments")
 def list_share_comments(
     token: str,
     asset_id: Optional[uuid.UUID] = None,
+    version_id: Optional[uuid.UUID] = None,
+    latest_only: bool = False,
+    share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Public endpoint — list comments for a shared asset. No auth required.
-    For folder/project shares, pass asset_id as query param to get comments for a specific asset."""
-    link = validate_share_link(db, token)
+    """Public endpoint — list comments for a shared asset. Enforces the share link's password
+    (if any) via share_session, same as the other public share endpoints.
+    For folder/project shares, pass asset_id as query param to get comments for a specific asset —
+    it's validated against the link's scope, so it can't be used to read another asset's comments.
+    Pass version_id to scope comments to a single version (matches the authenticated review view).
+    Pass latest_only=true to scope to the latest ready version — used by the folder/grid preview,
+    which has no version picker."""
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     # Determine the asset_id to list comments for
     target_asset_id = link.asset_id or asset_id
     if not target_asset_id:
         return []
-    asset_id = target_asset_id
+    asset = _get_asset(db, target_asset_id)
+    validate_asset_in_share(db, link, asset)
+    asset_id = asset.id
 
-    # Get top-level comments — reuse same format as authenticated endpoint
-    top_level = db.query(Comment).filter(
+    # The folder/grid preview has no version switcher, so it scopes to the latest ready version.
+    if latest_only and not version_id:
+        from ..models.asset import AssetVersion, ProcessingStatus
+        latest = db.query(AssetVersion).filter(
+            AssetVersion.asset_id == asset_id,
+            AssetVersion.deleted_at.is_(None),
+            AssetVersion.processing_status == ProcessingStatus.ready,
+        ).order_by(AssetVersion.version_number.desc()).first()
+        version_id = latest.id if latest else version_id
+
+    # Get top-level comments — reuse same format as authenticated endpoint. Internal-visibility
+    # comments are team-only and must never reach a public share link.
+    query = db.query(Comment).filter(
         Comment.asset_id == asset_id,
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
-    ).order_by(Comment.created_at).all()
+        Comment.visibility != "internal",
+    )
+    if version_id:
+        query = query.filter(Comment.version_id == version_id)
+    top_level = query.order_by(Comment.created_at).all()
 
-    return [_build_comment_response(c, db) for c in top_level]
+    # Batched build (fixed query count) — guests have no user, so no current_user_id.
+    return _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=True)
 
 
 @router.post("/share/{token}/comment", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
 def guest_comment(
     token: str,
     body: GuestCommentCreate,
+    share_session: Optional[str] = Query(None, alias="share_session"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
-    link = validate_share_link(db, token)
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     # Check share link permission allows commenting
     if link.permission == SharePermission.view:
         raise HTTPException(status_code=403, detail="This share link does not allow commenting")
 
-    # Resolve asset_id: from body, link, or error
-    target_asset_id = body.asset_id or link.asset_id
+    # Resolve asset_id: from the link when it's scoped to one asset; otherwise from the request
+    # body (folder/project shares only), validated against the link's actual scope below — the
+    # link's own asset_id always wins so a single-asset link can't be redirected to another asset.
+    target_asset_id = link.asset_id or body.asset_id
     if not target_asset_id:
         raise HTTPException(status_code=400, detail="asset_id is required for folder/project shares")
     asset = _get_asset(db, target_asset_id)
+    validate_asset_in_share(db, link, asset)
 
     # Resolve version_id: use provided or get latest ready version
     version_id = body.version_id

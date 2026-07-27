@@ -7,6 +7,19 @@ from botocore.exceptions import ClientError
 from ..config import settings
 
 
+def mail_is_configured(s=settings) -> bool:
+    """Whether the configured mailer can actually send.
+
+    Email is REQUIRED for login (magic codes) and invites, so the app warns at
+    startup when it's not set up. `smtp` needs a host; `ses` may authenticate via
+    an IAM role, so we can't reliably detect it and assume it's configured.
+    """
+    provider = (s.mail_provider or "").lower()
+    if provider == "smtp":
+        return bool(s.smtp_host)
+    return provider == "ses"
+
+
 class EmailService:
     """
     Email service that supports both AWS SES and standard SMTP.

@@ -11,6 +11,37 @@ from botocore.config import Config
 from .base import BaseTranscoder, TranscodeJob, TranscodeResult, VideoMetadata
 
 
+def parse_probe_metadata(data: dict) -> Optional[VideoMetadata]:
+    """Parse ffprobe JSON into the metadata persisted by v1.5.
+
+    Returns None when no video stream exists.  A zero/invalid frame rate stays
+    zero rather than inventing a value, and format-level duration is used when
+    the video stream does not provide one.
+    """
+    streams = data.get("streams") or []
+    if not streams:
+        return None
+    stream = streams[0]
+    fps = 0.0
+    raw_rate = stream.get("r_frame_rate") or ""
+    if "/" in raw_rate:
+        num, _, den = raw_rate.partition("/")
+        try:
+            if float(den) != 0:
+                fps = float(num) / float(den)
+        except ValueError:
+            fps = 0.0
+    duration = float(stream.get("duration") or 0)
+    if not duration:
+        duration = float((data.get("format") or {}).get("duration") or 0)
+    return VideoMetadata(
+        duration_seconds=duration,
+        width=int(stream.get("width") or 0),
+        height=int(stream.get("height") or 0),
+        fps=fps,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Hardware-acceleration backend support
 # ---------------------------------------------------------------------------
@@ -72,12 +103,22 @@ def _intel_available() -> bool:
     return os.path.exists("/dev/dri")
 
 
-def _has_dovi(stream: dict) -> bool:
-    """True if the stream carries a Dolby Vision side-data record (dv_profile)."""
+def _dovi_profile(stream: dict) -> int | None:
+    """Return the Dolby Vision profile, if the stream carries one.
+
+    Profile 5 is the IPT-only form with no usable HDR base layer and must go
+    through libplacebo. Profiles with a base layer (including the iPhone's
+    profile 8 HLG files and profile 7 HDR10 files) should use the normal HDR
+    hardware path so NVDEC/NVENC remains active.
+    """
     for sd in stream.get("side_data_list", []) or []:
-        if isinstance(sd, dict) and sd.get("dv_profile") is not None:
-            return True
-    return False
+        if not isinstance(sd, dict) or sd.get("dv_profile") is None:
+            continue
+        try:
+            return int(sd["dv_profile"])
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _pipeline_to_backend(pipeline: str | None) -> str | None:
@@ -253,19 +294,13 @@ class FFmpegTranscoder(BaseTranscoder):
         input_url = self._get_presigned_url(s3_key)
         cmd = [
             "ffprobe", "-v", "error", "-print_format", "json",
-            "-show_streams", "-select_streams", "v:0", input_url,
+            "-show_streams", "-select_streams", "v:0", "-show_format", input_url,
         ]
         stdout = self._run(cmd, timeout=120, label="ffprobe")
-        data = json.loads(stdout)
-        stream = data["streams"][0]
-        fps_parts = stream.get("r_frame_rate", "30/1").split("/")
-        fps = float(fps_parts[0]) / float(fps_parts[1])
-        return VideoMetadata(
-            duration_seconds=float(stream.get("duration", 0)),
-            width=int(stream.get("width", 0)),
-            height=int(stream.get("height", 0)),
-            fps=fps,
-        )
+        meta = parse_probe_metadata(json.loads(stdout))
+        if meta is None:
+            raise RuntimeError(f"No video stream found in {s3_key}")
+        return meta
 
     async def generate_thumbnails(self, s3_key: str, count: int) -> list[str]:
         """Generate thumbnails at 1 per 10 seconds using streaming input."""
@@ -306,20 +341,23 @@ class FFmpegTranscoder(BaseTranscoder):
             # _run() already fail-fasts on non-zero exit.
             cmd = [
                 "ffprobe", "-v", "error", "-print_format", "json",
-                "-show_streams", "-select_streams", "v:0", input_url,
+                "-show_streams", "-select_streams", "v:0", "-show_format", input_url,
             ]
             vid_info = self._run(cmd, timeout=120, label="ffprobe")
-            _vid_stream = json.loads(vid_info).get("streams", [{}])[0]
+            vid_data = json.loads(vid_info)
+            meta = parse_probe_metadata(vid_data)
+            _vid_stream = (vid_data.get("streams") or [{}])[0]
             # HDR detection: PQ (smpte2084), HLG (arib-std-b67) transfer.
             # DV (profile 5) is handled separately below. (transfer-only per
             # upstream review #127: bt2020 primaries alone are not an HDR signal.)
             is_hdr = _vid_stream.get("color_transfer") in _HDR_TRANSFERS
-            is_dv = _has_dovi(_vid_stream)
+            dovi_profile = _dovi_profile(_vid_stream)
             hdr_mode = get_hdr_mode()
-            # DV has no SDR base layer, so it is always tone-mapped (re-encoding
-            # drops the RPU anyway); ordinary HDR respects TRANSCODER_HDR.
-            tone_map = (is_hdr and hdr_mode == "convert") or is_dv
-            dv_software = is_dv
+            # Profile 5 has no usable base layer, so re-encoding must inverse-map
+            # it with libplacebo. DV profiles with HDR/HLG base layers follow the
+            # ordinary HDR path and retain hardware decode/scale/encode.
+            dv_software = dovi_profile == 5
+            tone_map = (is_hdr and hdr_mode == "convert") or dv_software
 
             # 2. Check if input has an audio stream
             audio_cmd = [
@@ -335,7 +373,19 @@ class FFmpegTranscoder(BaseTranscoder):
                 "720p": ("1280:720", 22),
                 "360p": ("640:360", 26),
             }
-            qualities = [q for q in job.qualities if q in QUALITY_MAP]
+            # Filter the ladder against the source resolution so a small
+            # source never gets upscaled renditions (upstream #204/#201).
+            # force_original_aspect_ratio=decrease prevents distortion but not
+            # upscaling, so the ladder itself must be trimmed here.
+            requested = [q for q in job.qualities if q in QUALITY_MAP]
+            source_height = (meta.height if meta else 0) or 0
+            qualities = [
+                q for q in requested
+                if int(QUALITY_MAP[q][0].split(":")[1]) <= source_height
+            ]
+            if not qualities and requested:
+                # Never emit an empty ladder: keep the smallest requested rung.
+                qualities = [min(requested, key=lambda q: int(QUALITY_MAP[q][0].split(":")[1]))]
 
             backend = get_backend()
             # DV is tone-mapped via libplacebo and encoded in software (see
@@ -351,8 +401,8 @@ class FFmpegTranscoder(BaseTranscoder):
             # the GPU scale filters (scale_cuda/scale_qsv/scale_vaapi) keep the
             # whole pipeline on the hardware device.
             split_outputs = "".join(f"[v{i}]" for i in range(len(qualities)))
-            if is_dv:
-                # Dolby Vision (profile 5) is IPT-encoded with no SDR base
+            if dv_software:
+                # Dolby Vision profile 5 is IPT-encoded with no usable base
                 # layer. The frames must be inverse-mapped via the RPU, which
                 # only libplacebo knows how to parse, so tone-map to Rec.709
                 # SDR here. This runs on the CPU/Vulkan path and is encoded with
@@ -360,6 +410,10 @@ class FFmpegTranscoder(BaseTranscoder):
                 # is skipped for DV. Output is bt709 SDR (8- or 10-bit).
                 _lp = "libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv"
                 _lp += ":format=yuv420p10le" if out_mode["ten_bit"] else ":format=yuv420p"
+                # libplacebo's colorspace option sets the matrix but can retain
+                # the source's bt2020 primaries in frame metadata.  Normalize
+                # all three Rec.709 tags before the software encoder.
+                _lp += ",setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"
                 hdr_prefix = f"[v:0]{_lp}[tcpu];"
                 src = "[tcpu]"
             elif is_hdr:
@@ -454,13 +508,26 @@ class FFmpegTranscoder(BaseTranscoder):
             # through the source's HDR tags; plain SDR -> no override.
             color_args = []
             if tone_map:
-                color_args = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
+                # These are output-stream options.  Without the explicit video
+                # stream specifier, FFmpeg can retain bt2020 primaries on HLG
+                # and Dolby Vision renditions even after the filtergraph has
+                # tone-mapped transfer and matrix to Rec.709.
+                for stream_index in range(len(qualities)):
+                    color_args += [
+                        f"-color_primaries:v:{stream_index}", "bt709",
+                        f"-color_trc:v:{stream_index}", "bt709",
+                        f"-colorspace:v:{stream_index}", "bt709",
+                    ]
             elif is_hdr and hdr_mode == "preserve":
-                color_args = [
-                    "-color_primaries", _vid_stream.get("color_primaries", "bt2020"),
-                    "-color_trc", _vid_stream.get("color_transfer", "smpte2084"),
-                    "-colorspace", _vid_stream.get("color_space", "bt2020nc"),
-                ]
+                for stream_index in range(len(qualities)):
+                    color_args += [
+                        f"-color_primaries:v:{stream_index}",
+                        _vid_stream.get("color_primaries", "bt2020"),
+                        f"-color_trc:v:{stream_index}",
+                        _vid_stream.get("color_transfer", "smpte2084"),
+                        f"-colorspace:v:{stream_index}",
+                        _vid_stream.get("color_space", "bt2020nc"),
+                    ]
             ffmpeg_cmd += color_args
             segment_dir = hls_dir / "%v"
             ffmpeg_cmd += [
@@ -501,7 +568,7 @@ class FFmpegTranscoder(BaseTranscoder):
             # 5. Generate and upload thumbnail (using streaming URL)
             thumb_path = work_dir / "thumb_0001.jpg"
             thumb_vf = "thumbnail"
-            if is_dv:
+            if dv_software:
                 thumb_vf += ",libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv,format=yuvj420p"
             elif is_hdr:
                 # Match the HLS path's full zscale->tonemap->zscale chain so the
@@ -534,6 +601,10 @@ class FFmpegTranscoder(BaseTranscoder):
                 success=True,
                 hls_prefix=job.output_s3_prefix,
                 thumbnail_keys=[thumbnail_key] if uploaded_thumb else [],
+                duration_seconds=(meta.duration_seconds or None) if meta else None,
+                width=(meta.width or None) if meta else None,
+                height=(meta.height or None) if meta else None,
+                fps=(meta.fps or None) if meta else None,
             )
 
         except Exception as e:

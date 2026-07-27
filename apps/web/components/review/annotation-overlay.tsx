@@ -3,17 +3,26 @@
 import React, { useEffect, useRef } from 'react'
 import { useReviewStore } from '@/stores/review-store'
 
+interface AnnotationOverlayProps {
+  /**
+   * Compare panes: render THIS drawing instead of the store's activeAnnotation.
+   * Pass null to render nothing. Omit entirely for store-driven behavior.
+   */
+  annotation?: Record<string, unknown> | null
+}
+
 /**
  * Read-only overlay that renders a saved Fabric.js annotation on top of the media.
  * Shown when a comment with an annotation is focused/hovered.
  */
-export function AnnotationOverlay() {
-  const activeAnnotation = useReviewStore((s) => s.activeAnnotation)
+export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
+  const storeActiveAnnotation = useReviewStore((s) => s.activeAnnotation)
+  const active = annotation !== undefined ? annotation : storeActiveAnnotation
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
-    if (!activeAnnotation || !canvasRef.current || !containerRef.current) return
+    if (!active || !canvasRef.current || !containerRef.current) return
 
     let disposed = false
     let fabricCanvas: any = null
@@ -48,7 +57,7 @@ export function AnnotationOverlay() {
       fabricCanvas.setDimensions({ width: w, height: h })
 
       try {
-        const data = activeAnnotation as Record<string, unknown>
+        const data = active as Record<string, unknown>
         // _canvasWidth/_canvasHeight are saved by use-drawing's getJSON().
         // Fall back to data.width (never set by Fabric) then current size.
         const origWidth = (data._canvasWidth as number) || (data.width as number) || w
@@ -56,7 +65,7 @@ export function AnnotationOverlay() {
         const scaleX = w / origWidth
         const scaleY = h / origHeight
 
-        await fabricCanvas.loadFromJSON(activeAnnotation)
+        await fabricCanvas.loadFromJSON(active)
 
         if (scaleX !== 1 || scaleY !== 1) {
           fabricCanvas.getObjects().forEach((obj: any) => {
@@ -83,13 +92,14 @@ export function AnnotationOverlay() {
         try { fabricCanvas.dispose() } catch { /* ignore */ }
       }
     }
-  }, [activeAnnotation])
+  }, [active])
 
-  if (!activeAnnotation) return null
+  if (!active) return null
 
   return (
     <div
       ref={containerRef}
+      data-testid="annotation-overlay"
       className="absolute inset-0 z-10 pointer-events-none"
       style={{ overflow: 'hidden' }}
     >

@@ -693,7 +693,7 @@ function ShareRightPanel({
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
 
   return (
-    <div className="w-[360px] flex flex-col border-l border-white/[0.06] bg-[#141416] shrink-0 animate-in slide-in-from-right-2 duration-150">
+    <div className="w-full md:w-[360px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto flex flex-col border-l-0 md:border-l border-white/[0.06] bg-[#141416] shrink-0 animate-in slide-in-from-right-2 duration-150">
       {/* Tabs */}
       <div className="px-4 pt-3 pb-2 shrink-0">
         <div className="flex items-center bg-white/5 rounded-lg p-0.5">
@@ -835,7 +835,7 @@ function ShareViewer({
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
   const [commentKey, setCommentKey] = React.useState(0)
-  const [sidebarOpen, setSidebarOpen] = React.useState(true)
+  const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
 
   // For video/audio assets, get a stream URL if not already provided
   React.useEffect(() => {
@@ -874,7 +874,7 @@ function ShareViewer({
       />
 
       {/* Main content: viewer + sidebar */}
-      <div className="flex flex-1 overflow-hidden min-h-0">
+      <div className="relative flex flex-1 overflow-hidden min-h-0">
         {/* Left: full-screen media viewer */}
         <ShareMediaViewer
           asset={asset}
@@ -905,112 +905,7 @@ function ShareViewer({
   )
 }
 
-// ─── Folder Asset Viewer (single asset within folder share) ──────────────────
 
-interface FolderAssetViewerProps {
-  token: string
-  assetId: string
-  permission: SharePermission
-  allowDownload: boolean
-  branding: any
-  folderName: string
-  onBack: () => void
-}
-
-function FolderAssetViewer({
-  token,
-  assetId,
-  permission,
-  allowDownload,
-  branding,
-  folderName,
-  onBack,
-}: FolderAssetViewerProps) {
-  const [streamUrl, setStreamUrl] = React.useState<string | null>(null)
-  const [thumbnailUrl, setThumbnailUrl] = React.useState<string | null>(null)
-  const [assetInfo, setAssetInfo] = React.useState<{
-    name: string
-    asset_type: string
-    description?: string
-    status?: string
-    keywords?: string[]
-  } | null>(null)
-  const [loading, setLoading] = React.useState(true)
-
-  React.useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-
-    const streamPromise = fetch(`${API_URL}/share/${token}/stream/${assetId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null)
-
-    const thumbPromise = fetch(`${API_URL}/share/${token}/thumbnail/${assetId}`)
-      .then((r) => {
-        if (!r.ok) return null
-        const contentType = r.headers.get('content-type')
-        if (contentType?.includes('application/json')) {
-          return r.json()
-        }
-        return { url: `${API_URL}/share/${token}/thumbnail/${assetId}` }
-      })
-      .catch(() => null)
-
-    Promise.all([streamPromise, thumbPromise]).then(([streamData, thumbData]) => {
-      if (cancelled) return
-      if (streamData?.url) setStreamUrl(streamData.url)
-      if (streamData?.name)
-        setAssetInfo({
-          name: streamData.name,
-          asset_type: streamData.asset_type ?? 'image',
-          description: streamData.description,
-          status: streamData.status,
-          keywords: streamData.keywords,
-        })
-      else setAssetInfo({ name: 'Asset', asset_type: 'image' })
-      if (thumbData?.url) setThumbnailUrl(thumbData.url)
-      setLoading(false)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [token, assetId])
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950">
-        <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
-      </div>
-    )
-  }
-
-  const assetType = assetInfo?.asset_type ?? 'image'
-
-  // Build a pseudo-asset object for the viewer
-  const pseudoAsset = {
-    id: assetId,
-    name: assetInfo?.name ?? 'Asset',
-    asset_type: assetType,
-    description: assetInfo?.description,
-    status: assetInfo?.status ?? 'draft',
-    keywords: assetInfo?.keywords ?? [],
-    thumbnail_url: thumbnailUrl,
-    stream_url: streamUrl,
-  } as Asset & { thumbnail_url?: string; stream_url?: string }
-
-  return (
-    <ShareViewer
-      token={token}
-      asset={pseudoAsset}
-      permission={permission}
-      allowDownload={allowDownload}
-      branding={branding}
-      shareName={folderName}
-      onBack={onBack}
-    />
-  )
-}
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 

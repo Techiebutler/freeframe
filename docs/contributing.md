@@ -76,26 +76,43 @@ freeframe/
 
 ### Backend (Python)
 
+Run pytest **from the `/workspace` directory inside the api container** (the repo root is mounted there; running bare `pytest` from the container's default directory misses the repo's `pytest.ini`):
+
 ```bash
 # Run all tests
-docker compose -f docker-compose.dev.yml exec api pytest
+docker compose -f docker-compose.dev.yml exec -w /workspace api python -m pytest apps/api/tests/ -q
 
 # Run with verbose output
-docker compose -f docker-compose.dev.yml exec api pytest -v
+docker compose -f docker-compose.dev.yml exec -w /workspace api python -m pytest apps/api/tests/ -v
 
 # Run a specific test file
-docker compose -f docker-compose.dev.yml exec api pytest apps/api/tests/test_auth.py
+docker compose -f docker-compose.dev.yml exec -w /workspace api python -m pytest apps/api/tests/test_auth.py -v
 ```
 
 ### Frontend (TypeScript)
 
+The frontend uses **pnpm** (single lockfile for the repo — same as CI). If you have pnpm locally, run from the repo root:
+
 ```bash
 # Run all tests
-docker compose -f docker-compose.dev.yml exec web npm test
+pnpm --filter web test
 
-# Run in watch mode
-docker compose -f docker-compose.dev.yml exec web npm run test:watch
+# Watch mode
+pnpm --filter web test:watch
+
+# Lint and type-checking build (what CI runs)
+pnpm --filter web lint
+pnpm --filter web build
 ```
+
+Or inside the container: `docker compose -f docker-compose.dev.yml exec web pnpm test`
+
+### House rules & test gotchas (read before writing tests)
+
+- **API tests use a mock DB, not a real database.** The models use PostgreSQL-specific types, so `apps/api/tests/conftest.py` provides a `mock_db` MagicMock fixture and a `client` fixture with dependency overrides — script sequential lookups with `mock_db.first.side_effect = [asset, version, ...]`. Look at `apps/api/tests/test_assets_stream_url.py` as a template. Conventional "insert a row and query it" tests won't work; for code that genuinely needs Postgres, use the `real_db` fixture (transaction always rolled back).
+- **CI has floor guards** — it fails if the suite collects too few test files or passing tests, so never delete or skip tests to get green.
+- **CI skips entirely for docs-only changes** (`*.md`, `docs/**` are path-ignored) — that's expected, not broken.
+- **Every user-facing change needs a `CHANGELOG.md` entry under `## [Unreleased]`** in the matching section (`### Added` / `### Changed` / `### Fixed`). Never create a new version heading — releases are cut by maintainers (see `docs/RELEASING.md`).
 
 ---
 
@@ -155,6 +172,9 @@ Always review auto-generated migrations before committing.
 - Include screenshots for UI changes
 - Add tests for new features
 - Update documentation if you're changing user-facing behavior
+- Add a `CHANGELOG.md` entry under `## [Unreleased]` for anything user-facing
+
+We aim to give every new PR a first response **within 48 hours**. If yours has been quiet longer than that, ping it with a comment — it's welcome, not rude.
 
 ---
 

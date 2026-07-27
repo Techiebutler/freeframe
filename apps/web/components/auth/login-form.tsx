@@ -14,7 +14,7 @@ type Step = 'email' | 'code' | 'password' | 'classic'
 
 export function LoginForm() {
   const router = useRouter()
-  const [step, setStep] = useState<Step>('email')
+  const [step, setStep] = useState<Step>('classic')
   const [email, setEmail] = useState('')
   const [emailError, setEmailError] = useState('')
   const [code, setCode] = useState(['', '', '', '', '', ''])
@@ -121,6 +121,10 @@ export function LoginForm() {
       })
 
       if (res.needs_password) {
+        // Persist the tokens issued by verify-magic-code before moving on:
+        // /auth/set-password requires an authenticated user (get_current_user),
+        // so without these the set-password call 401s and bounces the user out.
+        setTokens(res.access_token, res.refresh_token)
         setStep('password')
       } else {
         setTokens(res.access_token, res.refresh_token)
@@ -201,6 +205,10 @@ export function LoginForm() {
 
     if (!classicEmail || !classicPassword) {
       setClassicError('Email and password are required')
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(classicEmail)) {
+      setClassicError('Enter a valid email address')
       return
     }
 

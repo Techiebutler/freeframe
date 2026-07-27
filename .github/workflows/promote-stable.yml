@@ -1,0 +1,67 @@
+name: Promote release to stable
+
+# Manually promote a released tag to the `stable` branch, which self-hosters
+# track for production. Refuses to promote a tag whose commit did not pass CI,
+# so a bad release can never become `stable`. Rollback = re-run this with an
+# older, known-good tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to promote to stable (e.g. v1.3.1)"
+        required: true
+        type: string
+      force:
+        description: "Skip the CI-green gate (only for tags with no CI, e.g. docs-only)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify CI is green, then move `stable`
+        env:
+          TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          COMMIT="$(git rev-list -n1 "refs/tags/${TAG}")"
+          echo "Promoting ${TAG} (${COMMIT}) -> stable"
+
+          if [ "${FORCE}" != "true" ]; then
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}/check-runs")"
+            # Exclude this workflow's OWN check-run: a workflow_dispatch run registers a
+            # `promote` check-run on the default branch's HEAD commit. When a release is
+            # promoted straight from main HEAD (the common case), that HEAD *is* the tag
+            # commit being gated, so this run would count its own in_progress/failed
+            # `promote` check as a non-success and refuse to promote against itself.
+            checks="$(echo "$runs" | jq '[.check_runs[] | select(.name != "promote")]')"
+            total="$(echo "$checks" | jq 'length')"
+            bad="$(echo "$checks" | jq '[.[] | select(.conclusion != "success")] | length')"
+            if [ "$total" -lt 1 ]; then
+              echo "::error::No CI check-runs found for ${TAG} (${COMMIT}); refusing to promote. Re-run with force=true only if this tag legitimately has no CI."
+              exit 1
+            fi
+            if [ "$bad" -gt 0 ]; then
+              echo "::error::${TAG} has non-success checks; refusing to promote:"
+              echo "$checks" | jq -r '.[] | select(.conclusion != "success") | "  - \(.name): \(.conclusion // .status)"'
+              exit 1
+            fi
+            echo "All ${total} CI check(s) green for ${TAG}."
+          else
+            echo "::warning::force=true — skipping the CI-green gate for ${TAG}."
+          fi
+
+          git push --force origin "${COMMIT}:refs/heads/stable"
+          echo "::notice::stable now points at ${TAG} (${COMMIT})"

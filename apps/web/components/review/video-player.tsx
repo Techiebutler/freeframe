@@ -40,8 +40,12 @@ interface VideoPlayerProps {
 /**
  * Wraps children so they are positioned exactly over the visible video frame,
  * excluding the black letterbox bars created by object-contain.
+ *
+ * Exported for the compare overlay: annotations are AUTHORED inside this
+ * constraint (video-frame coordinates), so any viewer that renders them must
+ * mount the overlay in the same space.
  */
-function VideoFrameConstraint({
+export function VideoFrameConstraint({
   videoRef,
   children,
 }: {
@@ -134,7 +138,7 @@ export function VideoPlayer({
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [loop, setLoop] = useState(false);
 
-  const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime } =
+  const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime, currentVersion } =
     useReviewStore();
   const { registerPauseHandler } = useReview();
   const [timeFormatOpen, setTimeFormatOpen] = useState(false);
@@ -167,9 +171,14 @@ export function VideoPlayer({
     }
   }
 
-  // Load the stream URL — reset immediately on asset change so the old video
-  // doesn't keep playing while the new URL is being fetched.
+  // Load the stream URL — reset immediately on asset OR version change so the old
+  // video doesn't keep playing while the new URL is being fetched.
+  const versionId = currentVersion?.id;
   useEffect(() => {
+    // Guard against a superseded fetch: rapid version switching starts overlapping
+    // requests, and without this a slower earlier response could land last and leave
+    // the player on the wrong version's stream.
+    let ignore = false;
     setStreamUrl(null);
     if (initialStreamUrl) {
       const resolved = initialStreamUrl.startsWith("/")
@@ -178,9 +187,16 @@ export function VideoPlayer({
       setStreamUrl(resolved);
       return;
     }
+    // Pin the stream to the selected version — without version_id the API falls
+    // back to the latest version, so the switcher never actually changes the
+    // playing stream (#66).
+    const streamPath = versionId
+      ? `/assets/${assetId}/stream?version_id=${versionId}`
+      : `/assets/${assetId}/stream`;
     api
-      .get<StreamUrlResponse>(`/assets/${assetId}/stream`)
+      .get<StreamUrlResponse>(streamPath)
       .then((data) => {
+        if (ignore) return;
         // HLS proxy returns relative paths — prepend API URL
         const url = data.url.startsWith("/")
           ? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${data.url}`
@@ -190,7 +206,10 @@ export function VideoPlayer({
       .catch(() => {
         /* stream URL errors handled by player error state */
       });
-  }, [assetId, initialStreamUrl]);
+    return () => {
+      ignore = true;
+    };
+  }, [assetId, initialStreamUrl, versionId]);
 
   const player = useVideoPlayer(streamUrl);
 

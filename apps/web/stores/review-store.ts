@@ -56,7 +56,11 @@ export const useReviewStore = create<ReviewState>()((set) => ({
   },
 
   setCurrentVersion: (version: AssetVersion) => {
-    set({ currentVersion: version })
+    set((state) =>
+      state.currentVersion != null && state.currentVersion.id !== version.id
+        ? { currentVersion: version, activeAnnotation: null, focusedCommentId: null }
+        : { currentVersion: version },
+    )
   },
 
   setPlayheadTime: (time: number) => {

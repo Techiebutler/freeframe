@@ -19,9 +19,14 @@ docker compose -f docker-compose.dev.yml up --build
 ## Pull Request Process
 
 1. Fork and create a branch: `git checkout -b feat/my-feature`
-2. Make your changes and write tests
-3. Ensure CI passes: `python -m pytest apps/api/tests/ -v` and `pnpm --filter web build`
-4. Open a PR against `main`
+2. Make your changes and write tests (see [test gotchas](docs/contributing.md#house-rules--test-gotchas-read-before-writing-tests) — API tests use a mock DB)
+3. Run the checks CI runs:
+   - API: `docker compose -f docker-compose.dev.yml exec -w /workspace api python -m pytest apps/api/tests/ -q`
+   - Web: `pnpm --filter web test && pnpm --filter web lint && pnpm --filter web build`
+4. Add a `CHANGELOG.md` entry under `## [Unreleased]` for user-facing changes
+5. Open a PR against `main` — we aim to respond within 48 hours
+
+**Not a coder?** Testing releases against your NLE, writing detailed bug reports, and improving docs are first-class contributions too.
 
 ## Reporting Issues
 

@@ -7,6 +7,7 @@ import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Avatar } from '@/components/shared/avatar'
+import { setTokens } from '@/lib/auth'
 
 export default function ProfilePage() {
   const { user, fetchUser } = useAuthStore()
@@ -70,10 +71,15 @@ export default function ProfilePage() {
 
     setIsSavingPassword(true)
     try {
-      await api.patch('/auth/change-password', {
+      const response = await api.patch('/auth/change-password', {
         current_password: currentPassword,
         new_password: newPassword,
-      })
+      }) as { access_token: string, refresh_token:string}
+
+      if (response.access_token && response.refresh_token) {
+        setTokens(response.access_token, response.refresh_token)
+      }
+
       setCurrentPassword('')
       setNewPassword('')
       setConfirmPassword('')

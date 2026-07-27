@@ -1,0 +1,33 @@
+name: Move latest pointer
+
+# When a GitHub Release is published, fast-forward the `latest` branch to that
+# release's tag so cloners of `latest` always get the newest release. `stable`
+# is intentionally NOT touched here — it moves only via the manual
+# "Promote release to stable" workflow after validation.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  move-latest:
+    # Pre-releases (RCs, betas) do not move `latest`.
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Move `latest` to the released tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          COMMIT="$(git rev-list -n1 "refs/tags/${TAG}")"
+          echo "Moving latest -> ${TAG} (${COMMIT})"
+          git push --force origin "${COMMIT}:refs/heads/latest"
+          echo "::notice::latest now points at ${TAG} (${COMMIT})"
