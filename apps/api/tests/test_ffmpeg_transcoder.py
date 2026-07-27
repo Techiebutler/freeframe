@@ -328,3 +328,102 @@ def test_transcode_returns_probe_metadata():
     assert result.fps == 25.0
     assert result.width == 1920
     assert result.duration_seconds == 8.0
+
+
+# ─── hardware → software runtime fallback ─────────────────────────────────────
+
+def test_hw_runtime_failure_detection():
+    """Environmental hardware failures fall back; input errors must not."""
+    from packages.transcoder.ffmpeg_transcoder import _is_hw_runtime_failure
+
+    assert _is_hw_runtime_failure(
+        "decoder->cvdl->cuvidCreateDecoder failed -> CUDA_ERROR_OUT_OF_MEMORY: out of memory")
+    assert _is_hw_runtime_failure("Failed setup for format cuda: hwaccel initialisation returned error.")
+    assert _is_hw_runtime_failure("[h264_nvenc] Cannot load libnvidia-encode.so.1")
+    # Input/content problems must still fail loudly rather than silently
+    # burning CPU on a job that cannot succeed either way.
+    assert not _is_hw_runtime_failure("No such file or directory")
+    assert not _is_hw_runtime_failure("Invalid data found when processing input")
+    assert not _is_hw_runtime_failure("")
+
+
+def test_nvenc_oom_falls_back_to_software_encoder():
+    """A CUDA OOM on the first attempt must transparently retry on CPU."""
+    calls = []
+
+    def side_effect(cmd, **_kwargs):
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": [
+                {"r_frame_rate": "30/1", "duration": 6.0, "width": 3840, "height": 2160}]})
+            return m
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "a":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": []})
+            return m
+        if any("filter_complex" in str(a) for a in cmd):
+            calls.append(cmd)
+            if len(calls) == 1:                      # first (hardware) attempt
+                return MagicMock(
+                    returncode=218,
+                    stderr="CUDA_ERROR_OUT_OF_MEMORY: out of memory",
+                    stdout="")
+        return MagicMock(returncode=0, stderr="", stdout="")
+
+    with patch("subprocess.run", side_effect=side_effect), \
+         patch("packages.transcoder.ffmpeg_transcoder.get_backend", return_value="nvenc"), \
+         patch("builtins.open", MagicMock()), \
+         patch("pathlib.Path.glob", return_value=[]), \
+         patch("pathlib.Path.rglob", return_value=[]), \
+         patch("pathlib.Path.mkdir"), \
+         patch("shutil.rmtree"):
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        result = asyncio.run(FFmpegTranscoder(s3_mock, "test-bucket").transcode(_make_job()))
+
+    assert result.success is True, f"fallback should have rescued the job: {result.error}"
+    assert len(calls) == 2, f"expected a hardware attempt then a software retry, got {len(calls)}"
+
+    hw_cmd, cpu_cmd = calls
+    assert "cuda" in " ".join(hw_cmd), "first attempt should have used CUDA"
+    assert "h264_nvenc" in " ".join(hw_cmd)
+    # The retry must be a full software rebuild: no hwaccel, no GPU scaler.
+    joined = " ".join(cpu_cmd)
+    assert "-hwaccel" not in joined, "software retry must not request hwaccel"
+    assert "scale_cuda" not in joined, "software retry must not use the CUDA scaler"
+    assert "h264_nvenc" not in joined
+    assert "libx264" in joined, "software retry should encode with libx264"
+
+
+def test_non_hardware_error_does_not_retry():
+    """A content error must surface immediately, not trigger a CPU retry."""
+    calls = []
+
+    def side_effect(cmd, **_kwargs):
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": [
+                {"r_frame_rate": "30/1", "duration": 6.0, "width": 1920, "height": 1080}]})
+            return m
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "a":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": []})
+            return m
+        if any("filter_complex" in str(a) for a in cmd):
+            calls.append(cmd)
+            return MagicMock(returncode=1, stderr="Invalid data found when processing input", stdout="")
+        return MagicMock(returncode=0, stderr="", stdout="")
+
+    with patch("subprocess.run", side_effect=side_effect), \
+         patch("packages.transcoder.ffmpeg_transcoder.get_backend", return_value="nvenc"), \
+         patch("builtins.open", MagicMock()), \
+         patch("pathlib.Path.glob", return_value=[]), \
+         patch("pathlib.Path.rglob", return_value=[]), \
+         patch("pathlib.Path.mkdir"), \
+         patch("shutil.rmtree"):
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        result = asyncio.run(FFmpegTranscoder(s3_mock, "test-bucket").transcode(_make_job()))
+
+    assert result.success is False
+    assert len(calls) == 1, "content errors must not trigger a software retry"

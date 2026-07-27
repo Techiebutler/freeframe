@@ -251,6 +251,41 @@ def get_hdr_mode() -> str:
     return os.environ.get("TRANSCODER_HDR", "convert").lower()
 
 
+# Runtime hardware failures that should transparently fall back to software.
+# These are environmental (no/!busy device, exhausted VRAM, missing driver
+# library), not input-specific, so re-running the same job on the CPU pipeline
+# is expected to succeed.
+_HW_RUNTIME_FAILURES = (
+    "cuda_error_out_of_memory",
+    "out of memory",
+    "hwaccel initialisation returned error",
+    "failed setup for format cuda",
+    "no capable devices found",
+    "cannot load libnvidia-encode",
+    "cannot load libcuda",
+    "openencodesessionex failed",
+    "no free encoding sessions",
+    "function not implemented",
+    "failed to create specified hw device",
+    "device creation failed",
+    "error creating a mfx session",
+)
+
+
+def _is_hw_runtime_failure(err: str) -> bool:
+    lowered = (err or "").lower()
+    return any(marker in lowered for marker in _HW_RUNTIME_FAILURES)
+
+
+def _hw_failure_reason(err: str) -> str:
+    """First matching hardware-failure marker, for a compact log line."""
+    lowered = (err or "").lower()
+    for marker in _HW_RUNTIME_FAILURES:
+        if marker in lowered:
+            return marker
+    return "unknown hardware failure"
+
+
 def get_backend() -> str:
     global _BACKEND_CACHE
     if _BACKEND_CACHE is None:
@@ -387,170 +422,208 @@ class FFmpegTranscoder(BaseTranscoder):
                 # Never emit an empty ladder: keep the smallest requested rung.
                 qualities = [min(requested, key=lambda q: int(QUALITY_MAP[q][0].split(":")[1]))]
 
-            backend = get_backend()
-            # DV is tone-mapped via libplacebo and encoded in software (see
-            # below), so force the CPU scale filter for it.
-            scale_filter = "scale" if dv_software else _BACKEND_SCALE.get(backend, "scale")
-            out_mode = _OUTPUT_MODES.get(get_output_mode(), _OUTPUT_MODES["h264_8"])
+            primary_backend = get_backend()
 
             hls_dir = work_dir / "hls"
             hls_dir.mkdir()
 
-            # Build filter_complex: split then per-quality scale.
-            # force_original_aspect_ratio=decrease preserves aspect (no distortion);
-            # the GPU scale filters (scale_cuda/scale_qsv/scale_vaapi) keep the
-            # whole pipeline on the hardware device.
-            split_outputs = "".join(f"[v{i}]" for i in range(len(qualities)))
-            if dv_software:
-                # Dolby Vision profile 5 is IPT-encoded with no usable base
-                # layer. The frames must be inverse-mapped via the RPU, which
-                # only libplacebo knows how to parse, so tone-map to Rec.709
-                # SDR here. This runs on the CPU/Vulkan path and is encoded with
-                # the software encoder (avoids cuda<->vulkan interop); hwaccel
-                # is skipped for DV. Output is bt709 SDR (8- or 10-bit).
-                _lp = "libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv"
-                _lp += ":format=yuv420p10le" if out_mode["ten_bit"] else ":format=yuv420p"
-                # libplacebo's colorspace option sets the matrix but can retain
-                # the source's bt2020 primaries in frame metadata.  Normalize
-                # all three Rec.709 tags before the software encoder.
-                _lp += ",setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"
-                hdr_prefix = f"[v:0]{_lp}[tcpu];"
-                src = "[tcpu]"
-            elif is_hdr:
-                # Normalize HDR to 10-bit p010, tone-map to Rec.709 SDR (or keep
-                # the 10-bit HDR frames when preserving), then feed the encoder.
-                # On a hardware backend the source is a hardware frame, so it is
-                # downloaded first (hwdownload) and re-uploaded after the CPU
-                # tone-map (hwupload). On the cpu backend there is no hardware
-                # frame context, so the whole chain stays in software
-                # (no hwdownload/hwupload) -- this is what lets HDR decode work
-                # on CPU-only and ARM self-hosts with no GPU.
-                if backend == "cpu":
-                    hdr_prefix = "[v:0]format=p010"
-                    if tone_map:
-                        hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
-                                       f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
-                                       f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le")
-                    hdr_prefix += "[tcpu];"
+            def _build_ffmpeg_cmd(backend: str) -> list[str]:
+                """Build the full ffmpeg command for a given backend.
+
+                Kept as a closure so the whole graph (hwaccel, scale filter,
+                HDR prefix, encoders, colour tags) is rebuilt consistently when
+                a hardware attempt has to fall back to software.
+                """
+                # DV is tone-mapped via libplacebo and encoded in software (see
+                # below), so force the CPU scale filter for it.
+                scale_filter = "scale" if dv_software else _BACKEND_SCALE.get(backend, "scale")
+                out_mode = _OUTPUT_MODES.get(get_output_mode(), _OUTPUT_MODES["h264_8"])
+
+
+                # Build filter_complex: split then per-quality scale.
+                # force_original_aspect_ratio=decrease preserves aspect (no distortion);
+                # the GPU scale filters (scale_cuda/scale_qsv/scale_vaapi) keep the
+                # whole pipeline on the hardware device.
+                split_outputs = "".join(f"[v{i}]" for i in range(len(qualities)))
+                if dv_software:
+                    # Dolby Vision profile 5 is IPT-encoded with no usable base
+                    # layer. The frames must be inverse-mapped via the RPU, which
+                    # only libplacebo knows how to parse, so tone-map to Rec.709
+                    # SDR here. This runs on the CPU/Vulkan path and is encoded with
+                    # the software encoder (avoids cuda<->vulkan interop); hwaccel
+                    # is skipped for DV. Output is bt709 SDR (8- or 10-bit).
+                    _lp = "libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv"
+                    _lp += ":format=yuv420p10le" if out_mode["ten_bit"] else ":format=yuv420p"
+                    # libplacebo's colorspace option sets the matrix but can retain
+                    # the source's bt2020 primaries in frame metadata.  Normalize
+                    # all three Rec.709 tags before the software encoder.
+                    _lp += ",setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"
+                    hdr_prefix = f"[v:0]{_lp}[tcpu];"
                     src = "[tcpu]"
+                elif is_hdr:
+                    # Normalize HDR to 10-bit p010, tone-map to Rec.709 SDR (or keep
+                    # the 10-bit HDR frames when preserving), then feed the encoder.
+                    # On a hardware backend the source is a hardware frame, so it is
+                    # downloaded first (hwdownload) and re-uploaded after the CPU
+                    # tone-map (hwupload). On the cpu backend there is no hardware
+                    # frame context, so the whole chain stays in software
+                    # (no hwdownload/hwupload) -- this is what lets HDR decode work
+                    # on CPU-only and ARM self-hosts with no GPU.
+                    if backend == "cpu":
+                        hdr_prefix = "[v:0]format=p010"
+                        if tone_map:
+                            hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
+                                           f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
+                                           f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le")
+                        hdr_prefix += "[tcpu];"
+                        src = "[tcpu]"
+                    else:
+                        hdr_prefix = "[v:0]hwdownload,format=p010"
+                        if tone_map:
+                            hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
+                                           f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
+                                           f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le")
+                        hdr_prefix += f"[tcpu];[tcpu]hwupload{_HDR_UPLOAD.get(backend, '')}[t];"
+                        src = "[t]"
                 else:
-                    hdr_prefix = "[v:0]hwdownload,format=p010"
-                    if tone_map:
-                        hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
-                                       f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
-                                       f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le")
-                    hdr_prefix += f"[tcpu];[tcpu]hwupload{_HDR_UPLOAD.get(backend, '')}[t];"
-                    src = "[t]"
-            else:
-                hdr_prefix = ""
-                src = "[v:0]"
-            # Scale-filter suffix: append 10-bit surface forcing when requested.
-            scale_extra = _BACKEND_SCALE_OPTS.get(backend, "")
-            _sf = _BACKEND_SCALE_FORMAT.get(backend, {}).get(
-                "10" if out_mode["ten_bit"] else "8", "")
-            scale_extra += _sf
-            if dv_software:
-                # DV runs on the CPU scale filter, which takes no interp_algo
-                # or format option; the libplacebo prefix already set the target
-                # bit depth and the software encoder sets -pix_fmt itself.
-                scale_extra = ""
-            filter_complex = f"{hdr_prefix}{src}split={len(qualities)}{split_outputs};"
-            filter_complex += ";".join(
-                f"[v{i}]{scale_filter}={QUALITY_MAP[q][0]}:force_original_aspect_ratio=decrease:force_divisible_by=2{scale_extra}[{q}]"
-                for i, q in enumerate(qualities)
-            )
+                    hdr_prefix = ""
+                    src = "[v:0]"
+                # Scale-filter suffix: append 10-bit surface forcing when requested.
+                scale_extra = _BACKEND_SCALE_OPTS.get(backend, "")
+                _sf = _BACKEND_SCALE_FORMAT.get(backend, {}).get(
+                    "10" if out_mode["ten_bit"] else "8", "")
+                scale_extra += _sf
+                if dv_software:
+                    # DV runs on the CPU scale filter, which takes no interp_algo
+                    # or format option; the libplacebo prefix already set the target
+                    # bit depth and the software encoder sets -pix_fmt itself.
+                    scale_extra = ""
+                filter_complex = f"{hdr_prefix}{src}split={len(qualities)}{split_outputs};"
+                filter_complex += ";".join(
+                    f"[v{i}]{scale_filter}={QUALITY_MAP[q][0]}:force_original_aspect_ratio=decrease:force_divisible_by=2{scale_extra}[{q}]"
+                    for i, q in enumerate(qualities)
+                )
 
-            ffmpeg_cmd = ["ffmpeg", "-y"]
-            if not dv_software:
-                ffmpeg_cmd += _BACKEND_HWACCEL.get(backend, [])
-            ffmpeg_cmd += ["-i", input_url]
-            ffmpeg_cmd += ["-filter_complex", filter_complex]
+                ffmpeg_cmd = ["ffmpeg", "-y"]
+                if not dv_software:
+                    ffmpeg_cmd += _BACKEND_HWACCEL.get(backend, [])
+                ffmpeg_cmd += ["-i", input_url]
+                ffmpeg_cmd += ["-filter_complex", filter_complex]
 
-            # Per-backend encoder selection driven by TRANSCODER_OUTPUT.
-            family = out_mode["family"]      # "hevc" or "h264"
-            ten_bit = out_mode["ten_bit"]    # True=10-bit, False=8-bit
-            for i, quality in enumerate(qualities):
-                _, crf = QUALITY_MAP[quality]
-                ffmpeg_cmd += ["-map", f"[{quality}]"]
-                if has_audio:
-                    ffmpeg_cmd += ["-map", "a:0"]
-                if backend == "cpu" or dv_software:
-                    enc = "libx265" if family == "hevc" else "libx264"
-                    ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
-                                   "-force_key_frames", "expr:gte(t,n_forced*2)"]
-                    if ten_bit:
-                        ffmpeg_cmd += ["-pix_fmt", "yuv420p10le", "-crf", str(crf - 4)]
-                    else:
-                        ffmpeg_cmd += ["-pix_fmt", "yuv420p", "-crf", str(crf + 4)]
-                elif backend == "nvenc":
-                    enc = "hevc_nvenc" if family == "hevc" else "h264_nvenc"
-                    cq = _NVENC_CQ.get(get_output_mode(), 26)
-                    ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "p6", "-rc", "constqp",
-                                   "-qp", str(cq), "-force_key_frames", "expr:gte(t,n_forced*2)"]
-                    if family == "hevc":
-                        ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]
-                    else:
-                        ffmpeg_cmd += ["-profile:v", "high"]
-                elif backend == "qsv":
-                    enc = "hevc_qsv" if family == "hevc" else "h264_qsv"
-                    ffmpeg_cmd += [f"-c:v:{i}", enc, "-global_quality", str(crf),
-                                   "-look_ahead", "1",
-                                   "-force_key_frames", "expr:gte(t,n_forced*2)"]
-                elif backend == "vaapi":
-                    enc = "hevc_vaapi" if family == "hevc" else "h264_vaapi"
-                    ffmpeg_cmd += [f"-c:v:{i}", enc, "-global_quality", str(crf),
-                                   "-force_key_frames", "expr:gte(t,n_forced*2)"]
-                    if family == "hevc":
-                        ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]
-                    ffmpeg_cmd += ["-pix_fmt", "p010" if ten_bit else "nv12"]
+                # Per-backend encoder selection driven by TRANSCODER_OUTPUT.
+                family = out_mode["family"]      # "hevc" or "h264"
+                ten_bit = out_mode["ten_bit"]    # True=10-bit, False=8-bit
+                for i, quality in enumerate(qualities):
+                    _, crf = QUALITY_MAP[quality]
+                    ffmpeg_cmd += ["-map", f"[{quality}]"]
+                    if has_audio:
+                        ffmpeg_cmd += ["-map", "a:0"]
+                    if backend == "cpu" or dv_software:
+                        enc = "libx265" if family == "hevc" else "libx264"
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
+                                       "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                        if ten_bit:
+                            ffmpeg_cmd += ["-pix_fmt", "yuv420p10le", "-crf", str(crf - 4)]
+                        else:
+                            ffmpeg_cmd += ["-pix_fmt", "yuv420p", "-crf", str(crf + 4)]
+                    elif backend == "nvenc":
+                        enc = "hevc_nvenc" if family == "hevc" else "h264_nvenc"
+                        cq = _NVENC_CQ.get(get_output_mode(), 26)
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "p6", "-rc", "constqp",
+                                       "-qp", str(cq), "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                        if family == "hevc":
+                            ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]
+                        else:
+                            ffmpeg_cmd += ["-profile:v", "high"]
+                    elif backend == "qsv":
+                        enc = "hevc_qsv" if family == "hevc" else "h264_qsv"
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, "-global_quality", str(crf),
+                                       "-look_ahead", "1",
+                                       "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                    elif backend == "vaapi":
+                        enc = "hevc_vaapi" if family == "hevc" else "h264_vaapi"
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, "-global_quality", str(crf),
+                                       "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                        if family == "hevc":
+                            ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]
+                        ffmpeg_cmd += ["-pix_fmt", "p010" if ten_bit else "nv12"]
 
-            # Colour tags: tone-mapped SDR -> Rec.709; preserved HDR -> pass
-            # through the source's HDR tags; plain SDR -> no override.
-            color_args = []
-            if tone_map:
-                # These are output-stream options.  Without the explicit video
-                # stream specifier, FFmpeg can retain bt2020 primaries on HLG
-                # and Dolby Vision renditions even after the filtergraph has
-                # tone-mapped transfer and matrix to Rec.709.
-                for stream_index in range(len(qualities)):
-                    color_args += [
-                        f"-color_primaries:v:{stream_index}", "bt709",
-                        f"-color_trc:v:{stream_index}", "bt709",
-                        f"-colorspace:v:{stream_index}", "bt709",
-                    ]
-            elif is_hdr and hdr_mode == "preserve":
-                for stream_index in range(len(qualities)):
-                    color_args += [
-                        f"-color_primaries:v:{stream_index}",
-                        _vid_stream.get("color_primaries", "bt2020"),
-                        f"-color_trc:v:{stream_index}",
-                        _vid_stream.get("color_transfer", "smpte2084"),
-                        f"-colorspace:v:{stream_index}",
-                        _vid_stream.get("color_space", "bt2020nc"),
-                    ]
-            ffmpeg_cmd += color_args
-            segment_dir = hls_dir / "%v"
-            ffmpeg_cmd += [
-                "-f", "hls",
-                "-hls_time", "2",
-                "-hls_playlist_type", "vod",
-                "-hls_flags", "independent_segments",
-                "-hls_segment_type", "mpegts",
-                "-master_pl_name", "master.m3u8",
-                "-var_stream_map", " ".join(
-                    f"v:{i},a:{i}" if has_audio else f"v:{i}"
-                    for i in range(len(qualities))
-                ),
-                "-hls_segment_filename", str(hls_dir / "%v" / "seg_%03d.ts"),
-                str(hls_dir / "%v" / "playlist.m3u8"),
-            ]
+                # Colour tags: tone-mapped SDR -> Rec.709; preserved HDR -> pass
+                # through the source's HDR tags; plain SDR -> no override.
+                color_args = []
+                if tone_map:
+                    # These are output-stream options.  Without the explicit video
+                    # stream specifier, FFmpeg can retain bt2020 primaries on HLG
+                    # and Dolby Vision renditions even after the filtergraph has
+                    # tone-mapped transfer and matrix to Rec.709.
+                    for stream_index in range(len(qualities)):
+                        color_args += [
+                            f"-color_primaries:v:{stream_index}", "bt709",
+                            f"-color_trc:v:{stream_index}", "bt709",
+                            f"-colorspace:v:{stream_index}", "bt709",
+                        ]
+                elif is_hdr and hdr_mode == "preserve":
+                    for stream_index in range(len(qualities)):
+                        color_args += [
+                            f"-color_primaries:v:{stream_index}",
+                            _vid_stream.get("color_primaries", "bt2020"),
+                            f"-color_trc:v:{stream_index}",
+                            _vid_stream.get("color_transfer", "smpte2084"),
+                            f"-colorspace:v:{stream_index}",
+                            _vid_stream.get("color_space", "bt2020nc"),
+                        ]
+                ffmpeg_cmd += color_args
+                segment_dir = hls_dir / "%v"
+                ffmpeg_cmd += [
+                    "-f", "hls",
+                    "-hls_time", "2",
+                    "-hls_playlist_type", "vod",
+                    "-hls_flags", "independent_segments",
+                    "-hls_segment_type", "mpegts",
+                    "-master_pl_name", "master.m3u8",
+                    "-var_stream_map", " ".join(
+                        f"v:{i},a:{i}" if has_audio else f"v:{i}"
+                        for i in range(len(qualities))
+                    ),
+                    "-hls_segment_filename", str(hls_dir / "%v" / "seg_%03d.ts"),
+                    str(hls_dir / "%v" / "playlist.m3u8"),
+                ]
 
-            # Create per-quality directories
-            for q in qualities:
-                (hls_dir / q).mkdir(exist_ok=True)
+                # Create per-quality directories
+                for q in qualities:
+                    (hls_dir / q).mkdir(exist_ok=True)
 
-            # Timeout scales with expected duration - 4 hours for very large files
-            self._run(ffmpeg_cmd, timeout=14400, label="ffmpeg")
+                # Timeout scales with expected duration - 4 hours for very large files
+                return ffmpeg_cmd
+
+            # Try hardware first, then degrade to the software pipeline if the
+            # device is unusable at runtime (most commonly another process on the
+            # box has exhausted VRAM, so CUDA decode init fails with
+            # CUDA_ERROR_OUT_OF_MEMORY). A slow transcode beats a failed asset.
+            attempts = [primary_backend]
+            if primary_backend != "cpu" and not dv_software:
+                attempts.append("cpu")
+
+            backend = primary_backend
+            for attempt_index, attempt_backend in enumerate(attempts):
+                ffmpeg_cmd = _build_ffmpeg_cmd(attempt_backend)
+                try:
+                    self._run(ffmpeg_cmd, timeout=14400, label="ffmpeg")
+                    backend = attempt_backend
+                    break
+                except RuntimeError as exc:
+                    is_last = attempt_index == len(attempts) - 1
+                    if is_last or not _is_hw_runtime_failure(str(exc)):
+                        raise
+                    print(
+                        f"[transcoder] backend '{attempt_backend}' failed at runtime "
+                        f"({_hw_failure_reason(str(exc))}); retrying on the software "
+                        f"pipeline for {job.input_s3_key}",
+                        flush=True,
+                    )
+                    # Discard any partial HLS output before retrying.
+                    shutil.rmtree(hls_dir, ignore_errors=True)
+                    hls_dir.mkdir(exist_ok=True)
 
             # 4. Upload HLS files to S3
             uploaded_keys = []
