@@ -1,41 +1,140 @@
 version: 2
+
+# Routine version updates are batched into ONE PR per manifest.
+#
+# Why grouping (and not a lower open-pull-requests-limit): every pip PR edits
+# apps/api/requirements.txt and every npm PR edits apps/web/pnpm-lock.yaml, so
+# N open PRs means N-1 rebases after any merge. The conflict-optimal number of
+# open PRs per manifest is exactly 1. Lowering the limit caps the symptom;
+# grouping removes the cascade.
+#
+# Security updates are NOT throttled by anything in this file:
+#   - groups default to `applies-to: version-updates` (none here opt in to
+#     security-updates)
+#   - `cooldown` is documented as version-updates only
+#   - `ignore` + `update-types` is documented as version-updates only
+#   - security PRs are exempt from `open-pull-requests-limit`
+# NOTE: this only holds if Dependabot security updates are ENABLED on the repo.
+# That is a repo setting, not a config option:
+#   gh api -X PUT repos/:owner/:repo/automated-security-fixes
+#
+# Vocabulary trap: `groups.update-types` takes bare minor/patch/major, while
+# `ignore.update-types` takes version-update:semver-major. They are not the
+# same vocabulary.
+
 updates:
+  # ---------------------------------------------------------------------
+  # Python API — apps/api/requirements.txt
+  # ---------------------------------------------------------------------
   - package-ecosystem: pip
     directory: /apps/api
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
+      time: "06:00"
+      timezone: Etc/UTC
     open-pull-requests-limit: 5
     labels: ["dependencies", "backend"]
+    cooldown:
+      # boto3 ships almost daily; without a cooldown the grouped PR is
+      # superseded and rebased constantly.
+      default-days: 7
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      api-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
     ignore:
-      # Avoid major version bumps — review manually
+      # Majors reviewed by hand. Does NOT suppress security updates.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
+  # ---------------------------------------------------------------------
+  # Web frontend — apps/web/package.json + pnpm-lock.yaml
+  # ---------------------------------------------------------------------
   - package-ecosystem: npm
     directory: /apps/web
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
+      time: "06:00"
+      timezone: Etc/UTC
     open-pull-requests-limit: 5
     labels: ["dependencies", "frontend"]
+    cooldown:
+      default-days: 7
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      web-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
+  # ---------------------------------------------------------------------
+  # GitHub Actions — .github/workflows/*
+  # Majors are deliberately NOT ignored. For actions the major tag is the
+  # ordinary release channel (setup-node v6 -> v7 is a runner/Node bump, not
+  # a breaking API change), and pinning to an old major is how you end up
+  # stranded on a retired runner. The workflows ARE the test surface, so a
+  # bad bump fails CI immediately. Batch them instead of muting them.
+  # ---------------------------------------------------------------------
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
     open-pull-requests-limit: 3
     labels: ["dependencies", "ci"]
+    cooldown:
+      # github-actions supports default-days only (no semver-*-days).
+      default-days: 7
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - major
+          - minor
+          - patch
 
+  # ---------------------------------------------------------------------
+  # Docker base images
+  # `directories` (plural, supports globbing) covers both app images in one
+  # entry. Note: apps/web/Dockerfile* pin node:20-alpine, and Node 20 is EOL
+  # (2026-04-30). Moving to node:22 is a MAJOR bump and is therefore ignored
+  # below — it still needs a hand-written PR. Do not assume this entry
+  # handles it.
+  # ---------------------------------------------------------------------
   - package-ecosystem: docker
-    directory: /apps/api
+    directories:
+      - /apps/api
+      - /apps/web
     schedule:
       interval: monthly
     open-pull-requests-limit: 2
     labels: ["dependencies", "docker"]
+    cooldown:
+      default-days: 7
+    groups:
+      docker-images:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
