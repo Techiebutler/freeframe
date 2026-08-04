@@ -14,13 +14,13 @@ pydantic-settings==2.14.2
 python-jose[cryptography]==3.5.0
 bcrypt==4.3.0
 python-multipart==0.0.32
-boto3==1.43.56
+boto3==1.43.62
 # Pinned transitive: boto3 allows any botocore in >=1.43.56,<1.44.0, and botocore
 # is where S3 request signing lives. Silent botocore moves have broken S3
 # compatibility here before (SigV4 presigning against non-AWS backends), so this
 # is pinned to make those changes arrive as a reviewable PR.
 botocore==1.43.63
-celery[redis]==5.4.0
+celery[redis]==5.6.3
 redis==5.3.1
 httpx==0.28.1
 pytest==8.4.2
