@@ -150,7 +150,7 @@ jobs:
           node-version: "20"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.0.9
 
       - name: Verify critical frontend files exist
         run: |
@@ -226,7 +226,7 @@ jobs:
           node-version: "20"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.0.9
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
