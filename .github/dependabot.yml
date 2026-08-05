@@ -110,12 +110,31 @@ updates:
           - patch
 
   # ---------------------------------------------------------------------
-  # Docker base images
+  # Docker base images — PATCH ONLY, which today means: nothing.
+  #
   # `directories` (plural, supports globbing) covers both app images in one
-  # entry. Note: apps/web/Dockerfile* pin node:20-alpine, and Node 20 is EOL
-  # (2026-04-30). Moving to node:22 is a MAJOR bump and is therefore ignored
-  # below — it still needs a hand-written PR. Do not assume this entry
-  # handles it.
+  # entry. A base-image bump swaps the interpreter/runtime under the whole
+  # service at once, so it is not a dependency bump in the ordinary sense and
+  # is not something to accept on a green build. Restricted to patch here.
+  #
+  # READ THIS BEFORE ASSUMING THIS ENTRY KEEPS BASE IMAGES CURRENT — it does
+  # not, and cannot, for the tags we pin:
+  #   apps/api/Dockerfile*  FROM python:3.11-slim
+  #   apps/web/Dockerfile*  FROM node:20-alpine
+  # Dockerfile tag matching is precision-filtered: a two-segment tag only
+  # matches other two-segment tags, a one-segment tag only one-segment. So
+  # python:3.11-slim can only ever move to 3.x-slim (always MINOR) and
+  # node:20-alpine only to 2x-alpine (always MAJOR). Neither is ever a PATCH.
+  # Net effect: this entry opens zero PRs until a tag here gains a patch
+  # segment (e.g. python:3.11.14-slim).
+  #
+  # Keeping base images current is therefore a MANUAL, CALENDARED job, not an
+  # automated one. Node 20 is already EOL (2026-04-30) and needs a
+  # hand-written PR.
+  #
+  # The `ignore` block is load-bearing, not decoration: a dependency matching
+  # no group gets an INDIVIDUAL PR rather than being held back, so without it
+  # `update-types: [patch]` would ungroup minors instead of suppressing them.
   # ---------------------------------------------------------------------
   - package-ecosystem: docker
     directories:
@@ -133,8 +152,9 @@ updates:
         patterns:
           - "*"
         update-types:
-          - minor
           - patch
     ignore:
       - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
