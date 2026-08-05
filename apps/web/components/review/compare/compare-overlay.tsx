@@ -17,6 +17,7 @@ import { WipeViewer } from './wipe-viewer'
 import { AnnotationOverlay } from '@/components/review/annotation-overlay'
 import { AnnotationCanvas } from '@/components/review/annotation-canvas'
 import { VideoFrameConstraint } from '@/components/review/video-player'
+import { ImageFrameConstraint } from '@/components/review/image-frame-constraint'
 import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
 import type { AssetResponse, AssetVersion } from '@/types'
@@ -169,6 +170,10 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   // saved drawing aligns with how it later renders. Available for video and
   // image side-by-side; image wipe stays display-only (one ambiguous stage).
   const canAuthor = isVideo || mode === 'sbs'
+  // Per-pane image refs — ImageFrameConstraint measures these so each side's
+  // annotations live in that image's frame, not the pane's letterboxed box.
+  const imgARef = React.useRef<HTMLImageElement>(null)
+  const imgBRef = React.useRef<HTMLImageElement>(null)
   const [drawingSide, setDrawingSide] = React.useState<'a' | 'b' | null>(null)
   const toggleDrawing = React.useCallback(
     (side: 'a' | 'b') => setDrawingSide((prev) => (prev === side ? null : side)),
@@ -540,9 +545,13 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                   // available box as before.
                   <div className="relative flex h-full w-full items-center justify-center" style={transform.styleFor()}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
-                    <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
-                    {drawingSide === 'a' && <AnnotationCanvas />}
+                    <img ref={imgARef} src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
+                    {/* Image-frame space, not pane space — the two panes letterbox
+                        differently whenever the versions differ in aspect ratio. */}
+                    <ImageFrameConstraint imgRef={imgARef}>
+                      <AnnotationOverlay key={`a-${focusedCommentId ?? 'none'}`} annotation={annotationA} />
+                      {drawingSide === 'a' && <AnnotationCanvas />}
+                    </ImageFrameConstraint>
                   </div>
                 )}
               </div>
@@ -552,9 +561,11 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 {urlB && (
                   <div className="relative flex h-full w-full items-center justify-center" style={transform.styleFor()}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
-                    <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
-                    {drawingSide === 'b' && <AnnotationCanvas />}
+                    <img ref={imgBRef} src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
+                    <ImageFrameConstraint imgRef={imgBRef}>
+                      <AnnotationOverlay key={`b-${focusedCommentId ?? 'none'}`} annotation={annotationB} />
+                      {drawingSide === 'b' && <AnnotationCanvas />}
+                    </ImageFrameConstraint>
                   </div>
                 )}
               </div>

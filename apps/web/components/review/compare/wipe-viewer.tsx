@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { ImageFrameConstraint } from '@/components/review/image-frame-constraint'
 
 interface WipeViewerProps {
   urlA: string
@@ -31,6 +32,10 @@ interface WipeViewerProps {
 export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay, overlaySide }: WipeViewerProps) {
   const [split, setSplit] = React.useState(50)
   const stageRef = React.useRef<HTMLDivElement>(null)
+  // Annotations are authored in image-frame space, so display has to measure the
+  // owning version's <img> — the two versions can letterbox differently.
+  const imgARef = React.useRef<HTMLImageElement>(null)
+  const imgBRef = React.useRef<HTMLImageElement>(null)
   const dividerCleanup = React.useRef<(() => void) | null>(null)
   React.useEffect(() => () => dividerCleanup.current?.(), [])
 
@@ -62,13 +67,13 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay, ove
       {/* Side A (left of divider) */}
       <div className="absolute inset-0 flex items-center justify-center" style={transform.styleFor()}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
+        <img ref={imgARef} src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />
       </div>
       {/* Side B on top, revealed right of the divider */}
       <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${split}%)` }}>
         <div className="absolute inset-0 flex items-center justify-center" style={transform.styleFor()}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
+          <img ref={imgBRef} src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />
         </div>
       </div>
       {/* Overlay layer — above both images. The clip lives in SCREEN space
@@ -89,7 +94,16 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay, ove
           }
         >
           <div className="absolute inset-0" style={transform.styleFor()}>
-            {overlay}
+            {/* Keyed by side so switching owner remounts the constraint against
+                that version's <img> instead of holding the previous one's box.
+                Both images share this layer's coordinate space (every layer here
+                is `absolute inset-0` of the stage), so the offsets line up. */}
+            <ImageFrameConstraint
+              key={overlaySide ?? 'a'}
+              imgRef={overlaySide === 'b' ? imgBRef : imgARef}
+            >
+              {overlay}
+            </ImageFrameConstraint>
           </div>
         </div>
       )}

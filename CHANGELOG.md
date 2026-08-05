@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Image annotations no longer drift when the viewer's aspect ratio changes** — drawings on images were authored and replayed against the full letterboxed container box rather than the picture inside it, so the same annotation pointed at a different part of the image depending on where it was viewed: sidebar collapsed vs expanded, a resized window, a compare pane, or a share link. A 3:1 image annotated in a 900x500 viewer and reopened in a 400x700 one put the mark 54% of the image height away from where it was drawn, far enough to land off the picture entirely. Images now get the same treatment video already had (`VideoFrameConstraint`), applied in the single viewer, both side-by-side compare panes, and the wipe view. (#185)
+
 ### Changed
 - **Pinned `starlette` and `botocore` so self-hosted Docker builds are reproducible** — both were floating transitives, so rebuilding the same commit on a different day could silently install different versions with no diff and no PR. FastAPI declares `starlette>=0.46.0` with no upper bound, meaning builds were free to cross a Starlette major (the ASGI layer under the SSE endpoint and the middleware stack); `botocore` is where S3 request signing lives, and unreviewed moves there have broken S3 compatibility before. Both are pinned to the versions already resolving, so no installed version changes.
 

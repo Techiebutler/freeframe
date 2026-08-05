@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { useReviewStore } from '@/stores/review-store'
 import { useReview } from '@/components/review/review-provider'
+import { ImageFrameConstraint } from '@/components/review/image-frame-constraint'
 import type { Asset, AssetVersion, MediaFile } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -101,14 +102,16 @@ function SingleImage({ url, alt, containerRef, onImageLoad, annotationOverlay, i
         className="max-w-full max-h-full object-contain select-none"
         draggable={false}
       />
-      {/* Annotation overlay — positioned on top of the image, moves with zoom/pan */}
+      {/* Annotation overlay — pinned to the picture itself (not the letterboxed
+          container box), so coordinates stay image-relative across containers of
+          different aspect ratio. Moves with zoom/pan by sitting in the transform. */}
       {annotationOverlay && (
-        <div
-          className="absolute inset-0"
-          style={{ pointerEvents: isDrawingMode ? 'auto' : 'none' }}
+        <ImageFrameConstraint
+          imgRef={imgRef}
+          className={isDrawingMode ? 'pointer-events-auto' : 'pointer-events-none'}
         >
           {annotationOverlay}
-        </div>
+        </ImageFrameConstraint>
       )}
     </div>
   )
