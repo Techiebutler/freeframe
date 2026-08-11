@@ -286,12 +286,25 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
 
   // Version switch (either pane): offA/offB were calibrated for the OLD pair —
   // they no longer describe the new one, so drop them rather than silently
-  // misapplying a stale sync offset to the new pair (#182).
+  // misapplying a stale sync offset to the new pair (#182). The switched
+  // pane's shown drawing is likewise stale — it was frame-anchored to a
+  // comment on the OLD version and must not hang over the new one (#181).
+  //
+  // focusedCommentId is global rather than per-pane, and the comment list and
+  // progress bar both highlight from it. Clearing it on any switch would
+  // unfocus a comment the reviewer opened on the OTHER pane, which did not
+  // change — so only clear it when the drawing being dropped is the focused
+  // one, which lastAnnotationSide tells us.
   const handleSwitchLeft = React.useCallback(
     (v: AssetVersion) => {
       writeParams((p) => { p.set('compare', v.id); p.delete('offA'); p.delete('offB') })
+      setAnnotationA(null)
+      if (lastAnnotationSide === 'a') {
+        setLastAnnotationSide(null)
+        setFocusedCommentId(null)
+      }
     },
-    [writeParams],
+    [writeParams, lastAnnotationSide, setFocusedCommentId],
   )
   const handleSwitchRight = React.useCallback(
     (v: AssetVersion) => {
@@ -303,9 +316,14 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
       React.startTransition(() => {
         writeParams((p) => { p.delete('offA'); p.delete('offB') })
         setCurrentVersion(v)
+        setAnnotationB(null)
+        if (lastAnnotationSide === 'b') {
+          setLastAnnotationSide(null)
+          setFocusedCommentId(null)
+        }
       })
     },
-    [writeParams, setCurrentVersion],
+    [writeParams, setCurrentVersion, lastAnnotationSide, setFocusedCommentId],
   )
 
   // Shared zoom/pan for image modes
