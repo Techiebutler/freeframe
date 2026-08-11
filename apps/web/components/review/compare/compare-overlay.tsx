@@ -284,6 +284,23 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     [sideB],
   )
 
+  // Version switch (either pane): offA/offB were calibrated for the OLD pair —
+  // they no longer describe the new one, so drop them rather than silently
+  // misapplying a stale sync offset to the new pair (#182).
+  const handleSwitchLeft = React.useCallback(
+    (v: AssetVersion) => {
+      writeParams((p) => { p.set('compare', v.id); p.delete('offA'); p.delete('offB') })
+    },
+    [writeParams],
+  )
+  const handleSwitchRight = React.useCallback(
+    (v: AssetVersion) => {
+      writeParams((p) => { p.delete('offA'); p.delete('offB') })
+      setCurrentVersion(v)
+    },
+    [writeParams, setCurrentVersion],
+  )
+
   // Shared zoom/pan for image modes
   const transform = useSharedTransform()
 
@@ -315,7 +332,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
             value={left.id}
             excludeId={right.id}
             accentClass="text-sky-400"
-            onChange={(v) => writeParams((p) => p.set('compare', v.id))}
+            onChange={handleSwitchLeft}
           />
         </div>
         {/* Center: asset title (flex-1 min-w-0 truncates without pushing either
@@ -343,7 +360,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
             value={right.id}
             excludeId={left.id}
             accentClass="text-emerald-400"
-            onChange={(v) => setCurrentVersion(v)}
+            onChange={handleSwitchRight}
           />
           <button
             type="button"
