@@ -13,6 +13,7 @@ import {
   Repeat,
 } from "lucide-react";
 import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
+import { containBox } from "@/lib/media-frame";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
@@ -68,37 +69,25 @@ export function VideoFrameConstraint({
       const vw = video.videoWidth;
       const vh = video.videoHeight;
 
-      if (!vw || !vh) {
-        // Video metadata not loaded yet — fill container
+      if (!vw || !vh || !cw || !ch) {
+        // Metadata not loaded, or the container not laid out yet — fill it, and
+        // recompute on the next loadedmetadata/resize.
         setStyle({ position: "absolute", inset: 0 });
         return;
       }
 
-      const containerAspect = cw / ch;
-      const videoAspect = vw / vh;
-
-      let renderW: number, renderH: number, offsetX: number, offsetY: number;
-
-      if (videoAspect > containerAspect) {
-        // Video wider than container — letterbox top/bottom
-        renderW = cw;
-        renderH = cw / videoAspect;
-        offsetX = 0;
-        offsetY = (ch - renderH) / 2;
-      } else {
-        // Video taller than container — letterbox left/right
-        renderH = ch;
-        renderW = ch * videoAspect;
-        offsetX = (cw - renderW) / 2;
-        offsetY = 0;
-      }
+      // Same contain fit the image constraint uses; only the reference box
+      // differs. <video> is w-full h-full object-contain, so it always fills the
+      // container and letterboxes inside it — hence fitting against the
+      // container is right here, where for <img> under max-* it would not be.
+      const box = containBox(vw, vh, cw, ch);
 
       setStyle({
         position: "absolute",
-        left: offsetX,
-        top: offsetY,
-        width: renderW,
-        height: renderH,
+        left: box.left,
+        top: box.top,
+        width: box.width,
+        height: box.height,
       });
     };
 

@@ -70,10 +70,15 @@ export function ImageFrameConstraint({
     // is not redundant with the load listener.
     img.addEventListener('load', calc)
 
-    // The <img> itself resizes whenever its container does, under both the
-    // max-* and the w-full/h-full patterns, so observing it covers both.
+    // Watch both boxes. Under `w-full h-full` the <img> resizes with its
+    // container, but under `max-*` an image smaller than the container renders
+    // at natural size and a resize only RECENTRES it — offsetLeft/offsetTop
+    // move while the element's own box is untouched, and ResizeObserver does not
+    // fire on a position-only change. Observing the container catches that;
+    // observing the <img> catches a box change that leaves the container alone.
     const ro = new ResizeObserver(calc)
     ro.observe(img)
+    if (img.parentElement) ro.observe(img.parentElement)
 
     return () => {
       img.removeEventListener('load', calc)

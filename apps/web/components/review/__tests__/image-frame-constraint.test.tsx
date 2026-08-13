@@ -120,4 +120,35 @@ describe('ImageFrameConstraint', () => {
 
     expect(wrapper()).toHaveStyle({ left: '400px', width: '200px' })
   })
+
+  it('recomputes when the container resizes but the picture only recentres', () => {
+    // Records what each observer was pointed at, so a resize can be delivered to
+    // one element and not another. That distinction is the whole point here: the
+    // test above fires every callback regardless of target, which passes whether
+    // the component watches the picture or its container.
+    const observed = new Map<Element, Array<() => void>>()
+    vi.stubGlobal('ResizeObserver', class {
+      cb: () => void
+      constructor(cb: () => void) { this.cb = cb }
+      observe(el: Element) { observed.set(el, [...(observed.get(el) ?? []), this.cb]) }
+      unobserve() {}
+      disconnect() {}
+    })
+
+    // A 100x200 picture at natural size in a wide pane: max-* only ever shrinks,
+    // so the element hugs the picture and the pane centres it.
+    const { container } = render(
+      <Harness geometry={{ natural: [100, 200], box: [100, 200], offset: [400, 100] }} />,
+    )
+    expect(wrapper()).toHaveStyle({ left: '400px', top: '100px' })
+
+    // Sidebar collapses: the pane widens, the picture stays 100x200 and only
+    // recentres. The <img>'s own box never changes, so an observer on the <img>
+    // alone never fires — only one on the container does.
+    const img = container.querySelector('img') as HTMLImageElement
+    layOut(img, { natural: [100, 200], box: [100, 200], offset: [600, 100] })
+    act(() => { observed.get(img.parentElement as Element)?.forEach((cb) => cb()) })
+
+    expect(wrapper()).toHaveStyle({ left: '600px', top: '100px' })
+  })
 })

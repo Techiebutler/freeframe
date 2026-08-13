@@ -19,6 +19,36 @@ export interface Box {
 }
 
 /**
+ * The centred, aspect-preserving sub-box `object-fit: contain` produces when
+ * fitting content into a box. `left`/`top` are relative to the box's own origin.
+ *
+ * Shared by the two constraint components so they cannot drift apart:
+ * `renderedImageBox` below fits the picture inside the <img>'s own box and then
+ * offsets by where that element sits, while `VideoFrameConstraint` fits the
+ * video inside its container. Only the reference box differs — the fit itself
+ * is one implementation.
+ *
+ * Compares aspect ratios by cross-multiplying rather than dividing, so an exact
+ * fit (a 16:9 frame in a 16:9 box) stays exact instead of drifting a fraction of
+ * a pixel through an intermediate ratio.
+ *
+ * Assumes all four dimensions are non-zero; callers guard degenerate input.
+ */
+export function containBox(
+  contentWidth: number,
+  contentHeight: number,
+  boxWidth: number,
+  boxHeight: number,
+): Box {
+  const contentIsWider = contentWidth * boxHeight > contentHeight * boxWidth
+
+  const width = contentIsWider ? boxWidth : (boxHeight * contentWidth) / contentHeight
+  const height = contentIsWider ? (boxWidth * contentHeight) / contentWidth : boxHeight
+
+  return { left: (boxWidth - width) / 2, top: (boxHeight - height) / 2, width, height }
+}
+
+/**
  * The box the picture actually occupies, in the coordinate space of the <img>'s
  * offsetParent — i.e. excluding the empty bands `object-contain` leaves behind.
  *
@@ -58,18 +88,12 @@ export function renderedImageBox({
     return { left: offsetLeft, top: offsetTop, width: elementWidth, height: elementHeight }
   }
 
-  // Compare aspect ratios by cross-multiplying rather than dividing, so exact
-  // fits (a 16:9 image in a 16:9 box) stay exact instead of drifting a
-  // fraction of a pixel through an intermediate ratio.
-  const imageIsWider = naturalWidth * elementHeight > naturalHeight * elementWidth
-
-  const width = imageIsWider ? elementWidth : (elementHeight * naturalWidth) / naturalHeight
-  const height = imageIsWider ? (elementWidth * naturalHeight) / naturalWidth : elementHeight
+  const box = containBox(naturalWidth, naturalHeight, elementWidth, elementHeight)
 
   return {
-    left: offsetLeft + (elementWidth - width) / 2,
-    top: offsetTop + (elementHeight - height) / 2,
-    width,
-    height,
+    left: offsetLeft + box.left,
+    top: offsetTop + box.top,
+    width: box.width,
+    height: box.height,
   }
 }

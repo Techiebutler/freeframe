@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { stubGeometry, restoreGeometry } from '@/test/geometry'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useReviewStore } from '@/stores/review-store'
 
@@ -91,18 +92,6 @@ function makeVersion(n: number, status = 'ready') {
  * Describe a laid-out image on the prototypes; ImageFrameConstraint's own
  * effect then reads it for real. Restored in afterEach.
  */
-const geometryStubs: Array<() => void> = []
-function stubImageGeometry(props: Record<string, number>) {
-  for (const [key, value] of Object.entries(props)) {
-    const proto = key.startsWith('natural') ? HTMLImageElement.prototype : HTMLElement.prototype
-    const original = Object.getOwnPropertyDescriptor(proto, key)
-    Object.defineProperty(proto, key, { value, configurable: true })
-    geometryStubs.push(() => {
-      if (original) Object.defineProperty(proto, key, original)
-      else delete (proto as unknown as Record<string, unknown>)[key]
-    })
-  }
-}
 
 function makeComment(id: string, versionId: string, over: Record<string, unknown> = {}) {
   return {
@@ -147,7 +136,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  geometryStubs.splice(0).forEach((restore) => restore())
+  restoreGeometry()
 })
 
 describe('CompareOverlay', () => {
@@ -409,7 +398,7 @@ describe('CompareOverlay per-pane annotation display', () => {
     streamUrl = '/img.webp'
     // Portrait image rendered at natural size in a wider pane: max-w-full does
     // not upscale, so 350px of empty pane sits either side of the picture.
-    stubImageGeometry({
+    stubGeometry({
       naturalWidth: 100, naturalHeight: 200,
       offsetWidth: 100, offsetHeight: 200, offsetLeft: 350, offsetTop: 100,
     })
@@ -432,6 +421,51 @@ describe('CompareOverlay per-pane annotation display', () => {
       top: '100px',
       width: '100px',
       height: '200px',
+    })
+  })
+
+  it('image side-by-side: pane A pins its overlay to pane A’s own picture', () => {
+    searchParamsString = 'compare=v-1&mode=sbs'
+    streamUrl = '/img.webp'
+    // Baseline both panes share.
+    stubGeometry({
+      naturalWidth: 100, naturalHeight: 200,
+      offsetWidth: 100, offsetHeight: 200, offsetLeft: 350, offsetTop: 100,
+    })
+    commentsByVersion['v-1'] = [
+      makeComment('c1', 'v-1', {
+        timecode_start: null,
+        annotation: { id: 'ann1', comment_id: 'c1', drawing_data: DRAWING },
+      }),
+    ]
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+
+    // Give pane A's picture a landscape shape of its own — letterboxed top and
+    // bottom inside its element box, unlike the shared portrait baseline. The
+    // prototype stub alone cannot distinguish the panes, so without this an
+    // overlay wired to pane B's <img> would satisfy the assertion too.
+    for (const [key, value] of Object.entries({
+      naturalWidth: 400, naturalHeight: 100,
+      offsetWidth: 400, offsetHeight: 200, offsetLeft: 20, offsetTop: 250,
+    })) {
+      Object.defineProperty(screen.getByAltText('v1'), key, { value, configurable: true })
+    }
+    // The constraint measured the baseline at mount; decoding re-measures.
+    fireEvent.load(screen.getByAltText('v1'))
+
+    fireEvent.click(screen.getByLabelText('Toggle left comments'))
+    fireEvent.click(screen.getByText('Fix the color grade'))
+
+    // 4:1 picture inside a 400x200 element box: full width, 50px of band above
+    // and below, offset by where pane A's element sits.
+    expect(screen.getByTestId('annotation-overlay').parentElement).toHaveStyle({
+      position: 'absolute',
+      left: '20px',
+      top: '300px',
+      width: '400px',
+      height: '100px',
     })
   })
 

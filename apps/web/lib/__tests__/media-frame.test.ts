@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderedImageBox } from '../media-frame'
+import { containBox, renderedImageBox } from '../media-frame'
 
 /**
  * The three shapes below were measured in a real browser (Chrome, file:// probe)
@@ -21,6 +21,29 @@ const el = (
   elementWidth: number, elementHeight: number,
   offsetLeft = 0, offsetTop = 0,
 ) => ({ naturalWidth, naturalHeight, elementWidth, elementHeight, offsetLeft, offsetTop })
+
+describe('containBox', () => {
+  it('pads top/bottom when the content is wider than the box', () => {
+    expect(containBox(2, 1, 400, 400)).toEqual({ left: 0, top: 100, width: 400, height: 200 })
+  })
+
+  it('pads left/right when the content is taller than the box', () => {
+    expect(containBox(1, 2, 400, 400)).toEqual({ left: 100, top: 0, width: 200, height: 400 })
+  })
+
+  it('adds no padding when the aspect ratios already match', () => {
+    expect(containBox(1600, 900, 800, 450)).toEqual({ left: 0, top: 0, width: 800, height: 450 })
+  })
+
+  it('keeps an exact fit exact instead of drifting through an intermediate ratio', () => {
+    // Cross-multiplying rather than dividing is what makes this land on the
+    // exact value: `boxHeight * contentAspect` computes 799.9999999999999 here.
+    expect(containBox(1600, 900, 800, 450).width).toBe(800)
+    // A 1080p video in an odd-sized pane — the same divide-first route yields
+    // 300.4444444444444, one ULP low.
+    expect(containBox(1920, 1080, 301, 169).width).toBe(300.44444444444446)
+  })
+})
 
 describe('renderedImageBox — measured browser cases', () => {
   it('image smaller than its container renders at natural size, centered (max-* does not upscale)', () => {

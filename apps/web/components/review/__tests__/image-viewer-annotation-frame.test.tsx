@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
+import { stubGeometry, restoreGeometry } from '@/test/geometry'
 import { render, screen, waitFor } from '@testing-library/react'
 import { ImageViewer } from '../image-viewer'
 import { useReviewStore } from '@/stores/review-store'
@@ -19,18 +20,6 @@ const version = { id: 'v1', version_number: 1, files: [] } as never
  * jsdom does no layout, so the <img> geometry is stubbed on the prototype
  * before render — the component's own effect then reads it for real.
  */
-const stubbed: Array<() => void> = []
-function stubGeometry(props: Record<string, number>) {
-  for (const [key, value] of Object.entries(props)) {
-    const proto = key.startsWith('natural') ? HTMLImageElement.prototype : HTMLElement.prototype
-    const original = Object.getOwnPropertyDescriptor(proto, key)
-    Object.defineProperty(proto, key, { value, configurable: true })
-    stubbed.push(() => {
-      if (original) Object.defineProperty(proto, key, original)
-      else delete (proto as unknown as Record<string, unknown>)[key]
-    })
-  }
-}
 
 beforeEach(() => {
   useReviewStore.getState().reset()
@@ -42,7 +31,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  stubbed.splice(0).forEach((restore) => restore())
+  restoreGeometry()
 })
 
 describe('ImageViewer annotation frame', () => {
