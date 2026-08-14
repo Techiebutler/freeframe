@@ -56,6 +56,59 @@ describe('uploadAllParts', () => {
     expect(onProgress).toHaveBeenLastCalledWith(95)
   })
 
+  it('keeps several parts in flight and still returns them in order', async () => {
+    // Part-specific URLs so the fetch mock can tell which part it is serving.
+    vi.mocked(api.post).mockImplementation((_path: string, body: unknown) =>
+      Promise.resolve({ presigned_url: `https://s3.example/part-${(body as { part_number: number }).part_number}` }) as never,
+    )
+
+    let inFlight = 0
+    let maxInFlight = 0
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      inFlight -= 1
+      return okResponse(`"etag-${url.split('-').pop()}"`)
+    }) as unknown as typeof fetch
+
+    // 3 parts, 3 workers — all three should be in flight simultaneously.
+    const promise = uploadAllParts(makeFile(2 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 3)
+    await vi.runAllTimersAsync()
+    const parts = await promise
+
+    expect(maxInFlight).toBe(3)
+    expect(parts).toEqual([
+      { PartNumber: 1, ETag: '"etag-1"' },
+      { PartNumber: 2, ETag: '"etag-2"' },
+      { PartNumber: 3, ETag: '"etag-3"' },
+    ])
+  })
+
+  it('never exceeds the configured concurrency', async () => {
+    vi.mocked(api.post).mockImplementation((_path: string, body: unknown) =>
+      Promise.resolve({ presigned_url: `https://s3.example/part-${(body as { part_number: number }).part_number}` }) as never,
+    )
+
+    let inFlight = 0
+    let maxInFlight = 0
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      inFlight -= 1
+      return okResponse(`"etag-${url.split('-').pop()}"`)
+    }) as unknown as typeof fetch
+
+    // 5 parts, but only 2 workers.
+    const promise = uploadAllParts(makeFile(4 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 2)
+    await vi.runAllTimersAsync()
+    const parts = await promise
+
+    expect(maxInFlight).toBe(2)
+    expect(parts.map((p) => p.PartNumber)).toEqual([1, 2, 3, 4, 5])
+  })
+
   it('retries a part that fails transiently and still succeeds', async () => {
     global.fetch = vi.fn()
       .mockResolvedValueOnce(failResponse())

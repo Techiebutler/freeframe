@@ -5,6 +5,7 @@ import type { AssetResponse } from '@/types'
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
 const HISTORY_PAGE_SIZE = 20
+const UPLOAD_CONCURRENCY = 5 // parts in flight at once
 const PART_MAX_ATTEMPTS = 8 // per part, including the first try
 const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per part
 
@@ -101,8 +102,21 @@ async function uploadPart(
 }
 
 /**
- * Uploads every part of a multipart upload in order and returns the part list
- * for /upload/complete. Exported for tests.
+ * Uploads every part of a multipart upload and returns the part list for
+ * /upload/complete. Exported for tests.
+ *
+ * Parts are sent by a small pool of workers rather than strictly one after the
+ * other. A single PUT does not saturate a connection — most of a sequential
+ * upload is spent waiting on round-trips — so a handful in flight multiplies
+ * throughput on exactly the long-haul links where large uploads hurt most.
+ *
+ * Ordering is preserved by writing each result to its own index: parts finish
+ * out of order, but `parts` is indexed by part number, and progress counts
+ * completions rather than the highest number seen.
+ *
+ * When a part finally fails, the other workers stop picking up new ones but are
+ * left to finish what they already started. Aborting them mid-flight would only
+ * trade one error for several, and the upload is over either way.
  */
 export async function uploadAllParts(
   file: File,
@@ -110,19 +124,46 @@ export async function uploadAllParts(
   uploadId: string,
   controller: AbortController,
   onProgress: (percent: number) => void,
+  concurrency: number = UPLOAD_CONCURRENCY,
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-  const parts: Array<{ PartNumber: number; ETag: string }> = []
+  const parts: Array<{ PartNumber: number; ETag: string }> = new Array(totalChunks)
 
-  for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
-    if (controller.signal.aborted) {
-      throw new DOMException('Upload cancelled', 'AbortError')
+  let nextIndex = 0
+  let completed = 0
+  let firstError: unknown = null
+
+  async function worker(): Promise<void> {
+    while (true) {
+      if (controller.signal.aborted) {
+        throw new DOMException('Upload cancelled', 'AbortError')
+      }
+      if (firstError) return // another worker failed; stop taking new parts
+
+      const index = nextIndex++
+      if (index >= totalChunks) return
+
+      const partNumber = index + 1
+      try {
+        const etag = await uploadPart(file, s3Key, uploadId, partNumber, controller)
+        parts[index] = { PartNumber: partNumber, ETag: etag }
+        completed += 1
+        onProgress(Math.round((completed / totalChunks) * 95))
+      } catch (err) {
+        firstError ??= err
+        return
+      }
     }
-
-    const etag = await uploadPart(file, s3Key, uploadId, partNumber, controller)
-    parts.push({ PartNumber: partNumber, ETag: etag })
-    onProgress(Math.round((partNumber / totalChunks) * 95))
   }
+
+  const workerCount = Math.max(1, Math.min(concurrency, totalChunks))
+  const results = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
+
+  if (firstError) throw firstError
+
+  // A cancel surfaces as a rejected worker rather than through firstError.
+  const rejected = results.find((r) => r.status === 'rejected')
+  if (rejected && rejected.status === 'rejected') throw rejected.reason
 
   return parts
 }

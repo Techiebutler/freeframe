@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Large uploads send several parts at once instead of strictly one after another** — a single PUT does not saturate a connection, since most of a sequential upload is spent waiting on round-trips, so up to 5 parts are now in flight at a time. Part order is preserved (results are written by part number, progress counts completions), and when a part finally fails the remaining workers stop taking new parts while finishing what they already started. (#242)
+
 ## [1.8.0] - 2026-08-15
 
 ### Upgrade notes
