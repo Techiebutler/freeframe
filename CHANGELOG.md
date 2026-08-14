@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A single transient storage error no longer discards an entire multipart upload** — each part is now retried up to 8 times with exponential backoff and jitter (≈254s of tolerance per part) instead of failing the whole upload on the first non-OK response. A multi-gigabyte file is several hundred sequential requests, so one 500/503 from the object store or a brief network drop was enough to throw away everything already transferred; on a slow uplink that can be an hour of work. The presigned URL is re-fetched on every attempt, since `presign_upload_part` expires after an hour and a large upload can outlive that. User-initiated cancels are never retried. The part loop, previously duplicated between new-asset and new-version uploads, is now shared.
+
 ### Changed
 - **Pinned `starlette` and `botocore` so self-hosted Docker builds are reproducible** — both were floating transitives, so rebuilding the same commit on a different day could silently install different versions with no diff and no PR. FastAPI declares `starlette>=0.46.0` with no upper bound, meaning builds were free to cross a Starlette major (the ASGI layer under the SSE endpoint and the middleware stack); `botocore` is where S3 request signing lives, and unreviewed moves there have broken S3 compatibility before. Both are pinned to the versions already resolving, so no installed version changes.
 

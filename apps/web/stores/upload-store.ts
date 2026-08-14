@@ -5,6 +5,106 @@ import type { AssetResponse } from '@/types'
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
 const HISTORY_PAGE_SIZE = 20
+const PART_MAX_ATTEMPTS = 8 // per part, including the first try
+const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per part
+
+/** Uploads one part exactly once. Returns its ETag. */
+async function uploadPartOnce(
+  file: File,
+  s3Key: string,
+  uploadId: string,
+  partNumber: number,
+  controller: AbortController,
+): Promise<string> {
+  const start = (partNumber - 1) * CHUNK_SIZE
+  const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
+
+  // The presigned URL is fetched per attempt, not cached across retries:
+  // presign_upload_part expires after an hour and a large upload can outlive
+  // that, so a URL obtained before a long backoff may already be dead.
+  const { presigned_url } = await api.post<{ presigned_url: string }>('/upload/presign-part', {
+    s3_key: s3Key,
+    upload_id: uploadId,
+    part_number: partNumber,
+  })
+
+  const putResponse = await fetch(presigned_url, {
+    method: 'PUT',
+    body: chunk,
+    signal: controller.signal,
+  })
+
+  if (!putResponse.ok) {
+    throw new Error(`Part ${partNumber} failed: ${putResponse.statusText}`)
+  }
+
+  return putResponse.headers.get('ETag') ?? ''
+}
+
+/**
+ * Uploads one part, retrying with exponential backoff and jitter.
+ *
+ * A multi-gigabyte file is several hundred requests. Previously the first
+ * non-OK response aborted the entire upload without a second attempt, so a
+ * single transient 500/503 from the storage backend — or a brief network drop —
+ * discarded everything already transferred.
+ *
+ * Jitter keeps concurrent uploads from retrying in lockstep. A user-initiated
+ * cancel is never retried.
+ */
+async function uploadPart(
+  file: File,
+  s3Key: string,
+  uploadId: string,
+  partNumber: number,
+  controller: AbortController,
+): Promise<string> {
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= PART_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller)
+    } catch (err) {
+      if (controller.signal.aborted) throw err
+      if (err instanceof DOMException && err.name === 'AbortError') throw err
+
+      lastError = err
+      if (attempt === PART_MAX_ATTEMPTS) break
+
+      const delay = PART_RETRY_BASE_MS * 2 ** (attempt - 1) + Math.random() * 250
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+
+  throw lastError
+}
+
+/**
+ * Uploads every part of a multipart upload in order and returns the part list
+ * for /upload/complete. Exported for tests.
+ */
+export async function uploadAllParts(
+  file: File,
+  s3Key: string,
+  uploadId: string,
+  controller: AbortController,
+  onProgress: (percent: number) => void,
+): Promise<Array<{ PartNumber: number; ETag: string }>> {
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+  const parts: Array<{ PartNumber: number; ETag: string }> = []
+
+  for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
+    if (controller.signal.aborted) {
+      throw new DOMException('Upload cancelled', 'AbortError')
+    }
+
+    const etag = await uploadPart(file, s3Key, uploadId, partNumber, controller)
+    parts.push({ PartNumber: partNumber, ETag: etag })
+    onProgress(Math.round((partNumber / totalChunks) * 95))
+  }
+
+  return parts
+}
 
 export type UploadStatus = 'pending' | 'uploading' | 'processing' | 'complete' | 'failed' | 'cancelled'
 
@@ -179,39 +279,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
 
         updateFile(id, { uploadId: upload_id, assetId: asset_id, versionId: version_id })
 
-        const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-        const parts: Array<{ PartNumber: number; ETag: string }> = []
-
-        for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
-          if (controller.signal.aborted) {
-            throw new DOMException('Upload cancelled', 'AbortError')
-          }
-
-          const start = (partNumber - 1) * CHUNK_SIZE
-          const end = Math.min(start + CHUNK_SIZE, file.size)
-          const chunk = file.slice(start, end)
-
-          const { presigned_url } = await api.post<{ presigned_url: string }>('/upload/presign-part', {
-            s3_key,
-            upload_id,
-            part_number: partNumber,
-          })
-
-          const putResponse = await fetch(presigned_url, {
-            method: 'PUT',
-            body: chunk,
-            signal: controller.signal,
-          })
-
-          if (!putResponse.ok) {
-            throw new Error(`Part ${partNumber} failed: ${putResponse.statusText}`)
-          }
-
-          const etag = putResponse.headers.get('ETag') ?? ''
-          parts.push({ PartNumber: partNumber, ETag: etag })
-
-          updateFile(id, { progress: Math.round((partNumber / totalChunks) * 95) })
-        }
+        const parts = await uploadAllParts(file, s3_key, upload_id, controller, (percent) =>
+          updateFile(id, { progress: percent }),
+        )
 
         await api.post('/upload/complete', {
           s3_key,
@@ -293,20 +363,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         version_id = initRes.version_id
         updateFile(id, { uploadId: upload_id, versionId: version_id })
 
-        const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-        const parts: Array<{ PartNumber: number; ETag: string }> = []
-        for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
-          if (controller.signal.aborted) throw new DOMException('Upload cancelled', 'AbortError')
-          const start = (partNumber - 1) * CHUNK_SIZE
-          const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
-          const { presigned_url } = await api.post<{ presigned_url: string }>('/upload/presign-part', {
-            s3_key, upload_id, part_number: partNumber,
-          })
-          const putResponse = await fetch(presigned_url, { method: 'PUT', body: chunk, signal: controller.signal })
-          if (!putResponse.ok) throw new Error(`Part ${partNumber} failed: ${putResponse.statusText}`)
-          parts.push({ PartNumber: partNumber, ETag: putResponse.headers.get('ETag') ?? '' })
-          updateFile(id, { progress: Math.round((partNumber / totalChunks) * 95) })
-        }
+        const parts = await uploadAllParts(file, s3_key, upload_id, controller, (percent) =>
+          updateFile(id, { progress: percent }),
+        )
 
         await api.post('/upload/complete', { s3_key, upload_id, asset_id: assetId, version_id, parts })
         const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
