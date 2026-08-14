@@ -21,8 +21,8 @@ function okResponse(etag: string) {
   return { ok: true, headers: { get: () => etag } }
 }
 
-function failResponse(statusText = 'Service Unavailable') {
-  return { ok: false, statusText, headers: { get: () => null } }
+function failResponse(status = 503, statusText = 'Service Unavailable') {
+  return { ok: false, status, statusText, headers: { get: () => null } }
 }
 
 describe('uploadAllParts', () => {
@@ -83,7 +83,7 @@ describe('uploadAllParts', () => {
   })
 
   it('gives up after the attempt limit and surfaces the last error', async () => {
-    global.fetch = vi.fn().mockResolvedValue(failResponse('Internal Server Error')) as unknown as typeof fetch
+    global.fetch = vi.fn().mockResolvedValue(failResponse(500, 'Internal Server Error')) as unknown as typeof fetch
 
     const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
     const assertion = expect(promise).rejects.toThrow(/Part 1 failed/)
@@ -91,6 +91,29 @@ describe('uploadAllParts', () => {
     await assertion
 
     expect(global.fetch).toHaveBeenCalledTimes(8)
+  })
+
+  it('does not retry a 4xx, which would fail identically every time', async () => {
+    global.fetch = vi.fn().mockResolvedValue(failResponse(403, 'Forbidden')) as unknown as typeof fetch
+
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const assertion = expect(promise).rejects.toThrow(/Forbidden/)
+    await vi.runAllTimersAsync()
+    await assertion
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does retry a 429, which explicitly invites a later attempt', async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce(failResponse(429, 'Too Many Requests'))
+      .mockResolvedValueOnce(okResponse('"etag-1"')) as unknown as typeof fetch
+
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    await vi.runAllTimersAsync()
+
+    expect(await promise).toEqual([{ PartNumber: 1, ETag: '"etag-1"' }])
+    expect(global.fetch).toHaveBeenCalledTimes(2)
   })
 
   it('does not retry once the upload was cancelled', async () => {

@@ -8,6 +8,20 @@ const HISTORY_PAGE_SIZE = 20
 const PART_MAX_ATTEMPTS = 8 // per part, including the first try
 const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per part
 
+/**
+ * A failure that repeating cannot fix — a 4xx from the storage backend means the
+ * request itself was rejected (bad signature, expired policy, wrong length), and
+ * every further attempt is rejected identically.
+ */
+interface PartUploadError extends Error {
+  permanent?: boolean
+}
+
+/** 408 Request Timeout and 429 Too Many Requests explicitly invite a later attempt. */
+function isPermanentStatus(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429
+}
+
 /** Uploads one part exactly once. Returns its ETag. */
 async function uploadPartOnce(
   file: File,
@@ -35,7 +49,9 @@ async function uploadPartOnce(
   })
 
   if (!putResponse.ok) {
-    throw new Error(`Part ${partNumber} failed: ${putResponse.statusText}`)
+    const error: PartUploadError = new Error(`Part ${partNumber} failed: ${putResponse.statusText}`)
+    error.permanent = isPermanentStatus(putResponse.status)
+    throw error
   }
 
   return putResponse.headers.get('ETag') ?? ''
@@ -48,6 +64,10 @@ async function uploadPartOnce(
  * non-OK response aborted the entire upload without a second attempt, so a
  * single transient 500/503 from the storage backend — or a brief network drop —
  * discarded everything already transferred.
+ *
+ * Only failures that can plausibly recover are repeated: network errors and 5xx.
+ * A 4xx is thrown straight through, because retrying it eight times over four
+ * minutes would delay the error message without ever changing the outcome.
  *
  * Jitter keeps concurrent uploads from retrying in lockstep. A user-initiated
  * cancel is never retried.
@@ -67,6 +87,7 @@ async function uploadPart(
     } catch (err) {
       if (controller.signal.aborted) throw err
       if (err instanceof DOMException && err.name === 'AbortError') throw err
+      if ((err as PartUploadError)?.permanent) throw err
 
       lastError = err
       if (attempt === PART_MAX_ATTEMPTS) break
