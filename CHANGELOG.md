@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A machine going to sleep no longer silently kills an upload** — the browser is now asked for a Screen Wake Lock while an upload is in progress, and releases it when the last one finishes. An upload lives entirely in the tab, so a suspend mid-transfer kills the loop pushing chunks; worse, nothing runs afterwards, so the `/upload/abort` call never happens and the version is left at `processing_status = 'uploading'`, which in the UI is indistinguishable from a stalled transcode. Best-effort by design: without HTTPS, in low-power mode, or in a browser without the API there is simply no lock, which never blocks the upload. The lock is re-acquired on `visibilitychange`, since browsers drop it whenever the tab is hidden.
+
 ### Changed
 - **Pinned `starlette` and `botocore` so self-hosted Docker builds are reproducible** — both were floating transitives, so rebuilding the same commit on a different day could silently install different versions with no diff and no PR. FastAPI declares `starlette>=0.46.0` with no upper bound, meaning builds were free to cross a Starlette major (the ASGI layer under the SSE endpoint and the middleware stack); `botocore` is where S3 request signing lives, and unreviewed moves there have broken S3 compatibility before. Both are pinned to the versions already resolving, so no installed version changes.
 
