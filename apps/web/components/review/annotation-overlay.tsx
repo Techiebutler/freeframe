@@ -3,6 +3,7 @@
 import React, { useEffect, useRef } from 'react'
 import { useReviewStore } from '@/stores/review-store'
 import { MediaFrameContext, MEDIA_FRAME_SPACE } from './media-frame-context'
+import { containBox } from '@/lib/media-frame'
 
 interface AnnotationOverlayProps {
   /**
@@ -83,27 +84,32 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
         const origHeight = (data._canvasHeight as number) || (data.height as number) || h
 
         // Data saved before the frame fix measured the whole letterboxed
-        // container, not the picture. Replay it against the container it was
-        // authored for and then shift into this box's origin, which reproduces
-        // exactly where it used to render. `legacyFrame` is null on surfaces
-        // that always authored in media space (video), where unmarked data is
-        // already correct.
-        const isLegacy = data._frameSpace !== MEDIA_FRAME_SPACE && legacyFrame !== null
-        const refWidth = isLegacy ? legacyFrame.containerWidth : w
-        const refHeight = isLegacy ? legacyFrame.containerHeight : h
-        const shiftX = isLegacy ? legacyFrame.left : 0
-        const shiftY = isLegacy ? legacyFrame.top : 0
+        // container, not the picture. Reconstruct where the picture sat inside
+        // that container (the contain fit of the media's intrinsic size into
+        // the stored dimensions) so the mark can be expressed relative to the
+        // picture and replayed correctly at any size. `legacyFrame` is null on
+        // surfaces that always authored in media space (video), where unmarked
+        // data is already correct.
+        const isLegacy =
+          data._frameSpace !== MEDIA_FRAME_SPACE &&
+          legacyFrame !== null &&
+          !!legacyFrame.naturalWidth &&
+          !!legacyFrame.naturalHeight
 
-        const scaleX = refWidth / origWidth
-        const scaleY = refHeight / origHeight
+        const authored = isLegacy
+          ? containBox(legacyFrame!.naturalWidth, legacyFrame!.naturalHeight, origWidth, origHeight)
+          : { left: 0, top: 0, width: origWidth, height: origHeight }
+
+        const scaleX = w / authored.width
+        const scaleY = h / authored.height
 
         await fabricCanvas.loadFromJSON(active)
 
-        if (scaleX !== 1 || scaleY !== 1 || shiftX || shiftY) {
+        if (scaleX !== 1 || scaleY !== 1 || authored.left || authored.top) {
           fabricCanvas.getObjects().forEach((obj: any) => {
             obj.set({
-              left: (obj.left ?? 0) * scaleX - shiftX,
-              top: (obj.top ?? 0) * scaleY - shiftY,
+              left: ((obj.left ?? 0) - authored.left) * scaleX,
+              top: ((obj.top ?? 0) - authored.top) * scaleY,
               scaleX: (obj.scaleX ?? 1) * scaleX,
               scaleY: (obj.scaleY ?? 1) * scaleY,
             })

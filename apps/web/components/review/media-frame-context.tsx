@@ -3,26 +3,27 @@
 import * as React from 'react'
 
 /**
- * Describes the box that annotations used to be authored against, for surfaces
- * where that box changed.
+ * Marks a surface whose annotations used to be authored against the whole
+ * letterboxed container rather than the media inside it.
  *
- * Image annotations were historically drawn and replayed against the whole
- * letterboxed CONTAINER; they now use the picture box. Data saved before that
- * change carries container dimensions in `_canvasWidth`/`_canvasHeight`, so
- * replaying it against the picture box shifts and squashes it. `AnnotationOverlay`
- * uses this to put such data back exactly where it used to render.
+ * Image annotations were historically drawn and replayed against the container,
+ * so a mark saved in a 520x870 pane carries coordinates in that pane's space,
+ * with the picture occupying only a band inside it. Replaying those numbers
+ * directly against the picture box would misplace them.
  *
- * `null` means "this surface always authored in media space" — which is true of
- * `VideoFrameConstraint`, since it predates the change. Unmarked data there is
- * already correct and must not be shifted.
+ * Knowing the media's intrinsic size is enough to undo it: the picture box
+ * inside the authoring container is just the contain fit of that size into the
+ * stored `_canvasWidth`/`_canvasHeight`, which lets the mark be expressed
+ * relative to the picture and replayed correctly at any size.
+ *
+ * `null` means "this surface always authored in media space" — true of
+ * `VideoFrameConstraint`, which predates the change, so its unmarked data is
+ * already correct and must be left alone.
  */
 export interface LegacyAnnotationFrame {
-  /** The container box, i.e. what old `_canvasWidth`/`_canvasHeight` measured. */
-  containerWidth: number
-  containerHeight: number
-  /** Where the media box sits inside that container. */
-  left: number
-  top: number
+  /** Intrinsic media size, once known. Both 0 before the media has loaded. */
+  naturalWidth: number
+  naturalHeight: number
 }
 
 export const MediaFrameContext = React.createContext<LegacyAnnotationFrame | null>(null)

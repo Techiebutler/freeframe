@@ -56,22 +56,14 @@ export function ImageFrameConstraint({
       // at 0x0, and recalculate on the next load/resize.
       if (!box) {
         setStyle({ position: 'absolute', inset: 0 })
-        // Filling the container, so the two spaces coincide.
+        // Nothing measured yet; recalculated on the next load/resize.
         setLegacyFrame(null)
         return
       }
 
-      const container = img.parentElement
-      setLegacyFrame(
-        container
-          ? {
-              containerWidth: container.clientWidth,
-              containerHeight: container.clientHeight,
-              left: box.left,
-              top: box.top,
-            }
-          : null,
-      )
+      // Enough for the overlay to reconstruct the picture box inside the
+      // container that pre-fix annotations were authored against.
+      setLegacyFrame({ naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight })
 
       setStyle({
         position: 'absolute',

@@ -4,9 +4,11 @@ import { stubGeometry, restoreGeometry } from '@/test/geometry'
 
 /**
  * The frame fix moved image annotations from container space to picture space.
- * Annotations saved before that carry container dimensions in
- * `_canvasWidth`/`_canvasHeight`, so replaying them against the picture box
- * silently squashes and shifts them. These pin both spaces.
+ * Annotations saved before that carry CONTAINER dimensions in
+ * `_canvasWidth`/`_canvasHeight`, with the picture occupying only a band inside
+ * them. The overlay reconstructs that band from the image's intrinsic size and
+ * re-expresses the mark relative to the picture, so old drawings land where
+ * they were actually drawn at any viewer size. These pin both spaces.
  */
 
 const loaded: Array<Record<string, unknown>> = []
@@ -46,9 +48,11 @@ function makeObject(left: number, top: number) {
   } as unknown as Record<string, unknown>
 }
 
-// A 3000x1000 image in a 900x500 pane: the picture box is 900x300 at top 100.
-const CONTAINER = { width: 900, height: 500 }
-const PICTURE = { left: 0, top: 100, width: 900, height: 300 }
+// A 3000x1000 image authored in a 900x500 pane: the picture box was 900x300
+// at top 100, so a mark at container y=175 is 25% down the picture.
+const NATURAL = { naturalWidth: 3000, naturalHeight: 1000 }
+const AUTHORED = { canvasWidth: 900, canvasHeight: 500 }
+const PICTURE = { width: 900, height: 300 }
 
 async function renderOverlay(
   annotation: Record<string, unknown>,
@@ -82,22 +86,37 @@ describe('AnnotationOverlay coordinate spaces', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders a legacy container-space annotation where it was originally drawn', async () => {
-    // Drawn 25% down the picture: container y=175 with the picture starting at 100.
+  it('places a legacy container-space mark where it was drawn on the picture', async () => {
+    // Container y=175, i.e. 25% down a picture box that ran y=100..400.
     const obj = makeObject(0, 175)
     objects = [obj as never]
 
     await renderOverlay(
-      { objects: [{}], _canvasWidth: 900, _canvasHeight: 500 },
-      { containerWidth: CONTAINER.width, containerHeight: CONTAINER.height, left: PICTURE.left, top: PICTURE.top },
+      { objects: [{}], _canvasWidth: AUTHORED.canvasWidth, _canvasHeight: AUTHORED.canvasHeight },
+      NATURAL,
     )
 
-    // Same viewport it was authored in, so no rescale — only the shift into the
-    // picture box's own origin.
+    // Replayed into a picture box the same size as the authored one.
     expect(obj.scaleX).toBe(1)
     expect(obj.scaleY).toBe(1)
-    expect(obj.top).toBe(75)
+    expect(obj.top).toBe(75) // 25% of 300
     expect(obj.left).toBe(0)
+  })
+
+  it('keeps a legacy mark at the same point on the picture in a bigger viewer', async () => {
+    const obj = makeObject(0, 175)
+    objects = [obj as never]
+
+    // Same stored data, replayed in a picture box twice as large.
+    stubGeometry({ offsetWidth: 1800, offsetHeight: 600 })
+    await renderOverlay(
+      { objects: [{}], _canvasWidth: AUTHORED.canvasWidth, _canvasHeight: AUTHORED.canvasHeight },
+      NATURAL,
+    )
+
+    // Still 25% down the picture, now 25% of 600.
+    expect(obj.top).toBe(150)
+    expect(obj.scaleY).toBe(2)
   })
 
   it('leaves a picture-space annotation alone when the box matches', async () => {
@@ -106,7 +125,7 @@ describe('AnnotationOverlay coordinate spaces', () => {
 
     await renderOverlay(
       { objects: [{}], _canvasWidth: 900, _canvasHeight: 300, _frameSpace: 'media' },
-      { containerWidth: CONTAINER.width, containerHeight: CONTAINER.height, left: PICTURE.left, top: PICTURE.top },
+      NATURAL,
     )
 
     expect(obj.top).toBe(75)
@@ -120,7 +139,7 @@ describe('AnnotationOverlay coordinate spaces', () => {
     // Authored in a 450x150 picture box, replayed in 900x300: everything doubles.
     await renderOverlay(
       { objects: [{}], _canvasWidth: 450, _canvasHeight: 150, _frameSpace: 'media' },
-      { containerWidth: CONTAINER.width, containerHeight: CONTAINER.height, left: PICTURE.left, top: PICTURE.top },
+      NATURAL,
     )
 
     expect(obj.scaleY).toBe(2)
