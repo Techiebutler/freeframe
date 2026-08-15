@@ -46,6 +46,8 @@ FreeFrame is a monorepo with two main applications and supporting infrastructure
 | **S3 Storage** | Stores all media files (originals, transcoded outputs, thumbnails) |
 | **Transcoding Workers** | Celery workers that process video/audio/image files via FFmpeg |
 | **Email Workers** | Celery workers that send transactional emails (invites, magic codes, notifications) |
+| **Maintenance Worker** | Celery worker for scheduled housekeeping: retention GC, stale-upload reaper, orphan sweep |
+| **Beat** | Celery scheduler that publishes the periodic maintenance tasks |
 
 ---
 

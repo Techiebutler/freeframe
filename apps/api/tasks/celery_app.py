@@ -52,7 +52,10 @@ celery_app.conf.update(
         "send_due_date_reminders": {"queue": "maintenance"},
         "cleanup_soft_deleted": {"queue": "maintenance"},
         "sweep_orphan_s3": {"queue": "maintenance"},
-        "apply_watermark": {"queue": "maintenance"},
+        # Not housekeeping: this one is dispatched from a request handler and
+        # is a full FFmpeg re-encode, so it belongs with the other transcoding
+        # work rather than behind an hour-long bucket sweep.
+        "apply_watermark": {"queue": "transcoding"},
         "apps.api.tasks.email_tasks.send_magic_code_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_invite_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_mention_email": {"queue": "email_low"},

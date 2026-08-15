@@ -70,7 +70,7 @@ services:
   # own MinIO by uncommenting the two services below, then:
   #   1. add `miniodata:` under the top-level `volumes:` (see bottom of file);
   #   2. add `depends_on: { minio: { condition: service_healthy } }` to
-  #      api / worker / email_worker / beat;
+  #      api / worker / email_worker / maintenance_worker / beat;
   #   3. in .env.prod set:
   #        S3_STORAGE=minio
   #        S3_ENDPOINT=http://minio:9000
