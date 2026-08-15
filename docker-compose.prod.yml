@@ -224,6 +224,7 @@ services:
       dockerfile: Dockerfile.prod
       args:
         NEXT_PUBLIC_API_URL: /api
+        NEXT_PUBLIC_UPLOAD_CONCURRENCY: ${NEXT_PUBLIC_UPLOAD_CONCURRENCY:-5}
     env_file:
       - .env.prod
     depends_on:

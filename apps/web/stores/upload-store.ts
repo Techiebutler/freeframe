@@ -5,9 +5,26 @@ import type { AssetResponse } from '@/types'
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
 const HISTORY_PAGE_SIZE = 20
-const UPLOAD_CONCURRENCY = 5 // parts in flight at once
 const PART_MAX_ATTEMPTS = 8 // per part, including the first try
 const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per part
+
+/**
+ * Parts in flight per upload.
+ *
+ * Five hides the per-part presign round-trip without opening more sockets than
+ * a browser grants one origin (HTTP/1.1 allows six, and the SSE stream holds
+ * one of them when the object store shares the API's origin).
+ *
+ * Operator-tunable because a storage backend may throttle concurrent part PUTs
+ * and there is no way for us to know which one an instance points at. Read at
+ * build time like every other `NEXT_PUBLIC_*` value here, so changing it needs
+ * a web image rebuild — the same upgrade path as `NEXT_PUBLIC_API_URL`.
+ */
+const UPLOAD_CONCURRENCY = (() => {
+  const configured = Number(process.env.NEXT_PUBLIC_UPLOAD_CONCURRENCY)
+  if (!Number.isFinite(configured) || configured < 1) return 5
+  return Math.min(Math.floor(configured), 16)
+})()
 
 /**
  * A failure that repeating cannot fix — a 4xx from the storage backend means the
@@ -16,6 +33,11 @@ const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per
  */
 interface PartUploadError extends Error {
   permanent?: boolean
+}
+
+/** A cancellation, as opposed to a failure: the caller reports the two differently. */
+function isAbortError(err: unknown): err is DOMException {
+  return err instanceof DOMException && err.name === 'AbortError'
 }
 
 /** 408 Request Timeout and 429 Too Many Requests explicitly invite a later attempt. */
@@ -94,11 +116,40 @@ async function uploadPart(
       if (attempt === PART_MAX_ATTEMPTS) break
 
       const delay = PART_RETRY_BASE_MS * 2 ** (attempt - 1) + Math.random() * 250
-      await new Promise((resolve) => setTimeout(resolve, delay))
+      await delayUnlessAborted(delay, controller.signal)
+      // Waking early means the upload is over — the user cancelled, or a sibling
+      // part failed for good. Another attempt would spend a presign round-trip
+      // and 10 MB of uplink on a part nothing will ever complete.
+      if (controller.signal.aborted) break
     }
   }
 
   throw lastError
+}
+
+/**
+ * Sleeps for `ms`, or until `signal` aborts, whichever comes first.
+ *
+ * A plain `setTimeout` cannot be interrupted, so a worker part-way up the
+ * backoff ladder would keep sleeping long after the upload it belongs to was
+ * lost — up to 128s on the last rung, while the user waits on an error that has
+ * already happened.
+ */
+function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve()
+      return
+    }
+    let timer: ReturnType<typeof setTimeout>
+    const finish = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    signal.addEventListener('abort', finish, { once: true })
+  })
 }
 
 /**
@@ -114,9 +165,10 @@ async function uploadPart(
  * out of order, but `parts` is indexed by part number, and progress counts
  * completions rather than the highest number seen.
  *
- * When a part finally fails, the other workers stop picking up new ones but are
- * left to finish what they already started. Aborting them mid-flight would only
- * trade one error for several, and the upload is over either way.
+ * When a part finally fails the whole upload is lost, so the other workers are
+ * stopped rather than left to run their own retry ladders out: every error after
+ * the first is discarded anyway, so cancelling them costs nothing and turns a
+ * four-minute wait for an error that has already happened into an immediate one.
  */
 export async function uploadAllParts(
   file: File,
@@ -128,6 +180,14 @@ export async function uploadAllParts(
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
   const parts: Array<{ PartNumber: number; ETag: string }> = new Array(totalChunks)
+
+  // Workers run against their own signal, so a part failing for good can stop
+  // its siblings without being mistaken for a user cancel: `controller` keeps
+  // meaning "the user pressed Cancel", `pool` means "stop, for any reason".
+  const pool = new AbortController()
+  const stopPool = () => pool.abort()
+  if (controller.signal.aborted) stopPool()
+  else controller.signal.addEventListener('abort', stopPool, { once: true })
 
   let nextIndex = 0
   let completed = 0
@@ -145,27 +205,44 @@ export async function uploadAllParts(
 
       const partNumber = index + 1
       try {
-        const etag = await uploadPart(file, s3Key, uploadId, partNumber, controller)
+        const etag = await uploadPart(file, s3Key, uploadId, partNumber, pool)
         parts[index] = { PartNumber: partNumber, ETag: etag }
         completed += 1
         onProgress(Math.round((completed / totalChunks) * 95))
       } catch (err) {
-        firstError ??= err
+        // Not `??=`: an error is only ever recorded once, since every worker
+        // returns immediately after, and assigning plainly means a falsy
+        // rejection can never leave `firstError` unset while a part is missing.
+        if (firstError === null) firstError = err
+        stopPool()
         return
       }
     }
   }
 
-  const workerCount = Math.max(1, Math.min(concurrency, totalChunks))
-  const results = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
+  try {
+    const workerCount = Math.max(1, Math.min(concurrency, totalChunks))
+    const results = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
 
-  if (firstError) throw firstError
+    // A user cancel outranks whatever errors it caused in the parts it
+    // interrupted, so it is resolved before `firstError` rather than after —
+    // otherwise cancelling shows the row flipping from Cancelled back to Failed.
+    // The abort error a part actually raised is preferred over a synthesized
+    // one, so its reason survives; the fallback covers a cancel that landed
+    // between parts, where no request was in flight to reject.
+    if (controller.signal.aborted) {
+      const raised = [firstError, ...results.map((r) => (r.status === 'rejected' ? r.reason : null))]
+      throw raised.find(isAbortError) ?? new DOMException('Upload cancelled', 'AbortError')
+    }
+    if (firstError !== null) throw firstError
 
-  // A cancel surfaces as a rejected worker rather than through firstError.
-  const rejected = results.find((r) => r.status === 'rejected')
-  if (rejected && rejected.status === 'rejected') throw rejected.reason
+    const rejected = results.find((r) => r.status === 'rejected')
+    if (rejected && rejected.status === 'rejected') throw rejected.reason
 
-  return parts
+    return parts
+  } finally {
+    controller.signal.removeEventListener('abort', stopPool)
+  }
 }
 
 /**

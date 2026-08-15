@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Large uploads send several parts at once instead of strictly one after another** — a single PUT does not saturate a connection, since most of a sequential upload is spent waiting on round-trips, so up to 5 parts are now in flight at a time. Part order is preserved (results are written by part number, progress counts completions), and when a part finally fails the remaining workers stop taking new parts while finishing what they already started. (#242)
+- **Large uploads send several parts at once instead of strictly one after another** — up to 5 parts are now in flight per file, so an upload no longer pays a full presign round-trip and a TCP ramp-up for every 10 MB chunk in turn. **This helps only where a single stream cannot fill the link**, which means fast connections and object stores that are far away; on a bandwidth-limited uplink one stream already saturates the line and the upload will take exactly as long as before. Tune with `NEXT_PUBLIC_UPLOAD_CONCURRENCY` (default `5`) if your storage backend throttles concurrent part uploads; it is read at build time, so changing it needs a web image rebuild. Part order is preserved regardless of the order parts finish in, and progress counts completed parts rather than the highest one started. (#242)
+
+### Fixed
+- **A failed upload now reports straight away instead of up to four minutes later** — when one part failed for good, the other parts in flight were left to climb their own retry ladders before the error surfaced, so a doomed upload kept sending chunks for as long as ~255 seconds, the progress bar kept advancing, and the version sat at `uploading` the whole time. Sibling parts are now stopped as soon as a part fails, including any waiting out a backoff, since every error after the first is discarded anyway. Cancelling during that window also no longer shows the upload flipping from Cancelled back to Failed.
 
 ## [1.8.0] - 2026-08-15
 

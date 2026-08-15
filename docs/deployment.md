@@ -263,6 +263,7 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `TRANSCODING_CONCURRENCY` | Parallel transcoding jobs | `2` |
 | `EMAIL_CONCURRENCY` | Parallel email jobs | `2` |
 | `MAINTENANCE_CONCURRENCY` | Parallel housekeeping jobs | `1` |
+| `NEXT_PUBLIC_UPLOAD_CONCURRENCY` | Upload parts in flight per file (browser) | `5` |
 
 ---
 
