@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 import { cn } from '@/lib/utils'
-import { renderedImageBox } from '@/lib/media-frame'
+import { renderedMediaBox } from '@/lib/media-frame'
+import { MediaFrameContext, type LegacyAnnotationFrame } from './media-frame-context'
 
 /**
  * Wraps children so they sit exactly over the visible picture, excluding the
@@ -34,13 +35,15 @@ export function ImageFrameConstraint({
   children: React.ReactNode
 }) {
   const [style, setStyle] = React.useState<React.CSSProperties>({ position: 'absolute', inset: 0 })
+  // What annotations saved before the frame fix were measured against.
+  const [legacyFrame, setLegacyFrame] = React.useState<LegacyAnnotationFrame | null>(null)
 
   React.useEffect(() => {
     const img = imgRef.current
     if (!img) return
 
     const calc = () => {
-      const box = renderedImageBox({
+      const box = renderedMediaBox({
         naturalWidth: img.naturalWidth,
         naturalHeight: img.naturalHeight,
         elementWidth: img.offsetWidth,
@@ -53,8 +56,22 @@ export function ImageFrameConstraint({
       // at 0x0, and recalculate on the next load/resize.
       if (!box) {
         setStyle({ position: 'absolute', inset: 0 })
+        // Filling the container, so the two spaces coincide.
+        setLegacyFrame(null)
         return
       }
+
+      const container = img.parentElement
+      setLegacyFrame(
+        container
+          ? {
+              containerWidth: container.clientWidth,
+              containerHeight: container.clientHeight,
+              left: box.left,
+              top: box.top,
+            }
+          : null,
+      )
 
       setStyle({
         position: 'absolute',
@@ -87,8 +104,10 @@ export function ImageFrameConstraint({
   }, [imgRef])
 
   return (
-    <div style={style} className={cn('overflow-hidden', className)}>
-      {children}
-    </div>
+    <MediaFrameContext.Provider value={legacyFrame}>
+      <div style={style} className={cn('overflow-hidden', className)}>
+        {children}
+      </div>
+    </MediaFrameContext.Provider>
   )
 }

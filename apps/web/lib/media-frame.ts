@@ -1,6 +1,6 @@
-/** Geometry of a laid-out <img>, as read off the DOM. */
-export interface ImageFrameMetrics {
-  /** Intrinsic size. Both 0 until the image has decoded. */
+/** Geometry of a laid-out replaced element (<img> or <video>), read off the DOM. */
+export interface MediaFrameMetrics {
+  /** Intrinsic size. Both 0 until the media has loaded. */
   naturalWidth: number
   naturalHeight: number
   /** The element's own laid-out box (offsetWidth/offsetHeight). */
@@ -23,10 +23,9 @@ export interface Box {
  * fitting content into a box. `left`/`top` are relative to the box's own origin.
  *
  * Shared by the two constraint components so they cannot drift apart:
- * `renderedImageBox` below fits the picture inside the <img>'s own box and then
- * offsets by where that element sits, while `VideoFrameConstraint` fits the
- * video inside its container. Only the reference box differs — the fit itself
- * is one implementation.
+ * `renderedMediaBox` below fits the content inside the element's own box and
+ * then offsets by where that element sits. Both constraints use it, so they
+ * cannot drift apart.
  *
  * Compares aspect ratios by cross-multiplying rather than dividing, so an exact
  * fit (a 16:9 frame in a 16:9 box) stays exact instead of drifting a fraction of
@@ -55,10 +54,10 @@ export function containBox(
  * Annotations must be authored and displayed in THIS box rather than the
  * container's, or the same drawing lands somewhere else whenever the container's
  * aspect ratio changes (sidebar collapsed vs expanded, window resize, compare
- * panes, share view). See `renderedImageBox`'s callers.
+ * panes, share view). See `renderedMediaBox`'s callers.
  *
  * Deliberately measured from the ELEMENT's box, not the container's. The two
- * <img> patterns in this codebase behave differently:
+ * patterns in this codebase behave differently:
  *
  *   `max-w-full max-h-full`  the element already hugs the picture, since max-*
  *                            only shrinks — an image smaller than its container
@@ -67,18 +66,17 @@ export function containBox(
  *                            letterboxes inside it (what <video> does).
  *
  * Running the contain fit inside the element's own box is correct for both.
- * Deriving it from the container instead — which is what `VideoFrameConstraint`
- * does, correctly, for a filling <video> — silently upscales the box for any
- * image smaller than its container.
+ * Deriving it from the container instead silently upscales the box for any
+ * media smaller than its container.
  */
-export function renderedImageBox({
+export function renderedMediaBox({
   naturalWidth,
   naturalHeight,
   elementWidth,
   elementHeight,
   offsetLeft,
   offsetTop,
-}: ImageFrameMetrics): Box | null {
+}: MediaFrameMetrics): Box | null {
   // Not laid out yet — there is no box to report.
   if (!elementWidth || !elementHeight) return null
 

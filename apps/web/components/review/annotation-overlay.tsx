@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from 'react'
 import { useReviewStore } from '@/stores/review-store'
+import { MediaFrameContext, MEDIA_FRAME_SPACE } from './media-frame-context'
 
 interface AnnotationOverlayProps {
   /**
@@ -20,6 +21,24 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
   const active = annotation !== undefined ? annotation : storeActiveAnnotation
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const legacyFrame = React.useContext(MediaFrameContext)
+
+  // The constrained box is not final on mount: an <img> that has not decoded
+  // reports no size, so the constraint starts as the whole pane and shrinks to
+  // the picture on load. Re-running on that change keeps a deep-linked
+  // annotation from being scaled against the pane. AnnotationCanvas already
+  // does this via its own ResizeObserver.
+  const [boxSize, setBoxSize] = React.useState<string>('')
+  useEffect(() => {
+    const el = containerRef.current
+    // Absent in SSR and in older browsers; the initial measurement still stands.
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      setBoxSize(`${el.offsetWidth}x${el.offsetHeight}`)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [active])
 
   useEffect(() => {
     if (!active || !canvasRef.current || !containerRef.current) return
@@ -62,16 +81,29 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
         // Fall back to data.width (never set by Fabric) then current size.
         const origWidth = (data._canvasWidth as number) || (data.width as number) || w
         const origHeight = (data._canvasHeight as number) || (data.height as number) || h
-        const scaleX = w / origWidth
-        const scaleY = h / origHeight
+
+        // Data saved before the frame fix measured the whole letterboxed
+        // container, not the picture. Replay it against the container it was
+        // authored for and then shift into this box's origin, which reproduces
+        // exactly where it used to render. `legacyFrame` is null on surfaces
+        // that always authored in media space (video), where unmarked data is
+        // already correct.
+        const isLegacy = data._frameSpace !== MEDIA_FRAME_SPACE && legacyFrame !== null
+        const refWidth = isLegacy ? legacyFrame.containerWidth : w
+        const refHeight = isLegacy ? legacyFrame.containerHeight : h
+        const shiftX = isLegacy ? legacyFrame.left : 0
+        const shiftY = isLegacy ? legacyFrame.top : 0
+
+        const scaleX = refWidth / origWidth
+        const scaleY = refHeight / origHeight
 
         await fabricCanvas.loadFromJSON(active)
 
-        if (scaleX !== 1 || scaleY !== 1) {
+        if (scaleX !== 1 || scaleY !== 1 || shiftX || shiftY) {
           fabricCanvas.getObjects().forEach((obj: any) => {
             obj.set({
-              left: (obj.left ?? 0) * scaleX,
-              top: (obj.top ?? 0) * scaleY,
+              left: (obj.left ?? 0) * scaleX - shiftX,
+              top: (obj.top ?? 0) * scaleY - shiftY,
               scaleX: (obj.scaleX ?? 1) * scaleX,
               scaleY: (obj.scaleY ?? 1) * scaleY,
             })
@@ -92,7 +124,7 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
         try { fabricCanvas.dispose() } catch { /* ignore */ }
       }
     }
-  }, [active])
+  }, [active, legacyFrame, boxSize])
 
   if (!active) return null
 

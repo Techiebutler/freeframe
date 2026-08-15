@@ -13,7 +13,7 @@ import {
   Repeat,
 } from "lucide-react";
 import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
-import { containBox } from "@/lib/media-frame";
+import { renderedMediaBox } from "@/lib/media-frame";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
@@ -61,26 +61,27 @@ export function VideoFrameConstraint({
     if (!video) return;
 
     const calc = () => {
-      const container = video.parentElement;
-      if (!container) return;
+      // Measured from the element's own box, exactly like the image constraint.
+      // The main player's <video> is `w-full h-full object-contain`, so its box
+      // IS the container and this reduces to fitting against the container. The
+      // compare panes use `max-h-full max-w-full`, where the element only ever
+      // shrinks and so already hugs the picture — deriving the fit from the
+      // container there would upscale the box and misplace every annotation.
+      const box = renderedMediaBox({
+        naturalWidth: video.videoWidth,
+        naturalHeight: video.videoHeight,
+        elementWidth: video.offsetWidth,
+        elementHeight: video.offsetHeight,
+        offsetLeft: video.offsetLeft,
+        offsetTop: video.offsetTop,
+      });
 
-      const cw = container.clientWidth;
-      const ch = container.clientHeight;
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-
-      if (!vw || !vh || !cw || !ch) {
-        // Metadata not loaded, or the container not laid out yet — fill it, and
-        // recompute on the next loadedmetadata/resize.
+      if (!box) {
+        // Not laid out yet — fill the container and recompute on the next
+        // loadedmetadata/resize.
         setStyle({ position: "absolute", inset: 0 });
         return;
       }
-
-      // Same contain fit the image constraint uses; only the reference box
-      // differs. <video> is w-full h-full object-contain, so it always fills the
-      // container and letterboxes inside it — hence fitting against the
-      // container is right here, where for <img> under max-* it would not be.
-      const box = containBox(vw, vh, cw, ch);
 
       setStyle({
         position: "absolute",
@@ -95,7 +96,11 @@ export function VideoFrameConstraint({
     video.addEventListener("loadedmetadata", calc);
     video.addEventListener("resize", calc);
 
+    // Observe both: under `max-*` a container resize only RECENTRES the element,
+    // moving offsetLeft/offsetTop without changing its own box, and
+    // ResizeObserver does not fire on a position-only change.
     const ro = new ResizeObserver(calc);
+    ro.observe(video);
     if (video.parentElement) ro.observe(video.parentElement);
 
     return () => {
