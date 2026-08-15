@@ -231,11 +231,7 @@ def _reap_stale_uploads(db) -> int:
         return 0
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    # 1. Abort stale, still-open multipart uploads (reclaims uploaded parts).
-    for key, upload_id in list_stale_multipart_uploads(cutoff):
-        _safe(abort_multipart_upload, key, upload_id)
-
-    # 2. Reclaim stuck `uploading` / `failed` versions past the cutoff.
+    # 1. Reclaim stuck `uploading` / `failed` versions past the cutoff.
     # Age by last activity, falling back to creation for rows that predate it being
     # recorded. A large upload on a slow line can legitimately outlive the window
     # -- 90 GB at 8 Mbit/s takes longer than a day -- and reclaiming it by start
@@ -246,7 +242,24 @@ def _reap_stale_uploads(db) -> int:
         func.coalesce(AssetVersion.last_activity_at, AssetVersion.created_at) < cutoff,
     ).all()
     for v in versions:
+        # Abort this version's own multipart upload, if it has one still open.
+        #
+        # This used to be a separate pass that listed every in-progress upload in
+        # the bucket and aborted anything older than the cutoff, with no reference
+        # to the database at all. That was wrong twice over. It aborted uploads
+        # that were still actively transferring, because it aged them by when the
+        # multipart was *initiated* rather than by whether anything was still
+        # happening. And on MinIO, the default backend, it found nothing at all
+        # after a restart, because ListMultipartUploads there is served from a
+        # node-local in-memory cache: measured 3 open uploads before a restart and
+        # 0 after, with the parts themselves still present.
+        #
+        # Driving off our own rows fixes both. It inherits the activity-based
+        # cutoff above, and AbortMultipartUpload on a known (key, upload id) works
+        # on every backend regardless of what their listing does.
         for mf in db.query(MediaFile).filter(MediaFile.version_id == v.id).all():
+            if v.upload_id:
+                _safe(abort_multipart_upload, mf.s3_key_raw, v.upload_id)
             _safe(delete_object, mf.s3_key_raw)
             if mf.s3_key_processed:
                 _safe(delete_prefix, mf.s3_key_processed)
@@ -275,9 +288,34 @@ def _reap_stale_uploads(db) -> int:
             asset.deleted_at = datetime.now(timezone.utc)
             stripped += 1
 
+    # 3. Best-effort second pass for multipart uploads that no row owns at all.
+    #
+    # Both initiate handlers call CreateMultipartUpload before committing the rows
+    # that describe it, so a commit that fails leaves an upload nothing references
+    # and nothing above can find. Those are the only uploads this listing is still
+    # needed for, and restricting it to keys with no MediaFile is what keeps it
+    # from aborting something the database says is alive -- which is exactly what
+    # it used to do.
+    #
+    # Best-effort by design: on MinIO this listing is a node-local in-memory cache
+    # and returns nothing after a restart. That is survivable here because MinIO
+    # expires its own incomplete uploads after ~24h, and because anything with a
+    # row was already handled above.
+    orphans = 0
+    try:
+        for key, upload_id in list_stale_multipart_uploads(cutoff):
+            owned = db.query(MediaFile).filter(MediaFile.s3_key_raw == key).first()
+            if owned is not None:
+                continue
+            _safe(abort_multipart_upload, key, upload_id)
+            orphans += 1
+    except Exception as exc:  # noqa: BLE001 - a listing this backend cannot do is not fatal
+        log.warning("reaper: could not list in-progress uploads: %s", exc)
+
     log.info(
-        "reaper: soft-deleted %d stale version(s), %d asset(s) left with none",
-        len(versions), stripped,
+        "reaper: soft-deleted %d stale version(s), %d asset(s) left with none, "
+        "%d unreferenced upload(s) aborted",
+        len(versions), stripped, orphans,
     )
     return len(versions)
 
