@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-16
+
+### Upgrade notes
+
+- **A database migration is required this time.** Run `alembic upgrade head` (revision `b2c4d6e8f0a1`). It adds two nullable columns to `asset_versions` and one index, with no backfill, so it is quick and takes no heavy lock — but the API will not work against an unmigrated database. The previous release said no migration was needed; this one does need it.
+- **`STALE_UPLOAD_TIMEOUT_HOURS` starts applying on MinIO for the first time.** Reclaiming abandoned uploads was driven by a bucket listing that MinIO serves from a node-local in-memory cache, so it found nothing after any restart and the setting was silently inert. Abandoned uploads were only ever cleaned up by MinIO's own ~24 hour expiry. If you set a value expecting it to be honoured, it now is; if you set a short one, uploads will start being reclaimed on your schedule rather than MinIO's.
+- **Long-running uploads are no longer reclaimed while they are still transferring.** The same sweep aged uploads by when they started rather than by whether anything was still happening, so on the backends where it did work it could abort an upload mid-transfer. If you raised `STALE_UPLOAD_TIMEOUT_HOURS` to work around that, you can put it back.
+- **`NEXT_PUBLIC_UPLOAD_CONCURRENCY` (default `5`) is new**, and controls how many parts of one file upload at once. Like every other `NEXT_PUBLIC_*` value it is read at build time, so changing it needs a web image rebuild rather than just a restart. Lower it if your object store throttles concurrent part uploads.
+- **`POST /upload/complete` now rejects an incomplete parts list.** It previously accepted one and quietly produced a truncated file. Only relevant if you drive the API with something other than the FreeFrame web client; the browser client is unaffected.
+- **`ExposeHeaders: ETag` in your bucket CORS is no longer required**, though it remains recommended and harmless. `docs/deployment.md` has been corrected.
+
 ### Changed
 - **Large uploads send several parts at once instead of strictly one after another** — up to 5 parts are now in flight per file, so an upload no longer pays a full presign round-trip and a TCP ramp-up for every 10 MB chunk in turn. **This helps only where a single stream cannot fill the link**, which means fast connections and object stores that are far away; on a bandwidth-limited uplink one stream already saturates the line and the upload will take exactly as long as before. Tune with `NEXT_PUBLIC_UPLOAD_CONCURRENCY` (default `5`) if your storage backend throttles concurrent part uploads; it is read at build time, so changing it needs a web image rebuild. Part order is preserved regardless of the order parts finish in, and progress counts completed parts rather than the highest one started. (#242)
 - **`media_files.s3_key_raw` is indexed.** `/upload/presign-part` looks it up once per part, which was a sequential scan per chunk of a table that grows with every version ever uploaded — 10,000 of them on a large upload, several at a time now that parts upload in parallel.
@@ -23,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An interrupted upload no longer makes the whole asset look broken** — the asset surfaces showed the highest-numbered version regardless of its state, so starting a v2 on an approved asset made it read as uploading or failed until the reaper cleaned up, up to a day later, while v1 sat there ready and perfectly viewable. Listings and the detail view now show the newest version a viewer can actually use, falling back to the newest overall so a brand new asset still reports that it is uploading.
 - **A version being uploaded no longer makes earlier versions unplayable** — asking to stream or download an asset without naming a version picked the newest one and then refused it as not ready, with no way to reach v1 short of knowing its id. It now serves the newest *ready* version, which is how the share-side viewer already resolved it.
 - **A failed upload no longer comes back as a card that cannot be opened** — when the reaper reclaimed an asset's last remaining version it left the asset itself in place, and because the project grid deliberately shows assets that have no versions yet, a stripped asset became indistinguishable from a newly created one and reappeared a day after the failure. An asset left with no live versions is now soft-deleted with them.
+
+### Contributors
+Thanks to @Lennart-Pingpong, whose concurrent-upload implementation ships here (#242 via #250), and whose reports of #241 and #242 started the investigation that turned up most of the rest.
 
 ## [1.8.0] - 2026-08-15
 
