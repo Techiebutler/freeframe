@@ -173,6 +173,23 @@ def presign_part(
     return PresignPartResponse(presigned_url=url, part_number=body.part_number)
 
 
+def _already_assembled(s3_key: str, expected_bytes: int, version_id) -> bool:
+    """True if a fully assembled object is sitting at `s3_key` at the expected size.
+
+    Used to tell "this upload already finished" from "this upload is gone". Size
+    rather than ETag, because a completed multipart object's ETag is a composite
+    whose form is not guaranteed off AWS.
+    """
+    try:
+        return head_object_size(s3_key) == expected_bytes
+    except ClientError:
+        # A HeadObject we cannot complete says nothing either way, and guessing wrong
+        # here either loses a finished upload or reports a missing one as done.
+        logger.warning("could not check whether upload %s already completed", version_id,
+                       exc_info=True)
+        return False
+
+
 def _parts_from_listing(stored: list[dict], expected_total_bytes: int) -> list[dict]:
     """Turn what the backend holds into a parts list for CompleteMultipartUpload.
 
@@ -286,17 +303,6 @@ def complete_upload(
             status="processing", asset_id=body.asset_id, version_id=body.version_id
         )
 
-    def _already_assembled() -> bool:
-        """True if the object is sitting at the key at the size the client declared."""
-        try:
-            return head_object_size(s3_key) == media_file.file_size_bytes
-        except ClientError:
-            # A HeadObject we cannot complete says nothing either way, and guessing
-            # wrong here either loses a finished upload or reports a missing one as done.
-            logger.warning("could not check whether upload %s already completed", version.id,
-                           exc_info=True)
-            return False
-
     try:
         stored = list_upload_parts(s3_key, body.upload_id)
     except MultipartUploadGone:
@@ -304,7 +310,7 @@ def complete_upload(
         # the first response lands here. If the object is sitting there at the right
         # size the work is already done, and saying so is far better than failing:
         # a version left at `uploading` is deleted by the reaper a day later.
-        if _already_assembled():
+        if _already_assembled(s3_key, media_file.file_size_bytes, version.id):
             logger.warning("upload %s was already complete; treating retry as success", version.id)
             return _finish()
         raise HTTPException(
@@ -345,7 +351,7 @@ def complete_upload(
         # Same race as above, one step later: another request completed this upload
         # between our listing and our call.
         if str(e.response.get("Error", {}).get("Code", "")) in UPLOAD_GONE_CODES:
-            if _already_assembled():
+            if _already_assembled(s3_key, media_file.file_size_bytes, version.id):
                 return _finish()
         logger.warning("completing upload %s failed: %s", version.id, e)
         raise
@@ -363,6 +369,7 @@ def _trigger_processing(asset_id: uuid.UUID, version_id: uuid.UUID):
 @router.post("/abort", status_code=status.HTTP_204_NO_CONTENT)
 def abort_upload(
     body: AbortUploadRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -390,10 +397,30 @@ def abort_upload(
             raise
         logger.info("upload %s was already gone when aborted", version.id)
 
-    # Only an upload still in progress becomes `failed`. The client fires this from
-    # the catch of every completion failure, so without the guard a lost response to
-    # a *successful* complete would mark a finished, transcoded version failed, and
-    # the reaper deletes those a day later.
+    # Only an upload still in progress is resolved here. The client fires this from
+    # the catch of every completion failure, so a version that already reached
+    # `processing` must be left alone.
     if version.processing_status == ProcessingStatus.uploading:
+        # Still `uploading` does not prove the upload failed. CompleteMultipartUpload
+        # can have succeeded with the process dying before the status was committed,
+        # which leaves a finished object and a version that still looks in-flight.
+        # Marking that failed hands it to the reaper, which deletes the finished file
+        # a day later -- so ask storage what actually happened before deciding.
+        media_file = db.query(MediaFile).filter(
+            MediaFile.version_id == version.id,
+            MediaFile.s3_key_raw == body.s3_key,
+        ).first()
+        assembled = media_file is not None and _already_assembled(
+            body.s3_key, media_file.file_size_bytes, version.id
+        )
+        if assembled:
+            logger.warning(
+                "abort called for upload %s but the object is already complete; "
+                "recording it as processing instead of failed", version.id,
+            )
+            version.processing_status = ProcessingStatus.processing
+            db.commit()
+            background_tasks.add_task(_trigger_processing, version.asset_id, version.id)
+            return
         version.processing_status = ProcessingStatus.failed
         db.commit()

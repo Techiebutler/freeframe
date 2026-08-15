@@ -287,12 +287,18 @@ def test_abort_marks_the_version_failed_when_the_upload_was_already_gone(
     version.id = uuid.uuid4()
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
-    mock_db.first.side_effect = [version]
+    media_file = MagicMock()
+    media_file.s3_key_raw = "raw/k"
+    media_file.file_size_bytes = 23 * MB
+    # Second lookup: abort now asks whether the object actually got assembled before
+    # deciding this upload failed.
+    mock_db.first.side_effect = [version, media_file]
 
     def already_gone(k, u):
         raise _client_error("NoSuchUpload", "AbortMultipartUpload")
 
     monkeypatch.setattr(upload_module, "abort_multipart_upload", already_gone)
+    monkeypatch.setattr(upload_module, "head_object_size", lambda k: None)
 
     resp = client.post(
         "/upload/abort",
