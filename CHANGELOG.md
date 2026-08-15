@@ -7,14 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **A machine going to sleep no longer silently kills an upload** — the browser is now asked for a Screen Wake Lock while an upload is in progress, and releases it when the last one finishes. An upload lives entirely in the tab, so a suspend mid-transfer kills the loop pushing chunks; worse, nothing runs afterwards, so the `/upload/abort` call never happens and the version is left at `processing_status = 'uploading'`, which in the UI is indistinguishable from a stalled transcode. Best-effort by design: without HTTPS, in low-power mode, or in a browser without the API there is simply no lock, which never blocks the upload. The lock is re-acquired on `visibilitychange`, since browsers drop it whenever the tab is hidden.
-
 ### Changed
 - **Pinned `starlette` and `botocore` so self-hosted Docker builds are reproducible** — both were floating transitives, so rebuilding the same commit on a different day could silently install different versions with no diff and no PR. FastAPI declares `starlette>=0.46.0` with no upper bound, meaning builds were free to cross a Starlette major (the ASGI layer under the SSE endpoint and the middleware stack); `botocore` is where S3 request signing lives, and unreviewed moves there have broken S3 compatibility before. Both are pinned to the versions already resolving, so no installed version changes.
 
 ### Fixed
 - **A single transient storage error no longer discards an entire multipart upload** — each part is now retried up to 8 times with exponential backoff and jitter (≈254s of tolerance per part) instead of failing the whole upload on the first non-OK response. A multi-gigabyte file is several hundred sequential requests, so one 500/503 from the object store or a brief network drop was enough to throw away everything already transferred; on a slow uplink that can be an hour of work. The presigned URL is re-fetched on every attempt, since `presign_upload_part` expires after an hour and a large upload can outlive that. User-initiated cancels are never retried, and a 4xx is thrown straight through instead of being repeated eight times over four minutes — it would fail identically every time, so retrying it only delays the error. The part loop, previously duplicated between new-asset and new-version uploads, is now shared.
+- **A machine going to sleep no longer silently kills an upload** — the browser is now asked for a Screen Wake Lock while an upload is in progress, and releases it when the last one finishes. An upload lives entirely in the tab, so a suspend mid-transfer kills the loop pushing chunks; worse, nothing runs afterwards, so the `/upload/abort` call never happens and the version is left at `processing_status = 'uploading'`, which in the UI is indistinguishable from a stalled transcode. Best-effort by design: without HTTPS, in low-power mode, or in a browser without the API there is simply no lock, which never blocks the upload. The lock is re-acquired on `visibilitychange`, since browsers drop it whenever the tab is hidden.
 
 ## [1.7.5] - 2026-07-23
 

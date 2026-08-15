@@ -84,4 +84,40 @@ describe('upload wake lock', () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalled())
     expect(() => releaseWakeLock()).not.toThrow()
   })
+
+  // Dropping several files calls startUpload once per file, and each runs
+  // synchronously as far as retainWakeLock() before its first await. Selecting
+  // N files therefore means N retains before the first request has resolved.
+  it('requests a single sentinel when several uploads start in the same tick', async () => {
+    const acquired: ReturnType<typeof makeSentinel>[] = []
+    request.mockImplementation(async () => {
+      const next = makeSentinel()
+      acquired.push(next)
+      return next
+    })
+
+    retainWakeLock()
+    retainWakeLock()
+    retainWakeLock()
+    await vi.waitFor(() => expect(request).toHaveBeenCalled())
+
+    expect(request).toHaveBeenCalledTimes(1)
+
+    releaseWakeLock()
+    releaseWakeLock()
+    releaseWakeLock()
+    const stillHeld = acquired.filter((s) => s.release.mock.calls.length === 0)
+    expect(stillHeld).toHaveLength(0)
+  })
+
+  it('releases a lock that arrives after the last upload already finished', async () => {
+    let handOver: (s: unknown) => void = () => {}
+    request.mockImplementation(() => new Promise((resolve) => { handOver = resolve }))
+
+    retainWakeLock() // the request is in flight
+    releaseWakeLock() // a short upload finishes before it resolves
+    handOver(sentinel) // only now does the browser hand the sentinel over
+
+    await vi.waitFor(() => expect(sentinel.release).toHaveBeenCalled())
+  })
 })

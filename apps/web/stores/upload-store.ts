@@ -144,41 +144,58 @@ export async function uploadAllParts(
  * released when the last one finishes.
  */
 let wakeLock: WakeLockSentinel | null = null
+let wakeLockPending: Promise<void> | null = null
 let wakeLockHolders = 0
 
-async function acquireWakeLock(): Promise<void> {
-  if (wakeLock) return
+function acquireWakeLock(): void {
+  // Dropping several files starts several uploads in the same tick, so this
+  // runs again long before the first request has resolved. Without the pending
+  // guard each one would request its own sentinel and only the last would be
+  // tracked, leaving the rest held for the life of the page.
+  if (wakeLock || wakeLockPending) return
   if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return
-  try {
-    wakeLock = await navigator.wakeLock.request('screen')
-    // The browser drops the lock by itself when the tab is hidden.
-    wakeLock.addEventListener('release', () => {
-      wakeLock = null
-    })
-  } catch {
-    // Not having a wake lock is not an upload error.
-  }
+
+  wakeLockPending = (async () => {
+    try {
+      const sentinel = await navigator.wakeLock.request('screen')
+      if (wakeLockHolders === 0) {
+        // Every upload finished while the request was still in flight.
+        void sentinel.release().catch(() => {})
+        return
+      }
+      wakeLock = sentinel
+      // The browser drops the lock by itself when the tab is hidden.
+      sentinel.addEventListener('release', () => {
+        if (wakeLock === sentinel) wakeLock = null
+      })
+    } catch {
+      // Not having a wake lock is not an upload error.
+    } finally {
+      wakeLockPending = null
+    }
+  })()
 }
 
 /** Exported for tests. */
 export function retainWakeLock(): void {
   wakeLockHolders += 1
-  void acquireWakeLock()
+  acquireWakeLock()
 }
 
 /** Exported for tests. */
 export function releaseWakeLock(): void {
   wakeLockHolders = Math.max(0, wakeLockHolders - 1)
   if (wakeLockHolders > 0) return
-  void wakeLock?.release().catch(() => {})
+  const held = wakeLock
   wakeLock = null
+  void held?.release().catch(() => {})
 }
 
 // Coming back to the foreground needs a fresh lock: the one dropped on hide is
 // dead and cannot be reused.
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && wakeLockHolders > 0) void acquireWakeLock()
+    if (document.visibilityState === 'visible' && wakeLockHolders > 0) acquireWakeLock()
   })
 }
 
@@ -334,9 +351,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let s3_key: string | undefined
       let version_id: string | undefined
 
+      retainWakeLock()
       try {
         updateFile(id, { status: 'uploading' })
-        retainWakeLock()
 
         const initRes = await api.post<InitiateResponse>(
           '/upload/initiate',
@@ -424,9 +441,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let upload_id: string | undefined
       let s3_key: string | undefined
       let version_id: string | undefined
+      retainWakeLock()
       try {
         updateFile(id, { status: 'uploading' })
-        retainWakeLock()
         const initRes = await api.post<VersionInitiateResponse>(
           `/assets/${assetId}/versions`,
           {
