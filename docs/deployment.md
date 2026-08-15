@@ -193,7 +193,9 @@ In non-AWS mode FreeFrame always uses **path-style addressing** (`endpoint/bucke
 
 #### Bucket CORS — required for uploads
 
-Uploads go **directly from the browser to your bucket** via presigned URLs, so the bucket's CORS must allow your FreeFrame origin **and expose the `ETag` header** — the client reads each part's `ETag` to complete a multipart upload. If `ExposeHeaders` omits `ETag`, large uploads fail partway with a generic browser error ("Load failed") and **no server-side log**.
+Uploads go **directly from the browser to your bucket** via presigned URLs, so the bucket's CORS must allow your FreeFrame origin.
+
+`ExposeHeaders: ["ETag"]` is still recommended and is included below, but it is no longer required on any backend that supports `ListParts`, which is all of the ones above: the server reads an upload's parts from storage when completing it rather than relying on the browser having read each part's `ETag` response header. It is only used as a fallback on a backend that cannot list parts at all, and that case is logged as a warning. If you are debugging an upload that fails partway, `ETag` exposure is no longer the first thing to suspect.
 
 ```json
 {

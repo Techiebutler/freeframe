@@ -1,4 +1,6 @@
+import logging
 import os
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 import uuid
@@ -12,6 +14,8 @@ from ..models.project import Project
 from ..services.s3_service import (
     create_multipart_upload, presign_upload_part,
     complete_multipart_upload, abort_multipart_upload,
+    list_upload_parts, head_object_size, UPLOAD_GONE_CODES,
+    MultipartUploadGone, MultipartListingUnsupported,
 )
 from ..services.permissions import get_project_member, require_project_role
 from ..models.project import ProjectRole
@@ -22,6 +26,8 @@ from ..schemas.upload import (
     ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
 from ..services.storage import upload_guard_error
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -141,6 +147,69 @@ def presign_part(
     return PresignPartResponse(presigned_url=url, part_number=body.part_number)
 
 
+def _parts_from_listing(stored: list[dict], expected_total_bytes: int) -> list[dict]:
+    """Turn what the backend holds into a parts list for CompleteMultipartUpload.
+
+    ListParts proves a part exists; it does not prove the set is complete. That
+    distinction is the whole point of this function, because completing with a
+    gap is not an error on most backends: MinIO, Garage and SeaweedFS all
+    assemble the parts they were given and return success, so a client that
+    under-reports produces a silently truncated master that transcodes fine and
+    shows a green tick. Only Ceph rejects it.
+
+    Validated here, against the size the client declared at initiate:
+      - part numbers are exactly 1..N with no holes
+      - every part but the last is the same size (also what R2 requires)
+      - the sizes add up to the whole file
+
+    Raises ValueError with a message meant for the uploader.
+    """
+    by_number: dict[int, list[dict]] = {}
+    for part in stored:
+        by_number.setdefault(part["PartNumber"], []).append(part)
+
+    numbers = sorted(by_number)
+    if not numbers:
+        raise ValueError("No uploaded parts were found for this upload.")
+    if numbers != list(range(1, len(numbers) + 1)):
+        missing = sorted(set(range(1, numbers[-1] + 1)) - set(numbers))
+        raise ValueError(
+            f"Upload is incomplete: {len(missing)} part(s) missing, starting at part {missing[0]}."
+        )
+
+    # A part number listed twice means the backend kept both writes of a retried
+    # part (SeaweedFS does this). Picking between them needs the ETag to match the
+    # bytes we want, which is exactly the thing we cannot verify, so refuse rather
+    # than guess: choosing the stale row would assemble the wrong bytes silently.
+    duplicated = [n for n in numbers if len(by_number[n]) > 1]
+    if duplicated:
+        raise ValueError(
+            f"Storage reported part {duplicated[0]} more than once; please upload this file again."
+        )
+
+    parts = [by_number[n][0] for n in numbers]
+    if any(p["Size"] is None for p in parts):
+        raise ValueError("Storage did not report part sizes, so the upload cannot be verified.")
+
+    chunk_size = parts[0]["Size"]
+    for part in parts[:-1]:
+        if part["Size"] != chunk_size:
+            raise ValueError(
+                f"Part {part['PartNumber']} is {part['Size']} bytes but every part before the "
+                f"last must be {chunk_size}; please upload this file again."
+            )
+    if parts[-1]["Size"] > chunk_size:
+        raise ValueError("The final part is larger than the parts before it.")
+
+    total = sum(p["Size"] for p in parts)
+    if total != expected_total_bytes:
+        raise ValueError(
+            f"Uploaded {total} bytes but the file was declared as {expected_total_bytes}."
+        )
+
+    return [{"PartNumber": p["PartNumber"], "ETag": p["ETag"]} for p in parts]
+
+
 @router.post("/complete", response_model=CompleteUploadResponse)
 def complete_upload(
     body: CompleteUploadRequest,
@@ -158,16 +227,104 @@ def complete_upload(
     if version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
 
-    # Then complete S3 multipart
-    complete_multipart_upload(body.s3_key, body.upload_id, [p.model_dump() for p in body.parts])
+    # Match the key against this version rather than taking the request's word for
+    # it: ownership was proved for the version, never for whatever key the body
+    # carried. Matching on both also keeps working if a version ever holds more
+    # than one file, which an image carousel would need.
+    media_file = db.query(MediaFile).filter(
+        MediaFile.version_id == version.id,
+        MediaFile.s3_key_raw == body.s3_key,
+    ).first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="Upload not found for this version")
 
-    version.processing_status = ProcessingStatus.processing
-    db.commit()
+    # Only an upload that is still uploading can be completed. Without this, a
+    # replay of this request against an already-finished version rewinds it to
+    # `processing` and queues a second transcode -- and because `/upload/*` is
+    # exempt from the global rate limiter, a loop over it would park the whole
+    # transcoding queue on re-runs. The upload id is not a credential either: any
+    # unrecognised value reads as "already gone", so replaying needs no secret.
+    if version.processing_status != ProcessingStatus.uploading:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This upload is already {version.processing_status.value}.",
+        )
 
-    # Trigger transcoding in background (task dispatched in Step 7)
-    background_tasks.add_task(_trigger_processing, body.asset_id, body.version_id)
+    s3_key = media_file.s3_key_raw
 
-    return CompleteUploadResponse(status="processing", asset_id=body.asset_id, version_id=body.version_id)
+    def _finish() -> CompleteUploadResponse:
+        version.processing_status = ProcessingStatus.processing
+        db.commit()
+        background_tasks.add_task(_trigger_processing, body.asset_id, body.version_id)
+        return CompleteUploadResponse(
+            status="processing", asset_id=body.asset_id, version_id=body.version_id
+        )
+
+    def _already_assembled() -> bool:
+        """True if the object is sitting at the key at the size the client declared."""
+        try:
+            return head_object_size(s3_key) == media_file.file_size_bytes
+        except ClientError:
+            # A HeadObject we cannot complete says nothing either way, and guessing
+            # wrong here either loses a finished upload or reports a missing one as done.
+            logger.warning("could not check whether upload %s already completed", version.id,
+                           exc_info=True)
+            return False
+
+    try:
+        stored = list_upload_parts(s3_key, body.upload_id)
+    except MultipartUploadGone:
+        # Completing consumes the upload id, so a client that retries after losing
+        # the first response lands here. If the object is sitting there at the right
+        # size the work is already done, and saying so is far better than failing:
+        # a version left at `uploading` is deleted by the reaper a day later.
+        if _already_assembled():
+            logger.warning("upload %s was already complete; treating retry as success", version.id)
+            return _finish()
+        raise HTTPException(
+            status_code=409,
+            detail="This upload is no longer available. Please upload the file again.",
+        )
+    except MultipartListingUnsupported:
+        logger.warning(
+            "storage backend does not support ListParts; completing upload %s from the "
+            "client-reported part list, which cannot be verified",
+            version.id,
+        )
+        stored = None
+
+    if stored is None:
+        if not body.parts:
+            raise HTTPException(status_code=400, detail="No parts were reported for this upload.")
+        parts = [p.model_dump() for p in body.parts]
+    else:
+        try:
+            parts = _parts_from_listing(stored, media_file.file_size_bytes)
+        except ValueError as e:
+            # The user has just spent minutes or hours transferring this. Whatever we
+            # tell them, the operator needs enough to correlate a support ticket:
+            # rejecting after every byte moved is precisely the shape of failure that
+            # made this class of bug so hard to find in the first place.
+            logger.warning(
+                "rejected completion of upload %s (user %s, key %s): %s "
+                "[%d parts listed, %d bytes declared]",
+                version.id, current_user.id, s3_key, e, len(stored),
+                media_file.file_size_bytes,
+            )
+            raise HTTPException(status_code=409, detail=str(e)) from e
+
+    try:
+        complete_multipart_upload(s3_key, body.upload_id, parts)
+    except ClientError as e:
+        # Same race as above, one step later: another request completed this upload
+        # between our listing and our call.
+        if str(e.response.get("Error", {}).get("Code", "")) in UPLOAD_GONE_CODES:
+            if _already_assembled():
+                return _finish()
+        logger.warning("completing upload %s failed: %s", version.id, e)
+        raise
+
+    return _finish()
 
 
 def _trigger_processing(asset_id: uuid.UUID, version_id: uuid.UUID):
@@ -192,6 +349,25 @@ def abort_upload(
     if version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
 
-    abort_multipart_upload(body.s3_key, body.upload_id)
-    version.processing_status = ProcessingStatus.failed
-    db.commit()
+    # The status write must happen even if S3 refuses the abort. An upload the
+    # reaper already took raises NoSuchUpload here, and letting that propagate
+    # leaves the version at `uploading` forever -- indistinguishable in the UI
+    # from a stalled transcode, and the exact state this endpoint exists to avoid.
+    try:
+        abort_multipart_upload(body.s3_key, body.upload_id)
+    except ClientError as e:
+        # Only swallow "there was nothing to abort". Anything else -- a permissions
+        # problem, the wrong bucket, a throttle -- means parts are still sitting in
+        # storage, and reporting success would hide that from the operator.
+        if str(e.response.get("Error", {}).get("Code", "")) not in UPLOAD_GONE_CODES:
+            logger.warning("abort of upload %s failed: %s", version.id, e)
+            raise
+        logger.info("upload %s was already gone when aborted", version.id)
+
+    # Only an upload still in progress becomes `failed`. The client fires this from
+    # the catch of every completion failure, so without the guard a lost response to
+    # a *successful* complete would mark a finished, transcoded version failed, and
+    # the reaper deletes those a day later.
+    if version.processing_status == ProcessingStatus.uploading:
+        version.processing_status = ProcessingStatus.failed
+        db.commit()

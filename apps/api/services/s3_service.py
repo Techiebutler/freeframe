@@ -153,15 +153,14 @@ def ensure_bucket_exists():
                 },
             )
         except ClientError as e:
-            # Non-fatal, but surfaced: browser multipart uploads assemble the
-            # CompleteMultipartUpload from each part's ETag response header,
-            # which the browser only exposes when the bucket's CORS
-            # ExposeHeaders includes "ETag". If we can't set CORS here, uploads
-            # may fail client-side with a generic error and no server log —
-            # so warn and point the operator at the docs (issue #131).
+            # Non-fatal, but surfaced: the browser PUTs each part straight to the
+            # bucket, so without CORS allowing this origin no upload can start at
+            # all. ExposeHeaders no longer has to include "ETag" -- completion
+            # reads the parts from storage rather than from the browser -- but the
+            # origin rules still matter, so warn and point at the docs.
             logger.warning(
-                "Could not set bucket CORS on %r (%s). Browser multipart uploads "
-                "need the bucket CORS ExposeHeaders to include 'ETag'; configure it "
+                "Could not set bucket CORS on %r (%s). Browser uploads PUT directly to "
+                "the bucket, so its CORS must allow your FreeFrame origin; configure it "
                 "manually on your S3 provider — see docs/deployment.md (External S3 Storage).",
                 settings.s3_bucket, e,
             )
@@ -272,6 +271,107 @@ def abort_multipart_upload(s3_key: str, upload_id: str) -> None:
         Key=s3_key,
         UploadId=upload_id,
     )
+
+
+class MultipartUploadGone(Exception):
+    """The multipart upload no longer exists.
+
+    Either it was already completed — the usual cause is a retry after the
+    response to the first CompleteMultipartUpload was lost — or the stale-upload
+    reaper aborted it. HeadObject on the key tells the two apart.
+    """
+
+
+class MultipartListingUnsupported(Exception):
+    """The storage backend does not implement ListParts.
+
+    Every backend we test against does, but "S3-compatible" is a wide claim and
+    the upload must still complete on one that does not, so callers fall back to
+    the parts list the client reported.
+    """
+
+
+# `NoSuchKey` and a bare 404 are here because backends disagree about which one
+# an unknown UploadId produces; tusd special-cases the same set for the same reason.
+UPLOAD_GONE_CODES = {"NoSuchUpload", "NoSuchKey", "404", "NotFound"}
+# Deliberately narrow. A generic 400 such as `InvalidRequest` is not a statement about
+# what a backend implements, and treating it as one would quietly downgrade a malformed
+# request into trusting a parts list we cannot verify.
+_LISTING_UNSUPPORTED_CODES = {"NotImplemented", "MethodNotAllowed"}
+
+
+def list_upload_parts(s3_key: str, upload_id: str) -> list[dict]:
+    """Every part the backend currently holds for an in-progress multipart upload.
+
+    Returns dicts of PartNumber / ETag / Size, ascending by part number, paginated
+    to exhaustion. At the 10 MB chunk size one page covers ~9.8 GB on AWS, but
+    "no size cap by default" means more is reachable, and page size is a backend
+    decision (MinIO defaults to 10000 per page where AWS uses 1000), so the loop
+    is not optional.
+
+    Raises MultipartUploadGone or MultipartListingUnsupported; see those docstrings.
+    """
+    s3 = get_s3_client()
+    parts: list[dict] = []
+    previous_marker = None
+    kwargs = {"Bucket": settings.s3_bucket, "Key": s3_key, "UploadId": upload_id}
+    while True:
+        try:
+            resp = s3.list_parts(**kwargs)
+        except ClientError as e:
+            code = str(e.response.get("Error", {}).get("Code", ""))
+            if code in UPLOAD_GONE_CODES:
+                raise MultipartUploadGone(s3_key) from e
+            if code in _LISTING_UNSUPPORTED_CODES:
+                raise MultipartListingUnsupported(code) from e
+            raise
+        for p in resp.get("Parts", []):
+            parts.append({
+                "PartNumber": p["PartNumber"],
+                "ETag": p["ETag"],
+                "Size": p.get("Size"),
+            })
+        if not resp.get("IsTruncated"):
+            break
+        marker = resp.get("NextPartNumberMarker")
+        # Only ever echo back the backend's own marker. MinIO resolves a marker
+        # naming a part number it does not hold to an empty page rather than to
+        # the next part, so a synthesized one silently truncates the listing —
+        # and concurrent uploads produce exactly the gaps that would trigger it.
+        #
+        # The marker must also strictly advance. A backend that keeps setting
+        # IsTruncated while handing back the same marker would otherwise spin inside
+        # a request handler indefinitely; refusing to stand still costs nothing.
+        if marker in (None, "", 0):
+            break
+        if previous_marker is not None and marker <= previous_marker:
+            logger.warning(
+                "list_parts for %s stopped early: marker %r did not advance past %r",
+                s3_key, marker, previous_marker,
+            )
+            break
+        previous_marker = marker
+        kwargs["PartNumberMarker"] = marker
+    parts.sort(key=lambda p: p["PartNumber"])
+    return parts
+
+
+def head_object_size(s3_key: str) -> int | None:
+    """ContentLength of an object, or None if it does not exist.
+
+    Used to tell an already-completed upload from a reaped one, and to check what
+    was assembled against what the client said it was sending. Size is the only
+    integrity signal that is portable: the completed object's ETag is a composite
+    whose form is not guaranteed off AWS.
+    """
+    s3 = get_s3_client()
+    try:
+        return s3.head_object(Bucket=settings.s3_bucket, Key=s3_key)["ContentLength"]
+    except ClientError as e:
+        code = str(e.response.get("Error", {}).get("Code", ""))
+        if code in UPLOAD_GONE_CODES:
+            return None
+        raise
 
 def build_download_filename(display_name: str, source: str | None) -> str:
     """Return display_name with an extension appended from `source` if missing.

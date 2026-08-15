@@ -77,7 +77,10 @@ class CompleteUploadRequest(BaseModel):
     upload_id: str
     asset_id: uuid.UUID
     version_id: uuid.UUID
-    parts: list[UploadPart]
+    # Only used on a backend that cannot list an upload's parts. Everywhere else
+    # the server reads them from storage, because a client-supplied list that
+    # omits a part completes successfully and truncates the file.
+    parts: list[UploadPart] = []
 
 class CompleteUploadResponse(BaseModel):
     status: str
