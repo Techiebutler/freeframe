@@ -30,7 +30,12 @@ COMPOSE_FILES = ("docker-compose.prod.yml", "docker-compose.dev.yml")
 
 def consumed_queues(compose_filename: str) -> set[str]:
     """Every queue name any worker in this compose file subscribes to."""
-    text = (REPO_ROOT / compose_filename).read_text()
+    path = REPO_ROOT / compose_filename
+    if not path.is_file():
+        # The API container mounts only apps/api, so the compose files are not
+        # there. CI runs from a full checkout, which is what this guards.
+        pytest.skip(f"{compose_filename} not present (not a full checkout)")
+    text = path.read_text()
     queues: set[str] = set()
     for match in re.finditer(r"worker\s+-Q\s+([\w,]+)", text):
         queues.update(match.group(1).split(","))
