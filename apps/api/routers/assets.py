@@ -24,12 +24,56 @@ from ..services.s3_service import create_multipart_upload
 router = APIRouter(tags=["assets"])
 
 
+# A version in one of these is not something a viewer can open: it is an upload in
+# flight or one that died. It is still the newest version by number, which is why
+# "latest" and "the one to show" are not the same question.
+_UNVIEWABLE_STATUSES = (ProcessingStatus.uploading, ProcessingStatus.failed)
+
+
+def _pick_version(db: Session, asset_id: uuid.UUID, preferred) -> AssetVersion | None:
+    """Newest version matching `preferred`, falling back to the newest overall.
+
+    The fallback is what keeps a brand new asset honest: with nothing preferable to
+    show it still reports the version that is uploading, rather than reporting
+    nothing at all.
+    """
+    base = (AssetVersion.asset_id == asset_id, AssetVersion.deleted_at.is_(None))
+    hit = db.query(AssetVersion).filter(*base, preferred).order_by(
+        AssetVersion.version_number.desc()
+    ).first()
+    if hit:
+        return hit
+    return db.query(AssetVersion).filter(*base).order_by(
+        AssetVersion.version_number.desc()
+    ).first()
+
+
+def _display_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
+    """The version to show for an asset in a listing or detail view.
+
+    An interrupted v2 no longer makes an approved, viewable v1 read as failed for
+    the whole reaper window. `processing` counts as showable, because "this one is
+    being worked on" is true and useful.
+    """
+    return _pick_version(
+        db, asset_id, AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES)
+    )
+
+
+def _playable_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
+    """The version to serve when a caller asked for the asset without naming one.
+
+    Stricter than `_display_version`: only `ready` can actually be streamed or
+    downloaded, so a v2 that is merely processing must not shadow a v1 that plays.
+    """
+    return _pick_version(
+        db, asset_id, AssetVersion.processing_status == ProcessingStatus.ready
+    )
+
+
 def _build_asset_response(asset: Asset, db: Session) -> AssetResponse:
     """Build AssetResponse with latest version and its files."""
-    latest_version = db.query(AssetVersion).filter(
-        AssetVersion.asset_id == asset.id,
-        AssetVersion.deleted_at.is_(None),
-    ).order_by(AssetVersion.version_number.desc()).first()
+    latest_version = _display_version(db, asset.id)
 
     version_response = None
     thumbnail_url = None
@@ -58,22 +102,31 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
 
     asset_ids = [a.id for a in assets]
 
-    # Bulk load latest version per asset using a subquery
-    latest_version_subq = (
-        db.query(
+    # Bulk load the version to display per asset, matching _display_version: the
+    # newest viewable one, falling back to the newest overall. Two grouped queries
+    # rather than one, still no N+1.
+    def _max_version_rows(viewable_only: bool):
+        q = db.query(
             AssetVersion.asset_id,
             func.max(AssetVersion.version_number).label("max_version"),
+        ).filter(AssetVersion.asset_id.in_(asset_ids), AssetVersion.deleted_at.is_(None))
+        if viewable_only:
+            q = q.filter(AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES))
+        subq = q.group_by(AssetVersion.asset_id).subquery()
+        return (
+            db.query(AssetVersion)
+            .join(
+                subq,
+                (AssetVersion.asset_id == subq.c.asset_id)
+                & (AssetVersion.version_number == subq.c.max_version),
+            )
+            .all()
         )
-        .filter(AssetVersion.asset_id.in_(asset_ids), AssetVersion.deleted_at.is_(None))
-        .group_by(AssetVersion.asset_id)
-        .subquery()
-    )
-    latest_versions = (
-        db.query(AssetVersion)
-        .join(latest_version_subq, (AssetVersion.asset_id == latest_version_subq.c.asset_id) & (AssetVersion.version_number == latest_version_subq.c.max_version))
-        .all()
-    )
-    version_by_asset = {v.asset_id: v for v in latest_versions}
+
+    version_by_asset = {v.asset_id: v for v in _max_version_rows(viewable_only=False)}
+    # Viewable wins where one exists; the fallback above covers assets with none.
+    version_by_asset.update({v.asset_id: v for v in _max_version_rows(viewable_only=True)})
+    latest_versions = list(version_by_asset.values())
 
     # Bulk load media files for all those versions
     version_ids = [v.id for v in latest_versions]
@@ -250,10 +303,12 @@ def get_stream_url(
             AssetVersion.deleted_at.is_(None),
         ).first()
     else:
-        version = db.query(AssetVersion).filter(
-            AssetVersion.asset_id == asset_id,
-            AssetVersion.deleted_at.is_(None),
-        ).order_by(AssetVersion.version_number.desc()).first()
+        # With no version asked for, serve the newest one that can actually play.
+        # Picking the highest-numbered version regardless meant an upload in flight,
+        # or one that died, made every earlier version unplayable: the newest was
+        # selected and then rejected as not ready, with no way to reach v1 short of
+        # naming its id. The share-side viewer already resolves it this way.
+        version = _playable_version(db, asset_id)
 
     if not version:
         raise HTTPException(status_code=404, detail="No version found")

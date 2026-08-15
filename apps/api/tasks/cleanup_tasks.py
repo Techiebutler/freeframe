@@ -253,7 +253,32 @@ def _reap_stale_uploads(db) -> int:
             if mf.s3_key_thumbnail:
                 _safe(delete_object, mf.s3_key_thumbnail)
         v.deleted_at = datetime.now(timezone.utc)
-    log.info("reaper: soft-deleted %d stale version(s)", len(versions))
+    db.flush()
+
+    # An asset whose last live version has just been reclaimed is not a usable
+    # asset. Left alone it reappears in the project grid, because list_assets
+    # deliberately shows assets with no versions yet (a just-created one), and a
+    # stripped asset is indistinguishable from that -- so a failed upload comes
+    # back a day later as a card that cannot be opened, streamed or re-versioned.
+    stripped = 0
+    for asset_id in {v.asset_id for v in versions}:
+        asset = db.query(Asset).filter(
+            Asset.id == asset_id, Asset.deleted_at.is_(None)
+        ).first()
+        if asset is None:
+            continue
+        still_live = db.query(AssetVersion).filter(
+            AssetVersion.asset_id == asset_id,
+            AssetVersion.deleted_at.is_(None),
+        ).first()
+        if still_live is None:
+            asset.deleted_at = datetime.now(timezone.utc)
+            stripped += 1
+
+    log.info(
+        "reaper: soft-deleted %d stale version(s), %d asset(s) left with none",
+        len(versions), stripped,
+    )
     return len(versions)
 
 
