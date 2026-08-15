@@ -325,6 +325,12 @@ def initiate_new_version(
     s3_key = f"raw/{asset.project_id}/{asset_id}/{version.id}/original{ext}"
     upload_id = create_multipart_upload(s3_key, body.mime_type)
 
+    # Record which S3 upload backs this version. Without it nothing server-side can
+    # map a version to its multipart upload, so the reaper has to sweep the whole
+    # bucket and presign-part has nothing to validate against.
+    version.upload_id = upload_id
+    version.last_activity_at = datetime.now(timezone.utc)
+
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
     media_file = MediaFile(
         version_id=version.id,

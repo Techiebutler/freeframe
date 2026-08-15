@@ -58,6 +58,15 @@ class AssetVersion(Base):
     asset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     processing_status: Mapped[ProcessingStatus] = mapped_column(Enum(ProcessingStatus), default=ProcessingStatus.uploading)
+    # The S3 multipart upload backing this version while it is being uploaded.
+    # NULL for rows created before this was recorded, and for versions whose
+    # upload has been completed or aborted -- treat NULL as "unknown", never as
+    # "no upload exists".
+    upload_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Last time a part was signed for this upload. The reaper ages uploads by
+    # this rather than by created_at, so a transfer slower than the window is not
+    # aborted while it is still making progress.
+    last_activity_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

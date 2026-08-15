@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import text, func
 
 from .celery_app import celery_app
 from ..database import SessionLocal
@@ -236,10 +236,14 @@ def _reap_stale_uploads(db) -> int:
         _safe(abort_multipart_upload, key, upload_id)
 
     # 2. Reclaim stuck `uploading` / `failed` versions past the cutoff.
+    # Age by last activity, falling back to creation for rows that predate it being
+    # recorded. A large upload on a slow line can legitimately outlive the window
+    # -- 90 GB at 8 Mbit/s takes longer than a day -- and reclaiming it by start
+    # time destroys an upload that is still making progress.
     versions = db.query(AssetVersion).filter(
         AssetVersion.processing_status.in_([ProcessingStatus.uploading, ProcessingStatus.failed]),
         AssetVersion.deleted_at.is_(None),
-        AssetVersion.created_at < cutoff,
+        func.coalesce(AssetVersion.last_activity_at, AssetVersion.created_at) < cutoff,
     ).all()
     for v in versions:
         for mf in db.query(MediaFile).filter(MediaFile.version_id == v.id).all():

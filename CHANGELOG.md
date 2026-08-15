@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A slow upload is no longer aborted while it is still running** — the stale-upload reaper aged uploads by when they *started*, so anything slower than `STALE_UPLOAD_TIMEOUT_HOURS` (default 24) was reclaimed mid-transfer. On the connections this project exists for that is not a corner case: a 90 GB master at 8 Mbit/s takes longer than a day. Versions now record when a part was last requested and are aged by that, falling back to creation time for uploads that predate the column.
+- **`/upload/presign-part` no longer signs an arbitrary upload id** — the endpoint passed whatever upload id the caller sent straight to the signer, because nothing recorded which S3 upload a version actually belonged to. The upload id is now stored at initiate and checked here. It also no longer signs parts for a version the reaper has already soft-deleted, which wrote bytes to a key nothing owned. Neither was exploitable across accounts, since the key must already belong to the caller.
+
+### Changed
+- **`media_files.s3_key_raw` is indexed.** `/upload/presign-part` looks it up once per part, which was a sequential scan per chunk of a table that grows with every version ever uploaded — 10,000 of them on a large upload, several at a time now that parts upload in parallel.
+
+
 ### Changed
 - **Large uploads send several parts at once instead of strictly one after another** — up to 5 parts are now in flight per file, so an upload no longer pays a full presign round-trip and a TCP ramp-up for every 10 MB chunk in turn. **This helps only where a single stream cannot fill the link**, which means fast connections and object stores that are far away; on a bandwidth-limited uplink one stream already saturates the line and the upload will take exactly as long as before. Tune with `NEXT_PUBLIC_UPLOAD_CONCURRENCY` (default `5`) if your storage backend throttles concurrent part uploads; it is read at build time, so changing it needs a web image rebuild. Part order is preserved regardless of the order parts finish in, and progress counts completed parts rather than the highest one started. (#242)
 

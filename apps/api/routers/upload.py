@@ -99,6 +99,12 @@ def initiate_upload(
     # Initiate S3 multipart upload
     upload_id = create_multipart_upload(s3_key, body.mime_type)
 
+    # Record which S3 upload backs this version. Without it nothing server-side can
+    # map a version to its multipart upload, so the reaper has to sweep the whole
+    # bucket and presign-part has nothing to validate against.
+    version.upload_id = upload_id
+    version.last_activity_at = datetime.now(timezone.utc)
+
     # Create MediaFile record
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
     media_file = MediaFile(
@@ -133,11 +139,31 @@ def presign_part(
     media_file = db.query(MediaFile).filter(MediaFile.s3_key_raw == body.s3_key).first()
     if not media_file:
         raise HTTPException(status_code=404, detail="Upload not found")
-    version = db.query(AssetVersion).filter(AssetVersion.id == media_file.version_id).first()
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == media_file.version_id,
+        # A version the reaper has already soft-deleted must not keep accepting
+        # parts: those bytes would be written to a key nothing owns, and no later
+        # sweep would attribute them to anything.
+        AssetVersion.deleted_at.is_(None),
+    ).first()
     if not version or version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
 
+    # Sign only the upload this version actually belongs to. Previously whatever
+    # upload id the caller sent was passed straight to the signer, because there
+    # was nothing recorded to compare it against. NULL means the row predates
+    # that being stored, so it is accepted rather than breaking uploads that are
+    # already in flight across the upgrade.
+    if version.upload_id is not None and version.upload_id != body.upload_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this upload")
+
     url = presign_upload_part(body.s3_key, body.upload_id, body.part_number)
+
+    # Proof of life for the reaper: an upload slower than its window is still
+    # making progress and must not be aborted underneath the user.
+    version.last_activity_at = datetime.now(timezone.utc)
+    db.commit()
+
     return PresignPartResponse(presigned_url=url, part_number=body.part_number)
 
 
