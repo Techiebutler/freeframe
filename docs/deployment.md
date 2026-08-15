@@ -262,6 +262,7 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `API_WORKERS` | Gunicorn worker processes | `4` |
 | `TRANSCODING_CONCURRENCY` | Parallel transcoding jobs | `2` |
 | `EMAIL_CONCURRENCY` | Parallel email jobs | `2` |
+| `MAINTENANCE_CONCURRENCY` | Parallel housekeeping jobs | `1` |
 
 ---
 
@@ -288,6 +289,14 @@ Video transcoding is CPU-intensive. Adjust `TRANSCODING_CONCURRENCY` based on yo
 ### Email Workers
 
 Email sending is I/O-bound and lightweight. The default of `2` is sufficient for most deployments.
+
+### Maintenance Workers
+
+Housekeeping is I/O-bound but can run long: `cleanup_soft_deleted` deletes S3
+objects one at a time and `sweep_orphan_s3` lists the whole bucket. The default
+of `1` is right for most deployments, since these tasks are scheduled hourly at
+most and none of them is latency-sensitive. Raising it mainly helps if you have
+a large backlog of soft-deleted media to reclaim.
 
 ---
 
@@ -323,8 +332,36 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml logs --tail 100 a
 | Disk space | `df -h` | > 80% used |
 | Memory | `free -m` | Swap in use |
 | API response | `curl -s localhost/health` | Non-200 response |
-| Worker queue | `docker compose exec api celery -A tasks.celery_app inspect active` | Growing backlog |
+| Queue depth | `docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN transcoding` (repeat for `email_high`, `email_low`, `maintenance`, `default`) | Any queue growing steadily; **any depth at all on `default`** |
+| Busy workers | `docker compose exec api celery -A apps.api.tasks.celery_app inspect active` | Tasks stuck for hours |
 | Database connections | `docker compose exec postgres psql -U freeframe -c "SELECT count(*) FROM pg_stat_activity;"` | > 80% of max |
+
+Check depth with `LLEN`, not `inspect active`. `inspect active` reports what
+connected workers are executing right now, so a queue that no worker subscribes
+to shows up as nothing at all: the workers are genuinely idle while the backlog
+grows unseen. That is exactly how [#240](https://github.com/Techiebutler/freeframe/issues/240)
+went unnoticed.
+
+`default` should always be empty. Every task is routed explicitly, so anything
+landing there is a task that was added without a route and that no worker will
+ever run.
+
+### Queue Topology
+
+Each worker subscribes to an explicit `-Q` list, so a task whose queue has no
+subscriber is silently never executed. The shipped topology is:
+
+| Queue | Consumed by | Carries |
+|-------|-------------|---------|
+| `transcoding` | `worker` | Video/audio/image processing, metadata backfill |
+| `email_high` | `email_worker` | Magic codes, invites |
+| `email_low` | `email_worker` | Mentions, comments, approvals, share notices |
+| `maintenance` | `maintenance_worker` | Retention GC, stale-upload reaper, orphan sweep, watermarking |
+| `default` | nobody, by design | Should always be empty |
+
+If you add a task, route it in `apps/api/tasks/celery_app.py` to one of the
+consumed queues. `apps/api/tests/test_celery_queue_topology.py` fails if a
+registered task routes somewhere no compose worker consumes.
 
 ---
 
@@ -383,6 +420,47 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
 
 Database migrations run automatically on API startup. Always check the [CHANGELOG](../CHANGELOG.md) before updating.
+
+### Upgrading past the maintenance-queue fix ([#240](https://github.com/Techiebutler/freeframe/issues/240))
+
+Before this fix, no worker consumed the `default` queue, so the retention GC,
+the stale-upload reaper, the orphan sweeper, due-date reminders and
+`apply_watermark` were published and never executed. This release adds a
+`maintenance_worker` service, so **`docker compose up -d --build` alone is not
+enough: you must be using the updated compose file** for the new service to
+exist.
+
+Two things to do once, in this order.
+
+**1. Check what the first garbage-collection run will delete.** The GC has never
+run on your instance, so its first pass reclaims everything already past the
+retention window, all at once. Count it first:
+
+```bash
+docker compose exec postgres psql -U freeframe -c \
+  "SELECT count(*) FROM assets WHERE deleted_at < now() - interval '30 days';"
+```
+
+If that number is larger than you expect, raise `SOFT_DELETE_RETENTION_DAYS`
+(or set it to `0` to keep the GC off) before starting the new worker, and lower
+it once you have reviewed what would go. The deletion is a hard delete with S3
+reclaim and is not recoverable.
+
+**2. Drop the stale `default` backlog.** Instances that ran `beat` accumulated
+roughly 49 orphaned messages a day. The new worker consumes `maintenance`, not
+`default`, so the backlog is inert and safe to leave, but it wastes Redis
+memory:
+
+```bash
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN default
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" RENAME default default-old-240
+```
+
+`RENAME` rather than `DEL` so the messages can be inspected or restored. Delete
+`default-old-240` once the new worker is running and `LLEN maintenance` is
+draining normally.
+
+### Upgrading past the media-metadata fix ([#124](https://github.com/Techiebutler/freeframe/issues/124))
 
 If you're upgrading past the media-metadata fix ([#124](https://github.com/Techiebutler/freeframe/issues/124)), backfill missing `duration_seconds`/`width`/`height`/`fps` on already-processed files with: `docker exec freeframe-api-1 python -m apps.api.scripts.backfill_media_metadata`. The backfill runs as a Celery task on the `transcoding` queue, so it occupies one worker slot and can run long on large libraries (up to ~300s per file); new uploads keep transcoding normally on the remaining slots.
 

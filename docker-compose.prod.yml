@@ -188,6 +188,24 @@ services:
     command: sh -c "celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c $${EMAIL_CONCURRENCY:-2} --loglevel=warning"
     restart: unless-stopped
 
+  # Housekeeping: retention GC, stale-upload reaper, orphan sweep, watermarking.
+  # Kept off the transcoding worker (these hold a slot for minutes while a video
+  # waits) and off the email worker (a magic code queued behind a full bucket
+  # listing is a login someone is waiting on).
+  maintenance_worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.prod
+    env_file:
+      - .env.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q maintenance -c $${MAINTENANCE_CONCURRENCY:-1} --loglevel=warning"
+    restart: unless-stopped
+
   beat:
     build:
       context: .

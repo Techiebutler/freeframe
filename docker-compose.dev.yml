@@ -143,6 +143,59 @@ services:
       - ./packages/transcoder:/workspace/packages/transcoder
     command: celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c ${EMAIL_CONCURRENCY:-2} --loglevel=info
 
+  # Housekeeping worker. Present in dev as well as prod so the periodic tasks
+  # are exercised locally: #240 was invisible for months precisely because dev
+  # ran neither this worker nor beat.
+  maintenance_worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://freeframe:freeframe@postgres:5432/freeframe
+      REDIS_URL: redis://redis:6379/0
+      S3_STORAGE: ${S3_STORAGE:-minio}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-freeframe}
+      S3_REGION: ${S3_REGION:-us-east-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/workspace/apps/api
+      - ./packages/transcoder:/workspace/packages/transcoder
+    command: celery -A apps.api.tasks.celery_app worker -Q maintenance -c ${MAINTENANCE_CONCURRENCY:-1} --loglevel=info
+
+  beat:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://freeframe:freeframe@postgres:5432/freeframe
+      REDIS_URL: redis://redis:6379/0
+      S3_STORAGE: ${S3_STORAGE:-minio}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-freeframe}
+      S3_REGION: ${S3_REGION:-us-east-1}
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/workspace/apps/api
+      - ./packages/transcoder:/workspace/packages/transcoder
+    command: celery -A apps.api.tasks.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
+
   web:
     image: node:20-alpine
     working_dir: /app

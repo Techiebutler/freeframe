@@ -35,13 +35,24 @@ celery_app.conf.update(
     task_queues=(
         Queue("default"),
         Queue("transcoding"),
-        Queue("email_high"),  # Magic codes, invites - immediate
-        Queue("email_low"),   # Mentions, comments - can be delayed
+        Queue("email_high"),   # Magic codes, invites - immediate
+        Queue("email_low"),    # Mentions, comments - can be delayed
+        Queue("maintenance"),  # Housekeeping - long, I/O heavy, latency-insensitive
     ),
     task_default_queue="default",
-    # Route tasks to queues
+    # Route tasks to queues.
+    #
+    # NOTE: the housekeeping tasks below register under bare names
+    # (@celery_app.task(name="reap_stale_uploads")), not dotted module paths,
+    # so a glob like "apps.api.tasks.cleanup_tasks.*" would never match them.
+    # Route them by their bare name. See test_celery_queue_topology.py.
     task_routes={
         "apps.api.tasks.transcode_tasks.*": {"queue": "transcoding"},
+        "reap_stale_uploads": {"queue": "maintenance"},
+        "send_due_date_reminders": {"queue": "maintenance"},
+        "cleanup_soft_deleted": {"queue": "maintenance"},
+        "sweep_orphan_s3": {"queue": "maintenance"},
+        "apply_watermark": {"queue": "maintenance"},
         "apps.api.tasks.email_tasks.send_magic_code_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_invite_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_mention_email": {"queue": "email_low"},
