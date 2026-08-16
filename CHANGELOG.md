@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Instance branding — white-label your FreeFrame** — admins can set the org name, light/dark logos, favicon, apple-touch icon, login-page logo, and a primary accent color from Settings → Branding, with a toggle to hide the "Powered by FreeFrame" badge. The org name and logo appear across the app (sidebar, login, share pages, emails, page titles), and emails are de-branded so invitations come from the org rather than FreeFrame. Logos upload straight to storage via presigned URLs and are served back as short-lived presigned links. New endpoints: `GET/PUT /instance/branding`, `POST /instance/branding/{logo_type}-upload`, `DELETE /instance/branding/logo/{logo_type}`. (#203)
+
 ## [1.9.0] - 2026-08-16
 
 ### Upgrade notes
