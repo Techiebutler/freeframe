@@ -281,19 +281,51 @@ def complete_upload(
     if not media_file:
         raise HTTPException(status_code=404, detail="Upload not found for this version")
 
-    # Only an upload that is still uploading can be completed. Without this, a
+    s3_key = media_file.s3_key_raw
+
+    # Only an upload that is still uploading can be *completed*. Without this, a
     # replay of this request against an already-finished version rewinds it to
     # `processing` and queues a second transcode -- and because `/upload/*` is
     # exempt from the global rate limiter, a loop over it would park the whole
     # transcoding queue on re-runs. The upload id is not a credential either: any
     # unrecognised value reads as "already gone", so replaying needs no secret.
+    #
+    # A retry after a lost response lands here too, though, and it is the more
+    # common way to arrive: the first call committed `processing` and then the
+    # response never made it back. Answering that with 409 tells a user whose
+    # upload worked that it failed -- and the client fires /upload/abort from the
+    # catch of every completion failure, so the report is not even inert. Ask
+    # storage first: if the assembled object is sitting there at the declared
+    # size, this request already succeeded, and saying so costs one HeadObject on
+    # a path that is by definition not the hot one.
+    #
+    # The replay protection is unchanged. Everything expensive -- the status
+    # write, and the transcode dispatch -- still only ever runs from `uploading`.
     if version.processing_status != ProcessingStatus.uploading:
+        # Only these two mean a completion actually ran. `failed` is a version
+        # somebody resolved as broken; answering that with a success because an
+        # object happens to sit at the key would paper over the disagreement
+        # rather than surface it.
+        completed_before = version.processing_status in (
+            ProcessingStatus.processing,
+            ProcessingStatus.ready,
+        )
+        if completed_before and _already_assembled(s3_key, media_file.file_size_bytes, version.id):
+            logger.info(
+                "completion retried for upload %s after it already finished; "
+                "reporting %s", version.id, version.processing_status.value,
+            )
+            # The version's own status, not a hardcoded "processing": one that has
+            # since gone `ready` must not read as still transcoding.
+            return CompleteUploadResponse(
+                status=version.processing_status.value,
+                asset_id=body.asset_id,
+                version_id=body.version_id,
+            )
         raise HTTPException(
             status_code=409,
             detail=f"This upload is already {version.processing_status.value}.",
         )
-
-    s3_key = media_file.s3_key_raw
 
     def _finish() -> CompleteUploadResponse:
         version.processing_status = ProcessingStatus.processing
