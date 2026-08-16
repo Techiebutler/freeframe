@@ -84,12 +84,6 @@ async function fetchShareInfo(
   password?: string,
   logOpen?: boolean,
 ): Promise<ShareValidateResponse> {
-  const params = new URLSearchParams()
-  if (password) params.set('password', password)
-  if (logOpen) params.set('log_open', 'true')
-  const qs = params.toString() ? `?${params.toString()}` : ''
-  const url = `${API_URL}/share/${token}${qs}`
-
   // Include auth token if user is already logged in (for secure links)
   const headers: Record<string, string> = {}
   let accessToken: string | null = null
@@ -102,15 +96,36 @@ async function fetchShareInfo(
     headers['Authorization'] = `Bearer ${accessToken}`
   }
 
-  const response = await fetch(url, { headers })
-  if (!response.ok) {
-    if (response.status === 403) {
-      const data = await response.json().catch(() => ({}))
-      if (data.detail === 'Incorrect password') {
+  // When a password is supplied, use POST /share/{token}/verify so the
+  // password travels in the request body — not as a query string, which
+  // would be logged by nginx, browser history, Referer headers, and
+  // proxy/tunnel logs (SECURITY_AUDIT H3).
+  if (password) {
+    headers['Content-Type'] = 'application/json'
+    const body = JSON.stringify({ password, log_open: !!logOpen })
+    const resp = await fetch(`${API_URL}/share/${token}/verify`, {
+      method: 'POST',
+      headers,
+      body,
+    })
+    if (!resp.ok) {
+      if (resp.status === 403) {
         return { requires_password: true, error: 'Incorrect password' }
       }
-      return { requires_password: true }
+      if (resp.status === 410) return { expired: true }
+      return {}
     }
+    return resp.json()
+  }
+
+  // No password — GET validates the link and either returns the full
+  // response (no password set / authenticated creator) or
+  // requires_password:true (password-protected, not yet verified).
+  const params = new URLSearchParams()
+  if (logOpen) params.set('log_open', 'true')
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  const response = await fetch(`${API_URL}/share/${token}${qs}`, { headers })
+  if (!response.ok) {
     if (response.status === 410) return { expired: true }
     return {}
   }
@@ -245,20 +260,22 @@ function GuestCommentItem({ comment }: GuestCommentItemProps) {
 interface GuestCommentListProps {
   token: string
   refreshKey: number
+  shareSession?: string | null
 }
 
-function GuestCommentList({ token, refreshKey }: GuestCommentListProps) {
+function GuestCommentList({ token, refreshKey, shareSession }: GuestCommentListProps) {
   const [comments, setComments] = React.useState<GuestComment[]>([])
   const [loading, setLoading] = React.useState(true)
 
   React.useEffect(() => {
     setLoading(true)
-    fetch(`${API_URL}/share/${token}/comments`)
+    const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+    fetch(`${API_URL}/share/${token}/comments?_=1${sp}`)
       .then((r) => (r.ok ? r.json() : Promise.resolve([])))
       .then((data: CommentsResponse) => setComments(data))
       .catch(() => setComments([]))
       .finally(() => setLoading(false))
-  }, [token, refreshKey])
+  }, [token, refreshKey, shareSession])
 
   if (loading) {
     return (
@@ -681,6 +698,7 @@ interface ShareRightPanelProps {
   permission: SharePermission
   commentRefreshKey: number
   onCommentPosted: () => void
+  shareSession?: string | null
 }
 
 function ShareRightPanel({
@@ -689,6 +707,7 @@ function ShareRightPanel({
   permission,
   commentRefreshKey,
   onCommentPosted,
+  shareSession,
 }: ShareRightPanelProps) {
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
 
@@ -734,7 +753,7 @@ function ShareRightPanel({
             </div>
 
             {/* Comment list */}
-            <GuestCommentList token={token} refreshKey={commentRefreshKey} />
+            <GuestCommentList token={token} refreshKey={commentRefreshKey} shareSession={shareSession} />
 
             {/* Approval actions */}
             {permission === 'approve' && (
@@ -748,6 +767,7 @@ function ShareRightPanel({
               <GuestCommentInput
                 token={token}
                 onCommentPosted={onCommentPosted}
+                shareSession={shareSession}
                 className="border-t border-white/[0.06] bg-[#141416]"
               />
             ) : (
@@ -821,6 +841,7 @@ interface ShareViewerProps {
   branding: ProjectBranding | null
   shareName?: string
   onBack?: () => void
+  shareSession?: string | null
 }
 
 function ShareViewer({
@@ -831,6 +852,7 @@ function ShareViewer({
   branding,
   shareName,
   onBack,
+  shareSession,
 }: ShareViewerProps) {
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
@@ -891,6 +913,7 @@ function ShareViewer({
             permission={permission}
             commentRefreshKey={commentKey}
             onCommentPosted={() => setCommentKey((k) => k + 1)}
+            shareSession={shareSession}
           />
         )}
       </div>
@@ -1107,6 +1130,7 @@ export default function SharePage({
       permission={state.permission}
       allowDownload={state.allowDownload}
       branding={state.branding}
+      shareSession={shareSession}
     />
   )
 }

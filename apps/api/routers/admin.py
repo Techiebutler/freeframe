@@ -33,7 +33,7 @@ def list_all_users(
     users = db.query(User).filter(User.deleted_at.is_(None)).all()
     return users
 
-@router.patch("/users/{user_id}/deactivate", response_model=UserResponse)
+@router.patch("/users/{user_id}/deactivate", response_model=AdminUserResponse)
 def deactivate_user(
     user_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -62,7 +62,7 @@ def deactivate_user(
     db.refresh(user)
     return user
 
-@router.patch("/users/{user_id}/reactivate", response_model=UserResponse)
+@router.patch("/users/{user_id}/reactivate", response_model=AdminUserResponse)
 def reactivate_user(
     user_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -84,7 +84,7 @@ def reactivate_user(
     db.refresh(user)
     return user
 
-@router.patch("/users/{user_id}/role", response_model=UserResponse)
+@router.patch("/users/{user_id}/role", response_model=AdminUserResponse)
 def update_user_role(
     user_id: uuid.UUID,
     body: UpdateUserRoleRequest,

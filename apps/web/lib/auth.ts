@@ -29,7 +29,12 @@ export function clearTokens(): void {
   // Clear auth cookies
   document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0`
   document.cookie = `${REFRESH_TOKEN_KEY}=; path=/; max-age=0`
-  window.location.href = '/login'
+  // Respect the configured basePath so deployments mounted at a sub-path
+  // (e.g. /freeframe/) don't bounce to the bare /login and trigger the
+  // nginx catch-all 302 chain. Falls back to '/login' when basePath isn't
+  // set (the upstream default).
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+  window.location.href = `${basePath}/login`
 }
 
 // Deduplicate concurrent refresh calls — when access token expires, multiple

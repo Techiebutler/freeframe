@@ -109,9 +109,11 @@ interface GuestCommentInputProps {
   /** Called after a comment is successfully submitted */
   onCommentPosted?: () => void
   className?: string
+  /** Session token from password verification (POST /share/{token}/verify) */
+  shareSession?: string | null
 }
 
-export function GuestCommentInput({ token, onCommentPosted, className }: GuestCommentInputProps) {
+export function GuestCommentInput({ token, onCommentPosted, className, shareSession }: GuestCommentInputProps) {
   const [identity, setIdentity] = React.useState<GuestIdentity | null>(null)
   const [body, setBody] = React.useState('')
   const [submitting, setSubmitting] = React.useState(false)
@@ -140,7 +142,8 @@ export function GuestCommentInput({ token, onCommentPosted, className }: GuestCo
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const response = await fetch(`${API_URL}/share/${token}/comment`, {
+      const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+      const response = await fetch(`${API_URL}/share/${token}/comment?_=1${sp}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

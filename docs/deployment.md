@@ -201,13 +201,15 @@ Uploads go **directly from the browser to your bucket** via presigned URLs, so t
 {
   "CORSRules": [{
     "AllowedOrigins": ["https://your-freeframe-domain.example"],
-    "AllowedMethods": ["GET", "PUT", "POST", "HEAD", "DELETE"],
-    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["GET", "PUT", "POST", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "Content-MD5", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3000
   }]
 }
 ```
+
+`DELETE` is intentionally absent — FreeFrame has no presigned-DELETE flow, and the browser never needs it against the bucket. The `AllowedHeaders` list above is exactly what browser uploads and HLS segment fetches send; `["*"]` also works on most backends, but the list is sufficient and is what FreeFrame's automatic startup config now applies.
 
 If you allow **more than one origin**, give each origin its own rule rather than listing them all in one. Some backends (Garage) answer a multi-origin rule by joining every entry into a single comma-separated `Access-Control-Allow-Origin` header, which browsers reject — every upload and HLS segment fetch then fails CORS. FreeFrame's automatic startup config already emits one rule per origin.
 

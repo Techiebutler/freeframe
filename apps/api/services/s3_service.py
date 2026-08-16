@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import re
@@ -129,6 +128,14 @@ def ensure_bucket_exists():
 
     # Set CORS for browser-based uploads (presigned PUT)
     if not _is_aws_s3():
+        # Browser Origin headers never include a path, so strip any path
+        # from FRONTEND_URL before adding it to AllowedOrigins (e.g.
+        # https://host/freeframe -> https://host). Mirror the CORS origin
+        # strip in main.py.
+        from urllib.parse import urlparse as _urlparse
+        _fe = (settings.frontend_url or "").strip()
+        _cors_origin = f"{_urlparse(_fe).scheme}://{_urlparse(_fe).netloc}" if _fe else None
+        _allowed_origins = [o for o in [_cors_origin, "http://localhost:3000"] if o]
         try:
             # One rule per origin: Garage joins a rule's AllowedOrigins into a single
             # comma-separated Access-Control-Allow-Origin response header, which
@@ -142,8 +149,17 @@ def ensure_bucket_exists():
                 CORSConfiguration={
                     "CORSRules": [
                         {
-                            "AllowedHeaders": ["*"],
-                            "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+                            # Tighten from ["*"] to only the headers the
+                            # browser upload + multipart flows actually send.
+                            "AllowedHeaders": [
+                                "Content-Type",
+                                "Content-MD5",
+                                "x-amz-content-sha256",
+                                "x-amz-date",
+                                "x-amz-decoded-content-length",
+                            ],
+                            # Drop DELETE: no presigned-DELETE flow exists.
+                            "AllowedMethods": ["GET", "PUT", "POST", "HEAD"],
                             "AllowedOrigins": [origin],
                             "ExposeHeaders": ["ETag", "Content-Length", "x-amz-request-id"],
                             "MaxAgeSeconds": 3600,
@@ -165,27 +181,14 @@ def ensure_bucket_exists():
                 settings.s3_bucket, e,
             )
 
-        # Set public-read policy on processed/ prefix so HLS sub-playlists
-        # and .ts segments can be fetched without presigned URLs
-        try:
-            policy = {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Sid": "PublicReadProcessed",
-                        "Effect": "Allow",
-                        "Principal": "*",
-                        "Action": "s3:GetObject",
-                        "Resource": f"arn:aws:s3:::{settings.s3_bucket}/processed/*",
-                    }
-                ],
-            }
-            s3.put_bucket_policy(
-                Bucket=settings.s3_bucket,
-                Policy=json.dumps(policy),
-            )
-        except ClientError:
-            pass  # Policy config failed, non-critical
+        # NOTE: a public-read bucket policy on processed/* used to be set
+        # here so HLS sub-playlists and .ts segments could be fetched
+        # without presigned URLs. The HLS proxy in routers/hls_proxy.py
+        # already rewrites .ts URLs to presigned S3 URLs, so the public
+        # policy was dead weight and leaked any processed object to anyone
+        # who guessed a key (UUIDs aren't secret — share-link presigned
+        # GETs expose them). Removed for defense-in-depth; the bucket can
+        # stay fully private.
 
 
 def run_startup_bucket_setup(attempts: int = 5, base_delay: float = 3.0, _sleep=time.sleep) -> None:

@@ -34,6 +34,7 @@ from ..schemas.share import (
     ShareLinkResponse,
     ShareLinkUpdate,
     ShareLinkValidateResponse,
+    ShareVerifyRequest,
 )
 from ..services.permissions import (
     require_project_role, validate_share_link, validate_share_link_with_session,
@@ -216,29 +217,19 @@ def list_share_links(
     ).all()
 
 
-@router.get("/share/{token}", response_model=ShareLinkValidateResponse, dependencies=[Depends(rate_limit("share_validate", 30, 60))])
-def validate_share_link_endpoint(
-    token: str,
-    password: Optional[str] = None,
+def _build_share_validate_response(
+    db: Session,
+    link: ShareLink,
+    current_user: Optional[User],
+    session_id: Optional[str] = None,
     log_open: bool = False,
-    db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_optional_user),
-):
-    """Public endpoint — optional auth. For secure links, requires authenticated user."""
-    link = validate_share_link(db, token)
+) -> ShareLinkValidateResponse:
+    """Build the full ShareLinkValidateResponse for a validated link.
 
-    # Check secure visibility — requires authenticated user
-    if link.visibility == "secure":
-        if not current_user:
-            return ShareLinkValidateResponse(
-                requires_auth=True,
-                requires_password=False,
-                title=link.title,
-                permission=link.permission,
-                visibility=link.visibility,
-            )
-
-    # Resolve folder name if this is a folder share
+    Called by both GET /share/{token} (no password verification) and
+    POST /share/{token}/verify (password verification).
+    """
+    # Resolve folder / project names
     folder_name = None
     project_name = None
     if link.folder_id:
@@ -249,25 +240,6 @@ def validate_share_link_endpoint(
         project = db.query(Project).filter(Project.id == link.project_id, Project.deleted_at.is_(None)).first()
         if project:
             project_name = project.name
-
-    session_id = None
-    if link.password_hash:
-        if not password:
-            return ShareLinkValidateResponse(
-                requires_password=True,
-                title=link.title,
-                permission=link.permission,
-            )
-        try:
-            plain_bytes = password[:72].encode('utf-8')
-            hashed_bytes = link.password_hash.encode('utf-8')
-            if not bcrypt.checkpw(plain_bytes, hashed_bytes):
-                raise HTTPException(status_code=403, detail="Incorrect password")
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Incorrect password")
-        # Password verified — create a session so subsequent requests skip re-verification
-        session_id = secrets.token_urlsafe(32)
-        create_share_session(token, session_id)
 
     if log_open:
         actor_email = current_user.email if current_user else "anonymous"
@@ -342,6 +314,102 @@ def validate_share_link_endpoint(
         asset=asset_data,
         branding=branding_data,
         share_session=session_id,
+    )
+
+
+@router.get("/share/{token}", response_model=ShareLinkValidateResponse, dependencies=[Depends(rate_limit("share_validate", 30, 60))])
+def validate_share_link_endpoint(
+    token: str,
+    log_open: bool = False,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Public endpoint — optional auth. For secure links, requires authenticated user.
+
+    Does NOT verify the share-link password. Password-protected links return
+    `requires_password=True`; the caller must POST /share/{token}/verify with
+    the password in the body to obtain a `share_session`. The password used to
+    be a query parameter on this GET, which leaked it into nginx access logs,
+    browser history, Referer headers, and Cloudflare Tunnel logs.
+    """
+    link = validate_share_link(db, token)
+
+    # Check secure visibility — requires authenticated user
+    if link.visibility == "secure":
+        if not current_user:
+            return ShareLinkValidateResponse(
+                requires_auth=True,
+                requires_password=False,
+                title=link.title,
+                permission=link.permission,
+                visibility=link.visibility,
+            )
+
+    # Password-protected links: short-circuit and request POST /verify.
+    # Authenticated link creator bypasses the password (dashboard preview).
+    if link.password_hash:
+        if current_user and link.created_by == current_user.id:
+            return _build_share_validate_response(db, link, current_user, log_open=log_open)
+        return ShareLinkValidateResponse(
+            requires_password=True,
+            title=link.title,
+            permission=link.permission,
+        )
+
+    return _build_share_validate_response(db, link, current_user, log_open=log_open)
+
+
+@router.post(
+    "/share/{token}/verify",
+    response_model=ShareLinkValidateResponse,
+    dependencies=[Depends(rate_limit("share_verify", 30, 60))],
+)
+def verify_share_link_password(
+    token: str,
+    body: ShareVerifyRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Verify a share-link password and return the full validate response
+    with a `share_session` for subsequent requests.
+
+    The password is sent in the request body (not as a query string param)
+    so it isn't logged by nginx, browser history, Referer headers, or proxy
+    logs. See SECURITY_AUDIT H3.
+    """
+    link = validate_share_link(db, token)
+
+    # Check secure visibility — requires authenticated user (same gate as
+    # the GET endpoint). Without this, an anonymous caller who knows the
+    # password of a secure+password link could POST /verify and get the
+    # full response including asset_id and presigned stream URLs, bypassing
+    # the login requirement.
+    if link.visibility == "secure" and not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authentication required for this link's visibility setting",
+        )
+
+    # Authenticated link creator bypasses the password (dashboard preview)
+    if not (current_user and link.created_by == current_user.id):
+        if not link.password_hash:
+            # No password set — nothing to verify. Return the validate response.
+            return _build_share_validate_response(db, link, current_user)
+        try:
+            plain_bytes = body.password[:72].encode('utf-8')
+            hashed_bytes = link.password_hash.encode('utf-8')
+            if not bcrypt.checkpw(plain_bytes, hashed_bytes):
+                raise HTTPException(status_code=403, detail="Incorrect password")
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Incorrect password")
+
+    # Password verified (or creator bypass) — create a session so
+    # subsequent /share/{token}/assets, /comments, etc. skip re-verification.
+    session_id = secrets.token_urlsafe(32)
+    create_share_session(token, session_id)
+
+    return _build_share_validate_response(
+        db, link, current_user, session_id=session_id, log_open=body.log_open
     )
 
 

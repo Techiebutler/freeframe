@@ -4,7 +4,7 @@ These are only available when no superadmin exists in the system.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from ..database import get_db
 from ..models.user import User, UserStatus
@@ -23,7 +23,9 @@ class SetupStatusResponse(BaseModel):
 class CreateSuperAdminRequest(BaseModel):
     email: EmailStr
     name: str
-    password: str
+    # Match the auth schemas: 8-72 chars. bcrypt truncates at 72 bytes
+    # silently — surface it as a 400 instead.
+    password: str = Field(min_length=8, max_length=72)
 
 
 class SetupCompleteResponse(BaseModel):

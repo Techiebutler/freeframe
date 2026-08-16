@@ -64,7 +64,7 @@ def test_login_wrong_password(client, mock_db):
     with patch(_VERIFY_PATCH, return_value=False):
         resp = client.post(
             "/auth/login",
-            json={"email": "wp@example.com", "password": "wrong"},
+            json={"email": "wp@example.com", "password": "wrongpass"},
         )
 
     assert resp.status_code == 401

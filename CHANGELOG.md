@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Bucket CORS rules are tightened and the public-read bucket policy is gone** — the automatic bucket setup now pins `AllowedHeaders` to the headers browser uploads actually send (`Content-Type`, `Content-MD5`, `x-amz-content-sha256`, `x-amz-date`, `x-amz-decoded-content-length`) instead of `*`, and drops `DELETE` (no presigned-DELETE flow exists). It also no longer publishes a public-read policy on `processed/*`: HLS playback goes through the presign proxy, so the policy was dead weight that exposed any processed object to anyone who guessed a key. `docs/deployment.md` has been corrected to match. (#202)
+
+### Fixed
+- **Passwords are bounded at 8–72 characters everywhere they are set** — set-password, invite-accept, and admin-created accounts now require at least 8 characters and reject more than 72 with a clear validation error instead of letting bcrypt silently truncate (a longer password would otherwise authenticate against only its first 72 bytes). Login deliberately enforces only the 72-byte ceiling so legacy accounts with shorter passwords are not locked out before auth runs. (#202)
+- **User search treats `%` and `_` literally** — search terms are LIKE-escaped so wildcard characters match themselves instead of fanning out a search. (#202)
+- **`PATCH /auth/me/preferences` accepts only known keys** — it previously took an arbitrary dict, so anything stored could later be a stored-XSS surface if ever rendered back unescaped. Preferences are now validated against a fixed schema of primitive values, merged over existing prefs so unspecified keys are preserved. (#202)
+- **`POST /auth/refresh` is now rate-limited** (30/minute per IP) — previously only the generic global write limiter backed token refresh. (#202)
+- **Login redirects respect a configured base path** — deployments mounted at a sub-path (e.g. `/freeframe/`) no longer bounce to the bare `/login` and trigger a catch-all redirect chain when tokens are cleared. (#202)
+
 ## [1.9.0] - 2026-08-16
 
 ### Upgrade notes

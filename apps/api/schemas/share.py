@@ -90,6 +90,17 @@ class ShareLinkValidateResponse(BaseModel):
     share_session: Optional[str] = None  # Session token for password-protected links
 
 
+class ShareVerifyRequest(BaseModel):
+    """Body for POST /share/{token}/verify.
+
+    Carries the share-link password in the request body instead of as a
+    query string parameter so it isn't logged in nginx access logs,
+    browser history, Referer headers, or proxy/tunnel logs.
+    """
+    password: str
+    log_open: bool = False
+
+
 class ShareLinkUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
