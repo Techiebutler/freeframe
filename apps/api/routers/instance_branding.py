@@ -120,7 +120,7 @@ def upsert_instance_branding(
     ]
 
     for field, value in update_data.items():
-        if field in _LOGO_KEY_FIELDS and value is not None:
+        if field in _LOGO_KEY_FIELDS:
             old_key = getattr(branding, field)
             if old_key and old_key != value:
                 try:

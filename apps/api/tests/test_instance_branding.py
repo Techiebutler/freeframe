@@ -50,6 +50,41 @@ def test_put_branding_updates_fields(client, auth_headers, mock_db, test_user):
     assert body["powered_by_freeframe"] is False
 
 
+def test_put_branding_null_logo_key_deletes_old_object(client, auth_headers, mock_db, test_user, monkeypatch):
+    """Clearing a logo key with an explicit null must delete the old S3 object."""
+    test_user.is_superadmin = True
+
+    now = datetime.now(timezone.utc)
+    branding = InstanceBranding(
+        id=uuid.uuid4(),
+        org_name="FreeFrame",
+        powered_by_freeframe=True,
+        created_at=now,
+        updated_at=now,
+    )
+    branding.logo_light_key = "branding/logo-light/old-key"
+    mock_db.first.return_value = branding
+
+    delete_calls = []
+    monkeypatch.setattr(
+        "apps.api.routers.instance_branding.s3_service.delete_object",
+        lambda key: delete_calls.append(key),
+    )
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ):
+        r = client.put(
+            "/instance/branding",
+            headers=auth_headers,
+            json={"logo_light_key": None},
+        )
+    assert r.status_code == 200
+    assert delete_calls == ["branding/logo-light/old-key"]
+    assert branding.logo_light_key is None
+
+
 # ── POST /instance/branding/{logo_type}-upload ──────────────────────────
 
 def test_upload_presign_requires_admin(client, auth_headers, mock_db, test_user):

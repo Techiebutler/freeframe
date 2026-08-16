@@ -32,9 +32,21 @@ export function BrandingHead() {
   }, [loaded, fetchBranding])
 
   React.useEffect(() => {
-    const title = orgName || 'FreeFrame'
-    if (document.title !== title) {
-      document.title = title
+    const org = orgName || 'FreeFrame'
+    const current = document.title
+    // Page titles are composed as "Page – Org" (usePageTitle, folder-share-viewer).
+    // Preserve the page part and only swap the org suffix; set a bare org title
+    // only when nothing page-specific is being shown (e.g. the initial
+    // "FreeFrame" metadata title). Child effects run first, so a page title set
+    // on mount is already present here.
+    const idx = current ? current.lastIndexOf(' – ') : -1
+    if (idx !== -1) {
+      const next = `${current.slice(0, idx)} – ${org}`
+      if (document.title !== next) {
+        document.title = next
+      }
+    } else if (document.title !== org) {
+      document.title = org
     }
   }, [orgName])
 
