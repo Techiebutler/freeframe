@@ -24,6 +24,7 @@ from ..services.redis_service import (
 from ..tasks.email_tasks import send_magic_code_email, send_invite_email
 from ..tasks.celery_app import send_task_safe
 from ..models.user import User, UserStatus
+from ..models.instance_branding import InstanceBranding
 from ..middleware.auth import get_current_user
 from ..middleware.rate_limit import rate_limit
 
@@ -61,7 +62,9 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
 
     # Queue email via Celery (async)
     try:
-        send_task_safe(send_magic_code_email, body.email, code, MAGIC_CODE_EXPIRY_MINUTES)
+        branding = db.query(InstanceBranding).first()
+        org_name = branding.org_name if branding else None
+        send_task_safe(send_magic_code_email, body.email, code, MAGIC_CODE_EXPIRY_MINUTES, org_name)
     except Exception:
         pass  # Email delivery is best-effort; code is already in Redis
     

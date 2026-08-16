@@ -38,17 +38,19 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: Optional
 # ============================================================================
 
 @shared_task(bind=True, queue="email_high", max_retries=3, default_retry_delay=30)
-def send_magic_code_email(self, to_email: str, code: str, expiry_minutes: int = 10):
+def send_magic_code_email(self, to_email: str, code: str, expiry_minutes: int = 10, org_name: Optional[str] = None):
     """Send magic code email - high priority, immediate delivery."""
+    label = org_name or "FreeFrame"
     try:
-        subject = f"Your FreeFrame login code: {code}"
+        subject = f"Your {label} login code: {code}"
         html_body = render_template(
             "email/magic_code.html",
             subject=subject,
             code=code,
             expiry_minutes=expiry_minutes,
+            org_name=label,
         )
-        text_body = f"Your FreeFrame login code is: {code}. This code expires in {expiry_minutes} minutes."
+        text_body = f"Your {label} login code is: {code}. This code expires in {expiry_minutes} minutes."
         
         success = _send_email(to_email, subject, html_body, text_body)
         if not success:
@@ -70,7 +72,7 @@ def send_invite_email(
 ):
     """Send organization/team invite email - high priority."""
     try:
-        subject = f"You've been invited to join {org_name} on FreeFrame"
+        subject = f"You've been invited to join {org_name}"
         html_body = render_template(
             "email/invite.html",
             subject=subject,
@@ -80,7 +82,7 @@ def send_invite_email(
             invite_link=invite_link,
             expiry_days=expiry_days,
         )
-        text_body = f"{inviter_name} has invited you to join {org_name} on FreeFrame. Accept here: {invite_link}"
+        text_body = f"{inviter_name} has invited you to join {org_name}. Accept here: {invite_link}"
         
         success = _send_email(to_email, subject, html_body, text_body)
         if not success:

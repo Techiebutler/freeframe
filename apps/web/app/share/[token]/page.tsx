@@ -22,6 +22,10 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { GuestCommentInput } from '@/components/review/guest-comment-input'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
+import { useBrandingStore } from '@/stores/branding-store'
+import { useThemeStore } from '@/stores/theme-store'
+import { PoweredByBadge } from '@/components/shared/powered-by-badge'
+
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -67,6 +71,8 @@ interface GuestAuthor {
 interface GuestComment {
   id: string
   body: string
+  guest_name?: string
+  guest_email?: string
   author?: CommentAuthor | null
   guest_author?: GuestAuthor | null
   created_at: string
@@ -90,7 +96,6 @@ async function fetchShareInfo(
   const qs = params.toString() ? `?${params.toString()}` : ''
   const url = `${API_URL}/share/${token}${qs}`
 
-  // Include auth token if user is already logged in (for secure links)
   const headers: Record<string, string> = {}
   let accessToken: string | null = null
   try {
@@ -133,16 +138,25 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
     if (password.trim()) onSubmit(password.trim())
   }
 
+  const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } =
+    useBrandingStore()
+  const { theme } = useThemeStore()
+  const displayLogo = loginLogoUrl || (theme === 'dark' ? (orgLogoDark ?? orgLogoLight) : (orgLogoLight ?? orgLogoDark)) || undefined
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
       <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 shadow-xl">
-        <div className="mb-4 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-muted">
-            <Lock className="h-5 w-5 text-accent" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-text-primary">Password required</h1>
-            <p className="text-xs text-text-tertiary">Enter the password to access this link</p>
+        <div className="mb-4 flex flex-col items-center gap-3">
+          {displayLogo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={displayLogo} alt={orgName} className="h-10 object-contain" />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={`/logo-icon.svg`} alt="FreeFrame" className="h-10 w-10" />
+          )}
+          <div className="text-center">
+            <h1 className="text-sm font-semibold text-text-primary">{orgName}</h1>
+            <p className="text-xs text-text-tertiary mt-1">Password required to access this link</p>
           </div>
         </div>
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -159,6 +173,7 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
             Access link
           </Button>
         </form>
+        <PoweredByBadge className="mt-6 text-center justify-center" />
       </div>
     </div>
   )
@@ -171,6 +186,8 @@ interface ErrorStateProps {
 }
 
 function ErrorState({ expired }: ErrorStateProps) {
+  const { orgName } = useBrandingStore()
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
       <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 text-center shadow-xl">
@@ -191,6 +208,7 @@ function ErrorState({ expired }: ErrorStateProps) {
             ? 'This share link has expired and is no longer accessible.'
             : 'This share link is invalid or has been removed.'}
         </p>
+        <PoweredByBadge className="mt-6" showOrgName />
       </div>
     </div>
   )
@@ -415,9 +433,11 @@ function ShareTopBar({
     }
   }
   const primaryColor = branding?.primary_color ?? '#7c3aed'
+  const { loginLogoUrl, orgLogoDark } = useBrandingStore()
+  const instanceLogoUrl = loginLogoUrl || orgLogoDark || undefined
 
   return (
-    <div className="flex items-center justify-between border-b border-white/[0.06] px-3 h-12 bg-zinc-950 shrink-0">
+    <div className="flex items-center justify-between border-b border-white/[0.06] px-3 h-12 bg-zinc-950 shrink-0 relative">
       {/* Left: back + avatar + breadcrumb */}
       <div className="flex items-center gap-2 min-w-0 flex-1">
         {onBack && (
@@ -443,8 +463,21 @@ function ShareTopBar({
                 ;(e.target as HTMLImageElement).style.display = 'none'
               }}
             />
+          ) : loginLogoUrl || orgLogoDark ? (
+            <img
+              src={instanceLogoUrl}
+              alt=""
+              className="h-full w-full rounded-full object-cover"
+              onError={(e) => {
+                ;(e.target as HTMLImageElement).style.display = 'none'
+              }}
+            />
           ) : (
-            'FF'
+            <img
+              src={`/logo-icon.svg`}
+              alt="FreeFrame"
+              className="h-full w-full"
+            />
           )}
         </div>
 
@@ -460,6 +493,11 @@ function ShareTopBar({
             </>
           )}
         </nav>
+      </div>
+
+      {/* Center: Powered by FreeFrame */}
+      <div className="absolute left-1/2 -translate-x-1/2">
+        <PoweredByBadge className="text-zinc-500" />
       </div>
 
       {/* Right: download + panel toggle */}
@@ -836,6 +874,7 @@ function ShareViewer({
   const [streamLoading, setStreamLoading] = React.useState(false)
   const [commentKey, setCommentKey] = React.useState(0)
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
+  const { orgName } = useBrandingStore()
 
   // For video/audio assets, get a stream URL if not already provided
   React.useEffect(() => {
@@ -855,7 +894,14 @@ function ShareViewer({
       .finally(() => setStreamLoading(false))
   }, [token, asset.asset_type, asset.stream_url, asset.id])
 
-  const displayName = shareName || branding?.custom_title || 'FreeFrame'
+  /*
+   * Branding cascade for the share page top-bar title:
+   *   1. shareName — per-share override (set when creating the share link)
+   *   2. branding?.custom_title — per-project ProjectBranding override
+   *   3. orgName — instance-level org_name from InstanceBranding
+   *   4. 'FreeFrame' — hardcoded fallback
+   */
+  const displayName = shareName || branding?.custom_title || orgName || 'FreeFrame'
 
   return (
     <div className="absolute inset-0 flex flex-col bg-zinc-950 text-white overflow-hidden">
@@ -896,14 +942,19 @@ function ShareViewer({
       </div>
 
       {/* Custom footer */}
-      {branding?.custom_footer && (
+      {branding?.custom_footer ? (
         <div className="shrink-0 border-t border-white/[0.06] px-4 py-1.5 text-center">
           <p className="text-2xs text-zinc-600">{branding.custom_footer}</p>
+        </div>
+      ) : (
+        <div className="shrink-0 border-t border-white/[0.06] px-4 py-1.5 text-center">
+          <PoweredByBadge className="justify-center text-zinc-600" showOrgName />
         </div>
       )}
     </div>
   )
 }
+
 
 
 
@@ -947,6 +998,11 @@ export default function SharePage({
   const [state, setState] = React.useState<PageState>({ stage: 'loading' })
   const [shareSession, setShareSession] = React.useState<string | null>(null)
   const openLogged = React.useRef(false)
+  const { fetchBranding, loaded } = useBrandingStore()
+
+  React.useEffect(() => {
+    if (!loaded) fetchBranding()
+  }, [loaded, fetchBranding])
 
   async function validate(password?: string) {
     if (password) {
@@ -973,12 +1029,10 @@ export default function SharePage({
         return
       }
 
-      // Store share session from password-protected link validation
       if (data.share_session) {
         setShareSession(data.share_session)
       }
 
-      // Folder share mode OR project root share mode
       if ((data.folder_id || data.project_id) && !data.asset_id) {
         const defaultAppearance: ShareLinkAppearance = {
           layout: 'grid',
@@ -1008,7 +1062,6 @@ export default function SharePage({
         return
       }
 
-      // Standard asset share mode
       if (!data.asset) {
         setState({ stage: 'invalid' })
         return

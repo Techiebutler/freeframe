@@ -21,6 +21,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
+import { useBrandingStore } from '@/stores/branding-store'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -1050,8 +1051,9 @@ export function FolderShareViewer({
 
   // Set page title
   React.useEffect(() => {
-    document.title = title ? `${title} – FreeFrame` : 'FreeFrame'
-    return () => { document.title = 'FreeFrame' }
+    const orgName = useBrandingStore.getState().orgName || 'FreeFrame'
+    document.title = title ? `${title} – ${orgName}` : orgName
+    return () => { document.title = orgName }
   }, [title])
   const [selectedAsset, setSelectedAsset] = React.useState<FolderShareAssetItem | null>(null)
 

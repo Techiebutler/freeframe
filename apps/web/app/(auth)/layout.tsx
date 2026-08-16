@@ -1,8 +1,7 @@
-import type { Metadata } from 'next'
-import Image from 'next/image'
+import type { Metadata } from "next"
 
 export const metadata: Metadata = {
-  title: 'FreeFrame — Auth',
+  title: "FreeFrame — Auth",
 }
 
 export default function AuthLayout({
@@ -15,18 +14,6 @@ export default function AuthLayout({
       {/* Subtle radial glow */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute left-1/2 top-1/3 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[600px] rounded-full bg-accent/[0.04] blur-[120px]" />
-      </div>
-
-      {/* Logo */}
-      <div className="relative mb-10">
-        <Image
-          src="/logo-full.png"
-          alt="FreeFrame"
-          width={180}
-          height={48}
-          priority
-          className="h-12 w-auto"
-        />
       </div>
 
       {/* Card */}

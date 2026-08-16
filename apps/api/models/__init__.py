@@ -8,4 +8,5 @@ from .share import ShareLink, AssetShare, ShareLinkActivity, ShareActivityAction
 from .metadata import MetadataField, AssetMetadata, Collection, CollectionShare
 from .branding import ProjectBranding, WatermarkSettings
 from .instance_settings import InstanceSettings
+from .instance_branding import InstanceBranding
 from .activity import Mention, ActivityLog, Notification
