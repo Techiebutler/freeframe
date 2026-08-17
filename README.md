@@ -31,6 +31,7 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 - **Guest commenting** via share links (no account required)
 - **Due date tracking** with email reminders
 - **Real-time updates** via Server-Sent Events
+- **Instance branding** — white-label your deployment with your org name, logos, favicon, and accent color, and hide the "Powered by FreeFrame" badge
 - **Self-hosted** with Docker Compose — runs on any server or cloud VM
 
 ### Compare any two versions
