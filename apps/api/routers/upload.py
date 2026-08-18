@@ -1,6 +1,6 @@
 import logging
 import os
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 import uuid
@@ -182,9 +182,16 @@ def _already_assembled(s3_key: str, expected_bytes: int, version_id) -> bool:
     """
     try:
         return head_object_size(s3_key) == expected_bytes
-    except ClientError:
+    except (ClientError, BotoCoreError):
         # A HeadObject we cannot complete says nothing either way, and guessing wrong
         # here either loses a finished upload or reports a missing one as done.
+        #
+        # Both classes, because they are siblings: a refusal from the backend is a
+        # ClientError, but never reaching it -- EndpointConnectionError,
+        # ConnectTimeoutError, ReadTimeoutError -- is a BotoCoreError. Catching only
+        # the first turns a storage blip into an unhandled 500 out of an endpoint
+        # whose whole job here is to answer a retry, and the client fires
+        # /upload/abort from the catch of any completion failure, 500 included.
         logger.warning("could not check whether upload %s already completed", version_id,
                        exc_info=True)
         return False

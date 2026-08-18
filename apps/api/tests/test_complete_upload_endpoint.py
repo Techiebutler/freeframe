@@ -8,7 +8,9 @@ import uuid
 from unittest.mock import MagicMock
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError, ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError,
+)
 
 import apps.api.routers.upload as upload_module
 from apps.api.models.asset import ProcessingStatus
@@ -257,6 +259,53 @@ def test_retry_with_a_short_object_at_the_key_is_refused(
     )
 
     assert resp.status_code == 409
+
+
+@pytest.mark.parametrize("blip", [
+    EndpointConnectionError(endpoint_url="http://storage:9000"),
+    ConnectTimeoutError(endpoint_url="http://storage:9000"),
+    ReadTimeoutError(endpoint_url="http://storage:9000"),
+])
+def test_retry_survives_a_storage_blip_as_a_conflict_not_a_crash(
+    client, auth_headers, mock_db, test_user, monkeypatch, blip
+):
+    """Storage being briefly unreachable must degrade to the old answer, not to a 500.
+
+    These are `BotoCoreError`s, not `ClientError`s -- never reaching the backend is a
+    different class from being refused by it. The check above now runs on the common
+    retry path, so an uncaught one would surface as an unhandled 500 exactly when a
+    user's upload is fine, and the client fires /upload/abort from the catch of any
+    completion failure, 500 included.
+
+    A HeadObject we could not complete says nothing either way, so the request falls
+    through to the 409 it would have got before this change.
+    """
+    def _blip(_key):
+        raise blip
+
+    version = MagicMock()
+    version.id = uuid.uuid4()
+    version.created_by = test_user.id
+    version.processing_status = ProcessingStatus.processing
+
+    media_file = MagicMock()
+    media_file.s3_key_raw = "raw/p/a/v/original.mp4"
+    media_file.file_size_bytes = 23 * MB
+    mock_db.first.side_effect = [version, media_file]
+
+    dispatched = []
+    monkeypatch.setattr(upload_module, "_trigger_processing", lambda a, v: dispatched.append(v))
+    monkeypatch.setattr(upload_module, "list_upload_parts",
+                        lambda k, u: pytest.fail("storage listing must not be touched"))
+    monkeypatch.setattr(upload_module, "head_object_size", _blip)
+
+    resp = client.post(
+        "/upload/complete", json=_body(media_file, upload_id="junk"), headers=auth_headers
+    )
+
+    assert resp.status_code == 409
+    assert version.processing_status == ProcessingStatus.processing
+    assert dispatched == []
 
 
 # ------------------------------------------------------------------ idempotency
