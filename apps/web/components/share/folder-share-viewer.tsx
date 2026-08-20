@@ -19,6 +19,7 @@ import {
   ArrowLeft,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { withBasePath } from '@/lib/base-path'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
@@ -1090,38 +1091,8 @@ export function FolderShareViewer({
     : 'aspect-[16/10]'
 
   // Apply share link theme (overrides user's global theme on the share page)
-  React.useEffect(() => {
-    const theme = isDark ? 'dark' : 'light'
-    document.documentElement.setAttribute('data-theme', theme)
-    return () => {
-      // Restore user's theme when leaving share page
-      try {
-        const stored = JSON.parse(localStorage.getItem('ff-theme') || '{}')
-        const userTheme = stored?.state?.theme || 'dark'
-        const resolved = userTheme === 'system'
-          ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-          : userTheme
-        document.documentElement.setAttribute('data-theme', resolved)
-      } catch {
-        document.documentElement.setAttribute('data-theme', 'dark')
-      }
-    }
-  }, [isDark])
+  useShareAppearance(accentColor, isDark)
 
-  // Apply accent color via injected <style> tag — more reliable than inline CSS var override
-  React.useEffect(() => {
-    const styleId = 'ff-share-accent'
-    let el = document.getElementById(styleId) as HTMLStyleElement | null
-    if (!el) {
-      el = document.createElement('style')
-      el.id = styleId
-      document.head.appendChild(el)
-    }
-    el.textContent = `:root { --accent: ${accentColor} !important; }`
-    return () => {
-      document.getElementById(styleId)?.remove()
-    }
-  }, [accentColor])
 
   // Whether clicking opens viewer
   const openInViewer = appearance.open_in_viewer !== false
