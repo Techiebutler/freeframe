@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { withBasePath } from './lib/base-path'
 
 const PUBLIC_ROUTES = ['/login', '/setup']
 const PUBLIC_PREFIXES = ['/invite/', '/share/']
@@ -31,7 +32,7 @@ export async function middleware(request: NextRequest) {
       if (res.ok) {
         const data = await res.json()
         if (data.needs_setup) {
-          return NextResponse.redirect(new URL('/setup', request.url))
+          return NextResponse.redirect(new URL(withBasePath('/setup'), request.url))
         }
         // Setup is done — set cookie so we don't check again
         const response = NextResponse.next()
@@ -48,7 +49,7 @@ export async function middleware(request: NextRequest) {
   const refreshToken = request.cookies.get('ff_refresh_token')?.value
 
   if (!accessToken && !refreshToken) {
-    const loginUrl = new URL('/login', request.url)
+    const loginUrl = new URL(withBasePath('/login'), request.url)
     loginUrl.searchParams.set('from', pathname)
     return NextResponse.redirect(loginUrl)
   }

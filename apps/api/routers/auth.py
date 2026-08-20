@@ -11,6 +11,7 @@ from ..schemas.auth import (
     VerifyMagicCodeRequest, SetPasswordRequest,
     AcceptInviteRequest, InviteInfoResponse,
     ChangePasswordRequest,
+    PreferencesUpdate,
 )
 from ..services.auth_service import (
     hash_password, verify_password,
@@ -29,6 +30,15 @@ from ..middleware.auth import get_current_user
 from ..middleware.rate_limit import rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# One message for every magic-code failure. Reporting "too many attempts"
+# separately would tell a caller which addresses are registered (only a real
+# account ever gets a code issued, so only a real account can exhaust its
+# attempts), so the wording covers the one recoverable case without revealing
+# which case actually occurred.
+MAGIC_CODE_FAILURE_DETAIL = (
+    "Invalid or expired code. Request a new code if you've tried several times."
+)
 
 MAGIC_CODE_EXPIRY_MINUTES = MAGIC_CODE_EXPIRY_SECONDS // 60
 
@@ -67,7 +77,7 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
         send_task_safe(send_magic_code_email, body.email, code, MAGIC_CODE_EXPIRY_MINUTES, org_name)
     except Exception:
         pass  # Email delivery is best-effort; code is already in Redis
-    
+
     return SendMagicCodeResponse(
         message="Magic code sent to your email",
         email=body.email,
@@ -81,16 +91,16 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
     Returns needs_password=True if user hasn't set a password yet.
     """
     user = get_user_by_email(db, body.email)
-    
+
     # "No such user" and "deactivated" get the same generic failure as a wrong/expired code —
     # distinguishing them would let a caller enumerate registered or deactivated emails.
     if not user or user.status == UserStatus.deactivated:
-        raise HTTPException(status_code=401, detail="Invalid or expired code")
+        raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
 
     # Verify magic code from Redis
     success, error = redis_verify_magic_code(body.email, body.code)
     if not success:
-        raise HTTPException(status_code=401, detail=error)
+        raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
     
     # Mark email as verified
     user.email_verified = True
@@ -191,7 +201,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(rate_limit("refresh_token", 30, 60))])
 def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
     payload = decode_token(body.refresh_token)
     if not payload or payload.get("type") != "refresh":
@@ -215,13 +225,16 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 @router.patch("/me/preferences", response_model=UserResponse)
 def update_preferences(
-    body: dict,
+    body: PreferencesUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Update user preferences (theme, etc). Merges with existing preferences."""
     current_prefs = current_user.preferences or {}
-    current_prefs.update(body)
+    # Only known keys are accepted by PreferencesUpdate; merge them onto
+    # existing prefs so unspecified keys are preserved.
+    update_data = body.model_dump(exclude_unset=True)
+    current_prefs.update(update_data)
     current_user.preferences = current_prefs
     # Force SQLAlchemy to detect the JSON change
     from sqlalchemy.orm.attributes import flag_modified

@@ -1,3 +1,5 @@
+import { withBasePath } from './base-path'
+
 const ACCESS_TOKEN_KEY = 'ff_access_token'
 const REFRESH_TOKEN_KEY = 'ff_refresh_token'
 
@@ -29,7 +31,7 @@ export function clearTokens(): void {
   // Clear auth cookies
   document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0`
   document.cookie = `${REFRESH_TOKEN_KEY}=; path=/; max-age=0`
-  window.location.href = '/login'
+  window.location.href = withBasePath('/login')
 }
 
 // Deduplicate concurrent refresh calls — when access token expires, multiple

@@ -64,7 +64,7 @@ def test_login_wrong_password(client, mock_db):
     with patch(_VERIFY_PATCH, return_value=False):
         resp = client.post(
             "/auth/login",
-            json={"email": "wp@example.com", "password": "wrong"},
+            json={"email": "wp@example.com", "password": "wrongpass"},
         )
 
     assert resp.status_code == 401
@@ -190,7 +190,10 @@ def test_verify_magic_code_deactivated_user_generic_401(client, mock_db):
         resp = client.post("/auth/verify-magic-code", json={"email": "deactivated@example.com", "code": "000000"})
 
     assert resp.status_code == 401
-    assert resp.json()["detail"] == "Invalid or expired code"
+    # Compared against the shared constant so the two raise sites can't drift
+    # apart into distinguishable messages.
+    from apps.api.routers.auth import MAGIC_CODE_FAILURE_DETAIL
+    assert resp.json()["detail"] == MAGIC_CODE_FAILURE_DETAIL
 
 
 def test_verify_magic_code_success(client, mock_db):

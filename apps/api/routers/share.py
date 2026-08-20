@@ -34,12 +34,15 @@ from ..schemas.share import (
     ShareLinkResponse,
     ShareLinkUpdate,
     ShareLinkValidateResponse,
+    ShareVerifyRequest,
 )
 from ..services.permissions import (
     require_project_role, validate_share_link, validate_share_link_with_session,
-    validate_asset_in_share, _is_descendant_of,
+    validate_asset_in_share, enforce_share_link_visibility, _is_descendant_of,
 )
+from ..services.auth_service import bcrypt_password_bytes
 from ..services.redis_service import create_share_session
+from ..services.search import escape_like
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.crypto_service import encrypt_password, decrypt_password
 from .hls_proxy import create_hls_token
@@ -49,11 +52,6 @@ from ..tasks.celery_app import send_task_safe
 from ..config import settings
 
 router = APIRouter(tags=["sharing"])
-
-
-def _escape_like(s: str) -> str:
-    """Escape special LIKE pattern characters to prevent injection."""
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
@@ -172,7 +170,7 @@ def create_share_link(
 
     token = secrets.token_urlsafe(32)
     if body.password:
-        pwd_bytes = body.password[:72].encode('utf-8')
+        pwd_bytes = bcrypt_password_bytes(body.password)
         salt = bcrypt.gensalt()
         password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
         password_encrypted = encrypt_password(body.password)
@@ -190,6 +188,7 @@ def create_share_link(
         password_hash=password_hash,
         password_encrypted=password_encrypted,
         permission=body.permission,
+        visibility=body.visibility,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
         show_watermark=body.show_watermark,
@@ -216,29 +215,19 @@ def list_share_links(
     ).all()
 
 
-@router.get("/share/{token}", response_model=ShareLinkValidateResponse, dependencies=[Depends(rate_limit("share_validate", 30, 60))])
-def validate_share_link_endpoint(
-    token: str,
-    password: Optional[str] = None,
+def _build_share_validate_response(
+    db: Session,
+    link: ShareLink,
+    current_user: Optional[User],
+    session_id: Optional[str] = None,
     log_open: bool = False,
-    db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_optional_user),
-):
-    """Public endpoint — optional auth. For secure links, requires authenticated user."""
-    link = validate_share_link(db, token)
+) -> ShareLinkValidateResponse:
+    """Build the full ShareLinkValidateResponse for a validated link.
 
-    # Check secure visibility — requires authenticated user
-    if link.visibility == "secure":
-        if not current_user:
-            return ShareLinkValidateResponse(
-                requires_auth=True,
-                requires_password=False,
-                title=link.title,
-                permission=link.permission,
-                visibility=link.visibility,
-            )
-
-    # Resolve folder name if this is a folder share
+    Called by both GET /share/{token} (no password verification) and
+    POST /share/{token}/verify (password verification).
+    """
+    # Resolve folder / project names
     folder_name = None
     project_name = None
     if link.folder_id:
@@ -249,25 +238,6 @@ def validate_share_link_endpoint(
         project = db.query(Project).filter(Project.id == link.project_id, Project.deleted_at.is_(None)).first()
         if project:
             project_name = project.name
-
-    session_id = None
-    if link.password_hash:
-        if not password:
-            return ShareLinkValidateResponse(
-                requires_password=True,
-                title=link.title,
-                permission=link.permission,
-            )
-        try:
-            plain_bytes = password[:72].encode('utf-8')
-            hashed_bytes = link.password_hash.encode('utf-8')
-            if not bcrypt.checkpw(plain_bytes, hashed_bytes):
-                raise HTTPException(status_code=403, detail="Incorrect password")
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Incorrect password")
-        # Password verified — create a session so subsequent requests skip re-verification
-        session_id = secrets.token_urlsafe(32)
-        create_share_session(token, session_id)
 
     if log_open:
         actor_email = current_user.email if current_user else "anonymous"
@@ -345,6 +315,101 @@ def validate_share_link_endpoint(
     )
 
 
+@router.get("/share/{token}", response_model=ShareLinkValidateResponse, dependencies=[Depends(rate_limit("share_validate", 30, 60))])
+def validate_share_link_endpoint(
+    token: str,
+    log_open: bool = False,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Public endpoint — optional auth. For secure links, requires authenticated user.
+
+    Does NOT verify the share-link password. Password-protected links return
+    `requires_password=True`; the caller must POST /share/{token}/verify with
+    the password in the body to obtain a `share_session`. The password used to
+    be a query parameter on this GET, which leaked it into nginx access logs,
+    browser history, Referer headers, and Cloudflare Tunnel logs.
+    """
+    link = validate_share_link(db, token)
+
+    # Check secure visibility — requires authenticated user. This is the one
+    # place that answers with requires_auth instead of raising, so the client
+    # can render a sign-in prompt; every other endpoint enforces the same rule
+    # via permissions.enforce_share_link_visibility.
+    if link.visibility == "secure":
+        if not current_user:
+            return ShareLinkValidateResponse(
+                requires_auth=True,
+                requires_password=False,
+                title=link.title,
+                permission=link.permission,
+                visibility=link.visibility,
+            )
+
+    # Password-protected links: short-circuit and request POST /verify.
+    # Authenticated link creator bypasses the password (dashboard preview).
+    if link.password_hash:
+        if current_user and link.created_by == current_user.id:
+            return _build_share_validate_response(db, link, current_user, log_open=log_open)
+        return ShareLinkValidateResponse(
+            requires_password=True,
+            title=link.title,
+            permission=link.permission,
+        )
+
+    return _build_share_validate_response(db, link, current_user, log_open=log_open)
+
+
+@router.post(
+    "/share/{token}/verify",
+    response_model=ShareLinkValidateResponse,
+    dependencies=[Depends(rate_limit("share_verify", 30, 60))],
+)
+def verify_share_link_password(
+    token: str,
+    body: ShareVerifyRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Verify a share-link password and return the full validate response
+    with a `share_session` for subsequent requests.
+
+    The password is sent in the request body (not as a query string param)
+    so it isn't logged by nginx, browser history, Referer headers, or proxy
+    logs. See SECURITY_AUDIT H3.
+    """
+    link = validate_share_link(db, token)
+
+    # Check secure visibility — requires authenticated user (same gate as
+    # the GET endpoint). Without this, an anonymous caller who knows the
+    # password of a secure+password link could POST /verify and get the
+    # full response including asset_id and presigned stream URLs, bypassing
+    # the login requirement.
+    enforce_share_link_visibility(link, current_user)
+
+    # Authenticated link creator bypasses the password (dashboard preview)
+    if not (current_user and link.created_by == current_user.id):
+        if not link.password_hash:
+            # No password set — nothing to verify. Return the validate response.
+            return _build_share_validate_response(db, link, current_user)
+        try:
+            plain_bytes = bcrypt_password_bytes(body.password)
+            hashed_bytes = link.password_hash.encode('utf-8')
+            if not bcrypt.checkpw(plain_bytes, hashed_bytes):
+                raise HTTPException(status_code=403, detail="Incorrect password")
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Incorrect password")
+
+    # Password verified (or creator bypass) — create a session so
+    # subsequent /share/{token}/assets, /comments, etc. skip re-verification.
+    session_id = secrets.token_urlsafe(32)
+    create_share_session(token, session_id)
+
+    return _build_share_validate_response(
+        db, link, current_user, session_id=session_id, log_open=body.log_open
+    )
+
+
 def _share_link_response(link: ShareLink) -> ShareLinkResponse:
     """Build ShareLinkResponse from ORM model, computing has_password and decrypting password."""
     response = ShareLinkResponse.model_validate(link)
@@ -398,7 +463,7 @@ def update_share_link(
     if "password" in updates:
         raw_password = updates.pop("password")
         if raw_password:
-            pwd_bytes = raw_password[:72].encode('utf-8')
+            pwd_bytes = bcrypt_password_bytes(raw_password)
             salt = bcrypt.gensalt()
             link.password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
             link.password_encrypted = encrypt_password(raw_password)
@@ -447,7 +512,7 @@ def create_folder_share_link(
 
     token = secrets.token_urlsafe(32)
     if body.password:
-        pwd_bytes = body.password[:72].encode('utf-8')
+        pwd_bytes = bcrypt_password_bytes(body.password)
         salt = bcrypt.gensalt()
         password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
         password_encrypted = encrypt_password(body.password)
@@ -465,6 +530,7 @@ def create_folder_share_link(
         password_hash=password_hash,
         password_encrypted=password_encrypted,
         permission=body.permission,
+        visibility=body.visibility,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
         show_watermark=body.show_watermark,
@@ -491,7 +557,7 @@ def create_project_share_link(
 
     token = secrets.token_urlsafe(32)
     if body.password:
-        pwd_bytes = body.password[:72].encode('utf-8')
+        pwd_bytes = bcrypt_password_bytes(body.password)
         salt = bcrypt.gensalt()
         password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
         password_encrypted = encrypt_password(body.password)
@@ -509,6 +575,7 @@ def create_project_share_link(
         password_hash=password_hash,
         password_encrypted=password_encrypted,
         permission=body.permission,
+        visibility=body.visibility,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
         show_watermark=body.show_watermark,
@@ -944,7 +1011,7 @@ def list_project_share_links(
     )
 
     if search:
-        escaped = _escape_like(search)
+        escaped = escape_like(search)
         asset_query = asset_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
         folder_query = folder_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
         project_query = project_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
@@ -1102,7 +1169,7 @@ def create_multi_share_link(
     password_hash = None
     password_encrypted = None
     if body.password:
-        plain_bytes = body.password[:72].encode("utf-8")
+        plain_bytes = bcrypt_password_bytes(body.password)
         password_hash = bcrypt.hashpw(plain_bytes, bcrypt.gensalt()).decode("utf-8")
         try:
             password_encrypted = encrypt_password(body.password)

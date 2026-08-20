@@ -38,6 +38,23 @@ app = FastAPI(
     openapi_url=None if _disable_docs else "/openapi.json",
 )
 
+# Surface an obvious warning when the interactive API docs + OpenAPI schema
+# are exposed on a production frontend. The schema enumerates every endpoint
+# and Pydantic field on the app, which is a significant attack-surface leak
+# when FRONTEND_URL is a public hostname. The /docs,/redoc,/openapi.json
+# endpoints should be disabled in production via DISABLE_DOCS=true.
+if not _disable_docs:
+    from urllib.parse import urlparse
+    _fu = (settings.frontend_url or "").strip()
+    _fh = (urlparse(_fu).hostname or "").lower()
+    if _fh and _fh not in ("localhost", "127.0.0.1", "0.0.0.0"):
+        logging.getLogger("apps.api.startup").warning(
+            "FastAPI docs and OpenAPI schema are ENABLED at /docs, /redoc, "
+            "/openapi.json with FRONTEND_URL=%r (non-localhost). Set "
+            "DISABLE_DOCS=true in production to suppress this exposure.",
+            _fu,
+        )
+
 _cors_extra = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
 if "*" in _cors_extra:
     # Allow any origin. A literal "*" can't be combined with allow_credentials,
