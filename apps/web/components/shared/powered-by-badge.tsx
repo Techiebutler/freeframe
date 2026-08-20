@@ -10,37 +10,23 @@ interface PoweredByBadgeProps {
   showIcon?: boolean
 }
 
-function FreeFrameIcon({ id }: { id: string }) {
+/** The FreeFrame mark on its own: the exact artwork the favicon uses
+ *  (public/logo-icon.png is byte-identical to app/icon.png), with no wordmark,
+ *  since the line already reads "Powered by FreeFrame". Two files rather than
+ *  one because the mark is a flat silhouette, so it needs inverting per theme —
+ *  the same logo-dark/logo-light pair the sidebar uses. */
+function FreeFrameMark() {
   return (
-    <svg
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="h-3 w-3 shrink-0"
-      aria-hidden="true"
-    >
-      <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="32" y2="32">
-          <stop offset="0%" stopColor="#7c3aed" />
-          <stop offset="100%" stopColor="#a855f7" />
-        </linearGradient>
-      </defs>
-      <rect width="32" height="32" rx="8" fill={`url(#${id})`} />
-      <text
-        x="16"
-        y="22"
-        textAnchor="middle"
-        fontFamily="system-ui, -apple-system, sans-serif"
-        fontWeight="700"
-        fontSize="17"
-        fill="white"
-        letterSpacing="-0.5"
-      >
-        FF
-      </text>
-    </svg>
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo-icon.png" alt="" aria-hidden="true" className="logo-dark h-3.5 w-3.5 shrink-0 object-contain" />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo-icon-dark.png" alt="" aria-hidden="true" className="logo-light h-3.5 w-3.5 shrink-0 object-contain" />
+    </>
   )
 }
+
+const FREEFRAME_REPO_URL = 'https://github.com/Techiebutler/freeframe'
 
 export function PoweredByBadge({
   className,
@@ -48,21 +34,38 @@ export function PoweredByBadge({
   showIcon = true,
 }: PoweredByBadgeProps) {
   const { poweredByFreeframe, orgName } = useBrandingStore()
-  const gradientId = React.useId()
 
   if (!poweredByFreeframe) return null
 
-  return (
-    <p
-      className={cn(
-        'inline-flex items-center gap-1.5 text-xs text-text-tertiary',
-        className,
-      )}
-    >
-      {showIcon && <FreeFrameIcon id={gradientId} />}
+  const classes = cn(
+    'inline-flex items-center gap-1.5 text-xs text-text-tertiary',
+    className,
+  )
+  const content = (
+    <>
+      {showIcon && <FreeFrameMark />}
       <span>
         Powered by {showOrgName ? orgName || 'FreeFrame' : 'FreeFrame'}
       </span>
-    </p>
+    </>
+  )
+
+  // Only the FreeFrame credit links out. With showOrgName the line reads
+  // "Powered by <the org>", and pointing that at FreeFrame's repository would
+  // send people somewhere the text never promised.
+  if (showOrgName) {
+    return <p className={classes}>{content}</p>
+  }
+
+  return (
+    <a
+      href={FREEFRAME_REPO_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="FreeFrame on GitHub"
+      className={cn(classes, 'transition-colors hover:text-text-secondary')}
+    >
+      {content}
+    </a>
   )
 }

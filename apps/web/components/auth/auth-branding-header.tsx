@@ -40,12 +40,22 @@ export function AuthBrandingHeader() {
           }}
         />
       ) : (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={FALLBACK_LOGO}
-          alt="FreeFrame"
-          className="h-12 mx-auto mb-3 object-contain"
-        />
+        // The default lockup is a flat silhouette, so it needs inverting per
+        // theme — same logo-dark/logo-light pair the sidebar uses.
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={FALLBACK_LOGO}
+            alt="FreeFrame"
+            className="logo-dark h-12 mx-auto mb-3 object-contain"
+          />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo-full-dark.svg"
+            alt="FreeFrame"
+            className="logo-light h-12 mx-auto mb-3 object-contain"
+          />
+        </>
       )}
       <h1 className="text-xl font-semibold text-text-primary">{orgName}</h1>
     </div>

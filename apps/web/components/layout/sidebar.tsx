@@ -18,9 +18,8 @@ import { useAuthStore } from '@/stores/auth-store'
 import { useUploadStore } from '@/stores/upload-store'
 import { useNotificationStore } from '@/stores/notification-store'
 import { useBrandingStore } from '@/stores/branding-store'
-import { useThemeStore } from '@/stores/theme-store'
+import { useResolvedTheme } from '@/hooks/use-resolved-theme'
 import { Avatar } from '@/components/shared/avatar'
-import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import { NotificationDrawer } from './notification-drawer'
 import useSWR from 'swr'
 import { api } from '@/lib/api'
@@ -49,7 +48,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { unreadCount, fetchNotifications } = useNotificationStore()
   const { orgName, orgLogoDark, orgLogoLight } =
     useBrandingStore()
-  const { theme } = useThemeStore()
+  // Resolved, not the raw preference: 'system' is neither 'light' nor 'dark',
+  // so comparing it directly handed a system-light viewer the dark-background
+  // logo on a light page.
+  const theme = useResolvedTheme()
   const customLogo =
     theme === 'light'
       ? orgLogoLight ?? orgLogoDark
@@ -92,25 +94,22 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={`/logo-icon.svg`}
+                src={`/logo-icon.png`}
                 alt={orgName}
                 className="h-7 w-7 shrink-0 object-contain logo-dark"
               />
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={`/logo-icon-dark.svg`}
+                src={`/logo-icon-dark.png`}
                 alt={orgName}
                 className="h-7 w-7 shrink-0 object-contain logo-light"
               />
             </>
           )}
           {!collapsed && (
-            <div className="flex flex-col min-w-0">
-              <span className="text-sm font-semibold text-text-primary tracking-tight truncate">
-                {orgName}
-              </span>
-              <PoweredByBadge />
-            </div>
+            <span className="text-sm font-semibold text-text-primary tracking-tight truncate">
+              {orgName}
+            </span>
           )}
         </div>
 

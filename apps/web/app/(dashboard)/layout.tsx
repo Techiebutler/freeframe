@@ -9,6 +9,7 @@ import { Header } from "@/components/layout/header";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { UploadsPanel } from "@/components/layout/uploads-panel";
 import { UploadSSEBridge } from "@/components/layout/upload-sse-bridge";
+import { PoweredByBadge } from "@/components/shared/powered-by-badge";
 import { cn } from "@/lib/utils";
 
 export default function DashboardLayout({
@@ -60,6 +61,12 @@ export default function DashboardLayout({
 
         <div className="relative flex-1 overflow-y-auto">{children}</div>
       </main>
+
+      {/* Attribution floats over the content rather than living in the sidebar,
+          so it stays put whether the rail is collapsed or expanded and doesn't
+          compete with the org name for the 48px logo header. Renders nothing
+          when an admin turns "Powered by FreeFrame" off. */}
+      <PoweredByBadge className="fixed bottom-4 right-4 z-20 rounded-full border border-border bg-bg-elevated/90 px-3 py-1.5 shadow-lg backdrop-blur-sm" />
 
       <UploadsPanel />
       <UploadSSEBridge />
