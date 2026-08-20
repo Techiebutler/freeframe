@@ -7,18 +7,29 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models.user import User, UserStatus
 
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
+def bcrypt_password_bytes(password: str) -> bytes:
+    """Encode a password to the bytes bcrypt will actually hash.
+
+    bcrypt's limit is 72 *bytes*, not characters. Slicing the str first
+    (password[:72]) truncates by character, so a password of multi-byte
+    characters still hands bcrypt more than 72 bytes and it silently ignores
+    the tail — two different passwords sharing a 72-byte prefix then verify
+    against the same hash. Encode first, then slice, so the truncation point
+    is explicit and matches what bcrypt does internally.
+    """
+    return password.encode('utf-8')[:BCRYPT_MAX_PASSWORD_BYTES]
+
 def hash_password(password: str) -> str:
-    # bcrypt has a 72 byte limit, truncate to avoid errors
-    pwd_bytes = password[:72].encode('utf-8')
     salt = bcrypt.gensalt()
-    hashed_bytes = bcrypt.hashpw(pwd_bytes, salt)
+    hashed_bytes = bcrypt.hashpw(bcrypt_password_bytes(password), salt)
     return hashed_bytes.decode('utf-8')
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
-        plain_bytes = plain[:72].encode('utf-8')
         hashed_bytes = hashed.encode('utf-8')
-        return bcrypt.checkpw(plain_bytes, hashed_bytes)
+        return bcrypt.checkpw(bcrypt_password_bytes(plain), hashed_bytes)
     except ValueError:
         return False
 

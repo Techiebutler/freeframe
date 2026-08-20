@@ -30,6 +30,15 @@ from ..middleware.rate_limit import rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# One message for every magic-code failure. Reporting "too many attempts"
+# separately would tell a caller which addresses are registered (only a real
+# account ever gets a code issued, so only a real account can exhaust its
+# attempts), so the wording covers the one recoverable case without revealing
+# which case actually occurred.
+MAGIC_CODE_FAILURE_DETAIL = (
+    "Invalid or expired code. Request a new code if you've tried several times."
+)
+
 MAGIC_CODE_EXPIRY_MINUTES = MAGIC_CODE_EXPIRY_SECONDS // 60
 
 
@@ -83,12 +92,12 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
     # "No such user" and "deactivated" get the same generic failure as a wrong/expired code —
     # distinguishing them would let a caller enumerate registered or deactivated emails.
     if not user or user.status == UserStatus.deactivated:
-        raise HTTPException(status_code=401, detail="Invalid or expired code")
+        raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
 
     # Verify magic code from Redis
     success, error = redis_verify_magic_code(body.email, body.code)
     if not success:
-        raise HTTPException(status_code=401, detail="Invalid or expired code")
+        raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
     
     # Mark email as verified
     user.email_verified = True

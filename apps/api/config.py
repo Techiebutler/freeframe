@@ -118,4 +118,21 @@ class Settings(BaseSettings):
                 )
         return self
 
+    @property
+    def frontend_origin(self) -> str:
+        """`frontend_url` reduced to a bare `scheme://host[:port]` origin.
+
+        A browser's Origin header never carries a path, so a sub-path
+        deployment (FRONTEND_URL=https://host/freeframe) has to be matched
+        against https://host — using the raw URL means no CORS check ever
+        matches. Falls back to the configured value when it isn't parseable
+        as an absolute URL.
+        """
+        from urllib.parse import urlparse
+        raw = (self.frontend_url or "").strip()
+        parsed = urlparse(raw)
+        if not parsed.scheme or not parsed.netloc:
+            return raw
+        return f"{parsed.scheme}://{parsed.netloc}"
+
 settings = Settings()

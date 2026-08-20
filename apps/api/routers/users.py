@@ -12,16 +12,9 @@ from ..tasks.email_tasks import send_invite_email
 from ..tasks.celery_app import send_task_safe
 from ..config import settings
 from ..services import s3_service
+from ..services.search import escape_like
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-
-def _escape_like(s: str) -> str:
-    """Escape special LIKE pattern characters so user-supplied search
-    text is matched literally (not as wildcards). Not SQL injection —
-    SQLAlchemy parameterizes — but `%`/`_` would otherwise act as
-    wildcards and could be used to enumerate or DoS the search."""
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @router.get("", response_model=list[UserResponse])
@@ -48,7 +41,7 @@ def search_users(
     current_user: User = Depends(get_current_user),
 ):
     """Search users by name or email. Returns up to 10 matching users."""
-    pattern = f"%{_escape_like(q)}%"
+    pattern = f"%{escape_like(q)}%"
     users = db.query(User).filter(
         User.deleted_at.is_(None),
         (User.name.ilike(pattern) | User.email.ilike(pattern)),

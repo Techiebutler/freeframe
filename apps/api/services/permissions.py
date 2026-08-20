@@ -128,15 +128,33 @@ def validate_share_link(db: Session, token: str) -> ShareLink:
     return link
 
 
+def enforce_share_link_visibility(link: ShareLink, current_user: "User | None") -> None:
+    """Enforce a share link's visibility setting. Raises 403 for a `secure` link
+    with no authenticated caller.
+
+    Every endpoint that serves share-link content must run this — gating it only
+    where the link is first validated leaves the content endpoints (stream,
+    thumbnail, versions, listings, comments) reachable with the token alone,
+    which defeats the login requirement `secure` exists to impose.
+    """
+    if link.visibility == "secure" and not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authentication required for this link's visibility setting",
+        )
+
+
 def validate_share_link_with_session(
     db: Session,
     token: str,
     share_session: "str | None" = None,
     current_user: "User | None" = None,
 ) -> ShareLink:
-    """Validate a share link and verify password session if link is password-protected.
+    """Validate a share link, enforce its visibility setting, and verify the
+    password session if the link is password-protected.
     Skips password check if the caller is the authenticated link creator."""
     link = validate_share_link(db, token)
+    enforce_share_link_visibility(link, current_user)
     if link.password_hash:
         # Skip password for authenticated link creator (e.g. admin settings preview)
         if current_user and link.created_by == current_user.id:

@@ -1,3 +1,5 @@
+import { withBasePath } from './base-path'
+
 const ACCESS_TOKEN_KEY = 'ff_access_token'
 const REFRESH_TOKEN_KEY = 'ff_refresh_token'
 
@@ -29,12 +31,7 @@ export function clearTokens(): void {
   // Clear auth cookies
   document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0`
   document.cookie = `${REFRESH_TOKEN_KEY}=; path=/; max-age=0`
-  // Respect the configured basePath so deployments mounted at a sub-path
-  // (e.g. /freeframe/) don't bounce to the bare /login and trigger the
-  // nginx catch-all 302 chain. Falls back to '/login' when basePath isn't
-  // set (the upstream default).
-  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
-  window.location.href = `${basePath}/login`
+  window.location.href = withBasePath('/login')
 }
 
 // Deduplicate concurrent refresh calls — when access token expires, multiple

@@ -19,6 +19,7 @@ import {
   Music,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { GuestCommentInput } from '@/components/review/guest-comment-input'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
@@ -110,6 +111,17 @@ async function fetchShareInfo(
     })
     if (!resp.ok) {
       if (resp.status === 403) {
+        // /verify answers 403 both for a wrong password and for a `secure`
+        // link whose viewer isn't signed in. Reporting the latter as
+        // "Incorrect password" strands the viewer retyping a password that
+        // was never the problem — they need the sign-in prompt instead.
+        const detail = await resp
+          .json()
+          .then((d) => d?.detail)
+          .catch(() => null)
+        if (typeof detail === 'string' && detail.includes('Authentication required')) {
+          return { requires_auth: true }
+        }
         return { requires_password: true, error: 'Incorrect password' }
       }
       if (resp.status === 410) return { expired: true }
@@ -392,6 +404,7 @@ interface ShareTopBarProps {
   downloadUrl: string | null
   token: string
   assetId: string
+  shareSession?: string | null
   sidebarOpen: boolean
   onToggleSidebar: () => void
   onBack?: () => void
@@ -405,6 +418,7 @@ function ShareTopBar({
   downloadUrl,
   token,
   assetId,
+  shareSession,
   sidebarOpen,
   onToggleSidebar,
   onBack,
@@ -415,7 +429,12 @@ function ShareTopBar({
   async function handleDownload() {
     setDownloading(true)
     try {
-      const res = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true`)
+      // The stream endpoint re-checks the password session, so a
+      // password-protected link 403s here without it and the download
+      // silently does nothing.
+      const params = new URLSearchParams({ download: 'true' })
+      if (shareSession) params.set('share_session', shareSession)
+      const res = await fetch(`${API_URL}/share/${token}/stream/${assetId}?${params}`)
       if (!res.ok) return
       const data = await res.json()
       if (data?.url) {
@@ -867,7 +886,11 @@ function ShareViewer({
     }
     if (asset.asset_type !== 'video' && asset.asset_type !== 'audio') return
     setStreamLoading(true)
-    fetch(`${API_URL}/share/${token}/stream/${asset.id}`)
+    // Carries the password session for the same reason the download does —
+    // without it this 403s on a password-protected link and playback never
+    // starts.
+    const qs = shareSession ? `?share_session=${encodeURIComponent(shareSession)}` : ''
+    fetch(`${API_URL}/share/${token}/stream/${asset.id}${qs}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.stream_url) setStreamUrl(data.stream_url)
@@ -875,7 +898,7 @@ function ShareViewer({
       })
       .catch(() => null)
       .finally(() => setStreamLoading(false))
-  }, [token, asset.asset_type, asset.stream_url, asset.id])
+  }, [token, asset.asset_type, asset.stream_url, asset.id, shareSession])
 
   const displayName = shareName || branding?.custom_title || 'FreeFrame'
 
@@ -889,6 +912,7 @@ function ShareViewer({
         downloadUrl={streamUrl}
         token={token}
         assetId={asset.id}
+        shareSession={shareSession}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((p) => !p)}
         onBack={onBack}
@@ -976,8 +1000,12 @@ export default function SharePage({
       setState({ stage: 'password_required', loading: true })
     }
     try {
-      const shouldLogOpen = !password && !openLogged.current
-      if (shouldLogOpen) openLogged.current = true
+      // Ask to log the open on whichever call first returns the full
+      // response. Gating this on `!password` meant a password-protected link
+      // never recorded one: the initial GET short-circuits at
+      // requires_password and drops log_open, and the /verify that follows
+      // always carried log_open:false because a password was supplied.
+      const shouldLogOpen = !openLogged.current
       const data = await fetchShareInfo(token, password, shouldLogOpen)
       if (data.requires_auth) {
         setState({ stage: 'auth_required', title: data.title })
@@ -995,6 +1023,10 @@ export default function SharePage({
         setState({ stage: 'invalid' })
         return
       }
+
+      // Only now is the open actually recorded — the early returns above are
+      // all cases the server did not log.
+      if (shouldLogOpen) openLogged.current = true
 
       // Store share session from password-protected link validation
       if (data.share_session) {
@@ -1094,7 +1126,7 @@ export default function SharePage({
             This link is private. Please sign in to view the shared content.
           </p>
           <a
-            href="/login"
+            href={withBasePath('/login')}
             className="mt-4 inline-flex w-full items-center justify-center rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:bg-accent/90 transition-colors"
           >
             Sign in to continue
