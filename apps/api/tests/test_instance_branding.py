@@ -153,7 +153,7 @@ def test_upload_presign_passes_client_content_type(client, auth_headers, mock_db
         fake_put_url,
     )
 
-    # favicon slot's LOGO_CONTENT_TYPES default is "image/x-icon"
+    # the favicon slot used to be hardcoded to "image/x-icon"
     r = client.post(
         "/instance/branding/favicon-upload",
         headers=auth_headers,

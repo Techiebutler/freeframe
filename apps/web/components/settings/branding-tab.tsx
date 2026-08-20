@@ -3,18 +3,39 @@
 import * as React from 'react'
 import { Palette, Upload, RotateCcw, Check } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
-import { useBrandingStore } from '@/stores/branding-store'
+import { HARDCODED_DEFAULTS, useBrandingStore } from '@/stores/branding-store'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { BrandingLogoUpload } from '@/components/settings/branding-logo-upload'
+import { BrandingPreview } from '@/components/settings/branding-preview'
+
+type BrandingSlot = 'logo-light' | 'logo-dark' | 'favicon' | 'apple-icon' | 'login-logo'
+
+interface BrandingUrls {
+  logo_light_url?: string | null
+  logo_dark_url?: string | null
+  favicon_url?: string | null
+  apple_icon_url?: string | null
+  login_logo_url?: string | null
+}
+
+// The update response carries a URL for every slot that's set, not just the one that
+// changed — each slot has to read back its own field or it reports another slot's image.
+const SLOT_FIELDS: Record<BrandingSlot, { keyField: string; urlField: keyof BrandingUrls }> = {
+  'logo-light': { keyField: 'logo_light_key', urlField: 'logo_light_url' },
+  'logo-dark': { keyField: 'logo_dark_key', urlField: 'logo_dark_url' },
+  favicon: { keyField: 'favicon_key', urlField: 'favicon_url' },
+  'apple-icon': { keyField: 'apple_icon_key', urlField: 'apple_icon_url' },
+  'login-logo': { keyField: 'login_logo_key', urlField: 'login_logo_url' },
+}
 
 function QuickUpload({
-  onUpload,
+  onSlotUpload,
 }: {
-  onUpload: (url: string) => void
+  onSlotUpload: (slot: BrandingSlot, url: string) => void
 }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = React.useState(false)
@@ -32,44 +53,29 @@ function QuickUpload({
     }
 
     setUploading(true)
+    // The signature covers the content type, so the same value has to go on the PUT.
+    const contentType = file.type || 'image/png'
     try {
-      const slots = ['logo-light', 'logo-dark', 'favicon', 'apple-icon', 'login-logo']
-      let lastUrl = ''
-
-      for (const slot of slots) {
-        const mimeType = encodeURIComponent(file.type || 'image/png')
+      for (const slot of Object.keys(SLOT_FIELDS) as BrandingSlot[]) {
+        const { keyField, urlField } = SLOT_FIELDS[slot]
         const presignData = await api.post<{ upload_url: string; key: string }>(
-          `/instance/branding/${slot}-upload?content_type=${mimeType}`
+          `/instance/branding/${slot}-upload?content_type=${encodeURIComponent(contentType)}`
         )
         const { upload_url: presignedUrl, key: s3Key } = presignData
 
         const uploadRes = await fetch(presignedUrl, {
           method: 'PUT',
           body: file,
-          headers: { 'Content-Type': file.type },
+          headers: { 'Content-Type': contentType },
         })
         if (!uploadRes.ok) throw new Error(`Failed to upload for ${slot}`)
 
-        const keyName = slot.replace(/-/g, '_') + '_key'
-        const updateBody: Record<string, string> = {}
-        updateBody[keyName] = s3Key
-        const data = await api.put<{
-          logo_light_url?: string
-          logo_dark_url?: string
-          favicon_url?: string
-          apple_icon_url?: string
-          login_logo_url?: string
-        }>('/instance/branding', updateBody)
-        lastUrl =
-          data.logo_light_url ||
-          data.logo_dark_url ||
-          data.favicon_url ||
-          data.apple_icon_url ||
-          data.login_logo_url ||
-          lastUrl
+        const data = await api.put<BrandingUrls>('/instance/branding', { [keyField]: s3Key })
+        const url = data[urlField]
+        // Apply each slot as it lands, so a later failure doesn't discard the ones
+        // the server already accepted.
+        if (url) onSlotUpload(slot, url)
       }
-
-      if (lastUrl) onUpload(lastUrl)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
@@ -125,14 +131,15 @@ export function BrandingTab() {
     setLoginLogoUrl,
     setPoweredByFreeframe,
     setPrimaryColor,
-    resetAll,
     fetchBranding,
+    loaded,
   } = useBrandingStore()
 
   const [nameValue, setNameValue] = React.useState(orgName)
   const [nameSaved, setNameSaved] = React.useState(false)
   const [resetOpen, setResetOpen] = React.useState(false)
   const [resetting, setResetting] = React.useState(false)
+  const [resetError, setResetError] = React.useState<string | null>(null)
   const [savingPowered, setSavingPowered] = React.useState(false)
   const [savingName, setSavingName] = React.useState(false)
   const [savingColor, setSavingColor] = React.useState(false)
@@ -141,8 +148,8 @@ export function BrandingTab() {
   const isAdmin = user?.is_superadmin
 
   React.useEffect(() => {
-    fetchBranding()
-  }, [fetchBranding])
+    if (!loaded) fetchBranding()
+  }, [loaded, fetchBranding])
 
   React.useEffect(() => {
     const state = useBrandingStore.getState()
@@ -197,6 +204,7 @@ export function BrandingTab() {
 
   async function handleResetAll() {
     setResetting(true)
+    setResetError(null)
     try {
       const data = await api.put('/instance/branding', {
         org_name: 'FreeFrame',
@@ -211,20 +219,25 @@ export function BrandingTab() {
       syncBranding(data as never)
       setNameValue('FreeFrame')
       setResetOpen(false)
-    } catch {
-      // silent
+    } catch (err) {
+      // Rethrow so ConfirmDialog leaves itself open instead of closing as if the
+      // reset had worked — the message below tells the admin what went wrong.
+      setResetError(err instanceof Error ? err.message : 'Reset failed')
+      throw err
     } finally {
       setResetting(false)
     }
   }
 
   const hasCustomBranding =
-    orgName !== 'FreeFrame' ||
+    orgName !== HARDCODED_DEFAULTS.orgName ||
     orgLogoDark !== null ||
     orgLogoLight !== null ||
     faviconUrl !== null ||
     appleIconUrl !== null ||
-    loginLogoUrl !== null
+    loginLogoUrl !== null ||
+    primaryColor !== HARDCODED_DEFAULTS.primaryColor ||
+    poweredByFreeframe !== HARDCODED_DEFAULTS.poweredByFreeframe
 
   const slotProps = {
     disabled: !isAdmin,
@@ -244,6 +257,8 @@ export function BrandingTab() {
         </div>
       </div>
 
+      <BrandingPreview />
+
       {/* ── Section: Replace All ── */}
       {isAdmin && (
         <section className="space-y-3">
@@ -253,12 +268,15 @@ export function BrandingTab() {
           </p>
           <div className="p-4 rounded-lg border-2 border-dashed border-border bg-bg-secondary hover:border-accent/50 transition-colors">
             <QuickUpload
-              onUpload={(url) => {
-                setOrgLogoLight(url)
-                setOrgLogoDark(url)
-                setFaviconUrl(url)
-                setAppleIconUrl(url)
-                setLoginLogoUrl(url)
+              onSlotUpload={(slot, url) => {
+                const setters: Record<BrandingSlot, (url: string) => void> = {
+                  'logo-light': setOrgLogoLight,
+                  'logo-dark': setOrgLogoDark,
+                  favicon: setFaviconUrl,
+                  'apple-icon': setAppleIconUrl,
+                  'login-logo': setLoginLogoUrl,
+                }
+                setters[slot](url)
               }}
             />
           </div>
@@ -460,11 +478,17 @@ export function BrandingTab() {
             variant="ghost"
             size="sm"
             className="text-status-error hover:text-status-error hover:bg-status-error/10 gap-1.5"
-            onClick={() => setResetOpen(true)}
+            onClick={() => {
+              setResetError(null)
+              setResetOpen(true)
+            }}
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset all branding
           </Button>
+          {resetError && (
+            <p className="mt-2 text-xs text-status-error">{resetError}</p>
+          )}
         </section>
       )}
 
@@ -482,6 +506,7 @@ export function BrandingTab() {
         confirmLabel="Reset"
         variant="danger"
         loading={resetting}
+        error={resetError}
         onConfirm={handleResetAll}
       />
     </div>

@@ -5,27 +5,12 @@ import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
 import { LoginForm } from '@/components/auth/login-form'
-import { useBrandingStore } from '@/stores/branding-store'
-import { useThemeStore } from '@/stores/theme-store'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import type { SetupStatus } from '@/types'
 
 
 export default function LoginPage() {
   const router = useRouter()
-  const {
-    orgName,
-    loginLogoUrl,
-    orgLogoLight,
-    orgLogoDark,
-    fetchBranding,
-    loaded,
-  } = useBrandingStore()
-  const { theme } = useThemeStore()
-
-  useEffect(() => {
-    if (!loaded) fetchBranding()
-  }, [loaded, fetchBranding])
 
   useEffect(() => {
     async function checkSetup() {
@@ -51,38 +36,9 @@ export default function LoginPage() {
     checkSetup()
   }, [router])
 
-  const displayLogo = loginLogoUrl || (theme === 'dark' ? (orgLogoDark ?? orgLogoLight) : (orgLogoLight ?? orgLogoDark)) || undefined
-
   return (
     <>
-      {/* Branding header */}
-      <div className="mb-8 text-center">
-        {displayLogo ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={displayLogo}
-            alt={orgName}
-            className="h-12 mx-auto mb-3 object-contain"
-            onError={(e) => {
-              const target = e.currentTarget
-              if (target.src !== `/logo-full.svg`) {
-                target.src = `/logo-full.svg`
-              }
-            }}
-          />
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={`/logo-full.svg`}
-            alt="FreeFrame"
-            className="h-12 mx-auto mb-3 object-contain"
-          />
-        )}
-        <h1 className="text-xl font-semibold text-text-primary">
-          {orgName}
-        </h1>
-      </div>
-
+      {/* The branded logo + org name live in the (auth) layout, so every auth screen gets them */}
       <LoginForm />
 
       {/* Powered by FreeFrame */}

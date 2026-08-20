@@ -18,10 +18,17 @@ jinja_env = Environment(
     autoescape=True,
 )
 
+# Fallback brand name for callers that don't carry the instance branding.
+DEFAULT_ORG_NAME = "FreeFrame"
+
 
 def render_template(template_name: str, **context) -> str:
     """Render an email template with context."""
     context.setdefault("year", datetime.now().year)
+    # base.html brands every email header/footer with the instance name, so it must
+    # always be set — not left to each individual send function.
+    if not context.get("org_name"):
+        context["org_name"] = DEFAULT_ORG_NAME
     template = jinja_env.get_template(template_name)
     return template.render(**context)
 
@@ -40,7 +47,7 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: Optional
 @shared_task(bind=True, queue="email_high", max_retries=3, default_retry_delay=30)
 def send_magic_code_email(self, to_email: str, code: str, expiry_minutes: int = 10, org_name: Optional[str] = None):
     """Send magic code email - high priority, immediate delivery."""
-    label = org_name or "FreeFrame"
+    label = org_name or DEFAULT_ORG_NAME
     try:
         subject = f"Your {label} login code: {code}"
         html_body = render_template(

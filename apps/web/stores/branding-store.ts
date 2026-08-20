@@ -31,6 +31,8 @@ interface BrandingState {
   loginLogoUrl: string | null
   poweredByFreeframe: boolean
   primaryColor: string | null
+  /** When branding was last synced from the server — used to expire persisted logo URLs. */
+  brandingFetchedAt: number | null
   loaded: boolean
   loading: boolean
 
@@ -42,12 +44,11 @@ interface BrandingState {
   setLoginLogoUrl: (url: string | null) => void
   setPoweredByFreeframe: (value: boolean) => void
   setPrimaryColor: (color: string | null) => void
-  resetAll: () => void
   fetchBranding: () => Promise<void>
   syncBranding: (data: InstanceBranding) => void
 }
 
-const HARDCODED_DEFAULTS = {
+export const HARDCODED_DEFAULTS = {
   orgName: 'FreeFrame',
   orgLogoDark: null,
   orgLogoLight: null,
@@ -58,10 +59,16 @@ const HARDCODED_DEFAULTS = {
   primaryColor: '#7c3aed',
 }
 
+// Logo URLs are presigned S3 links the API signs for an hour. They're persisted so a
+// reload doesn't flash the default brand, but a URL older than this would render as a
+// broken image, so treat anything past the margin as unusable until the refetch lands.
+const LOGO_URL_MAX_AGE_MS = 45 * 60 * 1000
+
 export const useBrandingStore = create<BrandingState>()(
   persist(
     (set, get) => ({
       ...HARDCODED_DEFAULTS,
+      brandingFetchedAt: null,
       loaded: false,
       loading: false,
 
@@ -84,6 +91,7 @@ export const useBrandingStore = create<BrandingState>()(
           loginLogoUrl: data.login_logo_url ?? null,
           poweredByFreeframe: data.powered_by_freeframe ?? true,
           primaryColor: data.primary_color ?? HARDCODED_DEFAULTS.primaryColor,
+          brandingFetchedAt: Date.now(),
           loaded: true,
           loading: false,
         })
@@ -100,19 +108,13 @@ export const useBrandingStore = create<BrandingState>()(
           set({ loaded: true, loading: false })
         }
       },
-
-      resetAll: () =>
-        set({
-          ...HARDCODED_DEFAULTS,
-          loaded: true,
-          loading: false,
-        }),
     }),
     {
       name: 'ff-branding',
-      version: 4,
+      version: 5,
       migrate: () => ({
         ...HARDCODED_DEFAULTS,
+        brandingFetchedAt: null,
         loaded: false,
         loading: false,
       }),
@@ -125,7 +127,20 @@ export const useBrandingStore = create<BrandingState>()(
         faviconUrl: state.faviconUrl,
         appleIconUrl: state.appleIconUrl,
         loginLogoUrl: state.loginLogoUrl,
+        brandingFetchedAt: state.brandingFetchedAt,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return
+        const fetchedAt = state.brandingFetchedAt
+        if (fetchedAt && Date.now() - fetchedAt < LOGO_URL_MAX_AGE_MS) return
+        // Signed too long ago (or from a build that didn't record when) — drop the
+        // URLs so the default marks render until fetchBranding() signs fresh ones.
+        state.setOrgLogoDark(null)
+        state.setOrgLogoLight(null)
+        state.setFaviconUrl(null)
+        state.setAppleIconUrl(null)
+        state.setLoginLogoUrl(null)
+      },
     },
   ),
 )

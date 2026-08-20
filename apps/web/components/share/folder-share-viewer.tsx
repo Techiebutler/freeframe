@@ -1049,12 +1049,12 @@ export function FolderShareViewer({
   const [panelOpen, setPanelOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
 
-  // Set page title
+  // Set page title — subscribe to orgName so the title updates once branding loads
+  const orgName = useBrandingStore((s) => s.orgName) || 'FreeFrame'
   React.useEffect(() => {
-    const orgName = useBrandingStore.getState().orgName || 'FreeFrame'
     document.title = title ? `${title} – ${orgName}` : orgName
     return () => { document.title = orgName }
-  }, [title])
+  }, [title, orgName])
   const [selectedAsset, setSelectedAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   const [assets, setAssets] = React.useState<FolderShareAssetItem[]>([])

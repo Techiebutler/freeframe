@@ -15,6 +15,8 @@ interface ConfirmDialogProps {
   cancelLabel?: string
   variant?: 'danger' | 'default'
   loading?: boolean
+  /** Message from a rejected onConfirm — the dialog stays open so the caller can explain the failure. */
+  error?: string | null
   onConfirm: () => void | Promise<void>
 }
 
@@ -27,6 +29,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'default',
   loading = false,
+  error,
   onConfirm,
 }: ConfirmDialogProps) {
   const [isLoading, setIsLoading] = React.useState(false)
@@ -75,6 +78,10 @@ export function ConfirmDialog({
               )}
             </div>
           </div>
+
+          {error && (
+            <p className="mt-3 text-xs text-status-error">{error}</p>
+          )}
 
           <div className="flex items-center justify-end gap-2 mt-5">
             <Button

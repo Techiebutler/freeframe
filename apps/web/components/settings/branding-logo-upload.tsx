@@ -14,6 +14,17 @@ const TYPE_MAP: Record<string, string> = {
   login_logo: 'login-logo',
 }
 
+// Browsers ignore an `accept` list of human-readable labels ("ICO,PNG"), so map the
+// labels shown in the helper text to tokens a file picker understands.
+const ACCEPT_TOKENS: Record<string, string> = {
+  PNG: 'image/png,.png',
+  SVG: 'image/svg+xml,.svg',
+  WEBP: 'image/webp,.webp',
+  ICO: 'image/x-icon,image/vnd.microsoft.icon,.ico',
+  JPG: 'image/jpeg,.jpg,.jpeg',
+  JPEG: 'image/jpeg,.jpg,.jpeg',
+}
+
 interface BrandingLogoUploadProps {
   slotKey: string
   label: string
@@ -61,11 +72,12 @@ export function BrandingLogoUpload({
 
     setUploading(true)
     try {
-      // Step 1: Get presigned URL
+      // Step 1: Get presigned URL. The signature covers the content type, so the same
+      // value has to go on the PUT below — browsers report an empty file.type for .ico.
       const uploadKey = slotKey.replace(/_/g, '-')
-      const mimeType = encodeURIComponent(file.type || 'image/png')
+      const contentType = file.type || 'image/png'
       const presignData = await api.post<{ upload_url: string; key: string }>(
-        `/instance/branding/${uploadKey}-upload?content_type=${mimeType}`
+        `/instance/branding/${uploadKey}-upload?content_type=${encodeURIComponent(contentType)}`
       )
       const { upload_url: presignedUrl, key: s3Key } = presignData
 
@@ -73,7 +85,7 @@ export function BrandingLogoUpload({
       const uploadRes = await fetch(presignedUrl, {
         method: 'PUT',
         body: file,
-        headers: { 'Content-Type': file.type },
+        headers: { 'Content-Type': contentType },
       })
       if (!uploadRes.ok) throw new Error('Failed to upload file')
 
@@ -116,7 +128,9 @@ export function BrandingLogoUpload({
     }
   }
 
-  const acceptString = acceptedFormats.join(',')
+  const acceptString = acceptedFormats
+    .map((format) => ACCEPT_TOKENS[format.toUpperCase()] ?? `.${format.toLowerCase()}`)
+    .join(',')
   const hasLogo = !!currentUrl
 
   return (
@@ -172,7 +186,7 @@ export function BrandingLogoUpload({
               variant="ghost"
               size="sm"
               onClick={handleRemove}
-              disabled={uploading}
+              disabled={disabled || uploading}
               className="text-status-error hover:text-status-error hover:bg-status-error/10"
             >
               <X className="h-3.5 w-3.5" />

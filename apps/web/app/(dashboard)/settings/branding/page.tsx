@@ -1,11 +1,7 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { BrandingTab } from '@/components/settings/branding-tab'
-
+// Branding lives as a sub-tab of Settings → Admin. This route stays only so older
+// bookmarks land on it.
 export default function BrandingPage() {
-  return (
-    <div className="p-6 max-w-2xl">
-      <BrandingTab />
-    </div>
-  )
+  redirect('/settings/admin?tab=branding')
 }

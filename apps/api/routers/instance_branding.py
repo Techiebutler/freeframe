@@ -5,9 +5,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..middleware.auth import get_current_user, get_optional_user
+from ..middleware.auth import get_optional_user
 from ..models.user import User
 from ..models.instance_branding import InstanceBranding
+from ..routers.users import require_admin
 from ..schemas.instance_branding import (
     InstanceBrandingUpdate,
     InstanceBrandingResponse,
@@ -27,27 +28,24 @@ LOGO_TYPES = {
     "login-logo": "login_logo_key",
 }
 
-LOGO_CONTENT_TYPES = {
-    "logo-light": "image/webp",
-    "logo-dark": "image/webp",
-    "favicon": "image/x-icon",
-    "apple-icon": "image/png",
-    "login-logo": "image/webp",
-}
 
-
-def _get_or_create_instance_branding(db: Session) -> InstanceBranding:
-    row = db.query(InstanceBranding).first()
-    if row:
-        return row
+def _default_instance_branding() -> InstanceBranding:
+    """A transient (never added to the session) row carrying the built-in defaults."""
     now = datetime.now(timezone.utc)
-    row = InstanceBranding(
+    return InstanceBranding(
         id=_SINGLETON_ID,
         org_name="FreeFrame",
         powered_by_freeframe=True,
         created_at=now,
         updated_at=now,
     )
+
+
+def _get_or_create_instance_branding(db: Session) -> InstanceBranding:
+    row = db.query(InstanceBranding).first()
+    if row:
+        return row
+    row = _default_instance_branding()
     db.add(row)
     try:
         db.commit()
@@ -93,7 +91,12 @@ def get_instance_branding(
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
 ):
-    branding = _get_or_create_instance_branding(db)
+    """Anyone (login and share pages are unauthenticated): instance branding.
+
+    Read-only: does not create the branding row. Returns the built-in defaults
+    when no row exists yet — only PUT creates the singleton row.
+    """
+    branding = db.query(InstanceBranding).first() or _default_instance_branding()
     return _enrich_branding_response(branding)
 
 
@@ -101,13 +104,9 @@ def get_instance_branding(
 def upsert_instance_branding(
     body: InstanceBrandingUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    if not current_user.is_superadmin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can update instance branding"
-        )
+    """Admin only: update instance branding."""
     branding = _get_or_create_instance_branding(db)
     update_data = body.model_dump(exclude_unset=True)
 
@@ -119,18 +118,24 @@ def upsert_instance_branding(
         "login_logo_key",
     ]
 
+    # Collect the replaced keys and only drop them once the row that still points
+    # at them is safely committed — a rollback would otherwise leave the branding
+    # referencing an S3 object we already deleted.
+    replaced_keys = []
     for field, value in update_data.items():
         if field in _LOGO_KEY_FIELDS:
             old_key = getattr(branding, field)
             if old_key and old_key != value:
-                try:
-                    s3_service.delete_object(old_key)
-                except Exception:
-                    pass
+                replaced_keys.append(old_key)
         setattr(branding, field, value)
 
     db.commit()
     db.refresh(branding)
+    for old_key in replaced_keys:
+        try:
+            s3_service.delete_object(old_key)
+        except Exception:
+            pass
     return _enrich_branding_response(branding)
 
 
@@ -146,17 +151,13 @@ def get_logo_upload_url(
         description="MIME type of the logo file (e.g. image/png). If omitted, ContentType is not included in the presigned signature — S3 will accept any MIME type the browser sends.",
     ),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    if not current_user.is_superadmin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can upload branding logos"
-        )
-    if logo_type not in LOGO_CONTENT_TYPES:
+    """Admin only: presigned PUT URL for a branding logo slot."""
+    if logo_type not in LOGO_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid logo type. Must be one of: {', '.join(LOGO_CONTENT_TYPES.keys())}"
+            detail=f"Invalid logo type. Must be one of: {', '.join(LOGO_TYPES.keys())}"
         )
     key = f"branding/{logo_type}/{uuid.uuid4()}"
     upload_url = s3_service.generate_presigned_put_url(key, content_type=content_type, expires_in=3600)
@@ -167,13 +168,9 @@ def get_logo_upload_url(
 def reset_logo(
     logo_type: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    if not current_user.is_superadmin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can reset branding logos"
-        )
+    """Admin only: clear a branding logo slot."""
     column = LOGO_TYPES.get(logo_type)
     if not column:
         raise HTTPException(
@@ -182,12 +179,14 @@ def reset_logo(
         )
     branding = _get_or_create_instance_branding(db)
     old_key = getattr(branding, column)
+    setattr(branding, column, None)
+    db.commit()
+    db.refresh(branding)
+    # Only after the cleared row is committed: an orphaned object beats a row
+    # pointing at an object that no longer exists.
     if old_key:
         try:
             s3_service.delete_object(old_key)
         except Exception:
             pass
-    setattr(branding, column, None)
-    db.commit()
-    db.refresh(branding)
     return _enrich_branding_response(branding)

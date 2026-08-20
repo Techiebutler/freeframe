@@ -2,7 +2,7 @@
 
 {% block content %}
 <h2>Your login code</h2>
-<p>Use this code to sign in to FreeFrame:</p>
+<p>Use this code to sign in to {{ org_name }}:</p>
 <div class="code">{{ code }}</div>
 <p class="muted">This code expires in {{ expiry_minutes }} minutes.</p>
 <p class="muted">If you didn't request this code, you can safely ignore this email.</p>

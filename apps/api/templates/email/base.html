@@ -91,14 +91,14 @@
     <div class="container">
         <div class="card">
             <div class="logo">
-                <h1>FreeFrame</h1>
+                <h1>{{ org_name }}</h1>
             </div>
             {% block content %}{% endblock %}
         </div>
         <div class="footer">
-            <p>© {{ year }} FreeFrame. All rights reserved.</p>
+            <p>© {{ year }} {{ org_name }}. All rights reserved.</p>
             <p class="muted">
-                You're receiving this email because you have an account on FreeFrame.
+                You're receiving this email because you have an account on {{ org_name }}.
             </p>
         </div>
     </div>

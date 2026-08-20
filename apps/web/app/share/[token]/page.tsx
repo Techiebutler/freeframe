@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button'
 import { GuestCommentInput } from '@/components/review/guest-comment-input'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import { useBrandingStore } from '@/stores/branding-store'
-import { useThemeStore } from '@/stores/theme-store'
+import { useResolvedTheme } from '@/hooks/use-resolved-theme'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
@@ -140,7 +140,7 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
 
   const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } =
     useBrandingStore()
-  const { theme } = useThemeStore()
+  const theme = useResolvedTheme()
   const displayLogo = loginLogoUrl || (theme === 'dark' ? (orgLogoDark ?? orgLogoLight) : (orgLogoLight ?? orgLogoDark)) || undefined
 
   return (
@@ -433,8 +433,14 @@ function ShareTopBar({
     }
   }
   const primaryColor = branding?.primary_color ?? '#7c3aed'
-  const { loginLogoUrl, orgLogoDark } = useBrandingStore()
-  const instanceLogoUrl = loginLogoUrl || orgLogoDark || undefined
+  const { loginLogoUrl, orgLogoDark, orgLogoLight } = useBrandingStore()
+  const theme = useResolvedTheme()
+  // Same cascade as the password gate, so a guest doesn't lose the instance logo
+  // one screen into the flow when only one variant is uploaded.
+  const instanceLogoUrl =
+    loginLogoUrl ||
+    (theme === 'dark' ? (orgLogoDark ?? orgLogoLight) : (orgLogoLight ?? orgLogoDark)) ||
+    undefined
 
   return (
     <div className="flex items-center justify-between border-b border-white/[0.06] px-3 h-12 bg-zinc-950 shrink-0 relative">
@@ -463,7 +469,7 @@ function ShareTopBar({
                 ;(e.target as HTMLImageElement).style.display = 'none'
               }}
             />
-          ) : loginLogoUrl || orgLogoDark ? (
+          ) : instanceLogoUrl ? (
             <img
               src={instanceLogoUrl}
               alt=""

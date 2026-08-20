@@ -181,6 +181,15 @@ export default function AdminPage() {
     }
   }, [user, isSuperAdmin, router]);
 
+  // Deep link to a sub-tab (e.g. the old /settings/branding bookmark redirects here).
+  // Read after mount so the server and client render the same initial markup.
+  React.useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested === "instance" || requested === "branding") {
+      setTab(requested);
+    }
+  }, []);
+
   const handleDeactivate = async (userId: string) => {
     try {
       await api.patch(`/admin/users/${userId}/deactivate`);
