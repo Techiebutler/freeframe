@@ -75,6 +75,32 @@ class TestVisibilityIsEnforcedForEveryCaller:
         assert exc.value.status_code == 403
 
 
+class TestVisibilityIsPersistedOnCreate:
+    """A gate is worth nothing if the setting it reads can never be turned on.
+
+    ShareLinkCreate accepts `visibility` and the create dialog sends it, but
+    three of the four ShareLink constructions never passed it through, so
+    choosing "secure" produced a link that was actually public.
+    """
+
+    def test_every_share_link_construction_passes_visibility(self):
+        import inspect
+        import re
+
+        from apps.api.routers import share
+
+        source = inspect.getsource(share)
+        # Each `link = ShareLink(` block up to its closing paren.
+        blocks = re.findall(r"link = ShareLink\((.*?)\n    \)", source, re.DOTALL)
+        assert blocks, "no ShareLink constructions found — did the pattern change?"
+
+        missing = [i for i, b in enumerate(blocks) if "visibility=" not in b]
+        assert not missing, (
+            f"{len(missing)} of {len(blocks)} ShareLink constructions do not set "
+            f"visibility, so a 'secure' link would be created public"
+        )
+
+
 class TestContentEndpointsRefuseAnonymousSecureLinks:
     @patch("apps.api.services.permissions.validate_share_link")
     def test_guest_comment_listing_is_refused(self, mock_validate, client):
