@@ -29,7 +29,19 @@ class EmailService:
     def __init__(self):
         self.provider = settings.mail_provider
         self.from_address = settings.mail_from_address
-        self.from_name = settings.mail_from_name
+
+    @property
+    def from_name(self) -> str:
+        """Display name on the From line of every email.
+
+        MAIL_FROM_NAME wins when an operator has set it. Left unset, this
+        follows the instance branding, so a white-labelled instance doesn't
+        announce itself as FreeFrame in the recipient's inbox. Resolved per
+        send rather than at init so a branding change takes effect without a
+        worker restart.
+        """
+        from .branding_service import resolve_org_name
+        return (settings.mail_from_name or "").strip() or resolve_org_name()
     
     def _get_ses_client(self):
         """Create AWS SES client."""

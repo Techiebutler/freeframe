@@ -207,17 +207,21 @@ export function BrandingTab() {
     setResetError(null)
     try {
       const data = await api.put('/instance/branding', {
-        org_name: 'FreeFrame',
+        org_name: HARDCODED_DEFAULTS.orgName,
         logo_light_key: null,
         logo_dark_key: null,
         favicon_key: null,
         apple_icon_key: null,
         login_logo_key: null,
         primary_color: null,
+        // Included so "reset all" really is all: the attribution toggle counts
+        // toward hasCustomBranding, so leaving it out left the Reset section
+        // on screen after a reset that had already finished.
+        powered_by_freeframe: HARDCODED_DEFAULTS.poweredByFreeframe,
       })
       const { syncBranding } = useBrandingStore.getState()
       syncBranding(data as never)
-      setNameValue('FreeFrame')
+      setNameValue(HARDCODED_DEFAULTS.orgName)
       setResetOpen(false)
     } catch (err) {
       // Rethrow so ConfirmDialog leaves itself open instead of closing as if the
@@ -502,7 +506,7 @@ export function BrandingTab() {
         open={resetOpen}
         onOpenChange={setResetOpen}
         title="Reset all branding?"
-        description="Replace all branding with the FreeFrame defaults? Your custom logos and name will be cleared."
+        description='This clears your custom name, logos and accent color, and turns the "Powered by FreeFrame" badge back on.'
         confirmLabel="Reset"
         variant="danger"
         loading={resetting}

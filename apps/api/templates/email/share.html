@@ -2,7 +2,7 @@
 
 {% block content %}
 <h2>{{ sharer_name }} shared "{{ asset_name }}" with you</h2>
-<p>Please leave your comments and notes in FreeFrame.</p>
+<p>Please leave your comments and notes in {{ org_name }}.</p>
 {% if message %}
 <div class="quote">{{ message }}</div>
 {% endif %}
@@ -11,7 +11,7 @@
 </p>
 <div class="footer-note" style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #eee;">
     <p class="muted" style="font-size: 13px; color: #888;">
-        You have received this email because <strong>{{ sharer_name }}</strong> invited you to review content on FreeFrame.
+        You have received this email because <strong>{{ sharer_name }}</strong> invited you to review content on {{ org_name }}.
         If you don't recognize this email, please verify before accepting the invitation.
     </p>
     {% if permission %}

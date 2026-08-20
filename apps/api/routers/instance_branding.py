@@ -9,6 +9,7 @@ from ..middleware.auth import get_optional_user
 from ..models.user import User
 from ..models.instance_branding import InstanceBranding
 from ..routers.users import require_admin
+from ..services.branding_service import reset_org_name_cache
 from ..schemas.instance_branding import (
     InstanceBrandingUpdate,
     InstanceBrandingResponse,
@@ -131,6 +132,10 @@ def upsert_instance_branding(
 
     db.commit()
     db.refresh(branding)
+    # Drops this process's cached org name. The Celery workers that actually
+    # render email hold their own copy and pick a rename up when their cache
+    # expires, so email follows within the TTL rather than instantly.
+    reset_org_name_cache()
     for old_key in replaced_keys:
         try:
             s3_service.delete_object(old_key)

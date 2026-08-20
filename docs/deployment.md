@@ -225,7 +225,8 @@ Configure in `.env.prod`:
 ```
 MAIL_PROVIDER=smtp
 MAIL_FROM_ADDRESS=noreply@your-domain.com
-MAIL_FROM_NAME=FreeFrame
+# Blank follows the instance branding name; set it to pin a fixed one.
+MAIL_FROM_NAME=
 SMTP_HOST=smtp.mailgun.org
 SMTP_PORT=587
 SMTP_USER=your-smtp-user
@@ -237,7 +238,8 @@ SMTP_USE_TLS=true
 ```
 MAIL_PROVIDER=ses
 MAIL_FROM_ADDRESS=noreply@your-domain.com
-MAIL_FROM_NAME=FreeFrame
+# Blank follows the instance branding name; set it to pin a fixed one.
+MAIL_FROM_NAME=
 AWS_MAIL_ACCESS_KEY_ID=YOUR_KEY
 AWS_MAIL_SECRET_ACCESS_KEY=YOUR_SECRET
 AWS_MAIL_REGION=us-east-1
