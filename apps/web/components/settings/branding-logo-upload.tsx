@@ -28,10 +28,11 @@ const ACCEPT_TOKENS: Record<string, string> = {
 interface BrandingLogoUploadProps {
   slotKey: string
   label: string
+  /** One line on where the image is used. Kept short: five of these sit in a
+   *  grid together, and a paragraph each turns the section into a wall. */
   description: string
   acceptedFormats: string[]
   minResolution: string
-  guidance: string
   currentUrl: string | null
   defaultUrl?: string
   previewBg?: string
@@ -46,7 +47,6 @@ export function BrandingLogoUpload({
   description,
   acceptedFormats,
   minResolution,
-  guidance,
   currentUrl,
   defaultUrl,
   previewBg = 'bg-zinc-900',
@@ -144,7 +144,7 @@ export function BrandingLogoUpload({
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={defaultUrl || `/logo-icon.svg`}
+            src={defaultUrl || `/logo-icon.png`}
             alt="Default"
             className="h-full w-full object-contain p-1 opacity-40"
           />
@@ -152,8 +152,8 @@ export function BrandingLogoUpload({
       </div>
 
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-text-secondary">{label}</p>
-        <p className="text-sm text-text-secondary mt-0.5 mb-3">{description}</p>
+        <p className="text-sm font-medium text-text-primary">{label}</p>
+        <p className="text-xs text-text-tertiary mt-0.5 mb-3">{description}</p>
 
         {error && (
           <p className="text-xs text-status-error mb-2">{error}</p>
@@ -195,12 +195,9 @@ export function BrandingLogoUpload({
           )}
         </div>
 
-        <p className="text-xs text-text-secondary mt-2">
-          {acceptedFormats.join(', ')} · {minResolution} · Max 2 MB
+        <p className="text-2xs text-text-tertiary mt-2">
+          {acceptedFormats.join(' · ')} · {minResolution} · max 2 MB
         </p>
-        {guidance && (
-          <p className="text-xs text-text-secondary mt-0.5 italic">{guidance}</p>
-        )}
       </div>
     </div>
   )

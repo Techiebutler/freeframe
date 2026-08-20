@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Palette, Upload, RotateCcw, Check } from 'lucide-react'
+import { Upload, RotateCcw, Check } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { HARDCODED_DEFAULTS, useBrandingStore } from '@/stores/branding-store'
 import { api } from '@/lib/api'
@@ -248,29 +248,102 @@ export function BrandingTab() {
   }
 
   return (
-    <div className="max-w-2xl space-y-8">
-      <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-muted">
-          <Palette className="h-5 w-5 text-accent" />
-        </div>
-        <div>
-          <h1 className="text-lg font-semibold text-text-primary">Branding</h1>
-          <p className="text-base text-text-secondary">
-            Customize your workspace name, logo, and identity
-          </p>
-        </div>
-      </div>
-
+    // No heading of its own: this renders under the Admin Dashboard header as a
+    // sub-tab, the same way InstanceSettingsTab does.
+    <div className="max-w-5xl space-y-10">
       <BrandingPreview />
 
-      {/* ── Section: Replace All ── */}
-      {isAdmin && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-text-secondary">Quick Upload</h2>
-          <p className="text-sm text-text-secondary -mt-1">
-            Upload one logo and we&apos;ll apply it everywhere. Or customize each slot individually below.
-          </p>
-          <div className="p-4 rounded-lg border-2 border-dashed border-border bg-bg-secondary hover:border-accent/50 transition-colors">
+      {/* ── Identity: the two single-value settings, side by side rather than
+             as two more full-width cards in the stack ── */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-text-primary">Identity</h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2 rounded-lg border border-border bg-bg-secondary p-4">
+            <div>
+              <p className="text-sm font-medium text-text-primary">Workspace name</p>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                Sidebar, sign-in screen, and the emails this instance sends.
+              </p>
+            </div>
+            {isAdmin ? (
+              <div className="flex items-center gap-2 pt-1">
+                <Input
+                  value={nameValue}
+                  onChange={(e) => setNameValue(e.target.value)}
+                  placeholder="e.g. Acme Studio"
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
+                  className="flex-1"
+                />
+                <Button
+                  size="sm"
+                  onClick={handleSaveName}
+                  loading={savingName}
+                  disabled={!nameValue.trim() || nameValue.trim() === orgName}
+                >
+                  {nameSaved ? <Check className="h-3.5 w-3.5" /> : 'Save'}
+                </Button>
+              </div>
+            ) : (
+              <p className="pt-1 text-sm text-text-secondary">{orgName}</p>
+            )}
+          </div>
+
+          <div className="space-y-2 rounded-lg border border-border bg-bg-secondary p-4">
+            <div>
+              <p className="text-sm font-medium text-text-primary">Accent color</p>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                Primary buttons, links and focus rings, including a guest&apos;s download
+                and comment buttons.
+              </p>
+            </div>
+            {isAdmin ? (
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="color"
+                  aria-label="Accent color"
+                  value={colorValue || '#7c3aed'}
+                  onChange={(e) => setColorValue(e.target.value)}
+                  className="h-9 w-10 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+                />
+                <Input
+                  value={colorValue}
+                  onChange={(e) => setColorValue(e.target.value)}
+                  placeholder="#7c3aed"
+                  maxLength={7}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveColor()}
+                  className="flex-1 font-mono text-sm"
+                />
+                <Button
+                  size="sm"
+                  onClick={handleSaveColor}
+                  loading={savingColor}
+                  disabled={
+                    !colorValue.trim() ||
+                    colorValue.trim() === primaryColor ||
+                    !/^#[0-9A-Fa-f]{6}$/.test(colorValue.trim())
+                  }
+                >
+                  Save
+                </Button>
+              </div>
+            ) : (
+              <p className="pt-1 font-mono text-sm text-text-secondary">
+                {primaryColor || '#7c3aed'}
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Section: Logos & Icons ── */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-text-primary">Logos &amp; icons</h2>
+        <p className="-mt-1 text-sm text-text-secondary">
+          Upload one image to fill every slot, or set them individually below.
+        </p>
+
+        {isAdmin && (
+          <div className="rounded-lg border-2 border-dashed border-border bg-bg-secondary p-4 transition-colors hover:border-accent/50">
             <QuickUpload
               onSlotUpload={(slot, url) => {
                 const setters: Record<BrandingSlot, (url: string) => void> = {
@@ -284,58 +357,15 @@ export function BrandingTab() {
               }}
             />
           </div>
-        </section>
-      )}
+        )}
 
-      {/* ── Section: Logos & Icons ── */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-text-secondary">Logos & Icons</h2>
-        <p className="text-sm text-text-secondary -mt-1">
-          Upload logos for different contexts. Each slot can have its own image.
-        </p>
-        <div className="space-y-4">
-            {/* Greeting */}
-            <div className="p-4 rounded-lg border border-border bg-bg-secondary space-y-3">
-              <h3 className="text-sm font-medium text-text-secondary">Greeting</h3>
-              {isAdmin ? (
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={nameValue}
-                    onChange={(e) => setNameValue(e.target.value)}
-                    placeholder="e.g. Acme Studio"
-                    onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
-                    className="max-w-xs"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleSaveName}
-                    loading={savingName}
-                    disabled={
-                      !nameValue.trim() || nameValue.trim() === orgName
-                    }
-                  >
-                    {nameSaved ? (
-                      <Check className="h-3.5 w-3.5" />
-                    ) : (
-                      'Save'
-                    )}
-                  </Button>
-                </div>
-              ) : (
-                <p className="text-sm text-text-secondary">{orgName}</p>
-              )}
-              <p className="text-sm text-text-secondary">
-                Shown in the sidebar. Defaults to &ldquo;FreeFrame&rdquo;.
-              </p>
-            </div>
-
+        <div className="grid gap-4 lg:grid-cols-2">
             <BrandingLogoUpload
               slotKey="logo_light"
-              label="Logo (Light bg)"
-              description="Used on light backgrounds — dark-colored logo"
+              label="Logo (light background)"
+              description="Sidebar and app chrome in light theme."
               acceptedFormats={['PNG', 'SVG', 'WebP']}
-              minResolution="256×256px"
-              guidance="Solid shapes work best."
+              minResolution="256px+"
               currentUrl={orgLogoLight}
               previewBg="bg-white"
               {...slotProps}
@@ -345,11 +375,10 @@ export function BrandingTab() {
 
             <BrandingLogoUpload
               slotKey="logo_dark"
-              label="Logo (Dark bg)"
-              description="Used on dark backgrounds — light-colored logo"
+              label="Logo (dark background)"
+              description="Sidebar and app chrome in dark theme."
               acceptedFormats={['PNG', 'SVG', 'WebP']}
-              minResolution="256×256px"
-              guidance="Solid shapes work best against dark backgrounds."
+              minResolution="256px+"
               currentUrl={orgLogoDark}
               previewBg="bg-zinc-900"
               {...slotProps}
@@ -360,10 +389,9 @@ export function BrandingTab() {
             <BrandingLogoUpload
               slotKey="favicon"
               label="Favicon"
-              description="Browser tab icon"
+              description="Browser tab. Renders at 16-32px, so keep it simple."
               acceptedFormats={['ICO', 'PNG']}
-              minResolution="32×32px"
-              guidance="Keep it simple — renders at 16-32px."
+              minResolution="32px+"
               currentUrl={faviconUrl}
               previewBg="bg-zinc-900"
               {...slotProps}
@@ -373,11 +401,10 @@ export function BrandingTab() {
 
             <BrandingLogoUpload
               slotKey="apple_icon"
-              label="Apple Touch Icon"
-              description="iOS home screen icon"
+              label="Apple touch icon"
+              description="Shown when someone adds this instance to an iOS home screen."
               acceptedFormats={['PNG']}
-              minResolution="180×180px"
-              guidance="Shown when users add FreeFrame to iPhone home screen."
+              minResolution="180px+"
               currentUrl={appleIconUrl}
               previewBg="bg-zinc-900"
               {...slotProps}
@@ -387,11 +414,10 @@ export function BrandingTab() {
 
             <BrandingLogoUpload
               slotKey="login_logo"
-              label="Login Page Logo"
-              description="Custom logo for the login page (optional)"
+              label="Sign-in logo"
+              description="Optional. Falls back to your logo above."
               acceptedFormats={['PNG', 'SVG', 'WebP']}
-              minResolution="512×512px"
-              guidance="If omitted, the main logo is used on the login page."
+              minResolution="512px+"
               currentUrl={loginLogoUrl}
               previewBg="bg-zinc-900"
               {...slotProps}
@@ -401,79 +427,33 @@ export function BrandingTab() {
           </div>
       </section>
 
-      {/* ── Section: Primary Color ── */}
+      {/* ── Attribution: one switch, so it reads as a row rather than another
+             full section competing with the ones that hold real work ── */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-text-secondary">
-          Primary Color
-        </h2>
-        <div className="p-4 rounded-lg border border-border bg-bg-secondary space-y-3">
-          <p className="text-sm text-text-secondary">
-            Set a custom accent color for your instance. Used as a CSS variable (<code>--ff-primary</code>).
-          </p>
-          {isAdmin ? (
-            <div className="flex items-center gap-3">
-              <input
-                type="color"
-                value={colorValue || '#7c3aed'}
-                onChange={(e) => setColorValue(e.target.value)}
-                className="h-9 w-12 cursor-pointer rounded border border-border bg-transparent p-0.5"
-              />
-              <Input
-                value={colorValue}
-                onChange={(e) => setColorValue(e.target.value)}
-                placeholder="#7c3aed"
-                maxLength={7}
-                onKeyDown={(e) => e.key === 'Enter' && handleSaveColor()}
-                className="max-w-[140px] font-mono text-sm"
-              />
-              <Button
-                size="sm"
-                onClick={handleSaveColor}
-                loading={savingColor}
-                disabled={!colorValue.trim() || colorValue.trim() === primaryColor || !/^#[0-9A-Fa-f]{6}$/.test(colorValue.trim())}
-              >
-                Save
-              </Button>
-            </div>
-          ) : (
-            <p className="text-sm font-mono text-text-secondary">
-              {primaryColor || '#7c3aed'}
+        <h2 className="text-sm font-semibold text-text-primary">Attribution</h2>
+        <div className="flex items-center justify-between gap-6 rounded-lg border border-border bg-bg-secondary p-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-text-primary">
+              Show &ldquo;Powered by FreeFrame&rdquo;
             </p>
+            <p className="mt-0.5 text-xs text-text-tertiary">
+              A small link to the project, bottom-right of the app and under the sign-in
+              card. Turn it off to white-label completely.
+            </p>
+          </div>
+          {isAdmin ? (
+            <Switch
+              checked={poweredByFreeframe}
+              onCheckedChange={handleTogglePowered}
+              disabled={savingPowered}
+            />
+          ) : (
+            <span className="shrink-0 text-sm text-text-secondary">
+              {poweredByFreeframe ? 'On' : 'Off'}
+            </span>
           )}
         </div>
       </section>
-
-      {/* ── Section: Powered by FreeFrame ── */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-text-secondary">
-          Powered by FreeFrame
-        </h2>
-        <div className="p-4 rounded-lg border border-border bg-bg-secondary space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-text-primary">
-                Show attribution
-              </p>
-              <p className="text-sm text-text-secondary">
-                Support FreeFrame by showing &ldquo;Powered by FreeFrame&rdquo;.
-              </p>
-            </div>
-            {isAdmin ? (
-              <Switch
-                checked={poweredByFreeframe}
-                onCheckedChange={handleTogglePowered}
-                disabled={savingPowered}
-              />
-            ) : (
-              <span className="text-sm text-text-secondary">
-                {poweredByFreeframe ? 'On' : 'Off'}
-              </span>
-            )}
-          </div>
-        </div>
-      </section>
-
-
 
       {/* ── Section: Reset ── */}
       {isAdmin && hasCustomBranding && (

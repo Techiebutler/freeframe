@@ -256,7 +256,13 @@ export default function AdminPage() {
           <h1 className="text-xl font-semibold text-text-primary">
             Admin Dashboard
           </h1>
-          <p className="text-sm text-text-secondary">Manage platform users</p>
+          <p className="text-sm text-text-secondary">
+            {tab === "instance"
+              ? "Configure this instance"
+              : tab === "branding"
+                ? "Make this instance look like yours"
+                : "Manage platform users"}
+          </p>
         </div>
       </div>
 
