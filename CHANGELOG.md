@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Branding UI remains readable and correct across themes** — custom muted accents are now opaque, selected chips and controls use readable theme text, default logos pair light/dark artwork in previews and password gates, and the Apple home-screen icon uses its dedicated asset. Notifications now appear at the top-right instead of overlapping the bottom-right attribution badge. (#275)
+
 ## [1.10.0] - 2026-08-21
 
 ### Contributors

@@ -38,6 +38,9 @@ export function accentVars(color: string | null | undefined): Record<string, str
   return {
     '--accent': color,
     '--accent-hover': shift(rgb, luminance(rgb) > 0.6 ? -0.14 : 0.16),
-    '--accent-muted': `rgb(${rgb[0]} ${rgb[1]} ${rgb[2]} / 0.18)`,
+    // Keep muted accents opaque. An alpha color lets the surface behind each chip
+    // change its appearance; blending with the theme's secondary surface gives
+    // every consumer one stable, readable color instead.
+    '--accent-muted': `color-mix(in srgb, ${color} 18%, var(--bg-secondary))`,
   }
 }

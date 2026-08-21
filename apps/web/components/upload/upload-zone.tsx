@@ -61,7 +61,7 @@ export function UploadZone({ onFilesSelected, className }: UploadZoneProps) {
       className={cn(
         'flex flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed p-10 cursor-pointer transition-colors',
         isDragging
-          ? 'border-accent bg-accent-muted/30'
+          ? 'border-accent bg-accent-muted'
           : 'border-border bg-bg-secondary hover:border-border-focus hover:bg-bg-tertiary',
         className,
       )}

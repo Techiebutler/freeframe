@@ -367,6 +367,7 @@ export function BrandingTab() {
               acceptedFormats={['PNG', 'SVG', 'WebP']}
               minResolution="256px+"
               currentUrl={orgLogoLight}
+              defaultUrl="/logo-icon-dark.png"
               previewBg="bg-white"
               {...slotProps}
               onUpload={(url) => setOrgLogoLight(url)}
@@ -380,6 +381,7 @@ export function BrandingTab() {
               acceptedFormats={['PNG', 'SVG', 'WebP']}
               minResolution="256px+"
               currentUrl={orgLogoDark}
+              defaultUrl="/logo-icon.png"
               previewBg="bg-zinc-900"
               {...slotProps}
               onUpload={(url) => setOrgLogoDark(url)}

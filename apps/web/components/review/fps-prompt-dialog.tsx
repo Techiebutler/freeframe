@@ -45,7 +45,7 @@ export function FpsPromptDialog({
                 className={cn(
                   'rounded-md border px-2 py-1.5 text-[13px] font-medium transition-colors',
                   fps === option
-                    ? 'border-accent bg-accent-muted text-accent'
+                    ? 'border-accent bg-accent-muted text-text-primary'
                     : 'border-border text-text-secondary hover:bg-bg-hover',
                 )}
               >

@@ -181,7 +181,12 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
             <img src={displayLogo} alt={orgName} className="h-10 object-contain" />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={`/logo-icon.png`} alt="FreeFrame" className="h-10 w-10" />
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo-icon.png" alt="FreeFrame" className="logo-dark h-10 w-10" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo-icon-dark.png" alt="FreeFrame" className="logo-light h-10 w-10" />
+            </>
           )}
           <div className="text-center">
             <h1 className="text-sm font-semibold text-text-primary">{orgName}</h1>
@@ -257,7 +262,7 @@ function GuestCommentItem({ comment }: GuestCommentItemProps) {
   return (
     <div className="rounded-lg bg-bg-tertiary border border-white/5 px-3 py-2.5">
       <div className="flex items-center gap-2 mb-1.5">
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-muted text-2xs font-medium text-accent">
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-muted text-2xs font-medium text-text-primary">
           {avatarUrl && !imgError ? (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img

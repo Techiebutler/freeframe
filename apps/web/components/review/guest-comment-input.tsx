@@ -65,7 +65,7 @@ function IdentityForm({ onIdentified }: IdentityFormProps) {
     <div className="border-t border-border bg-bg-primary px-4 py-4">
       <div className="mb-3 flex items-center gap-2">
         <div className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-muted">
-          <User className="h-3.5 w-3.5 text-accent" />
+          <User className="h-3.5 w-3.5 text-text-primary" />
         </div>
         <p className="text-sm font-medium text-text-primary">Who are you?</p>
       </div>
@@ -185,7 +185,7 @@ export function GuestCommentInput({ token, onCommentPosted, className, shareSess
       {/* Identity badge */}
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-xs text-text-secondary">
-          <div className="flex h-5 w-5 items-center justify-center rounded-full bg-accent-muted text-accent text-2xs font-medium">
+          <div className="flex h-5 w-5 items-center justify-center rounded-full bg-accent-muted text-text-primary text-2xs font-medium">
             {identity.name.charAt(0).toUpperCase()}
           </div>
           <span>
