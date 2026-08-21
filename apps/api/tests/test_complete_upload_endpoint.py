@@ -17,10 +17,9 @@ from apps.api.models.asset import ProcessingStatus
 
 MB = 1024 * 1024
 
-# The asset the uploaded version belongs to. The rows and the request body have to
-# agree on one, so a test that wants them to disagree overrides `asset_id` on the
-# body. #267 adds a handler guard that rejects a mismatch outright; until then the
-# two simply have to not drift.
+# The asset the uploaded version belongs to. The handler checks the request's
+# asset id against the version's, so the rows and the body have to agree on one;
+# a test that wants them to disagree overrides `asset_id` on the body.
 ASSET_ID = uuid.uuid4()
 
 
@@ -50,7 +49,7 @@ def _body(media_file, **overrides):
     body = {
         "s3_key": media_file.s3_key_raw,
         "upload_id": "upload-1",
-        "asset_id": str(uuid.uuid4()),
+        "asset_id": str(ASSET_ID),
         "version_id": str(uuid.uuid4()),
         "parts": [{"PartNumber": 1, "ETag": '"client-said-so"'}],
     }
@@ -78,6 +77,67 @@ def _stub(monkeypatch, **kwargs):
     )
     monkeypatch.setattr(upload_module, "_trigger_processing", lambda a, v: None)
     return completed
+
+
+# --------------------------------------------------------- request/row agreement
+
+def test_a_completion_naming_another_assets_id_is_rejected(
+    client, auth_headers, mock_db, upload_rows, monkeypatch
+):
+    """The asset id decides where the transcode lands, so it cannot be taken on trust.
+
+    Ownership is proved for the version, never for whatever asset id the body
+    carried, and `process_asset` resolves that id with no cross-check of its own:
+    the output prefix and the SSE channel are both derived from the asset it
+    finds. Without this, the owner of any version can steer their own transcode
+    into a project they have no access to.
+    """
+    version, media_file = upload_rows
+    dispatched = []
+    listed = []
+    # Recorded rather than fatal: a sentinel that raises here would surface as a
+    # bare 500 and hide which of the three properties below actually broke.
+    _stub(monkeypatch, list_parts=lambda k, u: listed.append(k) or _listing(23 * MB))
+    monkeypatch.setattr(upload_module, "_trigger_processing", lambda a, v: dispatched.append(a))
+
+    resp = client.post(
+        "/upload/complete",
+        json=_body(media_file, asset_id=str(uuid.uuid4())),
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 400
+    # Rejected before any of the work: no storage call, no rewind, no transcode.
+    assert listed == []
+    assert version.processing_status == ProcessingStatus.uploading
+    assert dispatched == []
+
+
+def test_a_completion_dispatches_the_versions_own_asset_and_version(
+    client, auth_headers, mock_db, upload_rows, monkeypatch
+):
+    """What the success path hands the transcoder, which nothing else asserts.
+
+    The guard above makes the request's ids and the version's equal, so reverting
+    _finish() to read `body.*` passes every other test in this file -- and so does
+    swapping the two arguments, which would call process_asset(version_id, asset_id)
+    and mis-report the pair to the client. Both are silent. Pinning the order and
+    the source here is what makes the guard's promise -- that the dispatch is
+    correct on its own, not by way of a check thirty lines above it -- testable.
+    """
+    version, media_file = upload_rows
+    dispatched = []
+    _stub(monkeypatch, list_parts=lambda k, u: _listing(23 * MB))
+    monkeypatch.setattr(
+        upload_module, "_trigger_processing", lambda a, v: dispatched.append((a, v))
+    )
+
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert dispatched == [(version.asset_id, version.id)]
+    assert resp.json()["asset_id"] == str(version.asset_id)
+    assert resp.json()["version_id"] == str(version.id)
 
 
 # ------------------------------------------------------------------ the core fix
@@ -440,6 +500,7 @@ def test_a_key_that_does_not_belong_to_the_version_is_rejected(
     client, auth_headers, mock_db, test_user, monkeypatch
 ):
     version = MagicMock()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
     # The MediaFile lookup filters on version_id AND s3_key_raw, so a foreign key misses.
@@ -452,7 +513,7 @@ def test_a_key_that_does_not_belong_to_the_version_is_rejected(
         json={
             "s3_key": "raw/someone/else/original.mp4",
             "upload_id": "u",
-            "asset_id": str(uuid.uuid4()),
+            "asset_id": str(ASSET_ID),
             "version_id": str(uuid.uuid4()),
             "parts": [],
         },

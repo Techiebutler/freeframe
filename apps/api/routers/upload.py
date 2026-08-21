@@ -295,6 +295,15 @@ def complete_upload(
     if version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
 
+    # Same reasoning as the key below, for the id nothing downstream questions:
+    # `_trigger_processing` hands this straight to `process_asset`, which resolves
+    # the asset with no cross-check of its own and derives both the output prefix
+    # and the SSE channel from whatever it finds. Ownership was proved for the
+    # version, never for the asset id the body carried, so a mismatch here is one
+    # version's owner writing their transcode into somebody else's project.
+    if body.asset_id != version.asset_id:
+        raise HTTPException(status_code=400, detail="Asset does not match this version")
+
     # Match the key against this version rather than taking the request's word for
     # it: ownership was proved for the version, never for whatever key the body
     # carried. Matching on both also keeps working if a version ever holds more
@@ -384,6 +393,9 @@ def complete_upload(
         asset_id, version_id = version.asset_id, version.id
         version.processing_status = ProcessingStatus.processing
         db.commit()
+        # The rows, not the request. The guard above makes these equal, but reading
+        # them from the version keeps the dispatch correct on its own rather than
+        # by way of a check thirty lines up that a later edit could move.
         background_tasks.add_task(_trigger_processing, asset_id, version_id)
         return CompleteUploadResponse(
             status="processing", asset_id=asset_id, version_id=version_id
