@@ -388,6 +388,30 @@ function mapProcessingStatus(status: string): UploadStatus {
   }
 }
 
+/**
+ * What the server says this version reached, or null if the completion never landed.
+ *
+ * A request that throws is not the same thing as an upload that failed: a
+ * completion whose response was lost on the way back has already moved the
+ * version past `uploading` and started its transcode. Only the server can tell
+ * those apart, and it matters, because the caller's other branch marks the
+ * upload failed and asks the backend to discard it.
+ *
+ * Keyed on the version id rather than the status alone. `GET /assets/{id}`
+ * reports `_display_version`, which skips `uploading` and `failed`, so an asset
+ * whose new version did not land answers with the PREVIOUS version sitting at
+ * `ready` — which would read as success for an upload that never happened.
+ */
+async function completedVersionStatus(
+  assetId: string,
+  versionId: string,
+): Promise<'processing' | 'complete' | null> {
+  const asset = await api.get<AssetResponse>(`/assets/${assetId}`).catch(() => null)
+  if (!asset?.latest_version || asset.latest_version.id !== versionId) return null
+  const status = mapProcessingStatus(asset.latest_version.processing_status)
+  return status === 'processing' || status === 'complete' ? status : null
+}
+
 function mimeFromAssetType(assetType: string): string {
   switch (assetType) {
     case 'video': return 'video/mp4'
@@ -464,10 +488,13 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       const controller = new AbortController()
       abortControllers[id] = controller
 
-      // Track initiate response fields so catch block can call /upload/abort
+      // Track initiate response fields so catch block can call /upload/abort,
+      // and ask the server what became of the version before it does.
       let upload_id: string | undefined
       let s3_key: string | undefined
       let version_id: string | undefined
+      let asset_id: string | undefined
+      let completionAttempted = false
 
       retainWakeLock()
       try {
@@ -487,7 +514,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         upload_id = initRes.upload_id
         s3_key = initRes.s3_key
         version_id = initRes.version_id
-        const asset_id = initRes.asset_id
+        asset_id = initRes.asset_id
 
         updateFile(id, { uploadId: upload_id, assetId: asset_id, versionId: version_id })
 
@@ -495,6 +522,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           updateFile(id, { progress: percent }),
         )
 
+        completionAttempted = true
         await api.post('/upload/complete', {
           s3_key,
           upload_id,
@@ -515,6 +543,20 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         if (err instanceof DOMException && err.name === 'AbortError') {
           updateFile(id, { status: 'cancelled', progress: 0 })
         } else {
+          // A completion that threw may still have landed, with only its
+          // response lost on the way back. Writing that off would report a
+          // working upload as Failed and then ask the backend to discard it.
+          const landed = completionAttempted && asset_id && version_id
+            ? await completedVersionStatus(asset_id, version_id)
+            : null
+          if (landed) {
+            updateFile(id, {
+              progress: 100,
+              status: landed,
+              processingProgress: landed === 'complete' ? 100 : 0,
+            })
+            return
+          }
           const message = err instanceof Error ? err.message : 'Upload failed'
           updateFile(id, { status: 'failed', error: message })
         }
@@ -559,6 +601,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let upload_id: string | undefined
       let s3_key: string | undefined
       let version_id: string | undefined
+      let completionAttempted = false
       retainWakeLock()
       try {
         updateFile(id, { status: 'uploading' })
@@ -581,6 +624,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           updateFile(id, { progress: percent }),
         )
 
+        completionAttempted = true
         await api.post('/upload/complete', { s3_key, upload_id, asset_id: assetId, version_id, parts })
         const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
         updateFile(id, { progress: 100, status: isMedia ? 'processing' : 'complete', processingProgress: 0 })
@@ -588,6 +632,18 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         if (err instanceof DOMException && err.name === 'AbortError') {
           updateFile(id, { status: 'cancelled', progress: 0 })
         } else {
+          // See startUpload: a completion that threw may still have landed.
+          const landed = completionAttempted && version_id
+            ? await completedVersionStatus(assetId, version_id)
+            : null
+          if (landed) {
+            updateFile(id, {
+              progress: 100,
+              status: landed,
+              processingProgress: landed === 'complete' ? 100 : 0,
+            })
+            return
+          }
           updateFile(id, { status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' })
         }
         if (upload_id && s3_key && version_id) {
