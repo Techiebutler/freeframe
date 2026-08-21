@@ -97,17 +97,7 @@ import logging
 _task_logger = logging.getLogger("celery.dispatch")
 
 
-def _run_on_failure(on_failure, task):
-    """Report a dispatch that never happened, without letting the report itself throw."""
-    if on_failure is None:
-        return
-    try:
-        on_failure()
-    except Exception:
-        _task_logger.exception("on_failure handler for %s raised", task.name)
-
-
-def _dispatch_task(task, args, kwargs, on_failure=None):
+def _dispatch_task(task, args, kwargs):
     """Actually send the task to Celery broker (runs in background thread)."""
     try:
         task.delay(*args, **kwargs)
@@ -117,26 +107,19 @@ def _dispatch_task(task, args, kwargs, on_failure=None):
                 task.apply_async(args=args, kwargs=kwargs, producer=producer)
         except Exception:
             _task_logger.warning("Failed to dispatch task %s after retry", task.name)
-            _run_on_failure(on_failure, task)
     except Exception:
         _task_logger.warning("Failed to dispatch task %s", task.name)
-        _run_on_failure(on_failure, task)
 
 
-def send_task_safe(task, *args, on_failure=None, **kwargs):
+def send_task_safe(task, *args, **kwargs):
     """Send a Celery task in a background thread so it never blocks the API response.
 
     Broker connections can take seconds (especially with pool_limit=0).
     This ensures the API returns immediately while the task is dispatched async.
-
-    `on_failure` is called, on that same thread, when the task could not be handed
-    to the broker at all. Without it a dispatch failure is a log line and nothing
-    else, which leaves the caller's record asserting work that will never happen.
     """
     thread = threading.Thread(
         target=_dispatch_task,
         args=(task, args, kwargs),
-        kwargs={"on_failure": on_failure},
         daemon=True,
     )
     thread.start()

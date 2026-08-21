@@ -174,6 +174,20 @@ def presign_part(
     return PresignPartResponse(presigned_url=url, part_number=body.part_number)
 
 
+def _storage_unreachable(what: str = "check") -> HTTPException:
+    """The answer to "could not find out" on every path that has to give one.
+
+    Never 409. A conflict says the request can never succeed, and this client
+    treats it as final -- it marks the upload failed and fires /upload/abort -- so
+    answering a storage hiccup that way destroys a version that may be complete.
+    """
+    return HTTPException(
+        status_code=503,
+        detail=f"Could not reach storage to {what} this upload. Please retry.",
+        headers={"Retry-After": "5"},
+    )
+
+
 def _already_assembled(s3_key: str, expected_bytes: int, version_id) -> bool | None:
     """Whether a fully assembled object is sitting at `s3_key` at the expected size.
 
@@ -321,10 +335,13 @@ def complete_upload(
             ProcessingStatus.processing,
             ProcessingStatus.ready,
         )
-        # A retry presents the upload id it was given; a replay presents whatever it
-        # has. The version records its own, so this separates the two from stored
-        # state alone -- no network call, and it is the same check presign-part
-        # already makes. NULL means the row predates upload ids being stored.
+        # Refuse a mismatched upload id from stored state, without a network call --
+        # the same check presign-part already makes. This is a filter, not a
+        # discriminator: a replay of a captured request carries the *correct* id, so
+        # it only rejects the ones that made an id up. It still means the storage
+        # lookup below is reachable in a loop on an endpoint family the global rate
+        # limiter exempts, bounded only by the probe client's timeouts.
+        # NULL means the row predates upload ids being stored.
         same_upload = version.upload_id is None or version.upload_id == body.upload_id
         assembled = (
             _already_assembled(s3_key, media_file.file_size_bytes, version.id)
@@ -332,69 +349,44 @@ def complete_upload(
             else False
         )
         if assembled:
-            # Re-read before reporting. The status above was loaded before a network
-            # call that can take seconds, and the transcode runs in another process
-            # with its own session, so the cached value can be stale in both
-            # directions: one that has since finished would read as still
-            # transcoding, and one that has since failed would be reported as a
-            # success, defeating the carve-out below.
+            # Re-read before answering, and re-apply the carve-out to what comes
+            # back. The status was loaded before a network call that can take
+            # seconds and the transcode runs in another process, so it can have
+            # moved either way since -- and a version that went `failed` during the
+            # HeadObject must get the same 409 it would have got a moment earlier,
+            # not a 200 with "failed" in the body.
             db.refresh(version)
-            logger.info(
-                "completion retried for upload %s after it already finished; "
-                "reporting %s", version.id, version.processing_status.value,
-            )
-            # The version's own status, not a hardcoded "processing": one that has
-            # since gone `ready` must not read as still transcoding.
-            return CompleteUploadResponse(
-                status=version.processing_status.value,
-                asset_id=version.asset_id,
-                version_id=version.id,
-            )
-        if assembled is None:
-            # We did not find out. That is not the same as "the object is not there",
-            # and answering 409 would say the request can never succeed when the truth
-            # is that it might succeed on the next attempt. A client that treats 409
-            # as final -- ours does, it marks the upload failed and fires
-            # /upload/abort -- would then destroy a version over a storage hiccup.
-            raise HTTPException(
-                status_code=503,
-                detail="Could not reach storage to check this upload. Please retry.",
-                headers={"Retry-After": "5"},
-            )
+            if version.processing_status in (
+                ProcessingStatus.processing,
+                ProcessingStatus.ready,
+            ):
+                logger.info(
+                    "completion retried for upload %s after it already finished; "
+                    "reporting %s", version.id, version.processing_status.value,
+                )
+                # The version's own status, not a hardcoded "processing": one that
+                # has since gone `ready` must not read as still transcoding.
+                return CompleteUploadResponse(
+                    status=version.processing_status.value,
+                    asset_id=version.asset_id,
+                    version_id=version.id,
+                )
+        elif assembled is None:
+            raise _storage_unreachable()
         raise HTTPException(
             status_code=409,
             detail=f"This upload is already {version.processing_status.value}.",
         )
 
     def _finish() -> CompleteUploadResponse:
-        # Claim the version with a conditional update, not a read-then-write. The
-        # `uploading` check above is an unsynchronised read: two concurrent
-        # completions both pass it, the loser's CompleteMultipartUpload then fails
-        # NoSuchUpload because completing consumed the id, it finds the object
-        # assembled and arrives here too. Both would dispatch, and two transcodes
-        # would write the same processed/ prefix at once. Only the request whose
-        # UPDATE matched a row is the one that claimed it.
-        claimed = db.query(AssetVersion).filter(
-            AssetVersion.id == version.id,
-            AssetVersion.processing_status == ProcessingStatus.uploading,
-        ).update(
-            {AssetVersion.processing_status: ProcessingStatus.processing},
-            synchronize_session=False,
-        )
-        db.commit()
-        if not claimed:
-            # Someone else got there first. Their dispatch stands; report what the
-            # row says rather than queueing a second transcode behind it.
-            db.refresh(version)
-            return CompleteUploadResponse(
-                status=version.processing_status.value,
-                asset_id=version.asset_id,
-                version_id=version.id,
-            )
+        # Read the ids before the commit: `expire_on_commit` is on, so touching
+        # them afterwards costs a fresh SELECT per completion.
+        asset_id, version_id = version.asset_id, version.id
         version.processing_status = ProcessingStatus.processing
-        background_tasks.add_task(_trigger_processing, version.asset_id, version.id)
+        db.commit()
+        background_tasks.add_task(_trigger_processing, asset_id, version_id)
         return CompleteUploadResponse(
-            status="processing", asset_id=version.asset_id, version_id=version.id
+            status="processing", asset_id=asset_id, version_id=version_id
         )
 
     try:
@@ -418,9 +410,15 @@ def complete_upload(
         # the first response lands here. If the object is sitting there at the right
         # size the work is already done, and saying so is far better than failing:
         # a version left at `uploading` is deleted by the reaper a day later.
-        if _already_assembled(s3_key, media_file.file_size_bytes, version.id) is True:
+        assembled = _already_assembled(s3_key, media_file.file_size_bytes, version.id)
+        if assembled:
             logger.warning("upload %s was already complete; treating retry as success", version.id)
             return _finish()
+        if assembled is None:
+            # "Could not find out" is not "gone". Telling the client to upload the
+            # whole file again over a storage hiccup is the worst answer available
+            # here, and it is the one this branch used to give.
+            raise _storage_unreachable()
         raise HTTPException(
             status_code=409,
             detail="This upload is no longer available. Please upload the file again.",
@@ -459,8 +457,11 @@ def complete_upload(
         # Same race as above, one step later: another request completed this upload
         # between our listing and our call.
         if str(e.response.get("Error", {}).get("Code", "")) in UPLOAD_GONE_CODES:
-            if _already_assembled(s3_key, media_file.file_size_bytes, version.id) is True:
+            assembled = _already_assembled(s3_key, media_file.file_size_bytes, version.id)
+            if assembled:
                 return _finish()
+            if assembled is None:
+                raise _storage_unreachable() from e
         logger.warning("completing upload %s failed: %s", version.id, e)
         raise
     except BotoCoreError as e:
@@ -485,50 +486,11 @@ def complete_upload(
     return _finish()
 
 
-def _record_dispatch_failure(version_id: uuid.UUID):
-    """Mark a version failed when its transcode could not be queued.
-
-    A version committed to `processing` with no task behind it is invisible. The
-    reaper only sweeps `uploading` and `failed`, there is no reprocess endpoint,
-    and the bytes keep counting against the storage cap -- so a broker outage
-    between the commit and the dispatch stranded the upload permanently, and the
-    only reason anyone noticed was that a retry used to come back 409. Now that a
-    retry answers with the version's status, nothing would surface it at all.
-
-    Runs on the dispatch thread, so it needs a session of its own.
-    """
-    from ..database import SessionLocal
-    db = SessionLocal()
-    try:
-        version = db.query(AssetVersion).filter(
-            AssetVersion.id == version_id,
-            # Only the state we put it in. If the transcode has since started and
-            # moved the row on, the dispatch clearly did land.
-            AssetVersion.processing_status == ProcessingStatus.processing,
-        ).update(
-            {AssetVersion.processing_status: ProcessingStatus.failed},
-            synchronize_session=False,
-        )
-        db.commit()
-        if version:
-            logger.error(
-                "transcode for version %s could not be queued; recorded as failed",
-                version_id,
-            )
-    except Exception:
-        logger.exception("could not record dispatch failure for version %s", version_id)
-    finally:
-        db.close()
-
-
 def _trigger_processing(asset_id: uuid.UUID, version_id: uuid.UUID):
     """Dispatch Celery task to process the uploaded asset."""
     from ..tasks.transcode_tasks import process_asset
     from ..tasks.celery_app import send_task_safe
-    send_task_safe(
-        process_asset, str(asset_id), str(version_id),
-        on_failure=lambda: _record_dispatch_failure(version_id),
-    )
+    send_task_safe(process_asset, str(asset_id), str(version_id))
 
 
 @router.post("/abort", status_code=status.HTTP_204_NO_CONTENT)
@@ -562,11 +524,13 @@ def abort_upload(
             raise
         logger.info("upload %s was already gone when aborted", version.id)
     except BotoCoreError as e:
-        # Never reaching the backend is a sibling class of being refused by it, and
-        # this is the endpoint the client calls from the catch of every completion
-        # failure. Letting it escape as a 500 means the status write below never
-        # runs, so the version stays `uploading` with its parts still in storage and
-        # nothing recorded about why.
+        # Never reaching the backend is a sibling class of being refused by it, so
+        # it gets the same treatment a non-gone ClientError already gets above: the
+        # request stops here and the status is left alone, because parts are still
+        # sitting in storage and reporting success would hide that. The only change
+        # from the unhandled 500 this used to be is a code that says "try again".
+        # It does leave the version in the panel's Active tab; the fix for that is
+        # a client that retries, not a status written on a guess.
         logger.warning("abort of upload %s could not reach storage: %s", version.id, e)
         raise HTTPException(
             status_code=503,
@@ -592,22 +556,11 @@ def abort_upload(
             if media_file is not None
             else False
         )
-        if assembled is None:
-            # Storage could not tell us. Marking this failed on a guess is the one
-            # move that cannot be taken back: the reaper deletes `failed` versions'
-            # raw objects a day later, so a HeadObject that timed out would destroy a
-            # fully transferred master. Leaving it `uploading` costs nothing -- the
-            # same reaper still collects it on the same schedule -- but any later
-            # completion or abort that does get an answer can still rescue it.
-            logger.warning(
-                "abort of upload %s could not confirm what is in storage; leaving it "
-                "as uploading rather than recording a failure", version.id,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail="Could not reach storage to check this upload. Please retry.",
-                headers={"Retry-After": "5"},
-            )
+        # Only a confirmed object promotes the version. "Could not find out" is
+        # recorded as failed exactly like "not there", because the two have the
+        # same consequence: `_reap_stale_uploads` sweeps `uploading` and `failed`
+        # on identical criteria, so leaving it `uploading` saves no bytes and only
+        # parks the row in the panel's Active tab instead of Failed.
         if assembled:
             logger.warning(
                 "abort called for upload %s but the object is already complete; "

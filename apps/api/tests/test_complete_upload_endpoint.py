@@ -226,21 +226,28 @@ def test_retry_against_a_failed_version_is_still_refused(
     version.asset_id = uuid.uuid4()
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.failed
+    # Must match the body, or the upload-id check refuses it first and the
+    # carve-out below is never exercised.
+    version.upload_id = "upload-1"
 
     media_file = MagicMock()
     media_file.s3_key_raw = "raw/p/a/v/original.mp4"
     media_file.file_size_bytes = 23 * MB
     mock_db.first.side_effect = [version, media_file]
 
-    monkeypatch.setattr(upload_module, "head_object_size", lambda k: 23 * MB)
+    looked = []
+    monkeypatch.setattr(upload_module, "head_object_size",
+                        lambda k: looked.append(k) or 23 * MB)
     monkeypatch.setattr(upload_module, "list_upload_parts",
                         lambda k, u: pytest.fail("storage listing must not be touched"))
 
-    resp = client.post(
-        "/upload/complete", json=_body(media_file, upload_id="junk"), headers=auth_headers
-    )
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
 
     assert resp.status_code == 409
+    # The carve-out, not the upload-id check, which this request satisfies. `failed`
+    # is refused without asking storage at all -- so adding it to `completed_before`
+    # makes the HeadObject run, find 23MB, and answer 200 instead.
+    assert looked == []
 
 
 def test_retry_with_a_short_object_at_the_key_is_refused(
@@ -252,6 +259,7 @@ def test_retry_with_a_short_object_at_the_key_is_refused(
     version.asset_id = uuid.uuid4()
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.processing
+    version.upload_id = "upload-1"
 
     media_file = MagicMock()
     media_file.s3_key_raw = "raw/p/a/v/original.mp4"
@@ -361,10 +369,15 @@ def test_a_reaped_upload_is_reported_rather_than_treated_as_done(
     assert version.processing_status == ProcessingStatus.uploading
 
 
-def test_a_head_object_that_errors_is_not_read_as_success(
+def test_a_head_object_that_errors_is_retryable_rather_than_a_conflict(
     client, auth_headers, mock_db, upload_rows, monkeypatch
 ):
-    """Guessing wrong here either loses a finished upload or reports a missing one done."""
+    """Guessing wrong here either loses a finished upload or reports a missing one done.
+
+    So it guesses neither. A 409 would tell the client to upload the whole file
+    again -- and this client treats 409 as final -- when the object may be sitting
+    complete at the key and only the lookup failed.
+    """
     _, media_file = upload_rows
 
     def gone(k, u):
@@ -377,7 +390,8 @@ def test_a_head_object_that_errors_is_not_read_as_success(
 
     resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
 
-    assert resp.status_code == 409
+    assert resp.status_code == 503
+    assert resp.headers["Retry-After"] == "5"
 
 
 # ------------------------------------------------------------------ fallback path
@@ -621,66 +635,3 @@ def test_a_completion_that_did_not_answer_is_accepted_once_the_object_is_there(
     assert dispatched == [version.id]
 
 
-def test_only_the_request_that_claims_the_version_queues_a_transcode(
-    client, auth_headers, mock_db, upload_rows, monkeypatch
-):
-    """Two completions can both pass the `uploading` read; only one may dispatch.
-
-    The loser's CompleteMultipartUpload fails NoSuchUpload because completing
-    consumed the id, it finds the object assembled and arrives at _finish() too.
-    Without a conditional update both queue a transcode and two of them write the
-    same processed/ prefix at once.
-    """
-    version, media_file = upload_rows
-    dispatched = []
-    # A conditional UPDATE that matched no row: someone else got there first.
-    mock_db.query.return_value.filter.return_value.update.return_value = 0
-
-    _stub(monkeypatch, list_parts=lambda k, u: _listing(23 * MB))
-    monkeypatch.setattr(upload_module, "_trigger_processing", lambda a, v: dispatched.append(v))
-
-    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
-
-    assert resp.status_code == 200
-    assert dispatched == []
-
-
-# --------------------------------------------------------- dispatch that never lands
-
-def test_a_transcode_that_cannot_be_queued_is_recorded_rather_than_stranded(monkeypatch):
-    """A version committed to `processing` with no task behind it is invisible.
-
-    The reaper only sweeps `uploading` and `failed`, there is no reprocess endpoint,
-    and the bytes keep counting against the storage cap -- so a broker outage
-    between the commit and the dispatch stranded the upload permanently. The only
-    thing that used to surface it was a retry coming back 409, and a retry now
-    answers with the version's status instead.
-    """
-    version_id = uuid.uuid4()
-    updated = {}
-
-    session = MagicMock()
-    session.query.return_value.filter.return_value.update.side_effect = (
-        lambda values, **kw: updated.update(values) or 1
-    )
-    monkeypatch.setattr("apps.api.database.SessionLocal", lambda: session)
-
-    upload_module._record_dispatch_failure(version_id)
-
-    assert list(updated.values()) == [ProcessingStatus.failed]
-    assert session.commit.called
-    assert session.close.called
-
-
-def test_a_dispatch_failure_calls_back_so_the_caller_can_react(monkeypatch):
-    """send_task_safe swallowed every dispatch failure into a log line."""
-    from apps.api.tasks import celery_app as celery_module
-
-    called = []
-    task = MagicMock()
-    task.name = "process_asset"
-    task.delay.side_effect = RuntimeError("broker is gone")
-
-    celery_module._dispatch_task(task, ("a", "v"), {}, on_failure=lambda: called.append(True))
-
-    assert called == [True]
