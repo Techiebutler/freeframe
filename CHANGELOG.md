@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **`POST /upload/complete` now refuses a request whose `asset_id` is not the asset the version belongs to**, with a `400`. Only relevant if you drive the API with something other than the FreeFrame web client, which always sends back the id it was handed at initiate.
+
 ### Added
 - **Instance branding — white-label your FreeFrame** — admins can set the org name, light/dark logos, favicon, apple-touch icon, login-page logo, and a primary accent color from Settings → Branding, with a toggle to hide the "Powered by FreeFrame" badge. The org name and logo appear across the app (sidebar, login, share pages, emails, page titles), and emails are de-branded so invitations come from the org rather than FreeFrame. Logos upload straight to storage via presigned URLs and are served back as short-lived presigned links. New endpoints: `GET/PUT /instance/branding`, `POST /instance/branding/{logo_type}-upload`, `DELETE /instance/branding/logo/{logo_type}`. (#203)
 
@@ -14,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bucket CORS rules are tightened and the public-read bucket policy is gone** — the automatic bucket setup now pins `AllowedHeaders` to the headers browser uploads actually send (`Content-Type`, `Content-MD5`, `x-amz-content-sha256`, `x-amz-date`, `x-amz-decoded-content-length`) instead of `*`, and drops `DELETE` (no presigned-DELETE flow exists). It also no longer publishes a public-read policy on `processed/*`: HLS playback goes through the presign proxy, so the policy was dead weight that exposed any processed object to anyone who guessed a key. `docs/deployment.md` has been corrected to match. (#202)
 
 ### Fixed
+- **A completion could steer its transcode into another project** — `POST /upload/complete` took the request's `asset_id` on trust and handed it to the transcode task, which resolves that asset with no cross-check of its own and derives both the storage prefix it writes to and the event stream it publishes on from whatever it finds. The owner of any version could therefore name someone else's asset and have their own transcode output written under that project's prefix, with a `transcode_complete` event fired on its stream. The id is now checked against the version before anything runs, and the dispatch reads the version's own asset rather than the request's.
 - **Passwords are bounded at 8–72 characters everywhere they are set** — set-password, invite-accept, and admin-created accounts now require at least 8 characters and reject more than 72 with a clear validation error instead of letting bcrypt silently truncate (a longer password would otherwise authenticate against only its first 72 bytes). Login deliberately enforces only the 72-byte ceiling so legacy accounts with shorter passwords are not locked out before auth runs. (#202)
 - **User search treats `%` and `_` literally** — search terms are LIKE-escaped so wildcard characters match themselves instead of fanning out a search. (#202)
 - **`PATCH /auth/me/preferences` accepts only known keys** — it previously took an arbitrary dict, so anything stored could later be a stored-XSS surface if ever rendered back unescaped. Preferences are now validated against a fixed schema of primitive values, merged over existing prefs so unspecified keys are preserved. (#202)
