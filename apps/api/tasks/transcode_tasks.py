@@ -73,12 +73,25 @@ def process_asset(self, asset_id: str, version_id: str):
             })
 
         except Exception as exc:
-            version.processing_status = ProcessingStatus.failed
-            db.commit()
-            _publish_event(str(asset.project_id), "transcode_failed", {
-                "asset_id": asset_id,
-                "error": str(exc),
-            })
+            # `failed` means "this is not coming back", so only write it once the
+            # retries are actually spent. Writing it before each retry made the row
+            # oscillate failed -> processing -> failed for the whole ladder, with the
+            # raw object sitting there intact the entire time: callers that key off
+            # the status -- /upload/complete's retry guard, the reaper, the client --
+            # got a different answer depending on which second they asked in.
+            attempts_left = self.request.retries < self.max_retries
+            if not attempts_left:
+                version.processing_status = ProcessingStatus.failed
+                db.commit()
+                _publish_event(str(asset.project_id), "transcode_failed", {
+                    "asset_id": asset_id,
+                    "error": str(exc),
+                })
+            else:
+                log.warning(
+                    "transcode of version %s failed (attempt %d of %d), retrying: %s",
+                    version_id, self.request.retries + 1, self.max_retries + 1, exc,
+                )
             raise self.retry(exc=exc)
 
     finally:

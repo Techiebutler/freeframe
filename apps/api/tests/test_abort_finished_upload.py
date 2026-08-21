@@ -28,6 +28,7 @@ def abort_rows(mock_db, test_user):
     version = MagicMock()
     version.id = uuid.uuid4()
     version.asset_id = uuid.uuid4()
+    version.asset_id = uuid.uuid4()
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
 
@@ -92,17 +93,25 @@ def test_a_partial_object_at_the_key_is_not_mistaken_for_success(
     assert version.processing_status == ProcessingStatus.failed
 
 
-def test_an_unreadable_head_object_does_not_claim_success(
+def test_an_unreadable_head_object_decides_nothing(
     client, auth_headers, mock_db, abort_rows, monkeypatch
 ):
-    """Guessing wrong in this direction would report a missing upload as done."""
+    """Not knowing must not be recorded as either answer.
+
+    Claiming success would report a missing upload as done. Claiming failure is
+    worse and used to be what happened: the reaper deletes a `failed` version's raw
+    object a day later, so a HeadObject we could not complete would destroy a
+    master that had transferred perfectly. The version keeps its `uploading` status
+    -- the same reaper still collects it on the same schedule, but until then any
+    later call that does get an answer can still rescue it.
+    """
     version, _ = abort_rows
     monkeypatch.setattr(upload_module, "abort_multipart_upload", lambda k, u: None)
     monkeypatch.setattr(upload_module, "head_object_size",
                         lambda k: (_ for _ in ()).throw(_client_error("AccessDenied", "HeadObject")))
 
-    assert _abort(client, auth_headers).status_code == 204
-    assert version.processing_status == ProcessingStatus.failed
+    assert _abort(client, auth_headers).status_code == 503
+    assert version.processing_status == ProcessingStatus.uploading
 
 
 def test_a_version_that_already_reached_processing_is_left_alone(

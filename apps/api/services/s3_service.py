@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 # store can't hang app startup for boto3's default ~60s (deploy-test finding #6).
 _STARTUP_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2})
 
+# HeadObject runs on the request path: /upload/complete asks it on every retry and
+# /upload/abort on every cancellation, both of which the global rate limiter
+# exempts. Boto3's defaults there are ~60s per attempt with five attempts behind
+# them, which is minutes of a held threadpool slot and an open transaction for a
+# single request, and enough concurrent ones exhaust the connection pool.
+#
+# The answer is only ever advisory -- every caller has a defined behaviour for
+# "could not find out" -- so a check that cannot finish promptly is better
+# abandoned than waited on.
+_PROBE_S3_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2})
+
 # S3 Content-Type and Cache-Control mappings
 CONTENT_TYPE_MAP = {
     ".m3u8": ("application/vnd.apple.mpegurl", "no-cache"),
@@ -71,6 +82,17 @@ def _build_s3_client(config=None):
 def get_s3_client():
     """The shared, cached S3 client for server-side operations (see _build_s3_client)."""
     return _build_s3_client()
+
+@lru_cache(maxsize=1)
+def _get_probe_client():
+    """Client for bounded, advisory lookups on the request path (see _PROBE_S3_CONFIG).
+
+    Kept separate from `get_s3_client` because its timeouts would be wrong for the
+    calls that legitimately take a long time: CompleteMultipartUpload on a large
+    object can sit for minutes while the backend assembles it, and cutting that
+    off would turn a working upload into a failure.
+    """
+    return _build_s3_client(_PROBE_S3_CONFIG)
 
 @lru_cache(maxsize=1)
 def _get_presign_client():
@@ -282,6 +304,15 @@ class MultipartUploadGone(Exception):
     """
 
 
+class ObjectSizeUnavailable(Exception):
+    """HeadObject succeeded but reported no size, so nothing can be compared.
+
+    Distinct from "the object is not there": the object may well be complete, we
+    simply cannot confirm it. Callers that treat this as absence either delete a
+    finished upload or report a missing one as done.
+    """
+
+
 class MultipartListingUnsupported(Exception):
     """The storage backend does not implement ListParts.
 
@@ -364,14 +395,26 @@ def head_object_size(s3_key: str) -> int | None:
     integrity signal that is portable: the completed object's ETag is a composite
     whose form is not guaranteed off AWS.
     """
-    s3 = get_s3_client()
+    s3 = _get_probe_client()
     try:
-        return s3.head_object(Bucket=settings.s3_bucket, Key=s3_key)["ContentLength"]
+        resp = s3.head_object(Bucket=settings.s3_bucket, Key=s3_key)
     except ClientError as e:
         code = str(e.response.get("Error", {}).get("Code", ""))
         if code in UPLOAD_GONE_CODES:
             return None
         raise
+    size = resp.get("ContentLength")
+    if size is None:
+        # HeadObjectOutput has no required members, so botocore simply omits the key
+        # when the header is absent -- which happens behind proxies that strip or
+        # chunk-encode HEAD responses. Subscripting raised KeyError, which is neither
+        # a ClientError nor a BotoCoreError and so escaped every caller's handling as
+        # a 500. "The object is there but I cannot size it" is an unanswered question,
+        # not a missing object, so it must not collapse into the None above.
+        raise ObjectSizeUnavailable(
+            f"storage reported no ContentLength for {s3_key}"
+        )
+    return size
 
 def build_download_filename(display_name: str, source: str | None) -> str:
     """Return display_name with an extension appended from `source` if missing.
