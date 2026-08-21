@@ -17,6 +17,12 @@ from apps.api.models.asset import ProcessingStatus
 
 MB = 1024 * 1024
 
+# The asset the uploaded version belongs to. The rows and the request body have to
+# agree on one, so a test that wants them to disagree overrides `asset_id` on the
+# body. #267 adds a handler guard that rejects a mismatch outright; until then the
+# two simply have to not drift.
+ASSET_ID = uuid.uuid4()
+
 
 def _client_error(code: str, op: str = "CompleteMultipartUpload"):
     return ClientError({"Error": {"Code": code, "Message": code}}, op)
@@ -27,7 +33,7 @@ def upload_rows(mock_db, test_user):
     """A version being uploaded plus its media file, wired into the mock session."""
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
 
@@ -139,7 +145,7 @@ def test_replaying_a_finished_upload_is_refused(
     """
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = status
 
@@ -182,7 +188,7 @@ def test_retry_against_a_finished_version_reports_success_not_conflict(
     """
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = status
     # A retry presents the upload id it was handed at initiate. That is what makes
@@ -223,7 +229,7 @@ def test_retry_against_a_failed_version_is_still_refused(
     """
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.failed
     # Must match the body, or the upload-id check refuses it first and the
@@ -256,7 +262,7 @@ def test_retry_with_a_short_object_at_the_key_is_refused(
     """A half-assembled object is not proof the completion ran."""
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.processing
     version.upload_id = "upload-1"
@@ -303,7 +309,7 @@ def test_retry_survives_a_storage_blip_as_a_conflict_not_a_crash(
 
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.processing
     version.upload_id = "upload-1"
@@ -462,7 +468,7 @@ def test_abort_marks_the_version_failed_when_the_upload_was_already_gone(
 ):
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
     media_file = MagicMock()
@@ -498,7 +504,7 @@ def test_abort_does_not_fail_a_version_that_already_finished(
     """
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.ready
     mock_db.first.side_effect = [version]
@@ -520,7 +526,7 @@ def test_abort_surfaces_a_real_storage_failure(
     """Swallowing this would leave parts in the bucket and tell nobody."""
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
     mock_db.first.side_effect = [version]
@@ -557,7 +563,7 @@ def test_a_replay_with_an_unrecognised_upload_id_never_reaches_storage(
     """
     version = MagicMock()
     version.id = uuid.uuid4()
-    version.asset_id = uuid.uuid4()
+    version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.processing
     version.upload_id = "upload-1"
