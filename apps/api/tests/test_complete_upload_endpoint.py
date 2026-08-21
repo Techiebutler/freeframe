@@ -111,6 +111,33 @@ def test_a_completion_naming_another_assets_id_is_rejected(
     assert dispatched == []
 
 
+def test_a_completion_dispatches_the_versions_own_asset_and_version(
+    client, auth_headers, mock_db, upload_rows, monkeypatch
+):
+    """What the success path hands the transcoder, which nothing else asserts.
+
+    The guard above makes the request's ids and the version's equal, so reverting
+    _finish() to read `body.*` passes every other test in this file -- and so does
+    swapping the two arguments, which would call process_asset(version_id, asset_id)
+    and mis-report the pair to the client. Both are silent. Pinning the order and
+    the source here is what makes the guard's promise -- that the dispatch is
+    correct on its own, not by way of a check thirty lines above it -- testable.
+    """
+    version, media_file = upload_rows
+    dispatched = []
+    _stub(monkeypatch, list_parts=lambda k, u: _listing(23 * MB))
+    monkeypatch.setattr(
+        upload_module, "_trigger_processing", lambda a, v: dispatched.append((a, v))
+    )
+
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert dispatched == [(version.asset_id, version.id)]
+    assert resp.json()["asset_id"] == str(version.asset_id)
+    assert resp.json()["version_id"] == str(version.id)
+
+
 # ------------------------------------------------------------------ the core fix
 
 def test_completes_with_the_parts_storage_holds_not_the_ones_the_client_sent(
