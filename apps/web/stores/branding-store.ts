@@ -90,7 +90,15 @@ export const useBrandingStore = create<BrandingState>()(
           appleIconUrl: data.apple_icon_url ?? null,
           loginLogoUrl: data.login_logo_url ?? null,
           poweredByFreeframe: data.powered_by_freeframe ?? true,
-          primaryColor: data.primary_color ?? HARDCODED_DEFAULTS.primaryColor,
+          // No coercion to a default here, unlike the fields above. `null` means
+          // no accent was ever configured, and it has to survive as `null` so
+          // BrandingHead hands the accent tokens back to the stylesheet. Filling
+          // in HARDCODED_DEFAULTS instead was harmless while the colour went to a
+          // variable nothing read, but now that it reaches `--accent` it would
+          // repaint every un-branded instance from the product blue to that
+          // default -- on upgrade, with the settings screen still reporting no
+          // custom branding, and with "Reset all branding" unable to undo it.
+          primaryColor: data.primary_color ?? null,
           brandingFetchedAt: Date.now(),
           loaded: true,
           loading: false,

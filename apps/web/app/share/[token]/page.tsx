@@ -919,7 +919,10 @@ function ShareViewer({
   // Same resolution the folder grid uses: the link's own accent wins over the
   // project's, which wins over the built-in. This viewer was never given the
   // appearance at all, so a link's theme and accent were silently ignored here.
-  const accentColor = appearance?.accent_color ?? branding?.primary_color ?? '#6366f1'
+  const accentColor = appearance?.accent_color ?? branding?.primary_color
+  // No fallback: a link with no accent of its own, on an instance with no
+  // accent of its own, keeps the stylesheet's. Substituting a colour here
+  // would repaint every share link that already exists.
   useShareAppearance(accentColor, appearance?.theme !== 'light')
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)

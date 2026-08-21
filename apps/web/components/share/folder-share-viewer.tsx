@@ -1067,7 +1067,10 @@ export function FolderShareViewer({
   const [loadingMore, setLoadingMore] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  const accentColor = appearance.accent_color ?? branding?.primary_color ?? '#6366f1'
+  const accentColor = appearance.accent_color ?? branding?.primary_color
+  // No fallback: a link with no accent of its own, on an instance with no
+  // accent of its own, keeps the stylesheet's. Substituting a colour here
+  // would repaint every share link that already exists.
   const isDark = appearance.theme !== 'light'
   const cardSize = appearance.card_size ?? 'm'
   const aspectRatio = appearance.aspect_ratio ?? 'landscape'

@@ -18,7 +18,7 @@ const ACCENT_STYLE_ID = 'ff-share-accent'
  * the instance-level accent, which BrandingHead sets as an inline style on the
  * same element: a link's own appearance has to win on its own page.
  */
-export function useShareAppearance(accentColor: string, isDark: boolean) {
+export function useShareAppearance(accentColor: string | null | undefined, isDark: boolean) {
   React.useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
     return () => {
@@ -40,6 +40,15 @@ export function useShareAppearance(accentColor: string, isDark: boolean) {
   }, [isDark])
 
   React.useEffect(() => {
+    // Nothing configured means nothing to override. Injecting a fallback here
+    // would repaint every share link that never set an accent, which is a
+    // visible change to links that already exist rather than a feature.
+    const vars = accentColor ? accentVars(accentColor) : null
+    if (!vars) {
+      document.getElementById(ACCENT_STYLE_ID)?.remove()
+      return
+    }
+
     let el = document.getElementById(ACCENT_STYLE_ID) as HTMLStyleElement | null
     if (!el) {
       el = document.createElement('style')
@@ -49,7 +58,6 @@ export function useShareAppearance(accentColor: string, isDark: boolean) {
     // All three tokens, not just --accent: overriding the base colour alone
     // left the hover and muted shades on the instance's colour, so a button
     // repainted but its hover state did not.
-    const vars = accentVars(accentColor) ?? { '--accent': accentColor }
     el.textContent = `:root { ${Object.entries(vars)
       .map(([k, v]) => `${k}: ${v} !important;`)
       .join(' ')} }`
