@@ -160,3 +160,63 @@ describe('an upload that failed before it ever completed', () => {
     expect(api.get).not.toHaveBeenCalled()
   })
 })
+
+
+describe('races during the recovery read', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useUploadStore.setState({ files: [] })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => '"etag-1"' },
+    }) as never
+  })
+
+  it('does not overwrite a cancel the user made while it was asking', async () => {
+    // The row stays `uploading` for the whole round-trip and the panel keeps
+    // offering Cancel, so the user can act inside the window the re-read opened.
+    mockUploadWithFailingCompletion()
+    let release: (v: unknown) => void = () => {}
+    vi.mocked(api.get).mockImplementation(
+      () => new Promise((r) => { release = r }) as never,
+    )
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalled())
+
+    useUploadStore.getState().cancelUpload(id)
+    expect(rowOf(id).status).toBe('cancelled')
+
+    release({ id: ASSET_ID, latest_version: { id: VERSION_ID, processing_status: 'processing' } })
+    // Settle fully rather than waiting for the status to move: the whole point is
+    // that it must NOT move, so a helper that returns as soon as it leaves
+    // `uploading` would pass here without the recovery write ever being attempted.
+    await new Promise((r) => setTimeout(r, 20))
+
+    // The user's decision outranks the answer that arrived after it.
+    expect(rowOf(id).status).toBe('cancelled')
+  })
+
+  it('corrects itself when the abort resurrects the version', async () => {
+    // The object was assembled but the status write never landed, so the version
+    // is still `uploading` and the first read says "not landed". The abort then
+    // finds the object, promotes it to `processing` and dispatches the transcode.
+    const { aborts } = mockUploadWithFailingCompletion()
+    let reads = 0
+    vi.mocked(api.get).mockImplementation(() => {
+      reads += 1
+      return Promise.resolve({
+        id: ASSET_ID,
+        latest_version: reads === 1
+          ? { id: PREVIOUS_VERSION_ID, processing_status: 'ready' }  // still uploading -> not shown
+          : { id: VERSION_ID, processing_status: 'processing' },     // abort promoted it
+      }) as never
+    })
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await vi.waitFor(() => expect(rowOf(id).status).toBe('processing'))
+
+    expect(aborts).toHaveLength(1)
+    expect(reads).toBe(2)
+  })
+})

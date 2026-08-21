@@ -540,21 +540,31 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           updateFile(id, { progress: 100, status: 'complete' })
         }
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
+        // Asking the server what happened takes a round-trip, and the row stays
+        // interactive for its duration -- the panel still offers Cancel on an
+        // `uploading` row. A cancel landing in that window is the user's decision
+        // and outranks whatever we were about to write.
+        const applyLanded = (landed: 'processing' | 'complete') => {
+          if (get().files.find((f) => f.id === id)?.status === 'cancelled') return
+          updateFile(id, {
+            progress: 100,
+            status: landed,
+            processingProgress: landed === 'complete' ? 100 : 0,
+          })
+        }
+
+        const cancelled = err instanceof DOMException && err.name === 'AbortError'
+        if (cancelled) {
           updateFile(id, { status: 'cancelled', progress: 0 })
         } else {
           // A completion that threw may still have landed, with only its
           // response lost on the way back. Writing that off would report a
-          // working upload as Failed and then ask the backend to discard it.
+          // working upload as Failed.
           const landed = completionAttempted && asset_id && version_id
             ? await completedVersionStatus(asset_id, version_id)
             : null
           if (landed) {
-            updateFile(id, {
-              progress: 100,
-              status: landed,
-              processingProgress: landed === 'complete' ? 100 : 0,
-            })
+            applyLanded(landed)
             return
           }
           const message = err instanceof Error ? err.message : 'Upload failed'
@@ -563,7 +573,19 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         // Notify backend so the version is marked failed (not stuck at uploading).
         // This ensures post-refresh history shows the item in "Failed", not "Active".
         if (upload_id && s3_key && version_id) {
-          api.post('/upload/abort', { s3_key, upload_id, version_id }).catch(() => {})
+          const aborting = api.post('/upload/abort', { s3_key, upload_id, version_id })
+            .catch(() => {})
+          // The abort can change the answer we just acted on. When the object was
+          // assembled but the status write never landed, the version is still
+          // `uploading` -- so the read above said "not landed" and we wrote Failed --
+          // and the abort then finds the object, promotes the version to
+          // `processing` and dispatches the transcode. Asking again afterwards is
+          // what stops us reporting Failed for a file the server just resurrected.
+          if (!cancelled && completionAttempted && asset_id && version_id) {
+            await aborting
+            const after = await completedVersionStatus(asset_id, version_id)
+            if (after) applyLanded(after)
+          }
         }
       } finally {
         releaseWakeLock()
@@ -629,7 +651,18 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
         updateFile(id, { progress: 100, status: isMedia ? 'processing' : 'complete', processingProgress: 0 })
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
+        // See startUpload for why both of these exist.
+        const applyLanded = (landed: 'processing' | 'complete') => {
+          if (get().files.find((f) => f.id === id)?.status === 'cancelled') return
+          updateFile(id, {
+            progress: 100,
+            status: landed,
+            processingProgress: landed === 'complete' ? 100 : 0,
+          })
+        }
+
+        const cancelled = err instanceof DOMException && err.name === 'AbortError'
+        if (cancelled) {
           updateFile(id, { status: 'cancelled', progress: 0 })
         } else {
           // See startUpload: a completion that threw may still have landed.
@@ -637,17 +670,21 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
             ? await completedVersionStatus(assetId, version_id)
             : null
           if (landed) {
-            updateFile(id, {
-              progress: 100,
-              status: landed,
-              processingProgress: landed === 'complete' ? 100 : 0,
-            })
+            applyLanded(landed)
             return
           }
           updateFile(id, { status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' })
         }
         if (upload_id && s3_key && version_id) {
-          api.post('/upload/abort', { s3_key, upload_id, version_id }).catch(() => {})
+          const aborting = api.post('/upload/abort', { s3_key, upload_id, version_id })
+            .catch(() => {})
+          // See startUpload: the abort itself can promote the version and dispatch
+          // the transcode, so the answer we acted on above may already be stale.
+          if (!cancelled && completionAttempted) {
+            await aborting
+            const after = await completedVersionStatus(assetId, version_id)
+            if (after) applyLanded(after)
+          }
         }
       } finally {
         releaseWakeLock()
