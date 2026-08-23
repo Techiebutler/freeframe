@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Navigating the UI no longer throws a `null is not an object (evaluating 'instance.parentNode.removeChild')` error** — the favicon/apple-touch-icon `<link>` tags Next auto-generates from `app/icon.png`, `app/favicon.ico`, and `app/apple-icon.png` are React-managed hoistable resources, and the branding code removed them directly from the DOM. On the next commit React tried to unmount a node whose parent was already gone and threw. Those files have been removed from `app/` (`favicon.ico` now lives in `public/` so `/favicon.ico` still resolves), leaving the branding component as the sole owner of the icon links.
+
 ## [1.10.0] - 2026-08-21
 
 ### Contributors

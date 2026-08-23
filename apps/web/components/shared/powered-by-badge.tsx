@@ -10,11 +10,11 @@ interface PoweredByBadgeProps {
   showIcon?: boolean
 }
 
-/** The FreeFrame mark on its own: the exact artwork the favicon uses
- *  (public/logo-icon.png is byte-identical to app/icon.png), with no wordmark,
- *  since the line already reads "Powered by FreeFrame". Two files rather than
- *  one because the mark is a flat silhouette, so it needs inverting per theme —
- *  the same logo-dark/logo-light pair the sidebar uses. */
+/** The FreeFrame mark on its own: the same artwork the favicon defaults to
+ *  (public/logo-icon.png), with no wordmark, since the line already reads
+ *  "Powered by FreeFrame". Two files rather than one because the mark is a flat
+ *  silhouette, so it needs inverting per theme — the same logo-dark/logo-light
+ *  pair the sidebar uses. */
 function FreeFrameMark() {
   return (
     <>
