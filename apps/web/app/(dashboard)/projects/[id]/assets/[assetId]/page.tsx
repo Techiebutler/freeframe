@@ -7,6 +7,7 @@ import { ReviewProvider, useReview } from '@/components/review/review-provider'
 import { VideoPlayer } from '@/components/review/video-player'
 import { AudioPlayer } from '@/components/review/audio-player'
 import { ImageViewer } from '@/components/review/image-viewer'
+import { PdfViewer } from '@/components/review/pdf-viewer'
 import { AnnotationCanvas } from '@/components/review/annotation-canvas'
 import { AnnotationOverlay } from '@/components/review/annotation-overlay'
 import { CommentPanel } from '@/components/review/comment-panel'
@@ -44,6 +45,7 @@ const acceptByType: Record<string, string> = {
   audio: 'audio/*',
   image: 'image/*',
   image_carousel: 'image/*',
+  pdf: 'application/pdf',
 }
 
 function ReviewScreenInner({ projectId }: { projectId: string }) {
@@ -51,7 +53,15 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
-  const { currentVersion, isDrawingMode, focusedCommentId, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
+  const {
+    currentVersion,
+    isDrawingMode,
+    focusedCommentId,
+    seekTo,
+    setFocusedCommentId,
+    setActiveAnnotation,
+    discardAnnotations,
+  } = useReviewStore()
   const { user } = useAuthStore()
   const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
   const versionFileInputRef = useRef<HTMLInputElement>(null)
@@ -59,9 +69,26 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const setLabel = useBreadcrumbStore((s) => s.setLabel)
   usePageTitle(asset?.name ?? null)
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
+  const [pdfPage, setPdfPage] = useState(1)
   const [activeTab, setActiveTab] = useState<'comments' | 'fields'>('comments')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const deepLinkApplied = useRef(false)
+
+  const discardPdfAnnotation = useCallback(() => {
+    setAnnotationData(null)
+    discardAnnotations()
+  }, [discardAnnotations])
+
+  const changePdfPage = useCallback((page: number) => {
+    discardPdfAnnotation()
+    setPdfPage(page)
+  }, [discardPdfAnnotation])
+
+  useEffect(() => {
+    if (asset?.asset_type !== 'pdf') return
+    discardPdfAnnotation()
+    setPdfPage(1)
+  }, [asset?.id, asset?.asset_type, currentVersion?.id, discardPdfAnnotation])
 
   // Fetch folder tree to build the folder path for the breadcrumb
   const { data: folderTree } = useSWR<FolderTreeNode[]>(
@@ -153,13 +180,16 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     deepLinkApplied.current = true
     setFocusedCommentId(commentId)
     setActiveTab('comments')
+    if ((target as any).page_number !== null && (target as any).page_number !== undefined) {
+      changePdfPage((target as any).page_number)
+    }
     if ((target as any).timecode_start !== null && (target as any).timecode_start !== undefined) {
       seekTo((target as any).timecode_start, true)
     }
     if ((target as any).annotation?.drawing_data) {
       setActiveAnnotation((target as any).annotation.drawing_data)
     }
-  }, [comments, searchParams, seekTo, setFocusedCommentId, setActiveAnnotation])
+  }, [comments, searchParams, seekTo, setFocusedCommentId, setActiveAnnotation, changePdfPage])
 
   // Version-compare overlay: driven entirely by the ?compare= URL param so it
   // survives refresh/deep-link. closeCompare strips all four compare params.
@@ -217,6 +247,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     parentId?: string,
     visibility?: string,
     mentionUserIds?: string[],
+    pageNumber?: number,
   ) => {
     await createComment(
       body,
@@ -226,6 +257,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       parentId,
       visibility,
       mentionUserIds,
+      pageNumber,
     )
     setAnnotationData(null)
     refetchComments()
@@ -335,6 +367,21 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               }
             />
           </div>
+        )
+      case 'pdf':
+        return (
+          <PdfViewer
+            asset={asset}
+            version={currentVersion as any}
+            pageNumber={pdfPage}
+            onPageChange={changePdfPage}
+            annotationCanvas={
+              <>
+                <AnnotationOverlay key={focusedCommentId ?? 'none'} />
+                {isDrawingMode && <AnnotationCanvas onSave={(data) => setAnnotationData(data)} />}
+              </>
+            }
+          />
         )
       default:
         return null
@@ -509,6 +556,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                     onRemoveReaction={removeReaction}
                     onReply={() => {}}
                     onSubmitReply={handleSubmitReply}
+                    onSelectPage={asset.asset_type === 'pdf' ? changePdfPage : undefined}
                   />
                   {canComment && (
                     <CommentInput
@@ -517,6 +565,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                       assetType={asset.asset_type}
                       onSubmit={handleSubmitComment}
                       annotationData={annotationData}
+                      pageNumber={asset.asset_type === 'pdf' ? pdfPage : undefined}
                     />
                   )}
                 </>

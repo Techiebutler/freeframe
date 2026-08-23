@@ -4,7 +4,10 @@
   "private": true,
   "packageManager": "pnpm@10.15.0",
   "scripts": {
+    "pdfjs:assets": "node scripts/copy-pdfjs-assets.mjs",
+    "predev": "node scripts/copy-pdfjs-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-pdfjs-assets.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -28,6 +31,7 @@
     "hls.js": "^1.6.16",
     "lucide-react": "^0.577.0",
     "next": "14.2.35",
+    "pdfjs-dist": "5.4.624",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-zoom-pan-pinch": "^3.7.0",

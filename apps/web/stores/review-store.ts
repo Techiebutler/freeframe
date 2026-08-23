@@ -30,6 +30,7 @@ interface ReviewState {
   setDrawingTool: (tool: DrawingTool) => void
   setDrawingColor: (color: string) => void
   setBrushSize: (size: number) => void
+  discardAnnotations: () => void
   reset: () => void
 }
 
@@ -105,6 +106,10 @@ export const useReviewStore = create<ReviewState>()((set) => ({
 
   setBrushSize: (size: number) => {
     set({ brushSize: size })
+  },
+
+  discardAnnotations: () => {
+    set({ activeAnnotation: null, pendingAnnotation: null, isDrawingMode: false })
   },
 
   reset: () => {

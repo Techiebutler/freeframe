@@ -113,7 +113,7 @@ def initiate_upload(
     version.last_activity_at = datetime.now(timezone.utc)
 
     # Create MediaFile record
-    file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
+    file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image, AssetType.pdf: FileType.pdf}
     media_file = MediaFile(
         version_id=version.id,
         file_type=file_type_map.get(asset.asset_type, FileType.video),

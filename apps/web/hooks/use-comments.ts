@@ -27,6 +27,7 @@ interface CreateCommentPayload {
   version_id?: string
   timecode_start?: number
   timecode_end?: number
+  page_number?: number
   annotation?: {
     drawing_data: Record<string, unknown>
     frame_number?: number
@@ -85,6 +86,7 @@ export function useComments(assetId: string | null, versionId: string | null) {
     parentId?: string,
     visibility?: string,
     mentionUserIds?: string[],
+    pageNumber?: number,
   ): Promise<CommentWithReplies> {
     if (!assetId) throw new Error('No asset selected')
     if (!versionId) throw new Error('No version selected')
@@ -92,6 +94,7 @@ export function useComments(assetId: string | null, versionId: string | null) {
     const payload: CreateCommentPayload = { body, version_id: versionId }
     if (timecodeStart !== undefined) payload.timecode_start = timecodeStart
     if (timecodeEnd !== undefined) payload.timecode_end = timecodeEnd
+    if (pageNumber !== undefined) payload.page_number = pageNumber
     if (annotationData) payload.annotation = { drawing_data: annotationData }
     if (parentId) payload.parent_id = parentId
     if (visibility) payload.visibility = visibility

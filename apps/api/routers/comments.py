@@ -367,6 +367,7 @@ def create_comment(
         author_id=current_user.id,
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
+        page_number=body.page_number,
         body=body.body,
         visibility=body.visibility or "public",
     )
@@ -933,6 +934,7 @@ def guest_comment(
         guest_author_id=guest_author_id,
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
+        page_number=body.page_number,
         body=body.body,
     )
     db.add(comment)

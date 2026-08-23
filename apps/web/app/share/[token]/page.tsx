@@ -585,6 +585,7 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
 
   React.useEffect(() => {
     if (!streamUrl || streamLoading) return
+    if (asset.asset_type !== 'video' && asset.asset_type !== 'audio') return
 
     setFatalError(null)
     const mediaEl = asset.asset_type === 'video' ? videoRef.current : audioRef.current
@@ -745,6 +746,16 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
             }}
           />
         </div>
+      )}
+
+      {asset.asset_type === 'pdf' && (
+        streamLoading ? (
+          <Loader2 className="h-8 w-8 animate-spin text-text-tertiary" />
+        ) : streamUrl ? (
+          <iframe title={asset.name} src={`${streamUrl}#zoom=page-width`} className="h-full w-full border-0" />
+        ) : (
+          <div className="flex flex-col items-center gap-2"><FileText className="h-10 w-10 text-text-tertiary" /><p className="text-sm text-text-tertiary">PDF unavailable</p></div>
+        )
       )}
     </div>
   )

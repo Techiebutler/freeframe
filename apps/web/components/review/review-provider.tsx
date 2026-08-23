@@ -21,6 +21,7 @@ export interface CreateCommentPayload {
   parent_id?: string;
   timecode_start?: number;
   timecode_end?: number;
+  page_number?: number;
   annotation?: { drawing_data: Record<string, unknown> };
 }
 

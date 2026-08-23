@@ -13,6 +13,7 @@ class CommentCreate(BaseModel):
     parent_id: Optional[uuid.UUID] = None
     timecode_start: Optional[float] = None
     timecode_end: Optional[float] = None
+    page_number: Optional[int] = Field(default=None, ge=1)
     body: str
     visibility: Optional[str] = "public"  # "public" or "internal"
     annotation: Optional[AnnotationData] = None
@@ -24,6 +25,7 @@ class GuestCommentCreate(BaseModel):
     parent_id: Optional[uuid.UUID] = None
     timecode_start: Optional[float] = None
     timecode_end: Optional[float] = None
+    page_number: Optional[int] = Field(default=None, ge=1)
     body: str
     annotation: Optional[AnnotationData] = None
     guest_email: Optional[str] = None  # Not needed if user is logged in
@@ -109,6 +111,9 @@ class CommentResponse(BaseModel):
     guest_author_id: Optional[uuid.UUID]
     timecode_start: Optional[float]
     timecode_end: Optional[float]
+    # Optional for comments created before PDF review support, and for the
+    # lightweight namespaces used by the mock-database test suite.
+    page_number: Optional[int] = None
     body: str
     resolved: bool
     visibility: str = "public"

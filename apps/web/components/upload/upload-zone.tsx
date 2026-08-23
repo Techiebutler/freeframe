@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { CloudUpload, Film, Music, Image as ImageIcon } from 'lucide-react'
+import { CloudUpload } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface UploadZoneProps {
@@ -70,7 +70,7 @@ export function UploadZone({ onFilesSelected, className }: UploadZoneProps) {
         ref={inputRef}
         type="file"
         multiple
-        accept="video/*,audio/*,image/*"
+        accept="video/*,audio/*,image/*,application/pdf"
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
       />

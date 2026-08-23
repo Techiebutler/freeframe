@@ -54,6 +54,8 @@ interface CommentPanelProps {
   onSeekToTimecode?: (time: number, pause?: boolean) => void;
   /** Compare mode: route annotation display to a pane-scoped overlay instead of the global store. */
   onShowAnnotation?: (drawingData: Record<string, unknown> | null) => void;
+  /** PDF review: move the viewer to a comment's page before showing it. */
+  onSelectPage?: (page: number) => void;
   /** Compare mode: export this pane's version instead of the store's currentVersion. */
   exportVersionId?: string;
   className?: string;
@@ -370,6 +372,7 @@ interface CommentItemProps {
   onSubmitReply?: (parentId: string, body: string) => Promise<void>;
   onSeekToTimecode?: (time: number, pause?: boolean) => void;
   onShowAnnotation?: (drawingData: Record<string, unknown> | null) => void;
+  onSelectPage?: (page: number) => void;
 }
 
 function CommentItem({
@@ -388,6 +391,7 @@ function CommentItem({
   onSubmitReply,
   onSeekToTimecode,
   onShowAnnotation,
+  onSelectPage,
 }: CommentItemProps) {
   const storeSeekTo = useReviewStore((s) => s.seekTo);
   const seekTo = onSeekToTimecode ?? storeSeekTo;
@@ -452,6 +456,22 @@ function CommentItem({
     else await onAddReaction(comment.id, emoji);
   }
 
+  function activateComment() {
+    setFocusedCommentId(comment.id);
+    if (comment.page_number !== null && comment.page_number !== undefined) {
+      onSelectPage?.(comment.page_number);
+    }
+    if (
+      comment.timecode_start !== null &&
+      comment.timecode_start !== undefined
+    ) {
+      seekTo(comment.timecode_start, true);
+    }
+    showAnnotation(
+      comment.annotation ? comment.annotation.drawing_data : null,
+    );
+  }
+
   return (
     <div
       ref={itemRef}
@@ -466,18 +486,7 @@ function CommentItem({
                 : "border-white/[0.06] hover:border-white/15 hover:bg-white/[0.02]",
             ),
       )}
-      onClick={() => {
-        setFocusedCommentId(comment.id);
-        if (
-          comment.timecode_start !== null &&
-          comment.timecode_start !== undefined
-        ) {
-          seekTo(comment.timecode_start, true);
-        }
-        showAnnotation(
-          comment.annotation ? comment.annotation.drawing_data : null,
-        );
-      }}
+      onClick={activateComment}
     >
       <div className="flex gap-2.5 py-3">
         {/* Colored avatar */}
@@ -519,12 +528,9 @@ function CommentItem({
               comment.timecode_start !== undefined && (
                 <button
                   className="inline-flex items-center gap-1 rounded-md bg-accent/15 px-1.5 py-0.5 text-[11px] font-mono text-accent hover:bg-accent/25 transition-colors"
-                  onClick={() => {
-                    seekTo(comment.timecode_start!, true);
-                    setFocusedCommentId(comment.id);
-                    if (comment.annotation) {
-                      showAnnotation(comment.annotation.drawing_data);
-                    }
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    activateComment();
                   }}
                   title="Jump to timecode"
                 >
@@ -536,18 +542,24 @@ function CommentItem({
                     )}
                 </button>
               )}
+            {comment.page_number !== null && comment.page_number !== undefined && (
+              <button
+                className="ml-2 rounded bg-bg-hover px-1.5 py-0.5 text-[10px] font-medium text-text-secondary hover:text-text-primary"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  activateComment();
+                }}
+                title={`Go to page ${comment.page_number}`}
+              >
+                Page {comment.page_number}
+              </button>
+            )}
             {comment.annotation && (
               <button
                 className="inline-flex items-center justify-center h-5 w-5 rounded text-purple-400/70 hover:text-purple-400 hover:bg-purple-500/15 transition-colors"
-                onClick={() => {
-                  showAnnotation(comment.annotation!.drawing_data);
-                  setFocusedCommentId(comment.id);
-                  if (
-                    comment.timecode_start !== null &&
-                    comment.timecode_start !== undefined
-                  ) {
-                    seekTo(comment.timecode_start, true);
-                  }
+                onClick={(event) => {
+                  event.stopPropagation();
+                  activateComment();
                 }}
                 title="Show annotation"
               >
@@ -732,6 +744,7 @@ function CommentItem({
                   onSubmitReply={onSubmitReply}
                   onSeekToTimecode={onSeekToTimecode}
                   onShowAnnotation={onShowAnnotation}
+                  onSelectPage={onSelectPage}
                 />
               ))}
             </div>
@@ -779,6 +792,7 @@ export function CommentPanel({
   onSubmitReply,
   onSeekToTimecode,
   onShowAnnotation,
+  onSelectPage,
   exportVersionId,
   className,
 }: CommentPanelProps) {
@@ -1305,6 +1319,7 @@ export function CommentPanel({
                 onSubmitReply={onSubmitReply}
                 onSeekToTimecode={onSeekToTimecode}
                 onShowAnnotation={onShowAnnotation}
+                onSelectPage={onSelectPage}
               />
             </div>
           ))}

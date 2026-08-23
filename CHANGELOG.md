@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PDF drawings stay attached to the page they were made on** — PDF review now renders one app-owned page at a time, so annotations scroll and resize with that page instead of floating at fixed coordinates across the browser's multi-page PDF viewer. Opening an annotated comment also returns to its saved page, including from shared review links.
+
 ## [1.10.0] - 2026-08-21
 
 ### Contributors

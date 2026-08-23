@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { FolderShareViewer } from '../folder-share-viewer'
+import { FolderShareViewer, submitPendingShareComment } from '../folder-share-viewer'
 
 // Regression for #192: ShareReviewInner used to resolve its hooks with bare
 // CommonJS require('@/...') calls. Node's loader does not understand the '@'
@@ -44,5 +44,23 @@ describe('folder share — opening an asset mounts the review UI (#192)', () => 
     // subtree mounted — i.e. if its hook imports resolved.
     await waitFor(() => expect(screen.getByText('Fields')).toBeInTheDocument(), { timeout: 3000 })
     expect(screen.getByText('Comments')).toBeInTheDocument()
+  })
+})
+
+describe('folder share — pending guest PDF comment', () => {
+  it('retains the page number when identity collection delays submission', async () => {
+    const submit = vi.fn(async () => {})
+    await submitPendingShareComment(
+      { body: 'Mark this', annotationData: { objects: [] }, pageNumber: 4 },
+      submit,
+    )
+
+    expect(submit).toHaveBeenCalledWith(
+      'Mark this',
+      undefined,
+      undefined,
+      { objects: [] },
+      4,
+    )
   })
 })

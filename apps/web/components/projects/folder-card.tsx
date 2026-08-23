@@ -2,7 +2,7 @@
 
 import React, { useCallback, useState } from 'react'
 import useSWR from 'swr'
-import { Folder, Film, Music, Image as ImageIcon, Images, MoreHorizontal, Pencil, Trash, Share2 } from 'lucide-react'
+import { Folder, Film, Music, Image as ImageIcon, Images, FileText, MoreHorizontal, Pencil, Trash, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { NameDialog } from './name-dialog'
@@ -14,6 +14,7 @@ const assetTypeIcons = {
   audio: Music,
   image: ImageIcon,
   image_carousel: Images,
+  pdf: FileText,
 } as const
 
 function ThumbCell({ asset, className }: { asset: AssetResponse; className?: string }) {

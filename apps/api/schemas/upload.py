@@ -11,6 +11,8 @@ ALLOWED_MIME_TYPES = {
     # Video
     "video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska",
     "video/webm", "video/mpeg", "video/x-ms-wmv",
+    # Documents
+    "application/pdf",
 }
 
 CHUNK_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -41,6 +43,8 @@ def mime_to_asset_type(mime_type: str) -> AssetType:
         return AssetType.audio
     elif mime_type.startswith("video/"):
         return AssetType.video
+    elif mime_type == "application/pdf":
+        return AssetType.pdf
     raise ValueError(f"Unsupported mime type: {mime_type}")
 
 class InitiateUploadRequest(BaseModel):

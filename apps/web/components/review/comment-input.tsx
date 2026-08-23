@@ -33,6 +33,8 @@ interface CommentInputProps {
   assetId: string;
   projectId: string;
   assetType?: string;
+  /** Current PDF page; stored on comments instead of a video timecode. */
+  pageNumber?: number;
   replyToId?: string | null;
   annotationData?: Record<string, unknown> | null;
   onSubmit: (
@@ -43,6 +45,7 @@ interface CommentInputProps {
     parentId?: string,
     visibility?: string,
     mentionUserIds?: string[],
+    pageNumber?: number,
   ) => Promise<void>;
   onCancelReply?: () => void;
   onPauseVideo?: () => void;
@@ -192,6 +195,7 @@ export function CommentInput({
   assetId,
   projectId,
   assetType,
+  pageNumber,
   replyToId,
   annotationData,
   onSubmit,
@@ -410,6 +414,7 @@ export function CommentInput({
         replyToId ?? undefined,
         commentVisibility,
         mentionUserIds.length > 0 ? mentionUserIds : undefined,
+        pageNumber,
       );
 
       setBody("");

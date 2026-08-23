@@ -1,6 +1,6 @@
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-export type AssetType = "image" | "image_carousel" | "audio" | "video";
+export type AssetType = "image" | "image_carousel" | "audio" | "video" | "pdf";
 
 export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived";
 
@@ -29,7 +29,7 @@ export type ActivityAction =
   | "approved"
   | "rejected";
 
-export type FileType = "image" | "audio" | "video" | "document";
+export type FileType = "image" | "audio" | "video" | "pdf" | "document";
 
 export type MetadataFieldType = "text" | "number" | "date" | "select" | "multi_select";
 
@@ -200,6 +200,7 @@ export interface Comment {
   guest_author_id: string | null;
   timecode_start: number | null;
   timecode_end: number | null;
+  page_number: number | null;
   body: string;
   resolved: boolean;
   visibility: string;

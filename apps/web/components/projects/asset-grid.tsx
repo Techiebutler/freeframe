@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images, Link as LinkIcon, Pencil } from 'lucide-react'
+import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images, FileText, Link as LinkIcon, Pencil } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
@@ -20,6 +20,7 @@ const assetTypeIcons: Record<string, React.ElementType> = {
   audio: Music,
   image: ImageIcon,
   image_carousel: Images,
+  pdf: FileText,
 }
 
 const statusOrder: Record<AssetStatus, number> = {

@@ -33,6 +33,14 @@ function annotatedComment() {
   } as never
 }
 
+function pdfComment() {
+  return {
+    ...(annotatedComment() as Record<string, unknown>),
+    timecode_start: null,
+    page_number: 2,
+  } as never
+}
+
 describe('CommentPanel onSeekToTimecode', () => {
   it('routes timecode clicks through the override instead of the store', () => {
     const onSeek = vi.fn()
@@ -133,5 +141,55 @@ describe('CommentPanel onShowAnnotation', () => {
     )
     fireEvent.click(screen.getByTitle('Show annotation'))
     expect(useReviewStore.getState().activeAnnotation).toEqual(DRAWING)
+  })
+})
+
+describe('CommentPanel onSelectPage', () => {
+  it('selects the stored page from a whole-row click', () => {
+    const onSelectPage = vi.fn()
+    render(
+      <CommentPanel
+        comments={[pdfComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSelectPage={onSelectPage}
+      />,
+    )
+    fireEvent.click(screen.getByText('Fix the logo'))
+    expect(onSelectPage).toHaveBeenCalledOnce()
+    expect(onSelectPage).toHaveBeenCalledWith(2)
+  })
+
+  it('selects the stored page from the page badge', () => {
+    const onSelectPage = vi.fn()
+    render(
+      <CommentPanel
+        comments={[pdfComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSelectPage={onSelectPage}
+      />,
+    )
+    fireEvent.click(screen.getByTitle('Go to page 2'))
+    expect(onSelectPage).toHaveBeenCalledOnce()
+    expect(onSelectPage).toHaveBeenCalledWith(2)
+  })
+
+  it('selects the stored page before showing its annotation', () => {
+    const calls: string[] = []
+    render(
+      <CommentPanel
+        comments={[pdfComment()]}
+        onResolve={noop} onDelete={noop}
+        onAddReaction={noop} onRemoveReaction={noop}
+        onReply={() => {}}
+        onSelectPage={() => calls.push('page')}
+        onShowAnnotation={() => calls.push('annotation')}
+      />,
+    )
+    fireEvent.click(screen.getByTitle('Show annotation'))
+    expect(calls).toEqual(['page', 'annotation'])
   })
 })

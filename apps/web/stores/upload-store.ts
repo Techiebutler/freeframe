@@ -418,6 +418,7 @@ function mimeFromAssetType(assetType: string): string {
     case 'audio': return 'audio/mpeg'
     case 'image':
     case 'image_carousel': return 'image/jpeg'
+    case 'pdf': return 'application/pdf'
     default: return 'application/octet-stream'
   }
 }

@@ -47,6 +47,19 @@ describe('Review store', () => {
     expect(useReviewStore.getState().brushSize).toBe(10)
   })
 
+  it('discardAnnotations exits drawing and clears active and pending drawings', () => {
+    useReviewStore.getState().setIsDrawingMode(true)
+    useReviewStore.getState().setPendingAnnotation({ objects: [{ id: 'draft' }] })
+    useReviewStore.getState().setActiveAnnotation({ objects: [{ id: 'saved' }] })
+
+    useReviewStore.getState().discardAnnotations()
+
+    const state = useReviewStore.getState()
+    expect(state.isDrawingMode).toBe(false)
+    expect(state.pendingAnnotation).toBeNull()
+    expect(state.activeAnnotation).toBeNull()
+  })
+
   it('reset returns all state to initial values', () => {
     useReviewStore.getState().setPlayheadTime(100)
     useReviewStore.getState().toggleDrawingMode()
