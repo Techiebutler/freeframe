@@ -21,8 +21,12 @@ const DEFAULT_ICON = '/logo-icon.png'
  * 'instance.parentNode.removeChild')` the next time it committed. Those files
  * have therefore been moved out of `app/` (favicon.ico lives in `public/` so
  * browsers can still fetch /favicon.ico by convention), and this component owns
- * the icon links exclusively. The removal sweep below is defensive only — it
- * clears any stale non-branding links that aren't React-managed.
+ * the icon links exclusively.
+ *
+ * Note: the removal sweep below removes any pre-existing icon links that this
+ * component doesn't own. Avoid reintroducing React/Next-managed icon links (e.g.
+ * via `app/` icon routes or `metadata.icons`), or update the sweep to explicitly
+ * skip those nodes.
  *
  * The link is always present, pointing at the default when nothing custom is
  * set, so clearing a favicon falls back cleanly instead of leaving the page
