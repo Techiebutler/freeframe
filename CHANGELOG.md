@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Dead share dialog code removed from the review view** — `components/review/share-dialog.tsx` still carried the pre-dropdown tab components (`LinkTab`, `DirectTab`) and their helpers (`PermissionSelect`, `CopyButton`), unused since the April dropdown redesign. The live dialog creates links through `ShareCreateDialog`, which already includes the Link name field; the leftover code is what suggested otherwise. Removed to keep the file truthful. (#265)
+
 ### Added
 - **Optional hardware-accelerated transcoding (NVENC / VAAPI) with HDR and Dolby Vision support.** Auto-detects an available GPU backend and falls back to the software pipeline when none is present, or when a hardware attempt fails at runtime (for example, out of VRAM). CPU-only and arm64 builds are unaffected by default. New env vars: `TRANSCODER_PIPELINE`, `TRANSCODER_OUTPUT`, `TRANSCODER_HDR`. (#127)
 
