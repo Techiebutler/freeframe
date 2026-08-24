@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PDFs now get preview thumbnails** — the processing worker renders the first page as a bounded JPEG, so PDF assets have visual previews in project and shared folder grids while the original PDF remains the review source.
+
 ### Fixed
 
 - **PDF drawings stay attached to the page they were made on** — PDF review now renders one app-owned page at a time, so annotations scroll and resize with that page instead of floating at fixed coordinates across the browser's multi-page PDF viewer. Opening an annotated comment also returns to its saved page, including from shared review links.

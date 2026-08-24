@@ -44,6 +44,47 @@ def process_image(s3_client, bucket: str, input_s3_key: str, output_prefix: str)
     return result
 
 
+def process_pdf(s3_client, bucket: str, input_s3_key: str, output_prefix: str) -> dict:
+    """Render the first PDF page as a JPEG thumbnail."""
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        tmp_input = f.name
+    work_dir = tempfile.mkdtemp()
+    try:
+        s3_client.download_file(bucket, input_s3_key, tmp_input)
+
+        # pdftoppm appends the selected image extension to the output prefix.
+        # Render only page one and bound both dimensions to 400 pixels.
+        thumb_prefix = os.path.join(work_dir, "thumbnail")
+        subprocess.run(
+            [
+                "pdftoppm",
+                "-f", "1",
+                "-l", "1",
+                "-singlefile",
+                "-scale-to", "400",
+                "-jpeg",
+                tmp_input,
+                thumb_prefix,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+
+        thumb_path = f"{thumb_prefix}.jpg"
+        thumb_key = f"{output_prefix}/thumbnail.jpg"
+        s3_client.upload_file(
+            thumb_path,
+            bucket,
+            thumb_key,
+            ExtraArgs={"ContentType": "image/jpeg", "CacheControl": "max-age=86400"},
+        )
+        return {"thumbnail_key": thumb_key}
+    finally:
+        os.unlink(tmp_input)
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def process_audio(s3_client, bucket: str, input_s3_key: str, output_prefix: str) -> dict:
     """Normalize audio to MP3 + generate waveform JSON.
 

@@ -63,9 +63,7 @@ def process_asset(self, asset_id: str, version_id: str):
             elif asset.asset_type in (AssetType.image, AssetType.image_carousel):
                 _process_image(db, asset, version, media_file, s3, output_prefix)
             elif asset.asset_type == AssetType.pdf:
-                # PDFs are rendered in the browser. Keep the original object as
-                # the viewable file and avoid an unnecessary conversion step.
-                pass
+                _process_pdf(db, asset, version, media_file, s3, output_prefix)
 
             version.processing_status = ProcessingStatus.ready
             db.commit()
@@ -134,6 +132,13 @@ def _process_image(db, asset, version, media_file, s3, output_prefix):
     from packages.transcoder.image_processor import process_image
     result = process_image(s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix)
     media_file.s3_key_processed = result.get("webp_key")
+    media_file.s3_key_thumbnail = result.get("thumbnail_key")
+    db.flush()
+
+
+def _process_pdf(db, asset, version, media_file, s3, output_prefix):
+    from packages.transcoder.image_processor import process_pdf
+    result = process_pdf(s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix)
     media_file.s3_key_thumbnail = result.get("thumbnail_key")
     db.flush()
 

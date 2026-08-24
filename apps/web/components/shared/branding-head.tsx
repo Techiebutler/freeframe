@@ -26,7 +26,12 @@ const DEFAULT_ICON = '/logo-icon.png'
  */
 function setIcon(rel: string, href: string) {
   document
-    .querySelectorAll<HTMLLinkElement>(`link[rel="${rel}"]:not([${DATA_ATTR}])`)
+    // Never remove links owned by Next.js. React tracks those nodes and will
+    // later attempt to unmount them; removing them here causes a null
+    // parentNode and the `removeChild` crash in React's head reconciler.
+    .querySelectorAll<HTMLLinkElement>(
+      `link[rel="${rel}"]:not([${DATA_ATTR}]):not([data-next-head])`,
+    )
     .forEach((el) => el.remove())
 
   let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"][${DATA_ATTR}]`)
