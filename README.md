@@ -1,6 +1,8 @@
-# FreeFrame
+# FreeFrame X Spring CC
 
-**Self-hostable, open-source media review platform. A collaborative alternative to Frame.io.**
+**A FreeFrame fork with multi-page PDF review, annotations, and thumbnails.**
+
+FreeFrame X Spring CC is a self-hostable, open-source media review platform and a collaborative alternative to Frame.io. It builds on [FreeFrame](https://github.com/Techiebutler/freeframe) while adding multi-page PDF support for creative review workflows.
 
 [![CI](https://github.com/Techiebutler/freeframe/actions/workflows/ci.yml/badge.svg)](https://github.com/Techiebutler/freeframe/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -21,6 +23,7 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 - **Video review** with HLS adaptive streaming and frame-accurate timecoded comments
 - **Export comments to your NLE** — DaVinci Resolve (marker EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), or CSV
 - **Image and audio review** with annotations and waveform visualization
+- **Multi-page PDF review** with page navigation, page-bound annotations, and preview thumbnails
 - **Drawing annotations** on any frame using canvas tools
 - **Threaded comments** with mentions, reactions, and attachments
 - **Approval workflows** with per-reviewer status tracking
