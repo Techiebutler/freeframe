@@ -12,23 +12,18 @@ const DATA_ATTR = 'data-ff-branding'
 const DEFAULT_ICON = '/logo-icon.png'
 
 /**
- * Make this instance's icon the only one the browser can choose.
+ * Keep one component-owned icon link for the current instance branding.
  *
  * Next emits its own `<link rel="icon">` for app/icon.png, and serves
- * app/favicon.ico at /favicon.ico which browsers request by convention. Merely
- * appending another link left the custom favicon as one candidate among
- * several, and it generally lost — which is why setting one appeared to do
- * nothing. Any icon link this component doesn't own is removed first.
+ * app/favicon.ico at /favicon.ico which browsers request by convention. Do not
+ * remove those links: Next/React owns them and deleting them during client
+ * navigation makes React crash while unmounting the head.
  *
  * The link is always present, pointing at the default when nothing custom is
  * set, so clearing a favicon falls back cleanly instead of leaving the page
  * with no icon at all.
  */
 function setIcon(rel: string, href: string) {
-  document
-    .querySelectorAll<HTMLLinkElement>(`link[rel="${rel}"]:not([${DATA_ATTR}])`)
-    .forEach((el) => el.remove())
-
   let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"][${DATA_ATTR}]`)
   if (!link) {
     link = document.createElement('link')

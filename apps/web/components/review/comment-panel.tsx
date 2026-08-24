@@ -53,7 +53,7 @@ interface CommentPanelProps {
   /** Compare mode: route comment-timecode clicks to a pane-scoped transport instead of the global store. */
   onSeekToTimecode?: (time: number, pause?: boolean) => void;
   /** Compare mode: route annotation display to a pane-scoped overlay instead of the global store. */
-  onShowAnnotation?: (drawingData: Record<string, unknown> | null) => void;
+  onShowAnnotation?: (drawingData: Record<string, unknown> | null, frameNumber?: number | null) => void;
   /** Compare mode: export this pane's version instead of the store's currentVersion. */
   exportVersionId?: string;
   className?: string;
@@ -369,7 +369,7 @@ interface CommentItemProps {
   onCancelReply: () => void;
   onSubmitReply?: (parentId: string, body: string) => Promise<void>;
   onSeekToTimecode?: (time: number, pause?: boolean) => void;
-  onShowAnnotation?: (drawingData: Record<string, unknown> | null) => void;
+  onShowAnnotation?: (drawingData: Record<string, unknown> | null, frameNumber?: number | null) => void;
 }
 
 function CommentItem({
@@ -392,7 +392,13 @@ function CommentItem({
   const storeSeekTo = useReviewStore((s) => s.seekTo);
   const seekTo = onSeekToTimecode ?? storeSeekTo;
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation);
-  const showAnnotation = onShowAnnotation ?? setActiveAnnotation;
+  const showAnnotation = (drawingData: Record<string, unknown> | null, frameNumber?: number | null) => {
+    if (onShowAnnotation) {
+      if (frameNumber == null) onShowAnnotation(drawingData)
+      else onShowAnnotation(drawingData, frameNumber)
+    }
+    else setActiveAnnotation(drawingData)
+  }
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId);
   const itemRef = React.useRef<HTMLDivElement>(null);
   const [showReplies, setShowReplies] = React.useState(true);
@@ -476,6 +482,7 @@ function CommentItem({
         }
         showAnnotation(
           comment.annotation ? comment.annotation.drawing_data : null,
+          comment.annotation?.frame_number,
         );
       }}
     >
@@ -523,7 +530,7 @@ function CommentItem({
                     seekTo(comment.timecode_start!, true);
                     setFocusedCommentId(comment.id);
                     if (comment.annotation) {
-                      showAnnotation(comment.annotation.drawing_data);
+                      showAnnotation(comment.annotation.drawing_data, comment.annotation.frame_number);
                     }
                   }}
                   title="Jump to timecode"
@@ -540,7 +547,7 @@ function CommentItem({
               <button
                 className="inline-flex items-center justify-center h-5 w-5 rounded text-purple-400/70 hover:text-purple-400 hover:bg-purple-500/15 transition-colors"
                 onClick={() => {
-                  showAnnotation(comment.annotation!.drawing_data);
+                  showAnnotation(comment.annotation!.drawing_data, comment.annotation!.frame_number);
                   setFocusedCommentId(comment.id);
                   if (
                     comment.timecode_start !== null &&

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "prebuild": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
@@ -28,6 +29,7 @@
     "hls.js": "^1.6.16",
     "lucide-react": "^0.577.0",
     "next": "14.2.35",
+    "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-zoom-pan-pinch": "^3.7.0",

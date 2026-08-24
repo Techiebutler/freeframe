@@ -1,6 +1,6 @@
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-export type AssetType = "image" | "image_carousel" | "audio" | "video";
+export type AssetType = "image" | "image_carousel" | "audio" | "video" | "document";
 
 export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived";
 

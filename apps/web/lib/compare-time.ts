@@ -45,11 +45,11 @@ export function parseOffsetParam(v: string | null): number {
   return Number.isFinite(n) && n >= 0 ? n : 0
 }
 
-/** Compare button gating: video/image asset with >= 2 ready versions. */
+/** Compare button gating: comparable asset with >= 2 ready versions. */
 export function canCompare(
   assetType: string,
   versions: Array<{ processing_status: string }>,
 ): boolean {
-  if (assetType !== 'video' && assetType !== 'image') return false
+  if (assetType !== 'video' && assetType !== 'image' && assetType !== 'document') return false
   return versions.filter((v) => v.processing_status === 'ready').length >= 2
 }

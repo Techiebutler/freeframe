@@ -212,3 +212,21 @@ describe('CommentInput compare drawing props (annotationActive / onToggleAnnotat
     expect(screen.getByTitle('Draw annotation').className).not.toContain('text-accent')
   })
 })
+
+describe('CommentInput document annotations', () => {
+  it('submits the current PDF page as the annotation frame number', async () => {
+    useReviewStore.getState().setPendingAnnotation({ objects: [{ type: 'path' }] })
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommentInput
+        assetId="a1"
+        projectId="p1"
+        assetType="document"
+        annotationFrameNumber={3}
+        onSubmit={onSubmit}
+      />,
+    )
+    await typeAndSubmit('Fix this heading')
+    expect(onSubmit.mock.calls[0][7]).toBe(3)
+  })
+})

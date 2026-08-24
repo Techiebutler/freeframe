@@ -91,7 +91,7 @@ services:
       - ./apps/api:/workspace/apps/api
       - ./packages/transcoder:/workspace/packages/transcoder
     command: >
-      sh -c "cd /workspace/apps/api && alembic upgrade head && cd /workspace && uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload"
+      sh -c "cd /workspace/apps/api && alembic upgrade heads && cd /workspace && uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker:
     build:

@@ -21,7 +21,7 @@ export interface CreateCommentPayload {
   parent_id?: string;
   timecode_start?: number;
   timecode_end?: number;
-  annotation?: { drawing_data: Record<string, unknown> };
+  annotation?: { drawing_data: Record<string, unknown>; frame_number?: number };
 }
 
 interface ReviewContextValue {

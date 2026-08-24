@@ -746,6 +746,10 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
           />
         </div>
       )}
+
+      {asset.asset_type === 'document' && (
+        <iframe src={streamUrl || asset.stream_url || undefined} title={asset.name} className="w-full h-full border-0" />
+      )}
     </div>
   )
 }

@@ -7,6 +7,7 @@ import { ReviewProvider, useReview } from '@/components/review/review-provider'
 import { VideoPlayer } from '@/components/review/video-player'
 import { AudioPlayer } from '@/components/review/audio-player'
 import { ImageViewer } from '@/components/review/image-viewer'
+import { PdfViewer } from '@/components/review/pdf-viewer'
 import { AnnotationCanvas } from '@/components/review/annotation-canvas'
 import { AnnotationOverlay } from '@/components/review/annotation-overlay'
 import { CommentPanel } from '@/components/review/comment-panel'
@@ -44,6 +45,7 @@ const acceptByType: Record<string, string> = {
   audio: 'audio/*',
   image: 'image/*',
   image_carousel: 'image/*',
+  document: 'application/pdf',
 }
 
 function ReviewScreenInner({ projectId }: { projectId: string }) {
@@ -59,9 +61,21 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const setLabel = useBreadcrumbStore((s) => s.setLabel)
   usePageTitle(asset?.name ?? null)
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
+  const [documentUrl, setDocumentUrl] = useState<string | null>(null)
+  const [documentPage, setDocumentPage] = useState(1)
   const [activeTab, setActiveTab] = useState<'comments' | 'fields'>('comments')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const deepLinkApplied = useRef(false)
+
+  useEffect(() => {
+    if (asset?.asset_type !== 'document' || !currentVersion?.id) return
+    setDocumentUrl(null)
+    api.get<{ url: string }>(`/assets/${asset.id}/stream?version_id=${currentVersion.id}`)
+      .then((response) => setDocumentUrl(response.url))
+      .catch(() => setDocumentUrl(null))
+  }, [asset?.asset_type, asset?.id, currentVersion?.id])
+
+  useEffect(() => { setDocumentPage(1) }, [currentVersion?.id])
 
   // Fetch folder tree to build the folder path for the breadcrumb
   const { data: folderTree } = useSWR<FolderTreeNode[]>(
@@ -158,6 +172,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     }
     if ((target as any).annotation?.drawing_data) {
       setActiveAnnotation((target as any).annotation.drawing_data)
+      if (asset?.asset_type === 'document' && (target as any).annotation.frame_number) {
+        setDocumentPage((target as any).annotation.frame_number)
+      }
     }
   }, [comments, searchParams, seekTo, setFocusedCommentId, setActiveAnnotation])
 
@@ -217,6 +234,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     parentId?: string,
     visibility?: string,
     mentionUserIds?: string[],
+    annotationFrameNumber?: number,
   ) => {
     await createComment(
       body,
@@ -226,6 +244,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       parentId,
       visibility,
       mentionUserIds,
+      annotationFrameNumber,
     )
     setAnnotationData(null)
     refetchComments()
@@ -335,6 +354,21 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               }
             />
           </div>
+        )
+      case 'document':
+        return (
+          <PdfViewer
+            url={documentUrl}
+            name={asset.name}
+            page={documentPage}
+            onPageChange={setDocumentPage}
+            annotationCanvas={
+              <>
+                <AnnotationOverlay key={`${focusedCommentId ?? 'none'}-${documentPage}`} />
+                {isDrawingMode && <AnnotationCanvas onSave={(data) => setAnnotationData(data)} />}
+              </>
+            }
+          />
         )
       default:
         return null
@@ -450,7 +484,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
         </div>
         {/* Center: Powered by FreeFrame */}
         <div className="absolute left-1/2 -translate-x-1/2">
-          <PoweredByBadge showIcon />
+
         </div>
       </div>
 
@@ -509,6 +543,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                     onRemoveReaction={removeReaction}
                     onReply={() => {}}
                     onSubmitReply={handleSubmitReply}
+                    onShowAnnotation={(drawingData, frameNumber) => {
+                      setActiveAnnotation(drawingData)
+                      if (asset.asset_type === 'document' && frameNumber) setDocumentPage(frameNumber)
+                    }}
                   />
                   {canComment && (
                     <CommentInput
@@ -517,6 +555,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                       assetType={asset.asset_type}
                       onSubmit={handleSubmitComment}
                       annotationData={annotationData}
+                      annotationFrameNumber={asset.asset_type === 'document' ? documentPage : undefined}
                     />
                   )}
                 </>

@@ -25,6 +25,13 @@ let sharedHistory: string[] = []
 let sharedIsLoading = false
 let sharedPendingSize: { w: number; h: number } | null = null
 
+/** Discard an unsaved drawing when its review surface changes. */
+export function clearDrawingCanvas() {
+  if (!sharedFabric) return
+  sharedFabric.clear()
+  sharedHistory = [JSON.stringify(sharedFabric.toJSON())]
+}
+
 // Notify all hook consumers when canvas becomes ready
 let readyListeners: Array<() => void> = []
 function onCanvasReady(cb: () => void) {
@@ -300,9 +307,7 @@ export function useDrawing(): UseDrawingReturn {
   }, [])
 
   const clear = useCallback(() => {
-    if (!sharedFabric) return
-    sharedFabric.clear()
-    sharedHistory = [JSON.stringify(sharedFabric.toJSON())]
+    clearDrawingCanvas()
   }, [])
 
   const undo = useCallback(() => {

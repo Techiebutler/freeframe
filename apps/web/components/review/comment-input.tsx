@@ -43,6 +43,7 @@ interface CommentInputProps {
     parentId?: string,
     visibility?: string,
     mentionUserIds?: string[],
+    annotationFrameNumber?: number,
   ) => Promise<void>;
   onCancelReply?: () => void;
   onPauseVideo?: () => void;
@@ -60,6 +61,8 @@ interface CommentInputProps {
   /** Compare mode: called instead of the global toggle when the pencil / exit is clicked. */
   onToggleAnnotation?: () => void;
   className?: string;
+  /** Page number for a document annotation (the backend calls this frame_number). */
+  annotationFrameNumber?: number;
 }
 
 // ─── Drawing tools config ─────────────────────────────────────────────────────
@@ -202,6 +205,7 @@ export function CommentInput({
   annotationActive,
   onToggleAnnotation,
   className,
+  annotationFrameNumber,
 }: CommentInputProps) {
   const {
     isDrawingMode,
@@ -410,6 +414,7 @@ export function CommentInput({
         replyToId ?? undefined,
         commentVisibility,
         mentionUserIds.length > 0 ? mentionUserIds : undefined,
+        annotationFrameNumber,
       );
 
       setBody("");

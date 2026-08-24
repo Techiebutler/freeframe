@@ -31,7 +31,7 @@ const FREEFRAME_REPO_URL = 'https://github.com/Techiebutler/freeframe'
 export function PoweredByBadge({
   className,
   showOrgName,
-  showIcon = true,
+  showIcon = false,
 }: PoweredByBadgeProps) {
   const { poweredByFreeframe, orgName } = useBrandingStore()
 
@@ -44,9 +44,11 @@ export function PoweredByBadge({
   const content = (
     <>
       {showIcon && <FreeFrameMark />}
+     
       <span>
         Powered by {showOrgName ? orgName || 'FreeFrame' : 'FreeFrame'}
       </span>
+
     </>
   )
 

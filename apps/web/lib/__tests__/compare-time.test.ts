@@ -76,11 +76,12 @@ describe('parseOffsetParam', () => {
 describe('canCompare', () => {
   const ready = { processing_status: 'ready' }
   const processing = { processing_status: 'processing' }
-  it('requires video or image and >= 2 ready versions', () => {
+  it('requires a supported asset and >= 2 ready versions', () => {
     expect(canCompare('video', [ready, ready])).toBe(true)
     expect(canCompare('image', [ready, processing, ready])).toBe(true)
     expect(canCompare('video', [ready, processing])).toBe(false)
     expect(canCompare('audio', [ready, ready])).toBe(false)
     expect(canCompare('image_carousel', [ready, ready])).toBe(false)
+    expect(canCompare('document', [ready, ready])).toBe(true)
   })
 })

@@ -20,6 +20,7 @@ import { VideoFrameConstraint } from '@/components/review/video-player'
 import { ImageFrameConstraint } from '@/components/review/image-frame-constraint'
 import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
+import { PdfViewer } from '@/components/review/pdf-viewer'
 import type { AssetResponse, AssetVersion } from '@/types'
 
 interface CompareOverlayProps {
@@ -161,6 +162,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const sideB = useComments(asset.id, right.id)
   const [panelAOpen, setPanelAOpen] = React.useState(false)
   const [panelBOpen, setPanelBOpen] = React.useState(true)
+  const [pdfPage, setPdfPage] = React.useState(1)
 
   // Annotation AUTHORING: at most one pane draws at a time (the Fabric canvas is
   // a module-level singleton — a second mounted AnnotationCanvas disposes the
@@ -324,7 +326,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
           <span className="min-w-0 flex-1 truncate text-center text-[13px] font-medium text-text-primary" title={asset.name}>
             {asset.name}
           </span>
-          {!isVideo && (
+          {!isVideo && asset.asset_type !== 'document' && (
             <button
               type="button"
               aria-label={mode === 'wipe' ? 'Switch to side-by-side' : 'Switch to wipe'}
@@ -506,6 +508,17 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 }
               />
             </>
+          ) : asset.asset_type === 'document' ? (
+            <div className="flex min-h-0 flex-1 divide-x divide-border bg-bg-primary">
+              <div className="relative flex min-w-0 flex-1 flex-col">
+                <span className="absolute left-3 top-3 z-10 rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeA}</span>
+                <PdfViewer url={urlA} name={`${asset.name} ${badgeA}`} page={pdfPage} onPageChange={setPdfPage} />
+              </div>
+              <div className="relative flex min-w-0 flex-1 flex-col">
+                <span className="absolute right-3 top-3 z-10 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
+                <PdfViewer url={urlB} name={`${asset.name} ${badgeB}`} page={pdfPage} onPageChange={setPdfPage} />
+              </div>
+            </div>
           ) : mode === 'wipe' ? (
             urlA && urlB ? (
               <WipeViewer

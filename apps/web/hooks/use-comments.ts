@@ -85,6 +85,7 @@ export function useComments(assetId: string | null, versionId: string | null) {
     parentId?: string,
     visibility?: string,
     mentionUserIds?: string[],
+    annotationFrameNumber?: number,
   ): Promise<CommentWithReplies> {
     if (!assetId) throw new Error('No asset selected')
     if (!versionId) throw new Error('No version selected')
@@ -92,7 +93,7 @@ export function useComments(assetId: string | null, versionId: string | null) {
     const payload: CreateCommentPayload = { body, version_id: versionId }
     if (timecodeStart !== undefined) payload.timecode_start = timecodeStart
     if (timecodeEnd !== undefined) payload.timecode_end = timecodeEnd
-    if (annotationData) payload.annotation = { drawing_data: annotationData }
+    if (annotationData) payload.annotation = { drawing_data: annotationData, frame_number: annotationFrameNumber }
     if (parentId) payload.parent_id = parentId
     if (visibility) payload.visibility = visibility
     if (mentionUserIds?.length) (payload as any).mention_user_ids = mentionUserIds

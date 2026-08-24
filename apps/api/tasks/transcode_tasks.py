@@ -62,6 +62,10 @@ def process_asset(self, asset_id: str, version_id: str):
                 _process_audio(db, asset, version, media_file, s3, output_prefix)
             elif asset.asset_type in (AssetType.image, AssetType.image_carousel):
                 _process_image(db, asset, version, media_file, s3, output_prefix)
+            elif asset.asset_type == AssetType.document:
+                # PDFs are served directly from the original upload; the browser
+                # provides the multi-page viewer.
+                pass
 
             version.processing_status = ProcessingStatus.ready
             db.commit()

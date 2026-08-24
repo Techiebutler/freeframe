@@ -23,6 +23,7 @@ import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { withBasePath } from '@/lib/base-path'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
+import { PdfViewer } from '@/components/review/pdf-viewer'
 import { useBrandingStore } from '@/stores/branding-store'
 import type {
   SharePermission,
@@ -797,7 +798,8 @@ function ShareReviewInner({
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
-  const { currentVersion, isDrawingMode, focusedCommentId } = useReviewStore()
+  const { currentVersion, isDrawingMode, focusedCommentId, setActiveAnnotation } = useReviewStore()
+  const [documentPage, setDocumentPage] = React.useState(1)
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
@@ -812,6 +814,7 @@ function ShareReviewInner({
       setAnnotationCanvas(() => canvasMod.AnnotationCanvas)
     })
   }, [])
+  React.useEffect(() => { setDocumentPage(1) }, [currentVersion?.id])
 
   const canComment = permission === 'comment' || permission === 'approve'
   const versionReady = currentVersion?.processing_status === 'ready'
@@ -819,7 +822,7 @@ function ShareReviewInner({
   // Guest identity flow for non-authenticated users
   const [guestIdentity, setGuestIdentity] = React.useState<{ name: string; email: string } | null>(null)
   const [showGuestPrompt, setShowGuestPrompt] = React.useState(false)
-  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown> } | null>(null)
+  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown>; frameNumber?: number } | null>(null)
   React.useEffect(() => {
     try {
       const stored = localStorage.getItem('ff_guest_identity')
@@ -828,12 +831,12 @@ function ShareReviewInner({
   }, [])
   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
-  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
+  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, frameNumber?: number) => {
     const payload: CreateCommentPayload = { body }
     if (currentVersion?.id) payload.version_id = currentVersion.id
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
-    if (annotationData) payload.annotation = { drawing_data: annotationData }
+    if (annotationData) payload.annotation = { drawing_data: annotationData, frame_number: frameNumber }
     await addComment(payload)
     refetchComments().catch(() => {})
   }, [addComment, currentVersion, refetchComments])
@@ -846,9 +849,9 @@ function ShareReviewInner({
 
     // Auto-submit the pending comment
     if (pendingCommentRef.current) {
-      const { body, timecodeStart, timecodeEnd, annotationData } = pendingCommentRef.current
+      const { body, timecodeStart, timecodeEnd, annotationData, frameNumber } = pendingCommentRef.current
       pendingCommentRef.current = null
-      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData), 50)
+      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData, frameNumber), 50)
     }
   }, [submitComment])
 
@@ -913,6 +916,14 @@ function ShareReviewInner({
                 }
               />
             </div>
+          ) : asset.asset_type === 'document' && versionReady && (asset as any).stream_url ? (
+            <PdfViewer
+              url={(asset as any).stream_url}
+              name={assetName}
+              page={documentPage}
+              onPageChange={setDocumentPage}
+              annotationCanvas={<>{AnnotationOverlay && <AnnotationOverlay key={`${focusedCommentId ?? 'none'}-${documentPage}`} />}{isDrawingMode && AnnotationCanvas && <AnnotationCanvas />}</>}
+            />
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-text-tertiary" />
@@ -944,21 +955,26 @@ function ShareReviewInner({
                   onRemoveReaction={() => {}}
                   onReply={() => {}}
                   onSubmitReply={async () => {}}
+                  onShowAnnotation={(drawingData: Record<string, unknown> | null, frameNumber?: number | null) => {
+                    setActiveAnnotation(drawingData)
+                    if (asset.asset_type === 'document' && frameNumber) setDocumentPage(frameNumber)
+                  }}
                 />
                 {canComment && CommentInput && (
                   <CommentInput
                     assetId={asset.id}
                     projectId=""
                     assetType={asset.asset_type}
-                    onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
+                    annotationFrameNumber={asset.asset_type === 'document' ? documentPage : undefined}
+                    onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, _parentId?: string, _visibility?: string, _mentionUserIds?: string[], frameNumber?: number) => {
                       const hasAuth = !!localStorage.getItem('ff_access_token')
                       const hasGuest = !!localStorage.getItem('ff_guest_identity')
                       if (!hasAuth && !hasGuest) {
-                        pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData }
+                        pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData, frameNumber }
                         setShowGuestPrompt(true)
                         return
                       }
-                      await submitComment(body, timecodeStart, timecodeEnd, annotationData)
+                      await submitComment(body, timecodeStart, timecodeEnd, annotationData, frameNumber)
                     }}
                   />
                 )}
