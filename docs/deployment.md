@@ -133,6 +133,15 @@ If FreeFrame sits behind another proxy that already handles SSL:
 4. For **Cloudflare**: set SSL mode to "Full"
 5. Set `FRONTEND_URL` in `.env.prod` to your `https://` URL
 
+### Short share URLs (optional)
+
+Share links are also issued a 4-character short code (e.g. `https://your-domain.example/6RBr` instead of `https://your-domain.example/share/<46-char-token>`). For the short form to resolve, your reverse proxy must route root-level codes to the API's resolve endpoint:
+
+- **nginx:** `location / { proxy_pass http://<api-host>:8000/resolve/; }` as a catch-all *after* the rules for the app itself (the code path must not shadow `/share/`, `/api/`, or the frontend routes)
+- **Cloudflare:** a Worker/redirect rule matching `/{4}` → `https://<api>/resolve/{code}`
+
+Unknown codes redirect to the app root; valid codes 302 to the share page. Links created before this feature shipped have no code — run `python scripts/backfill_short_codes.py` once (server-side) to assign codes to them. Short URLs appear in the dashboard and in share emails whenever a code exists, with the full token URL as the fallback.
+
 ---
 
 ## Bring Your Own Infrastructure

@@ -282,6 +282,7 @@ export interface ShareLink {
   deleted_at: string | null;
   has_password: boolean;
   password_value: string | null;
+  short_code?: string | null;
 }
 
 export interface AssetShare {
@@ -306,6 +307,7 @@ export interface ShareLinkListItem {
   target_name: string
   view_count: number
   last_viewed_at: string | null
+  short_code?: string | null
 }
 
 export type ShareActivityAction = "opened" | "viewed_asset" | "commented" | "approved" | "rejected" | "downloaded"
