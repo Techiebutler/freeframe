@@ -63,6 +63,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
   const [documentUrl, setDocumentUrl] = useState<string | null>(null)
   const [documentPage, setDocumentPage] = useState(1)
+  const [documentSpreadRequest, setDocumentSpreadRequest] = useState(0)
   const [activeTab, setActiveTab] = useState<'comments' | 'fields'>('comments')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const deepLinkApplied = useRef(false)
@@ -362,6 +363,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             name={asset.name}
             page={documentPage}
             onPageChange={setDocumentPage}
+            spreadRequest={documentSpreadRequest}
             annotationCanvas={
               <>
                 <AnnotationOverlay key={`${focusedCommentId ?? 'none'}-${documentPage}`} />
@@ -545,7 +547,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                     onSubmitReply={handleSubmitReply}
                     onShowAnnotation={(drawingData, frameNumber) => {
                       setActiveAnnotation(drawingData)
-                      if (asset.asset_type === 'document' && frameNumber) setDocumentPage(frameNumber)
+                      if (asset.asset_type === 'document' && frameNumber) {
+                        setDocumentPage(frameNumber % 2 === 0 ? frameNumber - 1 : frameNumber)
+                        setDocumentSpreadRequest((request) => request + 1)
+                      }
                     }}
                   />
                   {canComment && (

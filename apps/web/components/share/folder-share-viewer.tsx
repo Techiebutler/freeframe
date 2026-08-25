@@ -800,6 +800,7 @@ function ShareReviewInner({
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, setActiveAnnotation } = useReviewStore()
   const [documentPage, setDocumentPage] = React.useState(1)
+  const [documentSpreadRequest, setDocumentSpreadRequest] = React.useState(0)
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
@@ -922,6 +923,7 @@ function ShareReviewInner({
               name={assetName}
               page={documentPage}
               onPageChange={setDocumentPage}
+              spreadRequest={documentSpreadRequest}
               annotationCanvas={<>{AnnotationOverlay && <AnnotationOverlay key={`${focusedCommentId ?? 'none'}-${documentPage}`} />}{isDrawingMode && AnnotationCanvas && <AnnotationCanvas />}</>}
             />
           ) : (
@@ -957,7 +959,10 @@ function ShareReviewInner({
                   onSubmitReply={async () => {}}
                   onShowAnnotation={(drawingData: Record<string, unknown> | null, frameNumber?: number | null) => {
                     setActiveAnnotation(drawingData)
-                    if (asset.asset_type === 'document' && frameNumber) setDocumentPage(frameNumber)
+                    if (asset.asset_type === 'document' && frameNumber) {
+                      setDocumentPage(frameNumber % 2 === 0 ? frameNumber - 1 : frameNumber)
+                      setDocumentSpreadRequest((request) => request + 1)
+                    }
                   }}
                 />
                 {canComment && CommentInput && (

@@ -11,11 +11,12 @@ interface PdfViewerProps {
   name: string
   page: number
   onPageChange: (page: number) => void
+  spreadRequest?: number
   annotationCanvas?: React.ReactNode
 }
 
 /** PDF review surface with optional two-page spread viewing. */
-export function PdfViewer({ url, name, page, onPageChange, annotationCanvas }: PdfViewerProps) {
+export function PdfViewer({ url, name, page, onPageChange, spreadRequest, annotationCanvas }: PdfViewerProps) {
   const canvasRefs = [React.useRef<HTMLCanvasElement>(null), React.useRef<HTMLCanvasElement>(null)]
   const viewportRef = React.useRef<HTMLDivElement>(null)
   const [pdf, setPdf] = React.useState<any>(null)
@@ -23,6 +24,7 @@ export function PdfViewer({ url, name, page, onPageChange, annotationCanvas }: P
   const [size, setSize] = React.useState({ width: 0, height: 0 })
   const [error, setError] = React.useState<string | null>(null)
   const [spread, setSpread] = React.useState(false)
+  React.useEffect(() => { if (spreadRequest) setSpread(true) }, [spreadRequest])
   const { isDrawingMode, setActiveAnnotation, setFocusedCommentId, setPendingAnnotation } = useReviewStore()
 
   const changePage = React.useCallback((nextPage: number) => {
@@ -88,13 +90,13 @@ export function PdfViewer({ url, name, page, onPageChange, annotationCanvas }: P
       if (!isDrawingMode) { setFocusedCommentId(null); setActiveAnnotation(null) }
     }}>
       {!pdf && <Loader2 className="h-8 w-8 animate-spin text-text-tertiary" />}
-      <div className={cn('flex items-center gap-4', spread && 'max-w-full', !pdf && 'hidden')}>
+      <div className={cn('relative flex items-center gap-4', spread && 'max-w-full', !pdf && 'hidden')}>
         {[page, ...(spread && page < pageCount ? [page + 1] : [])].map((pageNumber, index) => (
           <div key={pageNumber} className="relative shrink-0 shadow-lg">
             <canvas ref={canvasRefs[index]} aria-label={`${name}, page ${pageNumber}`} className="block max-w-full" />
-            {index === 0 && annotationCanvas && <div className={isDrawingMode ? 'pointer-events-auto' : 'pointer-events-none'}>{annotationCanvas}</div>}
           </div>
         ))}
+        {annotationCanvas && <div className={isDrawingMode ? 'pointer-events-auto absolute inset-0' : 'pointer-events-none absolute inset-0'}>{annotationCanvas}</div>}
       </div>
       {pageCount > 0 && <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-md border border-border bg-bg-elevated/90 px-2 py-1 text-xs shadow backdrop-blur-sm">
         <button type="button" aria-label="Previous PDF page" disabled={page <= 1} onClick={(e) => { e.stopPropagation(); changePage(Math.max(1, page - (spread ? 2 : 1))) }} className="rounded p-1 hover:bg-bg-hover disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button>
