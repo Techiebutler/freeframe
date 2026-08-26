@@ -3,33 +3,14 @@ import { render } from '@testing-library/react'
 import { BrandingHead } from '../shared/branding-head'
 import { type InstanceBranding, useBrandingStore } from '@/stores/branding-store'
 import { accentVars, ACCENT_VAR_NAMES } from '@/lib/accent'
-
-function branding(primaryColor: string | null, overrides: Partial<InstanceBranding> = {}): InstanceBranding {
-  return {
-    id: 'branding-1',
-    org_name: 'Acme',
-    logo_light_key: null,
-    logo_dark_key: null,
-    favicon_key: null,
-    apple_icon_key: null,
-    login_logo_key: null,
-    logo_light_url: null,
-    logo_dark_url: null,
-    favicon_url: null,
-    apple_icon_url: null,
-    login_logo_url: null,
-    primary_color: primaryColor,
-    powered_by_freeframe: true,
-    created_at: '2026-01-01T00:00:00Z',
-    updated_at: '2026-01-01T00:00:00Z',
-    ...overrides,
-  }
-}
+import { makeInstanceBranding } from '@/test/branding-fixtures'
 
 /** Match the data flow used after the branding endpoint returns, rather than
  * writing a state combination the production synchronization path cannot make. */
 function syncBranding(primaryColor: string | null, overrides: Partial<InstanceBranding> = {}) {
-  useBrandingStore.getState().syncBranding(branding(primaryColor, overrides))
+  useBrandingStore.getState().syncBranding(
+    makeInstanceBranding({ primary_color: primaryColor, ...overrides }),
+  )
 }
 
 describe('BrandingHead accent wiring', () => {
@@ -112,6 +93,14 @@ describe('BrandingHead icons', () => {
     const icons = Array.from(document.head.querySelectorAll('link[rel="icon"]'))
     expect(icons).toHaveLength(1)
     expect(icons[0].getAttribute('href')).toBe('https://s3.test/custom-favicon.png')
+  })
+
+  it('falls back to the default favicon when no custom icon is configured', () => {
+    syncBranding(null)
+    render(<BrandingHead />)
+
+    const icon = document.head.querySelector('link[rel="icon"]')
+    expect(icon?.getAttribute('href')).toBe('/logo-icon.png')
   })
 
   it('uses the dedicated Apple home-screen icon when no custom icon is configured', () => {

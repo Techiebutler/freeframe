@@ -408,6 +408,7 @@ export function BrandingTab() {
               acceptedFormats={['PNG']}
               minResolution="180px+"
               currentUrl={appleIconUrl}
+              defaultUrl="/apple-icon.png"
               previewBg="bg-zinc-900"
               {...slotProps}
               onUpload={(url) => setAppleIconUrl(url)}
@@ -421,6 +422,7 @@ export function BrandingTab() {
               acceptedFormats={['PNG', 'SVG', 'WebP']}
               minResolution="512px+"
               currentUrl={loginLogoUrl}
+              defaultUrl="/logo-full.svg"
               previewBg="bg-zinc-900"
               {...slotProps}
               onUpload={(url) => setLoginLogoUrl(url)}

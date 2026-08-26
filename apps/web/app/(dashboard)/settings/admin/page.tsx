@@ -250,7 +250,7 @@ export default function AdminPage() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-muted">
-          <Shield className="h-5 w-5 text-accent" />
+          <Shield className="h-5 w-5 text-text-primary" />
         </div>
         <div>
           <h1 className="text-xl font-semibold text-text-primary">

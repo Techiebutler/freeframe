@@ -181,12 +181,11 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
             <img src={displayLogo} alt={orgName} className="h-10 object-contain" />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/logo-icon.png" alt="FreeFrame" className="logo-dark h-10 w-10" />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/logo-icon-dark.png" alt="FreeFrame" className="logo-light h-10 w-10" />
-            </>
+            <img
+              src={theme === 'dark' ? '/logo-icon.png' : '/logo-icon-dark.png'}
+              alt="FreeFrame"
+              className="h-10 w-10"
+            />
           )}
           <div className="text-center">
             <h1 className="text-sm font-semibold text-text-primary">{orgName}</h1>
@@ -523,7 +522,7 @@ function ShareTopBar({
             />
           ) : (
             <img
-              src={`/logo-icon.png`}
+              src={theme === 'dark' ? '/logo-icon.png' : '/logo-icon-dark.png'}
               alt="FreeFrame"
               className="h-full w-full"
             />
@@ -1191,7 +1190,7 @@ export default function SharePage({
       <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
         <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 shadow-xl text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent-muted">
-            <Lock className="h-6 w-6 text-accent" />
+            <Lock className="h-6 w-6 text-text-primary" />
           </div>
           <h1 className="text-lg font-semibold text-text-primary">
             {state.title || 'Secure Share Link'}

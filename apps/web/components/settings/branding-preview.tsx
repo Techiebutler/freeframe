@@ -68,7 +68,7 @@ export function BrandingPreview() {
     <div className="rounded-xl border border-border bg-bg-secondary p-5">
       <div className="flex items-center gap-2.5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-muted">
-          <Eye className="h-4 w-4 text-accent" />
+          <Eye className="h-4 w-4 text-text-primary" />
         </div>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-text-primary">Preview</p>

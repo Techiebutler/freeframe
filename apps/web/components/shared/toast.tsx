@@ -129,7 +129,7 @@ function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
     <div
       aria-live="polite"
       aria-label="Notifications"
-      className="pointer-events-none fixed right-4 top-4 z-[9999] flex flex-col-reverse gap-2"
+      className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2"
     >
       {toasts.map((t) => (
         <ToastTile key={t.id} toast={t} onDismiss={onDismiss} />

@@ -43,7 +43,7 @@ export function Avatar({ src, name, size = 'md', className }: AvatarProps) {
         />
       )}
       <RadixAvatar.Fallback
-        className="flex h-full w-full items-center justify-center font-medium text-accent"
+        className="flex h-full w-full items-center justify-center font-medium text-text-primary"
         delayMs={0}
       >
         {getInitials(name)}
