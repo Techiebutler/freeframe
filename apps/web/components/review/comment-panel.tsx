@@ -29,6 +29,7 @@ import {
   Download,
 } from "lucide-react";
 import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
+import { CommentAttachment } from "./comment-attachment";
 import { useReviewStore } from "@/stores/review-store";
 import type { CommentWithReplies } from "@/hooks/use-comments";
 import {
@@ -603,6 +604,14 @@ function CommentItem({
               {comment.body}
             </p>
           )}
+
+          {comment.attachments?.length ? (
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {comment.attachments.map((attachment) => (
+                <CommentAttachment key={attachment.id} attachment={attachment} downloadUrl={attachment.url} isOwn={comment.author_id === currentUserId} />
+              ))}
+            </div>
+          ) : null}
 
           {/* Reactions row */}
           {reactionGroups.length > 0 && (

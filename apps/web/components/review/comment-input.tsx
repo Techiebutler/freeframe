@@ -44,6 +44,7 @@ interface CommentInputProps {
     visibility?: string,
     mentionUserIds?: string[],
     annotationFrameNumber?: number,
+    files?: File[],
   ) => Promise<void>;
   onCancelReply?: () => void;
   onPauseVideo?: () => void;
@@ -237,6 +238,7 @@ export function CommentInput({
   const { clear, undo, getJSON } = useDrawing();
 
   const [body, setBody] = React.useState("");
+  const [files, setFiles] = React.useState<File[]>([]);
   const [mentionUserIds, setMentionUserIds] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -415,9 +417,11 @@ export function CommentInput({
         commentVisibility,
         mentionUserIds.length > 0 ? mentionUserIds : undefined,
         annotationFrameNumber,
+        files,
       );
 
       setBody("");
+      setFiles([]);
       setMentionUserIds([]);
       // Drawing-state cleanup touches the SHARED singleton canvas + global store,
       // so gate it on ownership: an inactive compare pane (captureAnnotation false)
@@ -607,6 +611,11 @@ export function CommentInput({
               )}
 
               {/* Emoji */}
+              <label className="h-7 w-7 flex items-center justify-center rounded-md text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary transition-colors cursor-pointer" title="Attach files">
+                <Paperclip className="h-4 w-4" />
+                <input type="file" multiple className="hidden" onChange={(e) => setFiles((current) => [...current, ...Array.from(e.target.files ?? [])])} />
+              </label>
+              {files.length > 0 && <span className="text-2xs text-text-tertiary">{files.length} attached</span>}
               <div className="relative" ref={emojiRef}>
                 <button
                   className="h-7 w-7 flex items-center justify-center rounded-md text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary transition-colors"

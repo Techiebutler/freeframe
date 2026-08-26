@@ -208,6 +208,7 @@ export interface Comment {
   deleted_at: string | null;
   author?: CommentAuthor | null;
   guest_author?: GuestAuthor | null;
+  attachments?: CommentAttachment[];
 }
 
 export interface Annotation {
@@ -220,12 +221,10 @@ export interface Annotation {
 
 export interface CommentAttachment {
   id: string;
-  comment_id: string;
-  file_type: FileType;
-  s3_key: string;
-  original_filename: string;
-  file_size_bytes: number;
-  created_at: string;
+  file_name: string;
+  file_size: number;
+  content_type: string;
+  url: string;
 }
 
 export interface CommentReaction {

@@ -236,8 +236,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     visibility?: string,
     mentionUserIds?: string[],
     annotationFrameNumber?: number,
+    files?: File[],
   ) => {
-    await createComment(
+    const comment = await createComment(
       body,
       timecodeStart,
       timecodeEnd,
@@ -247,6 +248,13 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       mentionUserIds,
       annotationFrameNumber,
     )
+    for (const file of files ?? []) {
+      const upload = await api.post<{ upload_url: string }>(`/comments/${comment.id}/attachments`, {
+        file_name: file.name, file_size: file.size, content_type: file.type || 'application/octet-stream',
+      })
+      const response = await fetch(upload.upload_url, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
+      if (!response.ok) throw new Error(`Failed to upload ${file.name}`)
+    }
     setAnnotationData(null)
     refetchComments()
   }

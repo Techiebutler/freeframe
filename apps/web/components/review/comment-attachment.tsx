@@ -18,8 +18,8 @@ interface CommentAttachmentProps {
 
 // ─── File type icon helper ─────────────────────────────────────────────────────
 
-function FileIcon({ fileType, className }: { fileType: CommentAttachmentType['file_type']; className?: string }) {
-  switch (fileType) {
+function FileIcon({ fileType, className }: { fileType: string; className?: string }) {
+  switch (fileType.split('/')[0]) {
     case 'image':
       return <ImageIcon className={cn('h-5 w-5', className)} />
     case 'video':
@@ -51,8 +51,8 @@ export function CommentAttachment({
     }
   }
 
-  const isImage = attachment.file_type === 'image' && !imageError && downloadUrl
-  const isVideo = attachment.file_type === 'video' && downloadUrl
+  const isImage = attachment.content_type.startsWith('image/') && !imageError && downloadUrl
+  const isVideo = attachment.content_type.startsWith('video/') && downloadUrl
 
   return (
     <div
@@ -67,7 +67,7 @@ export function CommentAttachment({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={downloadUrl}
-            alt={attachment.original_filename}
+            alt={attachment.file_name}
             className="max-h-48 w-full object-cover"
             onError={() => setImageError(true)}
           />
@@ -76,7 +76,7 @@ export function CommentAttachment({
             {downloadUrl && (
               <a
                 href={downloadUrl}
-                download={attachment.original_filename}
+                download={attachment.file_name}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-white hover:bg-white/30 transition-colors"
                 title="Download"
               >
@@ -121,15 +121,15 @@ export function CommentAttachment({
       {/* File info row */}
       <div className="flex items-center gap-2 px-3 py-2">
         <div className="shrink-0 text-text-tertiary">
-          <FileIcon fileType={attachment.file_type} />
+          <FileIcon fileType={attachment.content_type} />
         </div>
 
         <div className="flex-1 min-w-0">
           <p className="truncate text-xs font-medium text-text-primary">
-            {attachment.original_filename}
+          {attachment.file_name}
           </p>
           <p className="text-2xs text-text-tertiary">
-            {formatBytes(attachment.file_size_bytes)}
+            {formatBytes(attachment.file_size)}
           </p>
         </div>
 
@@ -137,7 +137,7 @@ export function CommentAttachment({
           {downloadUrl && (
             <a
               href={downloadUrl}
-              download={attachment.original_filename}
+              download={attachment.file_name}
               className="inline-flex h-7 w-7 items-center justify-center rounded text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors"
               title="Download"
             >
