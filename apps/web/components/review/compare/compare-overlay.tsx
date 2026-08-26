@@ -6,6 +6,7 @@ import { Columns2, FlipHorizontal2, MessageSquare, Volume2, VolumeX, X } from 'l
 import { cn } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import { useAuthStore } from '@/stores/auth-store'
+import { api } from '@/lib/api'
 import { useComments } from '@/hooks/use-comments'
 import { useStreamUrl } from '@/hooks/use-stream-url'
 import { localTime, parseOffsetParam, type SideTiming } from '@/lib/compare-time'
@@ -401,8 +402,10 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                   parentId?: string,
                   visibility?: string,
                   mentionUserIds?: string[],
+                  _annotationFrameNumber?: number,
+                  files?: File[],
                 ) => {
-                  await sideA.createComment(
+                  const comment = await sideA.createComment(
                     body,
                     timecodeStart,
                     timecodeEnd,
@@ -411,6 +414,12 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     visibility,
                     mentionUserIds,
                   )
+                  for (const file of files ?? []) {
+                    const upload = await api.post<{ upload_url: string }>(`/comments/${comment.id}/attachments`, { file_name: file.name, file_size: file.size, content_type: file.type || 'application/octet-stream' })
+                    const response = await fetch(upload.upload_url, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
+                    if (!response.ok) throw new Error(`Failed to upload ${file.name}`)
+                  }
+                  await sideA.mutate()
                 }}
               />
               )}
@@ -626,8 +635,10 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                   parentId?: string,
                   visibility?: string,
                   mentionUserIds?: string[],
+                  _annotationFrameNumber?: number,
+                  files?: File[],
                 ) => {
-                  await sideB.createComment(
+                  const comment = await sideB.createComment(
                     body,
                     timecodeStart,
                     timecodeEnd,
@@ -636,6 +647,12 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                     visibility,
                     mentionUserIds,
                   )
+                  for (const file of files ?? []) {
+                    const upload = await api.post<{ upload_url: string }>(`/comments/${comment.id}/attachments`, { file_name: file.name, file_size: file.size, content_type: file.type || 'application/octet-stream' })
+                    const response = await fetch(upload.upload_url, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
+                    if (!response.ok) throw new Error(`Failed to upload ${file.name}`)
+                  }
+                  await sideB.mutate()
                 }}
               />
               )}
