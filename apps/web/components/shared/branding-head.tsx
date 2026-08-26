@@ -14,11 +14,17 @@ const DEFAULT_ICON = '/logo-icon.png'
 /**
  * Make this instance's icon the only one the browser can choose.
  *
- * Next emits its own `<link rel="icon">` for app/icon.png, and serves
- * app/favicon.ico at /favicon.ico which browsers request by convention. Merely
- * appending another link left the custom favicon as one candidate among
- * several, and it generally lost — which is why setting one appeared to do
- * nothing. Any icon link this component doesn't own is removed first.
+ * Next emits its own `<link rel="icon">` for any icon file under `app/`
+ * (icon.png, favicon.ico, apple-icon.png). Those are React-managed hoistable
+ * resources, so removing them with `el.remove()` left React holding a reference
+ * to a detached node and it would throw `null is not an object (evaluating
+ * 'instance.parentNode.removeChild')` the next time it committed. Those files
+ * have therefore been moved out of `app/` (favicon.ico and apple-icon.png now
+ * live in `public/` so /favicon.ico and /apple-icon.png still resolve by
+ * convention), and this component owns the icon links exclusively. The sweep
+ * below removes competing icon links that aren't ours ([data-ff-branding]);
+ * with no icon files left under `app/`, Next emits no React-owned icon links,
+ * so it can only ever touch nodes this component created itself.
  *
  * The link is always present, pointing at the default when nothing custom is
  * set, so clearing a favicon falls back cleanly instead of leaving the page

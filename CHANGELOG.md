@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Optional hardware-accelerated transcoding (NVENC / VAAPI) with HDR and Dolby Vision support.** Auto-detects an available GPU backend and falls back to the software pipeline when none is present, or when a hardware attempt fails at runtime (for example, out of VRAM). CPU-only and arm64 builds are unaffected by default. New env vars: `TRANSCODER_PIPELINE`, `TRANSCODER_OUTPUT`, `TRANSCODER_HDR`. (#127)
 
+### Fixed
+- **Navigating the UI no longer throws a `null is not an object (evaluating 'instance.parentNode.removeChild')` error** — Next auto-generates `<link rel="icon">` / `<link rel="apple-touch-icon">` tags from the `app/` icon files, and those are React-managed hoistable resources. `BrandingHead` removed them with `el.remove()`, leaving React to unmount a node whose parent was already gone on the next commit (e.g. during navigation). `favicon.ico` and `apple-icon.png` now live in `public/` (both still resolve by convention) and `icon.png` (a duplicate of `public/logo-icon.png`) was removed, so Next no longer emits the React-owned links and `BrandingHead` is their sole owner.
+
 ## [1.10.0] - 2026-08-21
 
 ### Contributors
