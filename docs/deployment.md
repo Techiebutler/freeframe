@@ -270,6 +270,9 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `EMAIL_CONCURRENCY` | Parallel email jobs | `2` |
 | `MAINTENANCE_CONCURRENCY` | Parallel housekeeping jobs | `1` |
 | `NEXT_PUBLIC_UPLOAD_CONCURRENCY` | Upload parts in flight per file (browser) | `5` |
+| `TRANSCODER_PIPELINE` | GPU backend: `Auto`, `NVIDIA`, `Intel`, or `Software` | `Auto` |
+| `TRANSCODER_OUTPUT` | Output codec: `h264_8` (broad compatibility) or `h265_10` (HEVC 10-bit) | `h264_8` |
+| `TRANSCODER_HDR` | `convert` (tone-map HDR to SDR) or `preserve` (keep HDR tags) | `convert` |
 
 ---
 
@@ -292,6 +295,24 @@ Video transcoding is CPU-intensive. Adjust `TRANSCODING_CONCURRENCY` based on yo
 | 2 cores | 1-2 |
 | 4 cores | 2-3 |
 | 8+ cores | 4-6 |
+
+### Hardware-Accelerated Transcoding (optional)
+
+FreeFrame can use an NVIDIA (NVENC) or Intel (VAAPI) GPU to transcode faster, and
+automatically falls back to software (CPU) transcoding if no GPU is present or a
+hardware attempt fails at runtime. This is entirely opt-in — the default build and
+default runtime behavior are unchanged.
+
+To enable it:
+1. Build the API image with `--build-arg ENABLE_HWACCEL=true` (Intel/VAAPI only —
+   NVENC needs no extra packages in the image, just the host driver).
+2. Give the `worker` service access to the GPU: pass through `/dev/dri` for VAAPI,
+   or install `nvidia-container-toolkit` and add a GPU reservation for NVENC.
+3. Set `TRANSCODER_PIPELINE` to `NVIDIA`, `Intel`, or leave it as `Auto` to detect
+   automatically.
+
+> Compose-file examples for GPU device passthrough aren't included yet — that's a
+> known follow-up.
 
 ### Email Workers
 

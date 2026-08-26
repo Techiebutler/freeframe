@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Optional hardware-accelerated transcoding (NVENC / VAAPI) with HDR and Dolby Vision support.** Auto-detects an available GPU backend and falls back to the software pipeline when none is present, or when a hardware attempt fails at runtime (for example, out of VRAM). CPU-only and arm64 builds are unaffected by default. New env vars: `TRANSCODER_PIPELINE`, `TRANSCODER_OUTPUT`, `TRANSCODER_HDR`. (#127)
+
 ### Fixed
-- **Branding UI remains readable and correct across themes** — custom muted accents are now opaque, selected chips and controls use readable theme text, default logos pair light/dark artwork in previews and password gates, and the Apple home-screen icon uses its dedicated asset. Notifications now appear at the top-right instead of overlapping the bottom-right attribution badge. (#275)
+- **Branding UI remains readable and correct across themes** — custom muted accents are now opaque, selected chips and controls use readable theme text, default logos pair light/dark artwork in previews and password gates, and the Apple home-screen icon uses its dedicated asset. Notifications stay at the bottom-right to avoid blocking dashboard header controls. (#275)
+
+### Removed
+- **Dead share dialog code removed from the review view** — `components/review/share-dialog.tsx` still carried the pre-dropdown tab components (`LinkTab`, `DirectTab`) and their helpers (`PermissionSelect`, `CopyButton`), unused since the April dropdown redesign. The live dialog creates links through `ShareCreateDialog`, which already includes the Link name field; the leftover code is what suggested otherwise. Removed to keep the file truthful. (#265)
 
 ## [1.10.0] - 2026-08-21
 

@@ -48,6 +48,8 @@ Put two cuts or revisions on screen at once and see exactly what changed. Video 
 
 Export a version's timecoded comments as timeline markers your editor can import — DaVinci Resolve (marker EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), or CSV — so notes land on the exact frame back in the timeline.
 
+See [Export comments to an NLE](docs/comment-export.md) for the export workflow, format choices, and frame-rate troubleshooting.
+
 <p align="center">
   <img src="docs/images/comment-export.png" alt="Export comments menu — DaVinci Resolve (EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), and CSV" width="480">
 </p>
@@ -197,6 +199,7 @@ For the full guide including **SSL setup**, **bring-your-own infrastructure** (e
 |-------|-------------|
 | [Production Deployment](docs/deployment.md) | SSL, bring-your-own infra, scaling, troubleshooting |
 | [Architecture](docs/architecture.md) | System design, data flow, media pipeline, permissions |
+| [Export comments to an NLE](docs/comment-export.md) | Export review notes for Resolve, Final Cut Pro, Premiere Pro, or CSV |
 | [Contributing](docs/contributing.md) | Dev setup, testing, code style, PR process |
 | [Environment Variables](.env.example) | Full config reference with comments |
 
