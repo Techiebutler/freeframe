@@ -144,6 +144,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     deleteComment,
     addReaction,
     removeReaction,
+    mutate: mutateComments,
   } = useComments(asset?.id || '', currentVersion?.id || '')
 
   // Keep the version list live: when a new version transcodes, revalidate so it
@@ -256,7 +257,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       if (!response.ok) throw new Error(`Failed to upload ${file.name}`)
     }
     setAnnotationData(null)
-    refetchComments()
+    await mutateComments()
   }
 
   const handleSubmitReply = async (parentId: string, body: string) => {
