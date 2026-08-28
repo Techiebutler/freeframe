@@ -131,8 +131,8 @@ Read this section before writing backend code or tests.
   carry a `deleted_at` column; 16 do not, including `MediaFile`, `Annotation`,
   `CommentAttachment`, `CommentReaction`, `Notification` and `ActivityLog`. Check the model
   before assuming. Where the column exists, prefer setting it over deleting the row, and
-  filter `deleted_at.is_(None)` **by hand in every query** — nothing filters it for you
-  (`middleware/soft_delete.py` exports a helper with zero call sites). Soft deletion is not
+  filter `deleted_at.is_(None)` **by hand in every query** — nothing filters it for you,
+  there is no automatic soft-delete layer. Soft deletion is not
   permanent either: `tasks/cleanup_tasks.py` hard-deletes soft-deleted rows and reclaims their
   S3 objects after `SOFT_DELETE_RETENTION_DAYS` (default 30).
 
