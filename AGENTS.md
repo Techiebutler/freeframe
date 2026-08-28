@@ -23,7 +23,20 @@ docker compose -f docker-compose.dev.yml up --build
 # open http://localhost:3000
 ```
 
-Everything (Postgres, Redis, MinIO, API, Celery workers, web) starts in Docker with hot reload.
+Ten services start in Docker: postgres, redis, minio, minio-init, api, worker, email_worker,
+maintenance_worker, beat, web.
+
+> **Hot reload covers `api` and `web` only.** The four Celery containers have no autoreload, so
+> a change under `apps/api/tasks/` (or to anything a task imports) does nothing until you restart
+> them:
+> ```bash
+> docker compose -f docker-compose.dev.yml restart worker email_worker maintenance_worker beat
+> ```
+
+> **The dev stack really deletes local data on a schedule.** `maintenance_worker` and `beat` run
+> the stale-upload reaper hourly and hard-delete soft-deleted rows at 03:00 UTC, reclaiming S3
+> objects. Set `STALE_UPLOAD_TIMEOUT_HOURS=0` and `SOFT_DELETE_RETENTION_DAYS=0` in `.env` to
+> switch both off while you work.
 
 ### Dev endpoints
 
@@ -50,8 +63,9 @@ freeframe/
 │   │   ├── schemas/        # Pydantic request/response schemas
 │   │   ├── routers/        # API route handlers
 │   │   ├── services/       # business logic (auth, s3, permissions, …)
-│   │   ├── tasks/          # Celery async tasks (transcode, email)
-│   │   ├── middleware/     # auth, rate limiting, soft delete, setup guard
+│   │   ├── tasks/          # Celery tasks (transcode, email, watermark, reminders,
+│   │   │                   #   cleanup — the only code that hard-deletes)
+│   │   ├── middleware/     # auth deps, share-link auth, rate limiting, setup guard
 │   │   ├── alembic/        # database migrations
 │   │   └── tests/          # pytest suite (mock-DB based — see Gotchas)
 │   └── web/                # Next.js 14 App Router frontend
@@ -113,9 +127,14 @@ Read this section before writing backend code or tests.
   `routers/share.py`, `services/permissions.py`, key `apps/web` files) goes missing. If a
   test is genuinely obsolete, replace it — don't remove coverage.
 
-- **Soft delete is universal.** Every entity has a `deleted_at` column. **Never hard-delete
-  in application code**, and always filter `deleted_at.is_(None)` in queries. Deletion is
-  recoverable and audited; retention GC handles eventual hard-deletion.
+- **Soft delete is common but not universal, and it is not automatic.** 13 of the 29 models
+  carry a `deleted_at` column; 16 do not, including `MediaFile`, `Annotation`,
+  `CommentAttachment`, `CommentReaction`, `Notification` and `ActivityLog`. Check the model
+  before assuming. Where the column exists, prefer setting it over deleting the row, and
+  filter `deleted_at.is_(None)` **by hand in every query** — nothing filters it for you
+  (`middleware/soft_delete.py` exports a helper with zero call sites). Soft deletion is not
+  permanent either: `tasks/cleanup_tasks.py` hard-deletes soft-deleted rows and reclaims their
+  S3 objects after `SOFT_DELETE_RETENTION_DAYS` (default 30).
 
 - **Model change ⇒ Alembic migration.** After editing a SQLAlchemy model:
   ```bash
@@ -140,7 +159,7 @@ Read this section before writing backend code or tests.
   heading (Keep a Changelog format: `Added` / `Changed` / `Fixed`). Don't invent or cut a
   version — releases are handled separately.
 - **UI changes:** include before/after screenshots in the PR (see
-  `.github/pull_request_template.md`).
+  `.github/PULL_REQUEST_TEMPLATE.md`).
 - **Docs:** update `docs/` or user-facing text when you change behavior.
 
 ---
