@@ -93,9 +93,11 @@ describe('BrandingHead favicon', () => {
     document.head.querySelectorAll('link').forEach((l) => l.remove())
   })
 
-  it("removes the framework's own icon link so the custom one is the only candidate", () => {
-    // Next emits a link for app/icon.png. Leaving it there left two candidates
-    // and the custom favicon usually lost, which read as "it does nothing".
+  it("removes an icon link it doesn't own so the custom one is the only candidate", () => {
+    // Any icon link the app didn't create leaves two candidates and the custom
+    // favicon usually loses, which reads as "setting one does nothing". No icon
+    // files may live under app/ again: Next would emit React-owned links there,
+    // and removing one of those is what crashed the router.
     const theirs = document.createElement('link')
     theirs.rel = 'icon'
     theirs.href = '/icon.png?abc123'

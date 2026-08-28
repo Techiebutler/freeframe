@@ -14,17 +14,22 @@ const DEFAULT_ICON = '/logo-icon.png'
 /**
  * Make this instance's icon the only one the browser can choose.
  *
- * Next emits its own `<link rel="icon">` for any icon file under `app/`
- * (icon.png, favicon.ico, apple-icon.png). Those are React-managed hoistable
- * resources, so removing them with `el.remove()` left React holding a reference
- * to a detached node and it would throw `null is not an object (evaluating
- * 'instance.parentNode.removeChild')` the next time it committed. Those files
- * have therefore been moved out of `app/` (favicon.ico and apple-icon.png now
- * live in `public/` so /favicon.ico and /apple-icon.png still resolve by
- * convention), and this component owns the icon links exclusively. The sweep
- * below removes competing icon links that aren't ours ([data-ff-branding]);
- * with no icon files left under `app/`, Next emits no React-owned icon links,
- * so it can only ever touch nodes this component created itself.
+ * Next emits its own icon links for any icon file under `app/`: `rel="icon"`
+ * for icon.png and favicon.ico, `rel="apple-touch-icon"` for apple-icon.png.
+ * Those are React-managed hoistable resources, so removing them with
+ * `el.remove()` left React holding a reference to a detached node and it would
+ * throw `null is not an object (evaluating 'instance.parentNode.removeChild')`
+ * the next time it committed. Those files have therefore been moved out of
+ * `app/` (favicon.ico and apple-icon.png now live in `public/`, so they are
+ * still served at /favicon.ico and /apple-icon.png), and this component owns
+ * the icon links exclusively.
+ *
+ * The sweep below only ever removes icon links this component did NOT create,
+ * since the selector excludes [data-ff-branding]. That is safe because no icon
+ * file is left under `app/` and no metadata export sets `icons`, so React owns
+ * no icon link for it to detach. Keep it that way: re-adding an icon file under
+ * `app/` re-arms the crash above. What the sweep still catches is a stray icon
+ * link from outside React, which is why it is kept rather than deleted.
  *
  * The link is always present, pointing at the default when nothing custom is
  * set, so clearing a favicon falls back cleanly instead of leaving the page
