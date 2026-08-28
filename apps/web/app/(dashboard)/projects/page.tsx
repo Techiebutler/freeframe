@@ -295,7 +295,7 @@ export default function ProjectsPage() {
               className={cn(
                 "p-1.5 transition-colors",
                 viewMode === "grid"
-                  ? "bg-accent-muted text-accent"
+                  ? "bg-accent-muted text-text-primary"
                   : "text-text-tertiary hover:bg-bg-hover hover:text-text-secondary",
               )}
               title="Grid view"
@@ -307,7 +307,7 @@ export default function ProjectsPage() {
               className={cn(
                 "p-1.5 transition-colors",
                 viewMode === "list"
-                  ? "bg-accent-muted text-accent"
+                  ? "bg-accent-muted text-text-primary"
                   : "text-text-tertiary hover:bg-bg-hover hover:text-text-secondary",
               )}
               title="List view"

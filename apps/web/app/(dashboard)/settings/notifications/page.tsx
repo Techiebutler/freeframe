@@ -99,7 +99,7 @@ export default function NotificationsPage() {
     <div className="p-6 max-w-3xl space-y-8">
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-muted">
-          <Bell className="h-5 w-5 text-accent" />
+          <Bell className="h-5 w-5 text-text-primary" />
         </div>
         <div className="flex-1">
           <h1 className="text-lg font-semibold text-text-primary">

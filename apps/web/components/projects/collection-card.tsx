@@ -37,7 +37,7 @@ export function CollectionCard({
     >
       {/* Header */}
       <div className="flex items-start gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-muted text-accent">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-muted text-text-primary">
           <Filter className="h-4 w-4" />
         </div>
         <div className="flex flex-col gap-0.5 min-w-0">

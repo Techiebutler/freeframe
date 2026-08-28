@@ -7,15 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-- **Dead share dialog code removed from the review view** — `components/review/share-dialog.tsx` still carried the pre-dropdown tab components (`LinkTab`, `DirectTab`) and their helpers (`PermissionSelect`, `CopyButton`), unused since the April dropdown redesign. The live dialog creates links through `ShareCreateDialog`, which already includes the Link name field; the leftover code is what suggested otherwise. Removed to keep the file truthful. (#265)
-
 ### Added
 - **Optional hardware-accelerated transcoding (NVENC / VAAPI) with HDR and Dolby Vision support.** Auto-detects an available GPU backend and falls back to the software pipeline when none is present, or when a hardware attempt fails at runtime (for example, out of VRAM). CPU-only and arm64 builds are unaffected by default. New env vars: `TRANSCODER_PIPELINE`, `TRANSCODER_OUTPUT`, `TRANSCODER_HDR`. (#127)
 
 ### Fixed
+- **Branding UI remains readable and correct across themes** — custom muted accents are now opaque, selected chips and controls use readable theme text, default logos pair light/dark artwork in previews and password gates, and the Apple home-screen icon uses its dedicated asset. (#275)
 - **Navigating the UI no longer throws a `null is not an object (evaluating 'instance.parentNode.removeChild')` error** — Next auto-generates `<link rel="icon">` / `<link rel="apple-touch-icon">` tags from the `app/` icon files, and those are React-managed hoistable resources. `BrandingHead` removed them with `el.remove()`, leaving React to unmount a node whose parent was already gone on the next commit (e.g. during navigation). `favicon.ico` and `apple-icon.png` now live in `public/` and are still served at the same URLs (browsers request `/favicon.ico` on their own) and `icon.png` (a duplicate of `public/logo-icon.png`) was removed, so Next no longer emits the React-owned links and `BrandingHead` is their sole owner.
 - **The default full logo was drawing one wave short** — `logo-full.svg` and `logo-full-dark.svg` were each missing the third arc of the FreeFrame mark, so the login page, the branding preview and any share page falling back to the default rendered a dot and two arcs instead of a dot and three. The path was present in `logo.svg` and in the master artwork all along and had simply been dropped when the two full-logo variants were derived from it. The raster assets (`logo-full.png`, `logo-icon.png`) were always correct, which is why the mark looked right in the sidebar and the attribution badge but wrong on the login screen.
+
+### Removed
+- **Dead share dialog code removed from the review view** — `components/review/share-dialog.tsx` still carried the pre-dropdown tab components (`LinkTab`, `DirectTab`) and their helpers (`PermissionSelect`, `CopyButton`), unused since the April dropdown redesign. The live dialog creates links through `ShareCreateDialog`, which already includes the Link name field; the leftover code is what suggested otherwise. Removed to keep the file truthful. (#265)
 
 ## [1.10.0] - 2026-08-21
 

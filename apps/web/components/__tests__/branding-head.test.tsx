@@ -1,25 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { BrandingHead } from '../shared/branding-head'
-import { useBrandingStore } from '@/stores/branding-store'
-import { accentVars, ACCENT_VAR_NAMES } from '@/lib/accent'
+import { type InstanceBranding, useBrandingStore } from '@/stores/branding-store'
+import { accentVars, ACCENT_VAR_NAMES, prefersLightMarkOn } from '@/lib/accent'
+import { makeInstanceBranding } from '@/test/branding-fixtures'
 
-/**
- * The instance primary color has to land on --accent to mean anything: every
- * accent-painted surface (primary buttons, the share-page download button, the
- * post-comment button, focus rings) resolves through that token. It previously
- * only set a bespoke --ff-primary that nothing read, so the control validated
- * and persisted a color that changed nothing on screen.
- */
-function setBranding(primaryColor: string | null) {
-  useBrandingStore.setState({
-    primaryColor,
-    faviconUrl: null,
-    appleIconUrl: null,
-    orgName: 'Acme',
-    loaded: true,
-    loading: false,
-  })
+/** Match the data flow used after the branding endpoint returns, rather than
+ * writing a state combination the production synchronization path cannot make. */
+function syncBranding(primaryColor: string | null, overrides: Partial<InstanceBranding> = {}) {
+  useBrandingStore.getState().syncBranding(
+    makeInstanceBranding({ primary_color: primaryColor, ...overrides }),
+  )
 }
 
 describe('BrandingHead accent wiring', () => {
@@ -28,55 +19,52 @@ describe('BrandingHead accent wiring', () => {
     document.documentElement.removeAttribute('style')
   })
 
-  it('paints the accent token buttons actually read', () => {
-    setBranding('#e2571f')
+  it('paints the accent token buttons actually read with an opaque muted surface', () => {
+    syncBranding('#e2571f')
     render(<BrandingHead />)
 
     const style = document.documentElement.style
     expect(style.getPropertyValue('--accent')).toBe('#e2571f')
     expect(style.getPropertyValue('--accent-hover')).not.toBe('')
-    expect(style.getPropertyValue('--accent-muted')).toContain('0.18')
+    expect(style.getPropertyValue('--accent-muted')).toBe(
+      'color-mix(in srgb, #e2571f 18%, var(--bg-secondary))',
+    )
   })
 
   it('lightens the hover shade for a dark accent and darkens it for a light one', () => {
-    setBranding('#111111')
+    syncBranding('#111111')
     const { unmount } = render(<BrandingHead />)
     const dark = document.documentElement.style.getPropertyValue('--accent-hover')
     unmount()
 
-    setBranding('#ffe066')
+    syncBranding('#ffe066')
     render(<BrandingHead />)
     const light = document.documentElement.style.getPropertyValue('--accent-hover')
 
-    // A near-black accent moves toward white; a pale yellow moves toward black.
     expect(dark).toBe('rgb(55 55 55)')
     expect(light).toBe('rgb(219 193 88)')
   })
 
-  it('hands the accent back to the stylesheet when the color is cleared', () => {
-    setBranding('#e2571f')
+  it('removes accent overrides after syncBranding clears the configured color', () => {
+    syncBranding('#e2571f')
     const { unmount } = render(<BrandingHead />)
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#e2571f')
     unmount()
 
-    setBranding(null)
+    syncBranding(null)
     render(<BrandingHead />)
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('')
     expect(document.documentElement.style.getPropertyValue('--accent-hover')).toBe('')
   })
 
   it('ignores a value that is not a 6-digit hex rather than writing garbage', () => {
-    setBranding('javascript:alert(1)')
+    syncBranding('javascript:alert(1)')
     render(<BrandingHead />)
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('')
   })
 
   it("loses to a share link's own accent, which must win on its own page", () => {
-    // The share viewer injects `:root { --accent: … !important }`. An author
-    // stylesheet declaration marked !important outranks a non-important inline
-    // style, so instance branding must not be setting these !important or a
-    // per-link accent would silently stop working.
-    setBranding('#e2571f')
+    syncBranding('#e2571f')
     render(<BrandingHead />)
 
     const root = document.documentElement
@@ -87,10 +75,10 @@ describe('BrandingHead accent wiring', () => {
   })
 })
 
-describe('BrandingHead favicon', () => {
+describe('BrandingHead icons', () => {
   beforeEach(() => {
     vi.spyOn(useBrandingStore.getState(), 'fetchBranding').mockResolvedValue(undefined)
-    document.head.querySelectorAll('link').forEach((l) => l.remove())
+    document.head.querySelectorAll('link').forEach((link) => link.remove())
   })
 
   it("removes an icon link it doesn't own so the custom one is the only candidate", () => {
@@ -103,14 +91,7 @@ describe('BrandingHead favicon', () => {
     theirs.href = '/icon.png?abc123'
     document.head.appendChild(theirs)
 
-    useBrandingStore.setState({
-      primaryColor: null,
-      faviconUrl: 'https://s3.test/custom-favicon.png',
-      appleIconUrl: null,
-      orgName: 'Acme',
-      loaded: true,
-      loading: false,
-    })
+    syncBranding(null, { favicon_url: 'https://s3.test/custom-favicon.png' })
     render(<BrandingHead />)
 
     const icons = Array.from(document.head.querySelectorAll('link[rel="icon"]'))
@@ -118,27 +99,44 @@ describe('BrandingHead favicon', () => {
     expect(icons[0].getAttribute('href')).toBe('https://s3.test/custom-favicon.png')
   })
 
-  it('falls back to the real mark when no favicon is set, rather than none', () => {
-    useBrandingStore.setState({
-      primaryColor: null,
-      faviconUrl: null,
-      appleIconUrl: null,
-      orgName: 'Acme',
-      loaded: true,
-      loading: false,
-    })
+  it('falls back to the default favicon when no custom icon is configured', () => {
+    syncBranding(null)
     render(<BrandingHead />)
 
     const icon = document.head.querySelector('link[rel="icon"]')
     expect(icon?.getAttribute('href')).toBe('/logo-icon.png')
   })
+
+  it('uses the dedicated Apple home-screen icon when no custom icon is configured', () => {
+    syncBranding(null)
+    render(<BrandingHead />)
+
+    const appleIcon = document.head.querySelector('link[rel="apple-touch-icon"]')
+    expect(appleIcon?.getAttribute('href')).toBe('/apple-icon.png')
+  })
+})
+
+describe('prefersLightMarkOn', () => {
+  // The share top bar draws the default mark on the accent circle, not on the
+  // page background, so the theme cannot decide which artwork contrasts.
+  it('keeps the light mark on a dark accent, where the dark one would vanish', () => {
+    expect(prefersLightMarkOn('#1a1a2e')).toBe(true)
+    expect(prefersLightMarkOn('#6366f1')).toBe(true)
+  })
+
+  it('switches to the dark mark on a light accent, which the theme would get wrong', () => {
+    expect(prefersLightMarkOn('#f59e0b')).toBe(false)
+    expect(prefersLightMarkOn('#ffe066')).toBe(false)
+  })
+
+  it('keeps the light mark when no accent is set, matching the stylesheet default', () => {
+    expect(prefersLightMarkOn(null)).toBe(true)
+    expect(prefersLightMarkOn('not-a-colour')).toBe(true)
+  })
 })
 
 describe('accentVars', () => {
   it('gives a share link the same three tokens instance branding sets', () => {
-    // Both call sites derive from one helper, so a link overriding the accent
-    // also overrides the hover and muted shades. Overriding --accent alone left
-    // a repainted button whose hover state was still the instance's colour.
     const vars = accentVars('#e2571f')
     expect(Object.keys(vars!).sort()).toEqual([...ACCENT_VAR_NAMES].sort())
   })

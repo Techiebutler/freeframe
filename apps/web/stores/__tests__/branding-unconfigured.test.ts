@@ -12,16 +12,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 
 import { useBrandingStore, HARDCODED_DEFAULTS } from '../branding-store'
-
-const RESPONSE = {
-  org_name: 'FreeFrame',
-  logo_dark_url: null,
-  logo_light_url: null,
-  favicon_url: null,
-  apple_icon_url: null,
-  login_logo_url: null,
-  powered_by_freeframe: true,
-}
+import { makeInstanceBranding } from '@/test/branding-fixtures'
 
 describe('syncBranding with no accent configured', () => {
   beforeEach(() => {
@@ -30,7 +21,7 @@ describe('syncBranding with no accent configured', () => {
   })
 
   it('leaves primaryColor null instead of substituting a default', () => {
-    useBrandingStore.getState().syncBranding({ ...RESPONSE, primary_color: null } as never)
+    useBrandingStore.getState().syncBranding(makeInstanceBranding({ primary_color: null }))
 
     const got = useBrandingStore.getState().primaryColor
     expect(got).toBeNull()
@@ -38,7 +29,7 @@ describe('syncBranding with no accent configured', () => {
   })
 
   it('carries a configured colour through unchanged', () => {
-    useBrandingStore.getState().syncBranding({ ...RESPONSE, primary_color: '#ff0000' } as never)
+    useBrandingStore.getState().syncBranding(makeInstanceBranding({ primary_color: '#ff0000' }))
 
     expect(useBrandingStore.getState().primaryColor).toBe('#ff0000')
   })

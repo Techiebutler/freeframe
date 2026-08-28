@@ -9,7 +9,8 @@ const DATA_ATTR = 'data-ff-branding'
 
 /** Shown when an admin hasn't set one. The real mark, not a placeholder, so a
  *  reset leaves a correct icon rather than a missing one. */
-const DEFAULT_ICON = '/logo-icon.png'
+const DEFAULT_FAVICON = '/logo-icon.png'
+const DEFAULT_APPLE_ICON = '/apple-icon.png'
 
 /**
  * Make this instance's icon the only one the browser can choose.
@@ -78,14 +79,14 @@ export function BrandingHead() {
   }, [orgName])
 
   React.useEffect(() => {
-    const href = faviconUrl || DEFAULT_ICON
+    const href = faviconUrl || DEFAULT_FAVICON
     setIcon('icon', href)
     // Legacy rel too: without it a stale /favicon.ico can still win in some browsers.
     setIcon('shortcut icon', href)
   }, [faviconUrl])
 
   React.useEffect(() => {
-    setIcon('apple-touch-icon', appleIconUrl || DEFAULT_ICON)
+    setIcon('apple-touch-icon', appleIconUrl || DEFAULT_APPLE_ICON)
   }, [appleIconUrl])
 
   React.useEffect(() => {

@@ -46,8 +46,12 @@ export function AppShellMock({ orgName, logoUrl, onLogoError }: MockProps) {
               className="h-7 w-7 shrink-0 rounded object-contain"
             />
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src="/logo-icon.png" alt="" className="h-7 w-7 shrink-0 object-contain" />
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo-icon.png" alt="" className="logo-dark h-7 w-7 shrink-0 object-contain" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo-icon-dark.png" alt="" className="logo-light h-7 w-7 shrink-0 object-contain" />
+            </>
           )}
           <span className="truncate text-sm font-semibold tracking-tight text-text-primary">
             {orgName}
@@ -213,8 +217,12 @@ export function LoginScreenMock({ orgName, logoUrl, onLogoError }: MockProps) {
             className="mx-auto mb-3 h-12 object-contain"
           />
         ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src="/logo-full.svg" alt="" className="mx-auto mb-3 h-12 object-contain" />
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-full.svg" alt="" className="logo-dark mx-auto mb-3 h-12 object-contain" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-full-dark.svg" alt="" className="logo-light mx-auto mb-3 h-12 object-contain" />
+          </>
         )}
         <h1 className="text-xl font-semibold text-text-primary">{orgName}</h1>
       </div>
