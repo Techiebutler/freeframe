@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Optional hardware-accelerated transcoding (NVENC / VAAPI) with HDR and Dolby Vision support.** Auto-detects an available GPU backend and falls back to the software pipeline when none is present, or when a hardware attempt fails at runtime (for example, out of VRAM). CPU-only and arm64 builds are unaffected by default. New env vars: `TRANSCODER_PIPELINE`, `TRANSCODER_OUTPUT`, `TRANSCODER_HDR`. (#127)
 
 ### Fixed
+- **Switching a version in compare no longer leaves the previous version's drawing on screen** — a comment's annotation stayed painted over the pane after that pane moved to a different version, anchored to a frame that was no longer there. It is now cleared when the pane showing it switches, and left alone when the other pane switches. (#181)
 - **Switching a version in compare no longer applies the previous pair's sync offsets** — offsets calibrated for one pair of versions stayed in the URL after switching either pane, silently misaligning the new pair. They are now cleared on a real switch, and left alone when you re-pick the version a pane already shows. (#182)
 
 - **Branding UI remains readable and correct across themes** — custom muted accents are now opaque, selected chips and controls use readable theme text, default logos pair light/dark artwork in previews and password gates, and the Apple home-screen icon uses its dedicated asset. (#275)
