@@ -295,8 +295,15 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   )
   const handleSwitchRight = React.useCallback(
     (v: AssetVersion) => {
-      writeParams((p) => { p.delete('offA'); p.delete('offB') })
-      setCurrentVersion(v)
+      // The right pane's version lives in the store, its offsets in the URL.
+      // The store write is synchronous and router.replace is deferred, so
+      // updating them separately renders the NEW version with the OLD offset
+      // still applied for a commit or two. Batching them keeps the pair and
+      // its offsets consistent in every rendered frame.
+      React.startTransition(() => {
+        writeParams((p) => { p.delete('offA'); p.delete('offB') })
+        setCurrentVersion(v)
+      })
     },
     [writeParams, setCurrentVersion],
   )
