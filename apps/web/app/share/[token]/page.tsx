@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
+import { prefersLightMarkOn } from '@/lib/accent'
 import { Button } from '@/components/ui/button'
 import { GuestCommentInput } from '@/components/review/guest-comment-input'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
@@ -180,12 +181,12 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
             // eslint-disable-next-line @next/next/no-img-element
             <img src={displayLogo} alt={orgName} className="h-10 object-contain" />
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={theme === 'dark' ? '/logo-icon.png' : '/logo-icon-dark.png'}
-              alt="FreeFrame"
-              className="h-10 w-10"
-            />
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo-icon.png" alt="FreeFrame" className="logo-dark h-10 w-10" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo-icon-dark.png" alt="" aria-hidden="true" className="logo-light h-10 w-10" />
+            </>
           )}
           <div className="text-center">
             <h1 className="text-sm font-semibold text-text-primary">{orgName}</h1>
@@ -521,8 +522,11 @@ function ShareTopBar({
               }}
             />
           ) : (
+            // This mark sits on the primaryColor circle, not on the page
+            // background, so the page theme says nothing about what it needs
+            // to contrast with. Pick from the accent's own brightness.
             <img
-              src={theme === 'dark' ? '/logo-icon.png' : '/logo-icon-dark.png'}
+              src={prefersLightMarkOn(primaryColor) ? '/logo-icon.png' : '/logo-icon-dark.png'}
               alt="FreeFrame"
               className="h-full w-full"
             />

@@ -46,7 +46,6 @@ export function AppShellMock({ orgName, logoUrl, onLogoError }: MockProps) {
               className="h-7 w-7 shrink-0 rounded object-contain"
             />
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/logo-icon.png" alt="" className="logo-dark h-7 w-7 shrink-0 object-contain" />
