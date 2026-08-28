@@ -90,12 +90,35 @@ def _process_video(db, asset, version, media_file, s3, output_prefix):
     from packages.transcoder.base import TranscodeJob
 
     transcoder = FFmpegTranscoder(s3, settings.s3_bucket, settings.s3_endpoint)
+    # Progress is cosmetic; the transcode is not. If the broker stops answering,
+    # every publish costs the socket timeout, and this runs inside the loop
+    # draining ffmpeg's stdout -- so paying it ~100 times would stall the encode
+    # behind a full pipe. One failure is enough to stop trying for this job.
+    progress_ok = {"enabled": True, "high_water": -1}
+
+    def _on_progress(percent: int) -> None:
+        if not progress_ok["enabled"]:
+            return
+        # A hardware attempt that fails at runtime is retried on the software
+        # backend, and the second ffmpeg starts counting from zero. Clamp so the
+        # bar never runs backwards from the viewer's point of view.
+        if percent <= progress_ok["high_water"]:
+            return
+        progress_ok["high_water"] = percent
+        delivered = _publish_event(str(asset.project_id), "transcode_progress", {
+            "asset_id": str(asset.id),
+            "percent": percent,
+        })
+        if delivered is False:
+            progress_ok["enabled"] = False
+
     job = TranscodeJob(
         media_id=str(asset.id),
         version_id=str(version.id),
         input_s3_key=media_file.s3_key_raw,
         output_s3_prefix=output_prefix,
         qualities=["1080p", "720p", "360p"],
+        progress_cb=_on_progress,
     )
     result = _run_async(transcoder.transcode(job))
     if not result.success:
@@ -135,15 +158,13 @@ def _process_image(db, asset, version, media_file, s3, output_prefix):
 
 
 def _publish_event(project_id: str, event_type: str, payload: dict):
-    """Publish SSE event via Redis from Celery worker context."""
-    try:
-        import redis as sync_redis
-        r = sync_redis.from_url(settings.redis_url, decode_responses=True)
-        message = json.dumps({"type": event_type, "payload": payload})
-        r.publish(f"project:{project_id}", message)
-        r.close()
-    except Exception:
-        pass  # SSE publish is best-effort
+    """Publish an SSE event from Celery worker context.
+
+    Delegates to event_service so there is a single emit path; it is pooled and
+    already best-effort, which is what this needs.
+    """
+    from ..services import event_service
+    return event_service.publish_sync(project_id, event_type, payload)
 
 
 def _eligible_media_rows(db):

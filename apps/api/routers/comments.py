@@ -13,6 +13,7 @@ from ..config import settings
 from ..database import get_db
 from ..middleware.auth import get_current_user, get_optional_user
 from ..middleware.share_auth import get_share_link
+from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
 from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction
@@ -399,6 +400,13 @@ def create_comment(
 
     db.commit()
     db.refresh(comment)
+
+    event_service.publish_sync(asset.project_id, "new_comment", {
+        "asset_id": str(asset_id),
+        "comment_id": str(comment.id),
+        "author": current_user.name,
+    })
+
     return _build_comment_response(comment, db, current_user_id=current_user.id)
 
 
@@ -441,6 +449,13 @@ def reply_to_comment(
 
     db.commit()
     db.refresh(reply)
+
+    event_service.publish_sync(asset.project_id, "new_comment", {
+        "asset_id": str(asset_id),
+        "comment_id": str(reply.id),
+        "author": current_user.name,
+    })
+
     return _build_comment_response(reply, db, current_user_id=current_user.id)
 
 
@@ -510,6 +525,14 @@ def resolve_comment(
     comment.resolved = not comment.resolved
     db.commit()
     db.refresh(comment)
+
+    # This endpoint toggles, so send the resulting state rather than implying
+    # "resolved" — a client that assumed that would get it backwards on unresolve.
+    event_service.publish_sync(asset.project_id, "comment_resolved", {
+        "comment_id": str(comment.id),
+        "resolved": comment.resolved,
+    })
+
     return _build_comment_response(comment, db, current_user_id=current_user.id)
 
 
@@ -979,5 +1002,13 @@ def guest_comment(
     )
     db.add(activity)
     db.commit()
+
+    # Guests comment through a share link, but the live update belongs to the
+    # project team watching the asset, so it goes on the same project channel.
+    event_service.publish_sync(asset.project_id, "new_comment", {
+        "asset_id": str(asset.id),
+        "comment_id": str(comment.id),
+        "author": actor_name or "Guest",
+    })
 
     return _build_comment_response(comment, db)

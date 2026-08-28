@@ -1,9 +1,11 @@
 import asyncio
 import json
 import os
+import select
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 import boto3
@@ -293,6 +295,31 @@ def get_backend() -> str:
     return _BACKEND_CACHE["name"]
 
 
+def parse_progress_percent(line: str, duration_seconds: float | None) -> int | None:
+    """Map one line of ffmpeg `-progress pipe:1` output to a percent, or None.
+
+    ffmpeg emits `out_time_us=<microseconds>` repeatedly and a final
+    `progress=end`. Anything else in the block is ignored. 100 is reserved for
+    `progress=end` so a rounding error can never report complete early.
+    """
+    line = line.strip()
+    if line == "progress=end":
+        return 100
+    if not line.startswith("out_time_us="):
+        return None
+    if not duration_seconds or duration_seconds <= 0:
+        return None
+    raw = line.split("=", 1)[1].strip()
+    try:
+        micros = int(raw)
+    except ValueError:
+        return None  # ffmpeg emits "N/A" before the first frame is written
+    if micros < 0:
+        return None
+    percent = int(micros / 1_000_000 / duration_seconds * 100)
+    return max(0, min(99, percent))
+
+
 class FFmpegTranscoder(BaseTranscoder):
     def __init__(self, s3_client, bucket: str, s3_endpoint: str = None):
         self.s3 = s3_client
@@ -306,6 +333,92 @@ class FFmpegTranscoder(BaseTranscoder):
             Params={"Bucket": self.bucket, "Key": s3_key},
             ExpiresIn=expires_in,
         )
+
+    def _run_with_progress(
+        self,
+        cmd: list[str],
+        timeout: int | None,
+        duration_seconds: float | None,
+        on_percent,
+        label: str = "ffmpeg",
+    ) -> None:
+        """Run ffmpeg, reporting percent complete as it goes.
+
+        Separate from _run rather than folded into it: _run is also used for
+        ffprobe and for short calls where streaming buys nothing, and this path
+        needs Popen, a stderr file and its own timeout handling.
+
+        stderr goes to a temp file rather than a pipe. ffmpeg is chatty, and
+        reading stdout while stderr fills its 64KB pipe buffer deadlocks a long
+        transcode -- which is exactly the case this feature exists for.
+        """
+        cmd = [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
+        last_sent = -1
+        timed_out = False
+        deadline = (time.monotonic() + timeout) if timeout else None
+
+        with tempfile.TemporaryFile(mode="w+", errors="replace") as err_file:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=err_file,
+            )
+            fd = proc.stdout.fileno()
+            buf = b""
+            try:
+                # Deadline-driven select rather than `for line in proc.stdout`.
+                # Iterating the pipe blocks until it is closed, and killing the
+                # child does not necessarily close it -- any grandchild that
+                # inherited the descriptor keeps it open. That turns the 4-hour
+                # ceiling into an unbounded hang, which is the exact failure the
+                # ceiling exists to stop. Waiting on the descriptor instead means
+                # the deadline holds no matter who is holding the pipe.
+                while True:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        timed_out = True
+                        break
+                    wait_for = 1.0
+                    if deadline is not None:
+                        wait_for = max(0.0, min(1.0, deadline - time.monotonic()))
+                    ready, _, _ = select.select([fd], [], [], wait_for)
+                    if ready:
+                        chunk = os.read(fd, 65536)
+                        if not chunk:
+                            break  # EOF: ffmpeg closed stdout
+                        buf += chunk
+                        *lines, buf = buf.split(b"\n")
+                        for raw in lines:
+                            percent = parse_progress_percent(
+                                raw.decode("utf-8", "replace"), duration_seconds
+                            )
+                            # Only forward whole-percent advances: ffmpeg emits a
+                            # progress block about twice a second, which would be
+                            # thousands of Redis publishes on a feature film.
+                            if percent is not None and percent > last_sent:
+                                last_sent = percent
+                                try:
+                                    on_percent(percent)
+                                except Exception:
+                                    pass  # a broken listener must not fail the transcode
+                    elif proc.poll() is not None:
+                        break  # exited and drained
+                if not timed_out:
+                    proc.wait()
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                proc.stdout.close()
+
+            if timed_out:
+                # Same exception subprocess.run(timeout=...) raises, so callers
+                # that already handle it keep working unchanged.
+                raise subprocess.TimeoutExpired(cmd, timeout)
+
+            if proc.returncode != 0:
+                err_file.seek(0)
+                stderr = err_file.read().strip()
+                raise RuntimeError(
+                    f"{label} exited {proc.returncode}: {stderr or 'no stderr output'}"
+                )
 
     @staticmethod
     def _run(cmd: list[str], timeout: int | None = None, label: str = "ffmpeg") -> str:
@@ -608,7 +721,16 @@ class FFmpegTranscoder(BaseTranscoder):
             for attempt_index, attempt_backend in enumerate(attempts):
                 ffmpeg_cmd = _build_ffmpeg_cmd(attempt_backend)
                 try:
-                    self._run(ffmpeg_cmd, timeout=14400, label="ffmpeg")
+                    if job.progress_cb:
+                        self._run_with_progress(
+                            ffmpeg_cmd,
+                            timeout=14400,
+                            duration_seconds=(meta.duration_seconds if meta else None),
+                            on_percent=job.progress_cb,
+                            label="ffmpeg",
+                        )
+                    else:
+                        self._run(ffmpeg_cmd, timeout=14400, label="ffmpeg")
                     backend = attempt_backend
                     break
                 except RuntimeError as exc:

@@ -2,7 +2,6 @@ import uuid
 import tempfile
 import os
 import subprocess
-import json
 import sys
 
 # Ensure the workspace root is on the path (same pattern as transcode_tasks)
@@ -15,15 +14,9 @@ from ..config import settings
 
 
 def _publish_event(project_id: str, event_type: str, payload: dict):
-    """Publish SSE event via Redis from Celery worker context (best-effort)."""
-    try:
-        import redis as sync_redis
-        r = sync_redis.from_url(settings.redis_url, decode_responses=True)
-        message = json.dumps({"type": event_type, "payload": payload})
-        r.publish(f"project:{project_id}", message)
-        r.close()
-    except Exception:
-        pass
+    """Publish an SSE event from Celery worker context (best-effort)."""
+    from ..services import event_service
+    return event_service.publish_sync(project_id, event_type, payload)
 
 
 @celery_app.task(name="apply_watermark", bind=True, max_retries=3, default_retry_delay=60)

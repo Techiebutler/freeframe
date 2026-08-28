@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 @dataclass
 class TranscodeJob:
@@ -9,6 +9,11 @@ class TranscodeJob:
     input_s3_key: str
     output_s3_prefix: str
     qualities: list[str] = field(default_factory=lambda: ["1080p", "720p", "360p"])
+    # Called with an integer 0-100 as the transcode advances. Optional so other
+    # backends need not implement it, and so callers that don't care pay nothing.
+    # Implementations must treat it as best-effort: a raising callback must not
+    # fail the transcode.
+    progress_cb: Optional[Callable[[int], None]] = None
 
 @dataclass
 class TranscodeResult:

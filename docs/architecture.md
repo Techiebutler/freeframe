@@ -93,10 +93,10 @@ Frontend loads HLS stream (video) / WebP (image) / MP3 (audio)
 Reviewer adds comment (with optional timecode + drawing annotation)
     │
     ▼
-API saves comment ──▶ Other viewers see it on next fetch (see SSE note)
+API saves comment ──▶ SSE: new_comment ──▶ Other viewers see it live
     │
     ▼
-Reviewer approves / rejects ──▶ Approval recorded (see SSE note)
+Reviewer approves / rejects ──▶ SSE: approval_updated
 ```
 
 ---
@@ -194,21 +194,18 @@ GET /events/{project_id}
 `routers/events.py` serves the stream; `services/event_service.py` subscribes to the Redis
 channel `project:{project_id}`, and anything published there reaches the browser.
 
-| Event | Payload | When | Status |
-|-------|---------|------|--------|
-| `transcode_complete` | `{asset_id, version_id}` | Processing finished | implemented |
-| `transcode_failed` | `{asset_id, error}` | Processing failed | implemented |
-| `transcode_progress` | `{asset_id, percent}` | During video processing | **not emitted** |
-| `new_comment` | `{asset_id, comment_id, author}` | Comment posted | **not emitted** |
-| `comment_resolved` | `{comment_id}` | Comment marked resolved | **not emitted** |
-| `approval_updated` | `{asset_id, user_id, status}` | Approval status changed | **not emitted** |
+| Event | Payload | When |
+|-------|---------|------|
+| `transcode_progress` | `{asset_id, percent}` | Whole-percent advances during video processing |
+| `transcode_complete` | `{asset_id, version_id}` | Processing finished |
+| `transcode_failed` | `{asset_id, error}` | Processing failed |
+| `new_comment` | `{asset_id, comment_id, author}` | Comment posted, including replies and guest comments |
+| `comment_resolved` | `{comment_id, resolved}` | Comment resolved or unresolved (the endpoint toggles) |
+| `approval_updated` | `{asset_id, user_id, status}` | Approval status changed |
 
-> **The last four have no producer.** The frontend subscribes to all six
-> (`apps/web/hooks/use-sse.ts`), but no backend code publishes them, so real-time comments,
-> comment resolution, approval updates and transcode progress do not currently work. The two
-> that do work are published straight to Redis from Celery worker context
-> (`tasks/transcode_tasks.py`, `tasks/watermark_tasks.py`) rather than through
-> `event_service.publish`, which has no callers. Tracked in #294.
+All six are published through `event_service.publish_sync`, which is the single emit path. It
+is best-effort: every call site publishes after its commit, and a broker that is down or slow
+degrades to "no live update" rather than failing the request that produced it.
 
 Clients reconnect automatically on disconnect. SSE was chosen over WebSockets because it's
 simpler, works through most proxies, and is sufficient for an async review workflow.
