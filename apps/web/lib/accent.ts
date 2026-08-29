@@ -24,14 +24,6 @@ function luminance([r, g, b]: [number, number, number]): number {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 }
 
-/** Whether a mark drawn on `color` should be the light one. Uses the same
- *  brightness measure and threshold as the hover shade, so a surface and the
- *  artwork on it never disagree about which way is dark. An unset or
- *  unparseable colour keeps the stylesheet accent, which is dark. */
-export function prefersLightMarkOn(color: string | null | undefined): boolean {
-  const rgb = color ? parseHex(color) : null
-  return !rgb || luminance(rgb) <= 0.6
-}
 
 function shift(rgb: [number, number, number], amount: number): string {
   const to = amount > 0 ? 255 : 0

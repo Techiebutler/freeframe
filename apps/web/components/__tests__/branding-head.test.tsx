@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { BrandingHead } from '../shared/branding-head'
 import { type InstanceBranding, useBrandingStore } from '@/stores/branding-store'
-import { accentVars, ACCENT_VAR_NAMES, prefersLightMarkOn } from '@/lib/accent'
+import { accentVars, ACCENT_VAR_NAMES } from '@/lib/accent'
 import { makeInstanceBranding } from '@/test/branding-fixtures'
 
 /** Match the data flow used after the branding endpoint returns, rather than
@@ -116,24 +116,6 @@ describe('BrandingHead icons', () => {
   })
 })
 
-describe('prefersLightMarkOn', () => {
-  // The share top bar draws the default mark on the accent circle, not on the
-  // page background, so the theme cannot decide which artwork contrasts.
-  it('keeps the light mark on a dark accent, where the dark one would vanish', () => {
-    expect(prefersLightMarkOn('#1a1a2e')).toBe(true)
-    expect(prefersLightMarkOn('#6366f1')).toBe(true)
-  })
-
-  it('switches to the dark mark on a light accent, which the theme would get wrong', () => {
-    expect(prefersLightMarkOn('#f59e0b')).toBe(false)
-    expect(prefersLightMarkOn('#ffe066')).toBe(false)
-  })
-
-  it('keeps the light mark when no accent is set, matching the stylesheet default', () => {
-    expect(prefersLightMarkOn(null)).toBe(true)
-    expect(prefersLightMarkOn('not-a-colour')).toBe(true)
-  })
-})
 
 describe('accentVars', () => {
   it('gives a share link the same three tokens instance branding sets', () => {
