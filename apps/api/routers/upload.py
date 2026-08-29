@@ -391,12 +391,52 @@ def complete_upload(
         # Read the ids before the commit: `expire_on_commit` is on, so touching
         # them afterwards costs a fresh SELECT per completion.
         asset_id, version_id = version.asset_id, version.id
-        version.processing_status = ProcessingStatus.processing
+
+        # Claim the version rather than assigning to it. The status check above is
+        # an unsynchronised read, so two concurrent completions can both pass it:
+        # the loser's CompleteMultipartUpload fails NoSuchUpload (completing
+        # consumed the id), it finds the object assembled, and it arrives here too.
+        # Assigning would let both dispatch, and two transcodes would write the
+        # same processed/ prefix at once.
+        #
+        # UPDATE ... WHERE processing_status = 'uploading' makes exactly one of
+        # them win, decided by the row lock rather than by timing. Both callers
+        # still get the same successful answer, because for the loser the work
+        # genuinely is underway -- it just is not this request that started it.
+        claimed = (
+            db.query(AssetVersion)
+            .filter(
+                AssetVersion.id == version_id,
+                AssetVersion.processing_status == ProcessingStatus.uploading,
+            )
+            .update(
+                {AssetVersion.processing_status: ProcessingStatus.processing},
+                synchronize_session=False,
+            )
+        )
         db.commit()
-        # The rows, not the request. The guard above makes these equal, but reading
-        # them from the version keeps the dispatch correct on its own rather than
-        # by way of a check thirty lines up that a later edit could move.
-        background_tasks.add_task(_trigger_processing, asset_id, version_id)
+
+        if claimed:
+            # The bulk UPDATE does not touch the instance already loaded in this
+            # session, so without this the row says `processing` while the object
+            # in hand still says `uploading`.
+            version.processing_status = ProcessingStatus.processing
+            # The rows, not the request. The guard above makes these equal, but
+            # reading them from the version keeps the dispatch correct on its own
+            # rather than by way of a check thirty lines up that a later edit
+            # could move.
+            background_tasks.add_task(_trigger_processing, asset_id, version_id)
+        else:
+            # Someone else moved it off `uploading` first. Dispatching again would
+            # be the double transcode this guard exists to prevent. A version that
+            # ends up claimed but never dispatched is recoverable separately (#270)
+            # and must not be papered over by re-dispatching on every retry.
+            logger.info(
+                "completion for version %s did not claim it; another request is "
+                "already processing it",
+                version_id,
+            )
+
         return CompleteUploadResponse(
             status="processing", asset_id=asset_id, version_id=version_id
         )

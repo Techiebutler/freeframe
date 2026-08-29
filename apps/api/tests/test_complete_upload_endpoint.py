@@ -702,3 +702,47 @@ def test_a_completion_that_did_not_answer_is_accepted_once_the_object_is_there(
     assert dispatched == [version.id]
 
 
+
+
+# ── the completion claim gates the dispatch (#272) ────────────────────────────
+
+def test_a_completion_that_does_not_claim_the_version_does_not_dispatch(
+    client, mock_db, upload_rows, auth_headers, monkeypatch
+):
+    """Two concurrent completions can both pass the status check above.
+
+    The loser must not dispatch: two transcodes writing the same processed/
+    prefix at once is the whole point of the claim. Here the claim reports zero
+    rows updated, which is what Postgres returns for the loser.
+    """
+    version, media_file = upload_rows
+    dispatched = []
+    # _stub() patches _trigger_processing to a no-op, so capture it afterwards or
+    # this test passes no matter what the handler does.
+    _stub(monkeypatch, list_parts=lambda k, u: _listing(23 * MB))
+    monkeypatch.setattr(upload_module, "_trigger_processing",
+                        lambda a, v: dispatched.append(v))
+    mock_db.update.return_value = 0          # someone else claimed it first
+
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
+
+    assert resp.status_code == 200, resp.text
+    # the caller is still told the work is underway, because it is
+    assert resp.json()["status"] == "processing"
+    assert dispatched == [], "the losing completion must not queue a second transcode"
+
+
+def test_a_completion_that_claims_the_version_dispatches_once(
+    client, mock_db, upload_rows, auth_headers, monkeypatch
+):
+    version, media_file = upload_rows
+    dispatched = []
+    _stub(monkeypatch, list_parts=lambda k, u: _listing(23 * MB))
+    monkeypatch.setattr(upload_module, "_trigger_processing",
+                        lambda a, v: dispatched.append(v))
+    mock_db.update.return_value = 1          # this request won the row
+
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
+
+    assert resp.status_code == 200, resp.text
+    assert dispatched == [version.id]
