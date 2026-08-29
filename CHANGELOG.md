@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-29
+
+### Upgrade notes
+
+- **New share links now allow commenting by default.** Existing links are unchanged, and downloads remain off by default. If you rely on links being read-only unless someone opts in, set `permission` explicitly when creating them.
+- **New optional env var: `STUCK_PROCESSING_TIMEOUT_HOURS`** (default `6`). An hourly job re-dispatches transcodes for versions stuck in `processing` past this window. It is deliberately above the transcoder's own 4-hour ceiling so a slow encode is never given a second worker; set `0` to disable.
+- **No migration required.**
+
 ### Changed
 - **A new share link now allows commenting, and still does not allow downloading** — commenting is the core loop of a review link, so a viewer who cannot comment should be the deliberate case rather than the default. Downloads stay off: commenting affects what happens inside the review page, while downloading pulls the original out of it, and a share link is the most exposed surface there is. The API schema and the create dialog both changed, so links made through either route behave the same. Existing links are unaffected. (#266, decided with @rubenxyz)
 
@@ -19,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Two concurrent completions can no longer both start a transcode for the same version** — the check that only an uploading version may be completed was an unsynchronised read, so two requests could both pass it and both dispatch, leaving two transcodes writing the same `processed/` prefix at once. The status change is now a conditional update, so exactly one request claims the version and only that one queues the work. Both callers still get the same successful answer. (#272)
 - **The sign-in code screen no longer claims a code was sent when it may not have been** — entering an address with no account still advanced to the 6-digit step and stated "We sent a 6-digit code to …", so someone who mistyped their email waited for mail that could never arrive. The API answers identically for known and unknown addresses on purpose, to stop it being used to enumerate accounts, so the screen now says only what the server guarantees: if that address has an account, a code is on its way. A typo hint sits next to the input, and "Use a different email" is a real button rather than tertiary text. No response changes, so the anti-enumeration property is untouched. (#248)
 - **An audio-only file in a video container now uploads instead of failing to process** — browsers type a `.mpg` or `.mp4` that carries only an audio track as `video/*`, so it was routed to the video pipeline. Every rung of the quality ladder was filtered out against a source height of zero, the "never emit an empty ladder" fallback put one back, and ffmpeg then died on `[v:0] matches no streams`, leaving the upload in `failed` with an error that said nothing about the cause. The transcoder now reports a missing video stream as its own outcome and the asset is re-typed and run through the audio pipeline. (#82)
+
+### Contributors
+
+No external PRs this release, but several of these came from other people's reports and reviews: @casinojeffrey found the audio-only upload failure (#82), @rubenxyz's reasoning decided the share-link defaults (#266), and @Lennart-Pingpong's earlier upload-reliability work is what surfaced the completion and status-lifecycle problems fixed here.
 
 ## [1.11.0] - 2026-08-29
 
