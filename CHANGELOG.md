@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The sign-in code screen no longer claims a code was sent when it may not have been** — entering an address with no account still advanced to the 6-digit step and stated "We sent a 6-digit code to …", so someone who mistyped their email waited for mail that could never arrive. The API answers identically for known and unknown addresses on purpose, to stop it being used to enumerate accounts, so the screen now says only what the server guarantees: if that address has an account, a code is on its way. A typo hint sits next to the input, and "Use a different email" is a real button rather than tertiary text. No response changes, so the anti-enumeration property is untouched. (#248)
 - **An audio-only file in a video container now uploads instead of failing to process** — browsers type a `.mpg` or `.mp4` that carries only an audio track as `video/*`, so it was routed to the video pipeline. Every rung of the quality ladder was filtered out against a source height of zero, the "never emit an empty ladder" fallback put one back, and ffmpeg then died on `[v:0] matches no streams`, leaving the upload in `failed` with an error that said nothing about the cause. The transcoder now reports a missing video stream as its own outcome and the asset is re-typed and run through the audio pipeline. (#82)
 
 ## [1.11.0] - 2026-08-29

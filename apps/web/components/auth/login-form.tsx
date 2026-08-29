@@ -335,9 +335,16 @@ export function LoginForm() {
       <div className="animate-slide-up">
         <div className="mb-8">
           <h1 className="text-xl font-semibold text-text-primary mb-1">Check your email</h1>
+          {/* The API answers identically whether or not the address has an
+              account, deliberately, so that this endpoint cannot be used to
+              enumerate registered emails. Claiming "we sent a code" asserts
+              something it never told us, and for an unknown address it is
+              simply untrue: the person then waits for mail that cannot
+              arrive. Say only what the server guarantees. (#248) */}
           <p className="text-sm text-text-secondary">
-            We sent a 6-digit code to{' '}
+            If{' '}
             <span className="text-text-primary font-medium">{email}</span>
+            {' '}has an account, a 6-digit code is on its way.
           </p>
         </div>
 
@@ -364,8 +371,15 @@ export function LoginForm() {
             ))}
           </div>
 
-          {codeError && (
+          {codeError ? (
             <p className="text-sm text-status-error -mt-3">{codeError}</p>
+          ) : (
+            // A mistyped address is the common case behind "no code arrived",
+            // and it is the one thing the person can check without us telling
+            // them whether the account exists.
+            <p className="text-sm text-text-tertiary -mt-3">
+              Didn&apos;t get a code? Check the address for typos.
+            </p>
           )}
 
           <Button type="submit" size="lg" loading={loading} className="w-full">
@@ -377,7 +391,7 @@ export function LoginForm() {
           <button
             type="button"
             onClick={() => { setStep('email'); setCode(['', '', '', '', '', '']); setCodeError('') }}
-            className="block w-full text-base text-text-tertiary hover:text-text-secondary transition-colors"
+            className="block w-full rounded-md border border-border bg-bg-secondary px-4 py-2.5 text-sm font-medium text-text-secondary transition-colors hover:border-border-focus hover:text-text-primary"
           >
             Use a different email
           </button>
