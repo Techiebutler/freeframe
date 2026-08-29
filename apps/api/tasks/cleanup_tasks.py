@@ -420,6 +420,68 @@ def _run_cleanup(db) -> PurgeCounts:
     return counts
 
 
+@celery_app.task(name="requeue_stuck_processing")
+def requeue_stuck_processing():
+    """Re-dispatch transcodes for versions claimed as `processing` that never ran.
+
+    /upload/complete claims the version and *then* schedules the dispatch on a
+    background thread whose failures are swallowed into a log line. A broker
+    outage, or an API worker recycled between the two, leaves a version at
+    `processing` with no task behind it. Nothing recovered that: the stale-upload
+    reaper filters on `uploading` and `failed` only, so the bytes kept counting
+    against the storage cap and the upload sat in the panel's Active tab forever.
+
+    This re-dispatches rather than condemning. Marking such a version `failed`
+    would be worse than leaving it: CompleteMultipartUpload has already run by
+    then, so the raw object is fully assembled, and the reaper deletes
+    `s3_key_raw` for `failed` and `uploading` alike -- a twenty-second broker
+    restart after a large upload would schedule that master for deletion.
+    """
+    hours = settings.stuck_processing_timeout_hours
+    if hours <= 0:
+        log.info("requeue: disabled (stuck_processing_timeout_hours=%s)", hours)
+        return 0
+
+    # The cutoff must clear the transcoder's own 4-hour ceiling, or a legitimately
+    # slow encode gets a second worker started on top of the one still running.
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    from .celery_app import send_task_safe
+    from .transcode_tasks import process_asset
+
+    db = SessionLocal()
+    try:
+        stuck = db.query(AssetVersion).filter(
+            AssetVersion.processing_status == ProcessingStatus.processing,
+            AssetVersion.deleted_at.is_(None),
+            func.coalesce(AssetVersion.last_activity_at, AssetVersion.created_at) < cutoff,
+        ).all()
+
+        requeued = 0
+        for v in stuck:
+            # A version whose output is already written finished its transcode and
+            # simply never had its status updated. Re-running it would redo hours
+            # of work to reach the same bytes, so treat the output as the truth.
+            done = db.query(MediaFile).filter(
+                MediaFile.version_id == v.id,
+                MediaFile.s3_key_processed.isnot(None),
+            ).first()
+            if done is not None:
+                v.processing_status = ProcessingStatus.ready
+                log.info("requeue: version %s already had output; marking ready", v.id)
+                continue
+
+            send_task_safe(process_asset, str(v.asset_id), str(v.id))
+            log.info("requeue: re-dispatched transcode for version %s", v.id)
+            requeued += 1
+
+        db.commit()
+        if stuck:
+            log.info("requeue: %s stuck, %s re-dispatched", len(stuck), requeued)
+        return requeued
+    finally:
+        db.close()
+
+
 @celery_app.task(name="cleanup_soft_deleted")
 def cleanup_soft_deleted():
     """Daily beat task: retention-window GC + expired-share sweep."""

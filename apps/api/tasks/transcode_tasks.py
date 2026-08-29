@@ -8,6 +8,8 @@ import logging
 # Ensure the workspace root is on the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
+from celery.exceptions import Retry
+
 from .celery_app import celery_app
 from ..database import SessionLocal
 from ..models.asset import AssetVersion, MediaFile, ProcessingStatus, AssetType
@@ -73,13 +75,38 @@ def process_asset(self, asset_id: str, version_id: str):
             })
 
         except Exception as exc:
-            version.processing_status = ProcessingStatus.failed
-            db.commit()
-            _publish_event(str(asset.project_id), "transcode_failed", {
-                "asset_id": asset_id,
-                "error": str(exc),
-            })
-            raise self.retry(exc=exc)
+            def _record_failure() -> None:
+                version.processing_status = ProcessingStatus.failed
+                db.commit()
+                _publish_event(str(asset.project_id), "transcode_failed", {
+                    "asset_id": asset_id,
+                    "error": str(exc),
+                })
+
+            # `failed` is written only when nothing more is coming. Writing it
+            # before every retry made the version oscillate
+            # failed -> processing -> failed for the whole ladder (three retries
+            # a minute apart) while its raw object sat there intact, so
+            # /upload/complete's retry guard, the reaper and the client each got
+            # a different answer depending on when they asked.
+            if self.request.retries >= self.max_retries:
+                _record_failure()
+                raise
+
+            try:
+                raise self.retry(exc=exc)
+            except Retry:
+                # Scheduled. Leave the version at `processing`: that is true, and
+                # the next attempt will move it on.
+                raise
+            except Exception:
+                # self.retry() raises Reject when the broker will not take the
+                # message, so the retry never gets queued and nothing else will
+                # run for this version. Leaving it at `processing` here is what
+                # stranded uploads before -- record the failure we already know
+                # about rather than leaving it for the sweep to find.
+                _record_failure()
+                raise
 
     finally:
         db.close()

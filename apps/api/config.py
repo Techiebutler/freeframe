@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 0
 
     # Reaper: uploads stuck in `uploading`/`failed` longer than this are reclaimed. Hours.
+    # A version claimed as `processing` whose transcode never ran is re-dispatched
+    # after this long. It must stay comfortably above the transcoder's own 4-hour
+    # ceiling, or a legitimately slow encode gets a second worker on top of it.
+    # 0 disables the sweep.
+    stuck_processing_timeout_hours: int = 6
     stale_upload_timeout_hours: int = 24
 
     # Retention GC: rows soft-deleted (deleted_at) longer than this are hard-deleted and their
