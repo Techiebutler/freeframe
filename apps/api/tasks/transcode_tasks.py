@@ -121,6 +121,22 @@ def _process_video(db, asset, version, media_file, s3, output_prefix):
         progress_cb=_on_progress,
     )
     result = _run_async(transcoder.transcode(job))
+
+    if result.no_video_stream:
+        # The browser types a .mpg or .mp4 carrying only audio as video/*, so
+        # mime_to_asset_type routed it here. The file is perfectly good, it just
+        # is not video. Correct the asset and run it through the audio pipeline
+        # rather than failing an upload the user had no reason to think was
+        # wrong (#82).
+        log.info(
+            "asset %s has no video stream; re-routing to the audio pipeline",
+            asset.id,
+        )
+        asset.asset_type = AssetType.audio
+        db.flush()
+        _process_audio(db, asset, version, media_file, s3, output_prefix)
+        return
+
     if not result.success:
         raise RuntimeError(f"Transcode failed: {result.error}")
 

@@ -18,6 +18,10 @@ class TranscodeJob:
 @dataclass
 class TranscodeResult:
     success: bool
+    # True when the input carries no video stream at all. Distinct from a plain
+    # failure: the file is fine, it just is not video, so a caller can re-route
+    # it to the audio pipeline instead of surfacing an error.
+    no_video_stream: bool = False
     hls_prefix: Optional[str] = None
     thumbnail_keys: list[str] = field(default_factory=list)
     waveform_key: Optional[str] = None

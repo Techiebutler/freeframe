@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **An audio-only file in a video container now uploads instead of failing to process** — browsers type a `.mpg` or `.mp4` that carries only an audio track as `video/*`, so it was routed to the video pipeline. Every rung of the quality ladder was filtered out against a source height of zero, the "never emit an empty ladder" fallback put one back, and ffmpeg then died on `[v:0] matches no streams`, leaving the upload in `failed` with an error that said nothing about the cause. The transcoder now reports a missing video stream as its own outcome and the asset is re-typed and run through the audio pipeline. (#82)
+
 ## [1.11.0] - 2026-08-29
 
 ### Added

@@ -427,3 +427,46 @@ def test_non_hardware_error_does_not_retry():
 
     assert result.success is False
     assert len(calls) == 1, "content errors must not trigger a software retry"
+
+
+# ── audio-only file in a video container (#82) ────────────────────────────────
+
+def _audio_only_probe(cmd, **_kwargs):
+    """ffprobe -select_streams v:0 on an audio-only container returns no streams.
+
+    That is the whole of the bug: the container's mime is video/*, so the file
+    is routed to the video pipeline, but there is no video track to encode.
+    """
+    mock = MagicMock()
+    mock.returncode = 0
+    mock.stderr = ""
+    mock.stdout = json.dumps({"streams": [], "format": {"duration": "3.0"}})
+    return mock
+
+
+def test_transcode_reports_a_missing_video_stream_instead_of_an_ffmpeg_error():
+    """The browser types .mpg / .mp4 as video/* even with no video track.
+
+    Before this, every ladder rung was filtered out by the source-height check,
+    the "never emit an empty ladder" fallback put one back, and ffmpeg died on
+    `[v:0] matches no streams` -- an error that says nothing about the cause.
+    """
+    t = FFmpegTranscoder.__new__(FFmpegTranscoder)
+    t.s3 = MagicMock()
+    t.bucket = "bucket"
+    t._get_presigned_url = lambda key, expires_in=7200: "http://example.test/in.mpg"
+
+    with patch("subprocess.run", side_effect=_audio_only_probe):
+        result = asyncio.run(t.transcode(_make_job()))
+
+    assert result.success is False
+    assert result.no_video_stream is True
+    assert "No video stream" in (result.error or "")
+
+
+def test_no_video_stream_defaults_false_so_other_backends_need_not_set_it():
+    """The field is additive; a real failure must not look like an audio file."""
+    from packages.transcoder.base import TranscodeResult
+
+    assert TranscodeResult(success=True).no_video_stream is False
+    assert TranscodeResult(success=False, error="boom").no_video_stream is False

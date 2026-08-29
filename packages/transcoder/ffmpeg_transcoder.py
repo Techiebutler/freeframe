@@ -494,6 +494,19 @@ class FFmpegTranscoder(BaseTranscoder):
             vid_info = self._run(cmd, timeout=120, label="ffprobe")
             vid_data = json.loads(vid_info)
             meta = parse_probe_metadata(vid_data)
+            if meta is None:
+                # No video stream. Every rung of the ladder would be filtered
+                # out, the "never emit an empty ladder" fallback would re-add
+                # one anyway, and ffmpeg would die on `[v:0] matches no
+                # streams` -- an error that says nothing about the real cause.
+                # Report it as its own outcome so the caller can decide; an
+                # audio-only file in a video container is a normal upload, not
+                # a broken one.
+                return TranscodeResult(
+                    success=False,
+                    no_video_stream=True,
+                    error=f"No video stream in {job.input_s3_key}",
+                )
             _vid_stream = (vid_data.get("streams") or [{}])[0]
             # HDR detection: PQ (smpte2084), HLG (arib-std-b67) transfer.
             # DV (profile 5) is handled separately below. (transfer-only per
