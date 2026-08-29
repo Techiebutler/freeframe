@@ -6,24 +6,11 @@ import {
   AlertTriangle,
   Clock,
   Loader2,
-  CheckCircle2,
-  XCircle,
-  Download,
-  ArrowLeft,
-  Columns2,
-  MessageSquare,
-  User,
-  FileText,
-  Image as ImageIcon,
-  Video,
-  Music,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
-import { prefersLightMarkOn } from '@/lib/accent'
 import { Button } from '@/components/ui/button'
-import { GuestCommentInput } from '@/components/review/guest-comment-input'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
+import { ShareReviewScreen } from '@/components/share/share-review-screen'
 import { useBrandingStore } from '@/stores/branding-store'
 import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
@@ -59,30 +46,8 @@ interface ShareValidateResponse {
   error?: string
 }
 
-interface CommentAuthor {
-  id: string
-  name: string
-  avatar_url?: string | null
-}
 
-interface GuestAuthor {
-  id: string
-  name: string
-  email?: string
-}
 
-interface GuestComment {
-  id: string
-  body: string
-  guest_name?: string
-  guest_email?: string
-  author?: CommentAuthor | null
-  guest_author?: GuestAuthor | null
-  created_at: string
-  timecode_start?: number | null
-}
-
-type CommentsResponse = GuestComment[]
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -220,7 +185,6 @@ interface ErrorStateProps {
 }
 
 function ErrorState({ expired }: ErrorStateProps) {
-  const { orgName } = useBrandingStore()
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
@@ -250,783 +214,26 @@ function ErrorState({ expired }: ErrorStateProps) {
 
 // ─── Guest comment item ───────────────────────────────────────────────────────
 
-interface GuestCommentItemProps {
-  comment: GuestComment
-}
 
-function GuestCommentItem({ comment }: GuestCommentItemProps) {
-  const displayName = comment.guest_author?.name || comment.author?.name || 'Unknown'
-  const avatarUrl = comment.author?.avatar_url ?? null
-  const [imgError, setImgError] = React.useState(false)
-
-  return (
-    <div className="rounded-lg bg-bg-tertiary border border-white/5 px-3 py-2.5">
-      <div className="flex items-center gap-2 mb-1.5">
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-muted text-2xs font-medium text-text-primary">
-          {avatarUrl && !imgError ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img
-              src={avatarUrl}
-              alt=""
-              className="h-full w-full rounded-full object-cover"
-              referrerPolicy="no-referrer"
-              onError={() => setImgError(true)}
-            />
-          ) : (
-            displayName.charAt(0).toUpperCase()
-          )}
-        </div>
-        <span className="text-xs font-medium text-text-secondary">{displayName}</span>
-        {comment.timecode_start != null && (
-          <span className="text-2xs text-text-tertiary font-mono bg-white/5 px-1.5 py-0.5 rounded">
-            {Math.floor(comment.timecode_start / 60)}:
-            {String(Math.floor(comment.timecode_start % 60)).padStart(2, '0')}
-          </span>
-        )}
-        <span className="ml-auto text-2xs text-text-tertiary">
-          {new Date(comment.created_at).toLocaleDateString()}
-        </span>
-      </div>
-      <p className="text-sm text-text-secondary leading-relaxed">{comment.body}</p>
-    </div>
-  )
-}
 
 // ─── Guest comment list (for right panel) ────────────────────────────────────
 
-interface GuestCommentListProps {
-  token: string
-  refreshKey: number
-  shareSession?: string | null
-}
 
-function GuestCommentList({ token, refreshKey, shareSession }: GuestCommentListProps) {
-  const [comments, setComments] = React.useState<GuestComment[]>([])
-  const [loading, setLoading] = React.useState(true)
-
-  React.useEffect(() => {
-    setLoading(true)
-    const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
-    fetch(`${API_URL}/share/${token}/comments?_=1${sp}`)
-      .then((r) => (r.ok ? r.json() : Promise.resolve([])))
-      .then((data: CommentsResponse) => setComments(data))
-      .catch(() => setComments([]))
-      .finally(() => setLoading(false))
-  }, [token, refreshKey, shareSession])
-
-  if (loading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-text-tertiary" />
-      </div>
-    )
-  }
-
-  if (comments.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-        <div className="h-12 w-12 rounded-full bg-white/5 flex items-center justify-center mb-3">
-          <MessageSquare className="h-6 w-6 text-text-tertiary" />
-        </div>
-        <p className="text-sm font-medium text-text-secondary">No comments — yet</p>
-        <p className="text-xs text-text-tertiary mt-1">
-          Be the first to leave feedback on this asset.
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
-      {comments.map((comment) => (
-        <GuestCommentItem key={comment.id} comment={comment} />
-      ))}
-    </div>
-  )
-}
 
 // ─── Guest approval actions ───────────────────────────────────────────────────
 
-interface GuestApprovalActionsProps {
-  token: string
-  asset: Asset
-}
 
-function GuestApprovalActions({ token, asset }: GuestApprovalActionsProps) {
-  const [status, setStatus] = React.useState<'idle' | 'approved' | 'rejected'>('idle')
-  const [loading, setLoading] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-
-  async function handleDecision(decision: 'approved' | 'rejected') {
-    setLoading(true)
-    setError(null)
-    try {
-      const response = await fetch(`${API_URL}/share/${token}/${decision === 'approved' ? 'approve' : 'reject'}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ asset_id: asset.id }),
-      })
-      if (!response.ok) throw new Error('Failed to submit decision')
-      setStatus(decision)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  if (status === 'approved') {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-500/10 border border-green-500/20">
-        <CheckCircle2 className="h-4 w-4 text-green-400" />
-        <span className="text-sm font-medium text-green-400">Approved</span>
-      </div>
-    )
-  }
-
-  if (status === 'rejected') {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
-        <XCircle className="h-4 w-4 text-red-400" />
-        <span className="text-sm font-medium text-red-400">Rejected</span>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex items-center gap-2">
-      {error && <span className="text-xs text-red-400 mr-2">{error}</span>}
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => handleDecision('rejected')}
-        disabled={loading}
-        className="text-red-400 border-red-500/30 hover:border-red-500/60 hover:bg-red-500/10"
-      >
-        <XCircle className="h-4 w-4" />
-        Reject
-      </Button>
-      <Button
-        variant="primary"
-        size="sm"
-        onClick={() => handleDecision('approved')}
-        loading={loading}
-        className="bg-green-600 hover:bg-green-700"
-      >
-        <CheckCircle2 className="h-4 w-4" />
-        Approve
-      </Button>
-    </div>
-  )
-}
 
 // ─── Share Top Bar ────────────────────────────────────────────────────────────
 
-interface ShareTopBarProps {
-  shareName: string
-  assetName?: string
-  allowDownload: boolean
-  downloadUrl: string | null
-  token: string
-  assetId: string
-  shareSession?: string | null
-  sidebarOpen: boolean
-  onToggleSidebar: () => void
-  onBack?: () => void
-  branding: ProjectBranding | null
-}
 
-function ShareTopBar({
-  shareName,
-  assetName,
-  allowDownload,
-  downloadUrl,
-  token,
-  assetId,
-  shareSession,
-  sidebarOpen,
-  onToggleSidebar,
-  onBack,
-  branding,
-}: ShareTopBarProps) {
-  const [downloading, setDownloading] = React.useState(false)
-
-  async function handleDownload() {
-    setDownloading(true)
-    try {
-      // The stream endpoint re-checks the password session, so a
-      // password-protected link 403s here without it and the download
-      // silently does nothing.
-      const params = new URLSearchParams({ download: 'true' })
-      if (shareSession) params.set('share_session', shareSession)
-      const res = await fetch(`${API_URL}/share/${token}/stream/${assetId}?${params}`)
-      if (!res.ok) return
-      const data = await res.json()
-      if (data?.url) {
-        const iframe = document.createElement('iframe')
-        iframe.style.display = 'none'
-        iframe.src = data.url
-        document.body.appendChild(iframe)
-        setTimeout(() => iframe.remove(), 30000)
-      }
-    } catch {
-      // silent
-    } finally {
-      setDownloading(false)
-    }
-  }
-  const primaryColor = branding?.primary_color ?? '#6366f1'
-  const { loginLogoUrl, orgLogoDark, orgLogoLight } = useBrandingStore()
-  const theme = useResolvedTheme()
-  // Same cascade as the password gate, so a guest doesn't lose the instance logo
-  // one screen into the flow when only one variant is uploaded.
-  const instanceLogoUrl =
-    loginLogoUrl ||
-    (theme === 'dark' ? (orgLogoDark ?? orgLogoLight) : (orgLogoLight ?? orgLogoDark)) ||
-    undefined
-
-  return (
-    <div className="flex items-center justify-between border-b border-border px-3 h-12 bg-bg-primary shrink-0 relative">
-      {/* Left: back + avatar + breadcrumb */}
-      <div className="flex items-center gap-2 min-w-0 flex-1">
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="flex items-center justify-center h-7 w-7 rounded-md text-text-tertiary hover:text-text-primary hover:bg-white/10 transition-colors shrink-0"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-        )}
-
-        {/* Avatar placeholder */}
-        <div
-          className="flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-text-primary shrink-0"
-          style={{ backgroundColor: primaryColor }}
-        >
-          {branding?.logo_s3_key ? (
-            <img
-              src={`${API_URL}/share/branding/logo`}
-              alt=""
-              className="h-full w-full rounded-full object-cover"
-              onError={(e) => {
-                ;(e.target as HTMLImageElement).style.display = 'none'
-              }}
-            />
-          ) : instanceLogoUrl ? (
-            <img
-              src={instanceLogoUrl}
-              alt=""
-              className="h-full w-full rounded-full object-cover"
-              onError={(e) => {
-                ;(e.target as HTMLImageElement).style.display = 'none'
-              }}
-            />
-          ) : (
-            // This mark sits on the primaryColor circle, not on the page
-            // background, so the page theme says nothing about what it needs
-            // to contrast with. Pick from the accent's own brightness.
-            <img
-              src={prefersLightMarkOn(primaryColor) ? '/logo-icon.png' : '/logo-icon-dark.png'}
-              alt="FreeFrame"
-              className="h-full w-full"
-            />
-          )}
-        </div>
-
-        {/* Breadcrumb */}
-        <nav className="flex items-center gap-1 text-[13px] min-w-0">
-          <span className="text-text-tertiary shrink-0 truncate max-w-[200px]">
-            {shareName}
-          </span>
-          {assetName && (
-            <>
-              <span className="text-text-tertiary">/</span>
-              <span className="text-text-primary font-medium truncate">{assetName}</span>
-            </>
-          )}
-        </nav>
-      </div>
-
-      {/* Right: download + panel toggle */}
-      <div className="flex items-center gap-2 shrink-0">
-        {allowDownload && (
-          <button
-            onClick={handleDownload}
-            disabled={downloading}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent hover:bg-accent-hover px-3 py-1.5 text-xs font-medium text-text-inverse transition-colors disabled:opacity-60"
-          >
-            {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-            Download
-          </button>
-        )}
-
-        <button
-          onClick={onToggleSidebar}
-          className={cn(
-            'flex items-center justify-center h-8 w-8 rounded-md transition-colors',
-            sidebarOpen
-              ? 'bg-white/10 text-text-primary'
-              : 'text-text-tertiary hover:text-text-primary hover:bg-white/10',
-          )}
-          title="Toggle panel"
-        >
-          <Columns2 className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-  )
-}
 
 // ─── Share Media Viewer ───────────────────────────────────────────────────────
 
-interface ShareMediaViewerProps {
-  asset: Asset & { thumbnail_url?: string; stream_url?: string }
-  token: string
-  streamUrl: string | null
-  streamLoading: boolean
-}
-
-function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMediaViewerProps) {
-  const videoRef = React.useRef<HTMLVideoElement>(null)
-  const audioRef = React.useRef<HTMLAudioElement>(null)
-  const [fatalError, setFatalError] = React.useState<string | null>(null)
-
-  React.useEffect(() => {
-    if (!streamUrl || streamLoading) return
-
-    setFatalError(null)
-    const mediaEl = asset.asset_type === 'video' ? videoRef.current : audioRef.current
-    if (!mediaEl) return
-
-    const isHls = streamUrl.includes('.m3u8')
-
-    // Resolve relative stream URLs against API_URL (backend returns /stream/hls/master.m3u8?token=...)
-    const resolvedUrl = streamUrl.startsWith('/')
-      ? `${API_URL}${streamUrl}`
-      : streamUrl
-
-    let hls: any = null
-    let cancelled = false
-
-    function setupHls() {
-      import('hls.js').then(({ default: Hls }) => {
-        if (cancelled) return
-
-        if (isHls && Hls.isSupported()) {
-          hls = new Hls()
-          hls.loadSource(resolvedUrl)
-          hls.attachMedia(mediaEl!)
-
-          hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
-            if (data.fatal) {
-              setFatalError(
-                data.type === Hls.ErrorTypes.NETWORK_ERROR
-                  ? 'Network error loading video'
-                  : data.type === Hls.ErrorTypes.MEDIA_ERROR
-                    ? 'Media decode error'
-                    : `Playback error: ${data.details || data.type}`
-              )
-              if (hls) {
-                hls.destroy()
-                hls = null
-              }
-            }
-          })
-        } else if (mediaEl!.canPlayType && mediaEl!.canPlayType('application/vnd.apple.mpegurl')) {
-          // Safari native HLS
-          mediaEl!.src = resolvedUrl
-        } else {
-          // Browser supports neither MSE (hls.js) nor native HLS playback
-          setFatalError('HLS playback is not supported in this browser')
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setFatalError('Failed to load video player')
-      })
-    }
-
-    if (isHls) {
-      setupHls()
-    } else if (mediaEl) {
-      mediaEl.src = resolvedUrl
-    }
-
-    function handleMediaError() {
-      // Tear down hls.js (if it's driving playback) so it doesn't keep fetching
-      // segments into the now-detached element once the error UI replaces it.
-      if (hls) {
-        hls.destroy()
-        hls = null
-      }
-      setFatalError('Media playback failed')
-    }
-    mediaEl.addEventListener('error', handleMediaError)
-
-    return () => {
-      cancelled = true
-      mediaEl.removeEventListener('error', handleMediaError)
-      if (hls) {
-        hls.destroy()
-      }
-    }
-  }, [streamUrl, streamLoading, asset.asset_type])
-
-  return (
-    <div className="flex-1 flex items-center justify-center bg-bg-primary min-h-0 overflow-hidden">
-      {asset.asset_type === 'video' && (
-        <div className="w-full h-full flex items-center justify-center">
-          {streamLoading ? (
-            <Loader2 className="h-8 w-8 animate-spin text-text-tertiary" />
-          ) : fatalError ? (
-            <div className="flex flex-col items-center gap-2">
-              <AlertTriangle className="h-10 w-10 text-red-500" />
-              <p className="text-sm text-red-400">{fatalError}</p>
-            </div>
-          ) : streamUrl ? (
-            <video
-              ref={videoRef}
-              controls
-              className="max-h-full max-w-full"
-              preload="metadata"
-              playsInline
-            >
-              Your browser does not support video playback.
-            </video>
-          ) : (
-            <div className="flex flex-col items-center gap-2">
-              <Video className="h-10 w-10 text-text-tertiary" />
-              <p className="text-sm text-text-tertiary">Video unavailable</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {asset.asset_type === 'audio' && (
-        <div className="w-full max-w-2xl px-8">
-          {streamLoading ? (
-            <Loader2 className="h-6 w-6 animate-spin text-text-tertiary mx-auto" />
-          ) : fatalError ? (
-            <div className="flex flex-col items-center gap-2">
-              <AlertTriangle className="h-10 w-10 text-red-500" />
-              <p className="text-sm text-red-400">{fatalError}</p>
-            </div>
-          ) : streamUrl ? (
-            <div className="space-y-6">
-              <div className="flex flex-col items-center gap-3">
-                <div className="h-24 w-24 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-                  <Music className="h-10 w-10 text-text-tertiary" />
-                </div>
-                <p className="text-sm font-medium text-text-secondary">{asset.name}</p>
-              </div>
-              <audio ref={audioRef} controls className="w-full">
-                Your browser does not support audio playback.
-              </audio>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-2">
-              <Music className="h-10 w-10 text-text-tertiary" />
-              <p className="text-sm text-text-tertiary">Audio unavailable</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {(asset.asset_type === 'image' || asset.asset_type === 'image_carousel') && (
-        <div className="w-full h-full flex items-center justify-center p-4">
-          <img
-            src={asset.thumbnail_url || asset.stream_url || `${API_URL}/share/${token}/thumbnail/${asset.id}`}
-            alt={asset.name}
-            className="max-h-full max-w-full object-contain"
-            onError={(e) => {
-              const target = e.target as HTMLImageElement
-              target.style.display = 'none'
-              const parent = target.parentElement
-              if (parent) {
-                const fallback = document.createElement('div')
-                fallback.className = 'flex flex-col items-center gap-2'
-                fallback.innerHTML = `
-                  <svg class="h-10 w-10 text-text-tertiary" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
-                  <p class="text-sm text-text-tertiary">Image unavailable</p>
-                `
-                parent.appendChild(fallback)
-              }
-            }}
-          />
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Share Right Panel ────────────────────────────────────────────────────────
-
-interface ShareRightPanelProps {
-  token: string
-  asset: Asset & { thumbnail_url?: string; stream_url?: string }
-  permission: SharePermission
-  commentRefreshKey: number
-  onCommentPosted: () => void
-  shareSession?: string | null
-}
-
-function ShareRightPanel({
-  token,
-  asset,
-  permission,
-  commentRefreshKey,
-  onCommentPosted,
-  shareSession,
-}: ShareRightPanelProps) {
-  const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
-
-  return (
-    <div className="w-full md:w-[360px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto flex flex-col border-l-0 md:border-l border-border bg-bg-secondary shrink-0 animate-in slide-in-from-right-2 duration-150">
-      {/* Tabs */}
-      <div className="px-4 pt-3 pb-2 shrink-0">
-        <div className="flex items-center bg-white/5 rounded-lg p-0.5">
-          <button
-            onClick={() => setActiveTab('comments')}
-            className={cn(
-              'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all flex items-center justify-center gap-1.5',
-              activeTab === 'comments'
-                ? 'bg-white/10 text-text-primary shadow-sm'
-                : 'text-text-tertiary hover:text-text-secondary',
-            )}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            Comments
-          </button>
-          <button
-            onClick={() => setActiveTab('fields')}
-            className={cn(
-              'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all flex items-center justify-center gap-1.5',
-              activeTab === 'fields'
-                ? 'bg-white/10 text-text-primary shadow-sm'
-                : 'text-text-tertiary hover:text-text-secondary',
-            )}
-          >
-            <FileText className="h-3.5 w-3.5" />
-            Fields
-          </button>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        {activeTab === 'comments' ? (
-          <>
-            {/* Comments header */}
-            <div className="px-4 py-2 shrink-0 flex items-center justify-between">
-              <span className="text-xs font-medium text-text-tertiary">All comments</span>
-            </div>
-
-            {/* Comment list */}
-            <GuestCommentList token={token} refreshKey={commentRefreshKey} shareSession={shareSession} />
-
-            {/* Approval actions */}
-            {permission === 'approve' && (
-              <div className="px-4 py-3 border-t border-border shrink-0">
-                <GuestApprovalActions token={token} asset={asset} />
-              </div>
-            )}
-
-            {/* Comment input */}
-            {(permission === 'comment' || permission === 'approve') ? (
-              <GuestCommentInput
-                token={token}
-                onCommentPosted={onCommentPosted}
-                shareSession={shareSession}
-                className="border-t border-border bg-bg-secondary"
-              />
-            ) : (
-              <div className="px-4 py-3 border-t border-border shrink-0">
-                <p className="text-xs text-text-tertiary text-center">View-only access. Comments are disabled.</p>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            <div className="space-y-3">
-              <FieldRow label="Name" value={asset.name} />
-              <FieldRow label="Type" value={asset.asset_type.replace('_', ' ')} capitalize />
-{asset.description && <FieldRow label="Description" value={asset.description} />}
-              {asset.rating != null && <FieldRow label="Rating" value={`${asset.rating}/5`} />}
-              {asset.due_date && (
-                <FieldRow
-                  label="Due date"
-                  value={new Date(asset.due_date).toLocaleDateString()}
-                />
-              )}
-              {asset.keywords && asset.keywords.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-xs text-text-tertiary">Keywords</span>
-                  <div className="flex flex-wrap gap-1">
-                    {asset.keywords.map((kw: string, i: number) => (
-                      <span
-                        key={i}
-                        className="text-2xs bg-white/5 text-text-tertiary rounded px-1.5 py-0.5"
-                      >
-                        {kw}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function FieldRow({
-  label,
-  value,
-  capitalize: shouldCapitalize,
-}: {
-  label: string
-  value: string
-  capitalize?: boolean
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-xs text-text-tertiary">{label}</span>
-      <span className={cn('text-xs text-text-secondary font-medium truncate ml-4 max-w-[200px]', shouldCapitalize && 'capitalize')}>
-        {value}
-      </span>
-    </div>
-  )
-}
-
-// ─── Share Viewer (single asset — Frame.io layout) ────────────────────────────
-
-interface ShareViewerProps {
-  token: string
-  asset: Asset & { thumbnail_url?: string; stream_url?: string }
-  permission: SharePermission
-  allowDownload: boolean
-  appearance?: ShareLinkAppearance | null
-  branding: ProjectBranding | null
-  shareName?: string
-  onBack?: () => void
-  shareSession?: string | null
-}
-
-function ShareViewer({
-  token,
-  asset,
-  permission,
-  allowDownload,
-  appearance,
-  branding,
-  shareName,
-  onBack,
-  shareSession,
-}: ShareViewerProps) {
-  // Same resolution the folder grid uses: the link's own accent wins over the
-  // project's, which wins over the built-in. This viewer was never given the
-  // appearance at all, so a link's theme and accent were silently ignored here.
-  const accentColor = appearance?.accent_color ?? branding?.primary_color
-  // No fallback: a link with no accent of its own, on an instance with no
-  // accent of its own, keeps the stylesheet's. Substituting a colour here
-  // would repaint every share link that already exists.
-  useShareAppearance(accentColor, appearance?.theme !== 'light')
-  const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
-  const [streamLoading, setStreamLoading] = React.useState(false)
-  const [commentKey, setCommentKey] = React.useState(0)
-  const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
-  const { orgName } = useBrandingStore()
-
-  // For video/audio assets, get a stream URL if not already provided
-  React.useEffect(() => {
-    if (asset.stream_url) {
-      setStreamUrl(asset.stream_url)
-      return
-    }
-    if (asset.asset_type !== 'video' && asset.asset_type !== 'audio') return
-    setStreamLoading(true)
-    // Carries the password session for the same reason the download does —
-    // without it this 403s on a password-protected link and playback never
-    // starts.
-    const qs = shareSession ? `?share_session=${encodeURIComponent(shareSession)}` : ''
-    fetch(`${API_URL}/share/${token}/stream/${asset.id}${qs}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.stream_url) setStreamUrl(data.stream_url)
-        else if (data?.url) setStreamUrl(data.url)
-      })
-      .catch(() => null)
-      .finally(() => setStreamLoading(false))
-  }, [token, asset.asset_type, asset.stream_url, asset.id, shareSession])
-
-  /*
-   * Branding cascade for the share page top-bar title:
-   *   1. shareName — per-share override (set when creating the share link)
-   *   2. branding?.custom_title — per-project ProjectBranding override
-   *   3. orgName — instance-level org_name from InstanceBranding
-   *   4. 'FreeFrame' — hardcoded fallback
-   */
-  const displayName = shareName || branding?.custom_title || orgName || 'FreeFrame'
-
-  return (
-    <div className="absolute inset-0 flex flex-col bg-bg-primary text-text-primary overflow-hidden">
-      {/* Top bar */}
-      <ShareTopBar
-        shareName={displayName}
-        assetName={asset.name}
-        allowDownload={allowDownload}
-        downloadUrl={streamUrl}
-        token={token}
-        assetId={asset.id}
-        shareSession={shareSession}
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((p) => !p)}
-        onBack={onBack}
-        branding={branding}
-      />
-
-      {/* Main content: viewer + sidebar */}
-      <div className="relative flex flex-1 overflow-hidden min-h-0">
-        {/* Left: full-screen media viewer */}
-        <ShareMediaViewer
-          asset={asset}
-          token={token}
-          streamUrl={streamUrl}
-          streamLoading={streamLoading}
-        />
-
-        {/* Right: comments panel */}
-        {sidebarOpen && (
-          <ShareRightPanel
-            token={token}
-            asset={asset}
-            permission={permission}
-            commentRefreshKey={commentKey}
-            onCommentPosted={() => setCommentKey((k) => k + 1)}
-            shareSession={shareSession}
-          />
-        )}
-      </div>
-
-      {/* Custom footer */}
-      {branding?.custom_footer ? (
-        <div className="shrink-0 border-t border-border px-4 py-1.5 text-center">
-          <p className="text-2xs text-text-tertiary">{branding.custom_footer}</p>
-        </div>
-      ) : (
-        <div className="shrink-0 border-t border-border px-4 py-1.5 text-center">
-          <PoweredByBadge className="justify-center text-text-tertiary" showOrgName />
-        </div>
-      )}
-    </div>
-  )
-}
-
-
-
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
+// The bespoke single-asset player (ShareMediaViewer) and its wrapper
+// (ShareViewer) lived here. A single-asset link now renders the same
+// ShareReviewScreen the folder path does, so they had no reachable caller left
+// (#117, #123).
 
 export default function SharePage({
   params,
@@ -1233,14 +440,58 @@ export default function SharePage({
   }
 
   return (
-    <ShareViewer
+    <SingleAssetShareViewer
       token={token}
       asset={state.asset}
       permission={state.permission}
       allowDownload={state.allowDownload}
+      showVersions={state.showVersions}
       appearance={state.appearance}
       branding={state.branding}
       shareSession={shareSession}
     />
+  )
+}
+
+/**
+ * A share link targeting one asset renders the same review screen the folder
+ * path does, rather than the bespoke player it used to.
+ *
+ * That player had a plain textarea with no timecode control and no version
+ * concept, so the same content behaved differently depending on whether it was
+ * shared on its own or inside a folder (#117, #123). This is a thin wrapper:
+ * it resolves the link's appearance, which the grid does for the folder path,
+ * and then defers entirely.
+ */
+function SingleAssetShareViewer({
+  token, asset, permission, allowDownload, showVersions, appearance, branding, shareSession,
+}: {
+  token: string
+  asset: { id: string; name: string }
+  permission: SharePermission
+  allowDownload: boolean
+  showVersions: boolean
+  appearance?: ShareLinkAppearance | null
+  branding?: { primary_color?: string | null } | null
+  shareSession?: string | null
+}) {
+  // Same resolution the folder grid uses: the link's own accent wins over the
+  // project's, which wins over the built-in. No fallback, so a link with no
+  // accent keeps the stylesheet's rather than being repainted.
+  const accentColor = appearance?.accent_color ?? branding?.primary_color
+  useShareAppearance(accentColor, appearance?.theme !== 'light')
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <ShareReviewScreen
+        token={token}
+        shareSession={shareSession}
+        assetId={asset.id}
+        assetName={asset.name}
+        permission={permission}
+        allowDownload={allowDownload}
+        showVersions={showVersions}
+      />
+    </div>
   )
 }

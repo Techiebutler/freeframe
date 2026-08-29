@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **A share link to a single asset now opens the same review screen as one inside a folder** — the two paths rendered entirely different component trees, so sharing an asset on its own gave a plain video element and a bare comment box, while sharing the same asset inside a folder gave the real review stack. The single-asset path now renders that stack too, which brings it timecode-attached comments, annotation and mention controls, and a version switcher with version-scoped streams and comments. (#117, #123)
+
+  Two consequences worth knowing. Guests who had identified themselves on a single-asset link will be asked once more, because the two paths stored that identity under different keys and the shared one wins. And the single-asset page no longer shows the instance's logo and share name above the player, since the folder path's asset view never did; making both show branding is tracked separately.
+
 ## [1.12.0] - 2026-08-29
 
 ### Upgrade notes
