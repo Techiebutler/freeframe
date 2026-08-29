@@ -18,7 +18,13 @@ class ShareLinkAppearance(BaseModel):
 
 
 class ShareLinkCreate(BaseModel):
-    permission: SharePermission = SharePermission.view
+    # Commenting is the core loop of a review link: a viewer who cannot comment
+    # needs a deliberately read-only link, which is the niche case rather than the
+    # default. Downloads stay off, because commenting affects what happens inside
+    # the review page while downloading pulls the original out of it, and a share
+    # link is the most exposed surface there is (anyone with the URL, no auth).
+    # Whoever needs downloads flips one toggle. (#266)
+    permission: SharePermission = SharePermission.comment
     visibility: str = "public"
     expires_at: Optional[datetime] = None
     password: Optional[str] = None
@@ -34,7 +40,8 @@ class MultiShareCreate(BaseModel):
     asset_ids: list[uuid.UUID] = []
     folder_ids: list[uuid.UUID] = []
     title: Optional[str] = None
-    permission: SharePermission = SharePermission.view
+    # Same default as ShareLinkCreate; see the note there. (#266)
+    permission: SharePermission = SharePermission.comment
     visibility: str = "public"
     expires_at: Optional[datetime] = None
     password: Optional[str] = None

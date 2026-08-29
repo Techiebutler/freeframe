@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uuid
 from ..models.asset import AssetType
 from ..config import settings
@@ -14,6 +14,10 @@ ALLOWED_MIME_TYPES = {
 }
 
 CHUNK_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+# S3 allows at most 10,000 parts, so this is the largest object this scheme can
+# assemble regardless of MAX_UPLOAD_BYTES. Declaring more than this is not a
+# policy question, it is arithmetically impossible.
+MAX_MULTIPART_BYTES = 10_000 * CHUNK_SIZE_BYTES
 
 def _format_bytes(num_bytes: int) -> str:
     """Human-readable size for error messages, e.g. '10 GB'."""
@@ -48,7 +52,11 @@ class InitiateUploadRequest(BaseModel):
     asset_name: str
     original_filename: str
     mime_type: str
-    file_size_bytes: int
+    # gt=0 because a zero or negative value otherwise reaches upload_guard_error
+    # and the client's ceil(size / chunk) arithmetic, where it produces a part
+    # count of zero and an upload that can never complete. The upper bound is the
+    # structural ceiling of S3 multipart: 10,000 parts at the 10 MB chunk size.
+    file_size_bytes: int = Field(gt=0, le=MAX_MULTIPART_BYTES)
     # For new version of existing asset
     asset_id: uuid.UUID | None = None
     folder_id: uuid.UUID | None = None

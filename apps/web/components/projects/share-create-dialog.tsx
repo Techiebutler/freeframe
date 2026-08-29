@@ -280,7 +280,10 @@ interface ConfigurePhaseProps {
 
 function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigurePhaseProps) {
   const [title, setTitle] = React.useState(defaultTitle)
-  const [allowComments, setAllowComments] = React.useState(false)
+  // Comments on, downloads off, matching ShareLinkCreate on the API. Both have to
+  // move together or a link created through the API keeps the old behaviour while
+  // one made in the dialog does not. (#266)
+  const [allowComments, setAllowComments] = React.useState(true)
   const [allowDownloads, setAllowDownloads] = React.useState(false)
   const [passphrase, setPassphrase] = React.useState(false)
   const [passphraseValue, setPassphraseValue] = React.useState('')
@@ -575,7 +578,8 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   const [savingTitle, setSavingTitle] = React.useState(false)
   const [showSettings, setShowSettings] = React.useState(false)
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
-  const [allowComments, setAllowComments] = React.useState(false)
+  // Same defaults as the single-item path above. (#266)
+  const [allowComments, setAllowComments] = React.useState(true)
   const [allowDownloads, setAllowDownloads] = React.useState(false)
   const [passphrase, setPassphrase] = React.useState(false)
   const [passphraseValue, setPassphraseValue] = React.useState('')

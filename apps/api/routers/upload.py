@@ -387,10 +387,42 @@ def complete_upload(
             detail=f"This upload is already {version.processing_status.value}.",
         )
 
+    def _reconcile_size() -> None:
+        """Record what storage actually holds, not what the client declared.
+
+        file_size_bytes is written once at initiate from a number the client
+        chose, and until now it was never compared with reality. Both the
+        per-file limit and the instance storage cap are enforced against that
+        column, and per-project usage is a SUM over it, so a client that
+        under-declares makes every one of those answers wrong -- and stays wrong,
+        because nothing ever revisits the row.
+
+        A HeadObject after assembly is the portable way to find out: the object
+        is there, and ContentLength is the one integrity signal that holds across
+        S3-compatible backends (a composite ETag's form is not guaranteed off
+        AWS). It does not make the pre-upload guard binding -- the bytes have
+        already landed by the time we can ask -- but it stops one wrong number
+        from permanently defeating the accounting. Best-effort: the upload
+        genuinely succeeded, so a storage hiccup here must not fail it.
+        """
+        try:
+            actual = head_object_size(s3_key)
+        except Exception:  # noqa: BLE001 - reconciliation must never fail a good upload
+            logger.warning("could not reconcile size for version %s", version.id, exc_info=True)
+            return
+        if actual is None or actual == media_file.file_size_bytes:
+            return
+        logger.warning(
+            "version %s declared %d bytes but storage holds %d; recording the actual size",
+            version.id, media_file.file_size_bytes, actual,
+        )
+        media_file.file_size_bytes = actual
+
     def _finish() -> CompleteUploadResponse:
         # Read the ids before the commit: `expire_on_commit` is on, so touching
         # them afterwards costs a fresh SELECT per completion.
         asset_id, version_id = version.asset_id, version.id
+        _reconcile_size()
 
         # Claim the version rather than assigning to it. The status check above is
         # an unsynchronised read, so two concurrent completions can both pass it:

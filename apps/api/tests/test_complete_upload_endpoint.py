@@ -746,3 +746,66 @@ def test_a_completion_that_claims_the_version_dispatches_once(
 
     assert resp.status_code == 200, resp.text
     assert dispatched == [version.id]
+
+
+# ── the recorded size is reconciled with storage (#258) ───────────────────────
+
+def test_the_recorded_size_is_corrected_to_what_storage_actually_holds(
+    client, mock_db, upload_rows, auth_headers, monkeypatch
+):
+    """file_size_bytes is client-declared and was never revisited.
+
+    Both the per-file limit and the instance storage cap are enforced against
+    this column, and per-project usage is a SUM over it, so an under-declared
+    value made all three permanently wrong for that upload.
+    """
+    version, media_file = upload_rows
+    media_file.file_size_bytes = 100 * MB          # what the client claimed
+    _stub(monkeypatch, list_parts=lambda k, u: _listing(100 * MB),
+          head=lambda k: 4000 * MB)                 # what actually landed
+    monkeypatch.setattr(upload_module, "_trigger_processing", lambda a, v: None)
+    mock_db.update.return_value = 1
+
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
+
+    assert resp.status_code == 200, resp.text
+    assert media_file.file_size_bytes == 4000 * MB, (
+        "the row must record the bytes storage holds, not the ones declared"
+    )
+
+
+def test_a_storage_failure_while_reconciling_does_not_fail_a_good_upload(
+    client, mock_db, upload_rows, auth_headers, monkeypatch
+):
+    """The bytes are already assembled by this point. Losing the reconciliation
+    is worth a log line, not a failed upload the client will retry."""
+    version, media_file = upload_rows
+    declared = media_file.file_size_bytes
+
+    def _boom(_key):
+        raise RuntimeError("storage unreachable")
+
+    _stub(monkeypatch, list_parts=lambda k, u: _listing(23 * MB), head=_boom)
+    monkeypatch.setattr(upload_module, "_trigger_processing", lambda a, v: None)
+    mock_db.update.return_value = 1
+
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
+
+    assert resp.status_code == 200, resp.text
+    assert media_file.file_size_bytes == declared
+
+
+def test_a_matching_size_is_left_alone(
+    client, mock_db, upload_rows, auth_headers, monkeypatch
+):
+    """The honest case, which is every real client: no write, no log noise."""
+    version, media_file = upload_rows
+    _stub(monkeypatch, list_parts=lambda k, u: _listing(23 * MB),
+          head=lambda k: 23 * MB)
+    monkeypatch.setattr(upload_module, "_trigger_processing", lambda a, v: None)
+    mock_db.update.return_value = 1
+
+    resp = client.post("/upload/complete", json=_body(media_file), headers=auth_headers)
+
+    assert resp.status_code == 200, resp.text
+    assert media_file.file_size_bytes == 23 * MB
