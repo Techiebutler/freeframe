@@ -20,6 +20,7 @@ import { useNotificationStore } from '@/stores/notification-store'
 import { useBrandingStore } from '@/stores/branding-store'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
 import { Avatar } from '@/components/shared/avatar'
+import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
 import { NotificationDrawer } from './notification-drawer'
 import useSWR from 'swr'
 import { api } from '@/lib/api'
@@ -91,20 +92,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               className="h-7 w-7 shrink-0 object-contain rounded"
             />
           ) : (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`/logo-icon.png`}
-                alt={orgName}
-                className="h-7 w-7 shrink-0 object-contain logo-dark"
-              />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`/logo-icon-dark.png`}
-                alt={orgName}
-                className="h-7 w-7 shrink-0 object-contain logo-light"
-              />
-            </>
+            <ThemedDefaultLogo
+              variant="icon"
+              alt={orgName}
+              className="h-7 w-7 shrink-0 object-contain"
+            />
           )}
           {!collapsed && (
             <span className="text-sm font-semibold text-text-primary tracking-tight truncate">

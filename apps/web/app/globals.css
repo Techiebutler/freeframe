@@ -114,11 +114,9 @@
 }
 
 @layer components {
-  /* Theme-aware logo switching */
-  [data-theme="dark"] .logo-dark { display: block; }
-  [data-theme="dark"] .logo-light { display: none; }
-  [data-theme="light"] .logo-dark { display: none; }
-  [data-theme="light"] .logo-light { display: block; }
+  /* The shared logo loads one dark-ink asset; dark surfaces recolor it white. */
+  .themed-default-logo { filter: none; }
+  [data-theme="dark"] .themed-default-logo { filter: brightness(0) invert(1); }
 
   /* Smooth focus ring for interactive elements */
   .focus-ring {

@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { useBrandingStore } from '@/stores/branding-store'
 import { cn } from '@/lib/utils'
+import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
 
 interface PoweredByBadgeProps {
   className?: string
@@ -10,19 +11,14 @@ interface PoweredByBadgeProps {
   showIcon?: boolean
 }
 
-/** The FreeFrame mark on its own: the same artwork the favicon defaults to
- *  (public/logo-icon.png), with no wordmark, since the line already reads
- *  "Powered by FreeFrame". Two files rather than one because the mark is a flat
- *  silhouette, so it needs inverting per theme — the same logo-dark/logo-light
- *  pair the sidebar uses. */
+/** Decorative mark for the adjacent "Powered by FreeFrame" label. */
 function FreeFrameMark() {
   return (
-    <>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/logo-icon.png" alt="" aria-hidden="true" className="logo-dark h-3.5 w-3.5 shrink-0 object-contain" />
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/logo-icon-dark.png" alt="" aria-hidden="true" className="logo-light h-3.5 w-3.5 shrink-0 object-contain" />
-    </>
+    <ThemedDefaultLogo
+      variant="icon"
+      decorative
+      className="h-3.5 w-3.5 shrink-0 object-contain"
+    />
   )
 }
 
