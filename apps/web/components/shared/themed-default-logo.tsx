@@ -9,7 +9,7 @@ type LogoAccessibility =
 
 export type ThemedDefaultLogoProps = Omit<
   ComponentPropsWithoutRef<'img'>,
-  'src' | 'alt' | 'aria-hidden'
+  'src' | 'srcSet' | 'alt' | 'aria-hidden' | 'style'
 > & {
   variant: LogoVariant
 } & LogoAccessibility
@@ -22,7 +22,8 @@ const LOGO_SOURCES: Record<LogoVariant, string> = {
 /**
  * The built-in FreeFrame mark, recolored by the root data-theme in globals.css.
  * A single dark-ink asset keeps the markup hydration-safe and avoids fetching a
- * second image that would only be hidden by CSS.
+ * second image that would only be hidden by CSS. `className` is for sizing
+ * and layout only; theme/filter styling is owned by this component.
  */
 export function ThemedDefaultLogo({
   variant,

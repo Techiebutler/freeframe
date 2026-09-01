@@ -113,10 +113,15 @@
   }
 }
 
+/*
+ * The logo owns its filter. Keeping these rules outside Tailwind's layers and
+ * scoping both themes through data-theme makes them outrank normal utility
+ * classes without resorting to !important.
+ */
+[data-theme="light"] .themed-default-logo { filter: none; }
+[data-theme="dark"] .themed-default-logo { filter: brightness(0) invert(1); }
+
 @layer components {
-  /* The shared logo loads one dark-ink asset; dark surfaces recolor it white. */
-  .themed-default-logo { filter: none; }
-  [data-theme="dark"] .themed-default-logo { filter: brightness(0) invert(1); }
 
   /* Smooth focus ring for interactive elements */
   .focus-ring {

@@ -11,17 +11,6 @@ interface PoweredByBadgeProps {
   showIcon?: boolean
 }
 
-/** Decorative mark for the adjacent "Powered by FreeFrame" label. */
-function FreeFrameMark() {
-  return (
-    <ThemedDefaultLogo
-      variant="icon"
-      decorative
-      className="h-3.5 w-3.5 shrink-0 object-contain"
-    />
-  )
-}
-
 const FREEFRAME_REPO_URL = 'https://github.com/Techiebutler/freeframe'
 
 export function PoweredByBadge({
@@ -39,7 +28,13 @@ export function PoweredByBadge({
   )
   const content = (
     <>
-      {showIcon && <FreeFrameMark />}
+      {showIcon && (
+        <ThemedDefaultLogo
+          variant="icon"
+          decorative
+          className="h-3.5 w-3.5 shrink-0 object-contain"
+        />
+      )}
       <span>
         Powered by {showOrgName ? orgName || 'FreeFrame' : 'FreeFrame'}
       </span>

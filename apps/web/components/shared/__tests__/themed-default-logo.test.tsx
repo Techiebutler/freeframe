@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -24,30 +25,45 @@ describe('ThemedDefaultLogo', () => {
     },
   )
 
-  it('applies the production light and dark theme filters', () => {
+  it('applies the production theme filter despite a later filter class', () => {
     const globalsCss = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8')
     const logoRules = globalsCss.match(
-      /(?:\[data-theme="dark"\]\s+)?\.themed-default-logo\s*\{[^}]+\}/g,
+      /\[data-theme="(?:light|dark)"\]\s+\.themed-default-logo\s*\{[^}]+\}/g,
     )
     expect(logoRules).toHaveLength(2)
 
     const style = document.createElement('style')
-    style.textContent = logoRules!.join('\n')
+    style.textContent = `${logoRules!.join('\n')}\n.filter-none { filter: none; }`
     document.head.appendChild(style)
 
-    const { container } = render(<ThemedDefaultLogo variant="icon" alt="FreeFrame" />)
-    const logo = container.querySelector('img')!
+    try {
+      const { container } = render(
+        <ThemedDefaultLogo variant="icon" alt="FreeFrame" className="filter-none" />,
+      )
+      const logo = container.querySelector('img')!
 
-    document.documentElement.setAttribute('data-theme', 'light')
-    expect(getComputedStyle(logo).filter).toBe('none')
+      document.documentElement.setAttribute('data-theme', 'light')
+      expect(getComputedStyle(logo).filter).toBe('none')
 
-    document.documentElement.setAttribute('data-theme', 'dark')
-    expect(getComputedStyle(logo).filter).toBe('brightness(0) invert(1)')
-
-    style.remove()
+      document.documentElement.setAttribute('data-theme', 'dark')
+      expect(getComputedStyle(logo).filter).toBe('brightness(0) invert(1)')
+    } finally {
+      style.remove()
+    }
   })
 
-  it('uses the full lockup asset and forwards native image props', () => {
+  it('does not expose style or srcSet overrides', () => {
+    type LogoProps = ComponentProps<typeof ThemedDefaultLogo>
+    type RestrictedPropsStayHidden = [
+      'style' extends keyof LogoProps ? false : true,
+      'srcSet' extends keyof LogoProps ? false : true,
+    ]
+
+    const restrictedPropsStayHidden: RestrictedPropsStayHidden = [true, true]
+    expect(restrictedPropsStayHidden).toEqual([true, true])
+  })
+
+  it('uses the full lockup asset and forwards safe native image props', () => {
     render(
       <ThemedDefaultLogo
         variant="full"

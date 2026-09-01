@@ -19,6 +19,7 @@ import { useUploadStore } from '@/stores/upload-store'
 import { useNotificationStore } from '@/stores/notification-store'
 import { useBrandingStore } from '@/stores/branding-store'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
+import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { Avatar } from '@/components/shared/avatar'
 import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
 import { NotificationDrawer } from './notification-drawer'
@@ -53,10 +54,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // so comparing it directly handed a system-light viewer the dark-background
   // logo on a light page.
   const theme = useResolvedTheme()
-  const customLogo =
-    theme === 'light'
-      ? orgLogoLight ?? orgLogoDark
-      : orgLogoDark ?? orgLogoLight
+  const customLogo = resolveBrandingLogo({
+    theme,
+    darkUrl: orgLogoDark,
+    lightUrl: orgLogoLight,
+  })
   const [notifOpen, setNotifOpen] = React.useState(false)
   const activeUploads = uploadFiles.filter((f) => f.status === 'uploading' || f.status === 'pending' || f.status === 'processing').length
   const { data: instance } = useSWR<InstanceSettings>(

@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Two consequences worth knowing. Guests who had identified themselves on a single-asset link will be asked once more, because the two paths stored that identity under different keys and the shared one wins. And the single-asset page no longer shows the instance's logo and share name above the player, since the folder path's asset view never did; making both show branding is tracked separately.
 
+### Fixed
+- **Default logos no longer load an invisible second theme asset** — sidebar, authentication, share-password, attribution and branding-preview fallbacks now share one themed icon/full-logo component. A failed custom authentication logo also falls back to the correct built-in mark and retries when branding supplies a new URL. (#288 by @luozejian)
+
 ## [1.12.0] - 2026-08-29
 
 ### Upgrade notes

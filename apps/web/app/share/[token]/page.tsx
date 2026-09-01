@@ -8,6 +8,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { withBasePath } from '@/lib/base-path'
+import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { Button } from '@/components/ui/button'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import { ShareReviewScreen } from '@/components/share/share-review-screen'
@@ -137,7 +138,12 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
   const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } =
     useBrandingStore()
   const theme = useResolvedTheme()
-  const displayLogo = loginLogoUrl || (theme === 'dark' ? (orgLogoDark ?? orgLogoLight) : (orgLogoLight ?? orgLogoDark)) || undefined
+  const displayLogo = resolveBrandingLogo({
+    theme,
+    darkUrl: orgLogoDark,
+    lightUrl: orgLogoLight,
+    preferredUrl: loginLogoUrl,
+  })
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">

@@ -46,6 +46,24 @@ describe('AuthBrandingHeader logo fallback', () => {
     )
   })
 
+  it('retries a previously failed URL after branding changes away and back', () => {
+    setBranding({ orgName: 'Example Studio', loginLogoUrl: BROKEN_LOGO })
+    render(<AuthBrandingHeader />)
+    fireEvent.error(screen.getByRole('img', { name: 'Example Studio' }))
+
+    act(() => useBrandingStore.setState({ loginLogoUrl: FRESH_LOGO }))
+    expect(screen.getByRole('img', { name: 'Example Studio' })).toHaveAttribute(
+      'src',
+      FRESH_LOGO,
+    )
+
+    act(() => useBrandingStore.setState({ loginLogoUrl: BROKEN_LOGO }))
+    expect(screen.getByRole('img', { name: 'Example Studio' })).toHaveAttribute(
+      'src',
+      BROKEN_LOGO,
+    )
+  })
+
   it('tries a new custom URL after a previous URL failed', () => {
     setBranding({ orgName: 'Example Studio', loginLogoUrl: BROKEN_LOGO })
     render(<AuthBrandingHeader />)
