@@ -8,6 +8,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { withBasePath } from '@/lib/base-path'
+import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { Button } from '@/components/ui/button'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import { ShareReviewScreen } from '@/components/share/share-review-screen'
@@ -15,6 +16,7 @@ import { useBrandingStore } from '@/stores/branding-store'
 import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
+import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
 
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
 
@@ -136,7 +138,12 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
   const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } =
     useBrandingStore()
   const theme = useResolvedTheme()
-  const displayLogo = loginLogoUrl || (theme === 'dark' ? (orgLogoDark ?? orgLogoLight) : (orgLogoLight ?? orgLogoDark)) || undefined
+  const displayLogo = resolveBrandingLogo({
+    theme,
+    darkUrl: orgLogoDark,
+    lightUrl: orgLogoLight,
+    preferredUrl: loginLogoUrl,
+  })
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
@@ -146,12 +153,11 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
             // eslint-disable-next-line @next/next/no-img-element
             <img src={displayLogo} alt={orgName} className="h-10 object-contain" />
           ) : (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/logo-icon.png" alt="FreeFrame" className="logo-dark h-10 w-10" />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/logo-icon-dark.png" alt="" aria-hidden="true" className="logo-light h-10 w-10" />
-            </>
+            <ThemedDefaultLogo
+              variant="icon"
+              alt="FreeFrame"
+              className="h-10 w-10"
+            />
           )}
           <div className="text-center">
             <h1 className="text-sm font-semibold text-text-primary">{orgName}</h1>
