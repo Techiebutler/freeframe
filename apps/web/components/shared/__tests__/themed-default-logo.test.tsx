@@ -25,15 +25,24 @@ describe('ThemedDefaultLogo', () => {
     },
   )
 
-  it('applies the production theme filter despite a later filter class', () => {
-    const globalsCss = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8')
-    const logoRules = globalsCss.match(
-      /\[data-theme="(?:light|dark)"\]\s+\.themed-default-logo\s*\{[^}]+\}/g,
+  // Pins the two production rules to their theme scoping and to the values that make
+  // the dark-ink asset legible in either theme. It does not prove anything about
+  // beating Tailwind's own output: the generated utilities are not in this document,
+  // and `.filter-none` below is one selector, so it loses on specificity whatever its
+  // position. A variant-prefixed utility would still win, hence the caller contract.
+  it('ships both theme-scoped filter rules and applies them to the logo', () => {
+    // Anchored to this file rather than process.cwd(), which is the launching shell's
+    // directory and not vitest's root.
+    const globalsCss = readFileSync(
+      join(import.meta.dirname, '../../../app/globals.css'),
+      'utf8',
     )
+    const logoRules = globalsCss.match(/^.*\.themed-default-logo\s*\{[^}]*\}$/gm) ?? []
     expect(logoRules).toHaveLength(2)
+    expect(logoRules.every((rule) => rule.includes('data-theme'))).toBe(true)
 
     const style = document.createElement('style')
-    style.textContent = `${logoRules!.join('\n')}\n.filter-none { filter: none; }`
+    style.textContent = `${logoRules.join('\n')}\n.filter-none { filter: none; }`
     document.head.appendChild(style)
 
     try {
@@ -52,15 +61,21 @@ describe('ThemedDefaultLogo', () => {
     }
   })
 
-  it('does not expose style or srcSet overrides', () => {
-    type LogoProps = ComponentProps<typeof ThemedDefaultLogo>
-    type RestrictedPropsStayHidden = [
-      'style' extends keyof LogoProps ? false : true,
-      'srcSet' extends keyof LogoProps ? false : true,
-    ]
+  it('drops style and srcSet even when a caller forces them past the types', () => {
+    const forced = {
+      variant: 'icon',
+      alt: 'FreeFrame',
+      className: 'h-7 w-7',
+      style: { filter: 'none' },
+      srcSet: '/logo-icon.png 2x',
+    } as unknown as ComponentProps<typeof ThemedDefaultLogo>
 
-    const restrictedPropsStayHidden: RestrictedPropsStayHidden = [true, true]
-    expect(restrictedPropsStayHidden).toEqual([true, true])
+    const { container } = render(<ThemedDefaultLogo {...forced} />)
+
+    const logo = container.querySelector('img')!
+    expect(logo.getAttribute('style')).toBeNull()
+    expect(logo.getAttribute('srcset')).toBeNull()
+    expect(logo).toHaveAttribute('src', '/logo-icon-dark.png')
   })
 
   it('uses the full lockup asset and forwards safe native image props', () => {

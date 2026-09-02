@@ -114,12 +114,20 @@
 }
 
 /*
- * The logo owns its filter. Keeping these rules outside Tailwind's layers and
- * scoping both themes through data-theme makes them outrank normal utility
- * classes without resorting to !important.
+ * The logo owns its filter. Tailwind v3 flattens the @tailwind directives at build
+ * time and emits no @layer at-rules, so nothing here gains layer priority. What keeps
+ * these ahead of a utility is specificity — two selectors against a utility's one —
+ * plus sitting after the utilities @tailwind emits. That covers bare utilities only:
+ * a variant-prefixed one (hover:, group-hover:, peer-*) is emitted later at equal or
+ * higher specificity and would still win, which is why callers pass sizing and layout
+ * classes only.
+ *
+ * Dark is the unscoped default so it matches :root at the top of this file: a document
+ * that never received a data-theme is painted with the dark palette, and the mark has
+ * to be legible against it.
  */
 [data-theme="light"] .themed-default-logo { filter: none; }
-[data-theme="dark"] .themed-default-logo { filter: brightness(0) invert(1); }
+:root:not([data-theme="light"]) .themed-default-logo { filter: brightness(0) invert(1); }
 
 @layer components {
 

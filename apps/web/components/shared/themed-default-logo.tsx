@@ -24,6 +24,10 @@ const LOGO_SOURCES: Record<LogoVariant, string> = {
  * A single dark-ink asset keeps the markup hydration-safe and avoids fetching a
  * second image that would only be hidden by CSS. `className` is for sizing
  * and layout only; theme/filter styling is owned by this component.
+ *
+ * `style` and `srcSet` are omitted from the props type and pinned to undefined
+ * after the spread, so the ownership above holds at runtime too rather than
+ * resting on the caller being typechecked.
  */
 export function ThemedDefaultLogo({
   variant,
@@ -37,6 +41,8 @@ export function ThemedDefaultLogo({
     <img
       {...props}
       src={LOGO_SOURCES[variant]}
+      srcSet={undefined}
+      style={undefined}
       alt={decorative ? '' : alt}
       aria-hidden={decorative || undefined}
       className={cn('themed-default-logo', className)}
