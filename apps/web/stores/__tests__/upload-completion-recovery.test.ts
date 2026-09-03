@@ -3,8 +3,12 @@
  *
  * The failure the client sees is not the same thing as the upload failing. A
  * completion whose response was lost on the way back has already moved the
- * version on, and reporting that as Failed is both wrong and destructive: the
- * catch fires `/upload/abort` behind it.
+ * version on, and reporting that as Failed would be wrong.
+ *
+ * The other half of these tests is what must NOT happen: `/upload/abort` is only
+ * ever sent for a user cancel. Firing it from the catch of any failure discards
+ * every part the backend is holding, which is what made an interrupted upload
+ * unrecoverable in the first place.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -104,41 +108,54 @@ describe('an upload whose completion request threw', () => {
     expect(aborts).toEqual([])
   })
 
-  it('still fails when the asset reports a different version than the one uploaded', async () => {
+  it('is interrupted, not failed, when the asset reports a different version', async () => {
     // The trap: GET /assets/{id} returns `_display_version`, which excludes
     // `uploading` and `failed`. On a version upload whose completion genuinely
     // never landed, it answers with the PREVIOUS version, sitting at `ready`.
-    // Keying on status alone would call that a success and skip the abort.
+    // Keying on status alone would call that a success.
     const { aborts } = mockUploadWithFailingCompletion()
     mockAssetRead(PREVIOUS_VERSION_ID, 'ready')
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
     await settled(id)
 
-    expect(rowOf(id).status).toBe('failed')
-    expect(aborts).toHaveLength(1)
+    expect(rowOf(id).status).toBe('interrupted')
+    expect(aborts).toEqual([])
   })
 
-  it('still fails when the asset has no version to report', async () => {
+  it('is interrupted when the asset has no version to report', async () => {
     const { aborts } = mockUploadWithFailingCompletion()
     mockAssetRead(null, '')
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
     await settled(id)
 
-    expect(rowOf(id).status).toBe('failed')
-    expect(aborts).toHaveLength(1)
+    expect(rowOf(id).status).toBe('interrupted')
+    expect(aborts).toEqual([])
   })
 
-  it('still fails when the server cannot be reached for an answer either', async () => {
+  it('is interrupted when the server cannot be reached for an answer either', async () => {
     const { aborts } = mockUploadWithFailingCompletion()
     vi.mocked(api.get).mockRejectedValue(new Error('Failed to fetch'))
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
     await settled(id)
 
-    expect(rowOf(id).status).toBe('failed')
-    expect(aborts).toHaveLength(1)
+    expect(rowOf(id).status).toBe('interrupted')
+    expect(aborts).toEqual([])
+  })
+
+  it('keeps the version id an interrupted row needs to resume', async () => {
+    // Without this the row is a dead end: the resume path keys off the version,
+    // and the upload id and key it needs are looked up from it server-side.
+    mockUploadWithFailingCompletion()
+    mockAssetRead(null, '')
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await settled(id)
+
+    expect(rowOf(id).versionId).toBe(VERSION_ID)
+    expect(rowOf(id).assetId).toBe(ASSET_ID)
   })
 })
 
@@ -154,6 +171,8 @@ describe('an upload that failed before it ever completed', () => {
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
     await settled(id)
 
+    // Failed, not interrupted: initiate never returned, so there is no multipart
+    // upload holding bytes and nothing to come back to.
     expect(rowOf(id).status).toBe('failed')
     // No completion was attempted, so there is nothing for the server to
     // contradict and no reason to spend a request asking.
@@ -175,7 +194,7 @@ describe('races during the recovery read', () => {
   it('does not overwrite a cancel the user made while it was asking', async () => {
     // The row stays `uploading` for the whole round-trip and the panel keeps
     // offering Cancel, so the user can act inside the window the re-read opened.
-    mockUploadWithFailingCompletion()
+    const { aborts } = mockUploadWithFailingCompletion()
     let release: (v: unknown) => void = () => {}
     vi.mocked(api.get).mockImplementation(
       () => new Promise((r) => { release = r }) as never,
@@ -195,28 +214,33 @@ describe('races during the recovery read', () => {
 
     // The user's decision outranks the answer that arrived after it.
     expect(rowOf(id).status).toBe('cancelled')
+    // And it still reaches the abort. The error being handled here is the
+    // completion's, not an AbortError, so a cancel that lands inside the recovery
+    // window is only visible in the row -- which is why the abort is gated on the
+    // row rather than on the error that got us here.
+    expect(aborts).toHaveLength(1)
   })
 
-  it('corrects itself when the abort resurrects the version', async () => {
-    // The object was assembled but the status write never landed, so the version
-    // is still `uploading` and the first read says "not landed". The abort then
-    // finds the object, promotes it to `processing` and dispatches the transcode.
+  it('asks the server exactly once and leaves the parts where they are', async () => {
+    // This used to read twice: once before the abort and once after, because the
+    // abort itself could promote a version whose object was assembled. Nothing
+    // aborts here any more, so the second read has nothing new to learn -- and
+    // the parts that read was compensating for the loss of are still in place.
     const { aborts } = mockUploadWithFailingCompletion()
     let reads = 0
     vi.mocked(api.get).mockImplementation(() => {
       reads += 1
       return Promise.resolve({
         id: ASSET_ID,
-        latest_version: reads === 1
-          ? { id: PREVIOUS_VERSION_ID, processing_status: 'ready' }  // still uploading -> not shown
-          : { id: VERSION_ID, processing_status: 'processing' },     // abort promoted it
+        latest_version: { id: PREVIOUS_VERSION_ID, processing_status: 'ready' },
       }) as never
     })
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
-    await vi.waitFor(() => expect(rowOf(id).status).toBe('processing'))
+    await settled(id)
 
-    expect(aborts).toHaveLength(1)
-    expect(reads).toBe(2)
+    expect(rowOf(id).status).toBe('interrupted')
+    expect(aborts).toEqual([])
+    expect(reads).toBe(1)
   })
 })

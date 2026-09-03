@@ -317,7 +317,18 @@ if (typeof document !== 'undefined') {
   })
 }
 
-export type UploadStatus = 'pending' | 'uploading' | 'processing' | 'complete' | 'failed' | 'cancelled'
+/**
+ * `interrupted` is a transfer that stopped without the user asking it to.
+ *
+ * It is deliberately not `failed`: the multipart upload is still open and every
+ * part already transferred is still held by the storage backend, so the work is
+ * recoverable rather than lost. It is deliberately not `uploading` either --
+ * nothing is running, so a row in this state must not offer Cancel, must not
+ * count towards the active badge, and must not sit in the Active tab claiming
+ * progress it is not making.
+ */
+export type UploadStatus =
+  | 'pending' | 'uploading' | 'processing' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
 
 export interface UploadFile {
   id: string
@@ -378,9 +389,20 @@ interface UploadStore {
   refreshProcessingItems: () => Promise<void>
 }
 
+/**
+ * A server-reported `processing_status` as this panel should render it.
+ *
+ * `uploading` maps to `interrupted` rather than to `uploading` because of who is
+ * asking. Every caller here is reconciling a row against the server, and a
+ * transfer this tab is currently running is never among them: the live row is
+ * driven by its own upload loop, and `mergeHistoryAssets` skips assets already
+ * in the list. So a version the server still has at `uploading` is one nobody in
+ * this tab is pushing bytes to — which is the definition of `interrupted`, and
+ * why such a row used to sit at "Uploading 100%" indefinitely.
+ */
 function mapProcessingStatus(status: string): UploadStatus {
   switch (status) {
-    case 'uploading': return 'uploading'
+    case 'uploading': return 'interrupted'
     case 'processing': return 'processing'
     case 'ready': return 'complete'
     case 'failed': return 'failed'
@@ -429,6 +451,7 @@ function mergeHistoryAssets(existing: UploadFile[], assets: AssetResponse[]): Up
     .map((a) => {
       const v = a.latest_version!
       const file = v.files?.[0]
+      const status = mapProcessingStatus(v.processing_status)
       return {
         id: `history-${a.id}`,
         fileName: file?.original_filename ?? a.name,
@@ -436,9 +459,14 @@ function mergeHistoryAssets(existing: UploadFile[], assets: AssetResponse[]): Up
         fileType: file?.mime_type ?? mimeFromAssetType(a.asset_type),
         projectId: a.project_id,
         assetName: a.name,
-        progress: 100,
+        // How much of the transfer is done is not something the history endpoint
+        // knows, and 100 was a guess that happened to be right for every status
+        // except the one that mattered: an interrupted upload rendered as
+        // "Uploading 100%" forever. Resuming replaces this with the real figure
+        // as soon as the parts already held come back from the server.
+        progress: status === 'interrupted' ? 0 : 100,
         processingProgress: v.processing_status === 'ready' ? 100 : 0,
-        status: mapProcessingStatus(v.processing_status),
+        status,
         assetId: a.id,
         versionId: v.id,
         createdAt: new Date(v.created_at).getTime(),
@@ -553,8 +581,11 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           })
         }
 
-        const cancelled = err instanceof DOMException && err.name === 'AbortError'
-        if (cancelled) {
+        // Asked again after the round-trip below, not captured once: the user can
+        // cancel while it is in flight, and that decision has to reach the abort.
+        const userCancelled = () => get().files.find((f) => f.id === id)?.status === 'cancelled'
+
+        if (isAbortError(err)) {
           updateFile(id, { status: 'cancelled', progress: 0 })
         } else {
           // A completion that threw may still have landed, with only its
@@ -565,27 +596,26 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
             : null
           if (landed) {
             applyLanded(landed)
-            return
+          } else if (!userCancelled()) {
+            // Nothing was destroyed, so nothing is lost: the multipart upload is
+            // still open and every part already sent is still held. `interrupted`
+            // says that, where `failed` claimed the opposite. A version that never
+            // got as far as a multipart upload has nothing to come back to and
+            // stays `failed`.
+            updateFile(id, {
+              status: upload_id && version_id ? 'interrupted' : 'failed',
+              error: err instanceof Error ? err.message : 'Upload failed',
+            })
           }
-          const message = err instanceof Error ? err.message : 'Upload failed'
-          updateFile(id, { status: 'failed', error: message })
         }
-        // Notify backend so the version is marked failed (not stuck at uploading).
-        // This ensures post-refresh history shows the item in "Failed", not "Active".
-        if (upload_id && s3_key && version_id) {
-          const aborting = api.post('/upload/abort', { s3_key, upload_id, version_id })
-            .catch(() => {})
-          // The abort can change the answer we just acted on. When the object was
-          // assembled but the status write never landed, the version is still
-          // `uploading` -- so the read above said "not landed" and we wrote Failed --
-          // and the abort then finds the object, promotes the version to
-          // `processing` and dispatches the transcode. Asking again afterwards is
-          // what stops us reporting Failed for a file the server just resurrected.
-          if (!cancelled && completionAttempted && asset_id && version_id) {
-            await aborting
-            const after = await completedVersionStatus(asset_id, version_id)
-            if (after) applyLanded(after)
-          }
+
+        // The one and only reason to abort. AbortMultipartUpload discards every
+        // part the backend is holding, and this used to run from the catch of
+        // *any* error -- destroying the bytes that make a resume possible at
+        // exactly the moment they became worth keeping. Everything else is left
+        // for the user to resume or for the reaper to reclaim.
+        if (userCancelled() && upload_id && s3_key && version_id) {
+          await api.post('/upload/abort', { s3_key, upload_id, version_id }).catch(() => {})
         }
       } finally {
         releaseWakeLock()
@@ -661,30 +691,27 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           })
         }
 
-        const cancelled = err instanceof DOMException && err.name === 'AbortError'
-        if (cancelled) {
+        // See startUpload for why all three of these are shaped this way.
+        const userCancelled = () => get().files.find((f) => f.id === id)?.status === 'cancelled'
+
+        if (isAbortError(err)) {
           updateFile(id, { status: 'cancelled', progress: 0 })
         } else {
-          // See startUpload: a completion that threw may still have landed.
           const landed = completionAttempted && version_id
             ? await completedVersionStatus(assetId, version_id)
             : null
           if (landed) {
             applyLanded(landed)
-            return
+          } else if (!userCancelled()) {
+            updateFile(id, {
+              status: upload_id && version_id ? 'interrupted' : 'failed',
+              error: err instanceof Error ? err.message : 'Upload failed',
+            })
           }
-          updateFile(id, { status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' })
         }
-        if (upload_id && s3_key && version_id) {
-          const aborting = api.post('/upload/abort', { s3_key, upload_id, version_id })
-            .catch(() => {})
-          // See startUpload: the abort itself can promote the version and dispatch
-          // the transcode, so the answer we acted on above may already be stale.
-          if (!cancelled && completionAttempted) {
-            await aborting
-            const after = await completedVersionStatus(assetId, version_id)
-            if (after) applyLanded(after)
-          }
+
+        if (userCancelled() && upload_id && s3_key && version_id) {
+          await api.post('/upload/abort', { s3_key, upload_id, version_id }).catch(() => {})
         }
       } finally {
         releaseWakeLock()
@@ -779,23 +806,33 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   },
 
   refreshProcessingItems: async () => {
-    const processingFiles = get().files.filter((f) => f.status === 'processing' && f.assetId)
-    if (!processingFiles.length) return
+    // Interrupted rows are polled alongside processing ones. The same upload can
+    // be resumed from another tab or another machine, and without this the row
+    // here keeps offering a resume for a version that is already transcoding.
+    const watched = get().files.filter(
+      (f) => (f.status === 'processing' || f.status === 'interrupted') && f.assetId,
+    )
+    if (!watched.length) return
     try {
       const results = await Promise.all(
-        processingFiles.map((f) =>
+        watched.map((f) =>
           api.get<AssetResponse>(`/assets/${f.assetId}`).catch(() => null),
         ),
       )
       set((s) => ({
         files: s.files.map((f) => {
-          if (f.status !== 'processing' || !f.assetId) return f
-          const idx = processingFiles.findIndex((pf) => pf.assetId === f.assetId)
+          if ((f.status !== 'processing' && f.status !== 'interrupted') || !f.assetId) return f
+          const idx = watched.findIndex((pf) => pf.assetId === f.assetId)
           const asset = idx >= 0 ? results[idx] : null
           if (!asset?.latest_version) return f
           const status = mapProcessingStatus(asset.latest_version.processing_status)
-          if (status === 'processing') return f
-          return { ...f, status, processingProgress: status === 'complete' ? 100 : 0 }
+          if (status === f.status) return f
+          return {
+            ...f,
+            status,
+            progress: status === 'interrupted' ? f.progress : 100,
+            processingProgress: status === 'complete' ? 100 : 0,
+          }
         }),
       }))
     } catch {
@@ -807,11 +844,16 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
 export const useUploadStore = create<UploadStore>()(
   persist(storeCreator, {
     name: 'ff-uploads',
-    // Only persist failed/cancelled items — in-progress uploads can't be resumed
-    // and successful ones are fetched from the API history on panel open.
+    // Terminal rows plus the resumable ones. Successful uploads are fetched from
+    // the API history on panel open, so they are not kept here; an `interrupted`
+    // row is, because it is an offer to carry on and the user is likely to
+    // reload before taking it up. Rows still in flight are still excluded: a
+    // reload kills the transfer, and the version comes back from history as
+    // `interrupted` on its own.
     partialize: (state: UploadStore) => ({
       files: state.files.filter(
-        (f: UploadFile) => f.status === 'failed' || f.status === 'cancelled',
+        (f: UploadFile) =>
+          f.status === 'failed' || f.status === 'cancelled' || f.status === 'interrupted',
       ),
     }),
   }),

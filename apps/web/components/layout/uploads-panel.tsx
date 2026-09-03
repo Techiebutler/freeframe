@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Ban,
   Cog,
+  PauseCircle,
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
@@ -31,9 +32,11 @@ type FilterTab = 'all' | 'active' | 'complete' | 'failed'
 function matchesFilter(status: UploadStatus, filter: FilterTab): boolean {
   switch (filter) {
     case 'all': return true
+    // `interrupted` is deliberately not active: nothing is being transferred, so
+    // listing it here would put a row that cannot move next to ones that are.
     case 'active': return status === 'pending' || status === 'uploading' || status === 'processing'
     case 'complete': return status === 'complete'
-    case 'failed': return status === 'failed' || status === 'cancelled'
+    case 'failed': return status === 'failed' || status === 'cancelled' || status === 'interrupted'
   }
 }
 
@@ -79,6 +82,8 @@ function StatusBadge({ status }: { status: UploadStatus }) {
       return <span className="inline-flex items-center gap-1 rounded-full bg-status-error/10 px-2 py-0.5 text-[10px] font-medium text-status-error"><AlertCircle className="h-2.5 w-2.5" />Failed</span>
     case 'cancelled':
       return <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-tertiary"><Ban className="h-2.5 w-2.5" />Cancelled</span>
+    case 'interrupted':
+      return <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"><PauseCircle className="h-2.5 w-2.5" />Interrupted</span>
   }
 }
 
@@ -142,6 +147,11 @@ function UploadItem({ upload }: { upload: UploadFile }) {
           {upload.status === 'failed' && upload.error && (
             <span className="text-[11px] text-status-error truncate">{upload.error}</span>
           )}
+          {upload.status === 'interrupted' && (
+            <span className="text-[11px] text-amber-400/90 truncate">
+              {upload.error ?? 'Transfer stopped'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -165,7 +175,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
             <X className="h-3.5 w-3.5" />
           </button>
         )}
-        {upload.status === 'failed' && (
+        {(upload.status === 'failed' || upload.status === 'interrupted') && (
           <button
             onClick={() => removeFile(upload.id)}
             className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
@@ -224,7 +234,7 @@ export function UploadsPanel() {
     all: files.length,
     active: files.filter((f) => f.status === 'pending' || f.status === 'uploading' || f.status === 'processing').length,
     complete: files.filter((f) => f.status === 'complete').length,
-    failed: files.filter((f) => f.status === 'failed' || f.status === 'cancelled').length,
+    failed: files.filter((f) => matchesFilter(f.status, 'failed')).length,
   }
 
   const tabs: { id: FilterTab; label: string; count: number }[] = [
