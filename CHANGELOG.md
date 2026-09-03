@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **One migration.** `asset_versions.chunk_size_bytes` records the part size an upload was started with, so a resume places its parts on the boundaries the parts already in the bucket were cut on. Nullable, no backfill: rows created before it derive the size from the parts storage is holding.
+
+### Added
+- **An interrupted upload can be resumed instead of started again** — a transfer that stopped part-way now offers Resume. The server reports which parts the storage backend is already holding, and only the missing ones are sent; a 5 GB file that died at 80% costs the remaining 20%, not another 5 GB. This is the point of no longer aborting on failure: the parts have to still be there for anything to resume from. Because a browser cannot reopen a local file by itself, resuming asks for the same file again — that is inherent to every browser-based resumable uploader — and the name and size are checked against the upload before anything is sent. An upload whose object turned out to be assembled already needs no file and completes on the spot. Discard is the other new button, and is now the only path that throws parts away. (#241)
+
 ### Changed
 - **A share link to a single asset now opens the same review screen as one inside a folder** — the two paths rendered entirely different component trees, so sharing an asset on its own gave a plain video element and a bare comment box, while sharing the same asset inside a folder gave the real review stack. The single-asset path now renders that stack too, which brings it timecode-attached comments, annotation and mention controls, and a version switcher with version-scoped streams and comments. (#117, #123)
 

@@ -1,6 +1,6 @@
 import { create, type StateCreator } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import type { AssetResponse } from '@/types'
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -52,9 +52,10 @@ async function uploadPartOnce(
   uploadId: string,
   partNumber: number,
   controller: AbortController,
+  chunkSize: number,
 ): Promise<string> {
-  const start = (partNumber - 1) * CHUNK_SIZE
-  const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size))
+  const start = (partNumber - 1) * chunkSize
+  const chunk = file.slice(start, Math.min(start + chunkSize, file.size))
 
   // The presigned URL is fetched per attempt, not cached across retries:
   // presign_upload_part expires after an hour and a large upload can outlive
@@ -101,12 +102,13 @@ async function uploadPart(
   uploadId: string,
   partNumber: number,
   controller: AbortController,
+  chunkSize: number,
 ): Promise<string> {
   let lastError: unknown
 
   for (let attempt = 1; attempt <= PART_MAX_ATTEMPTS; attempt++) {
     try {
-      return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller)
+      return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize)
     } catch (err) {
       if (controller.signal.aborted) throw err
       if (err instanceof DOMException && err.name === 'AbortError') throw err
@@ -169,6 +171,13 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * stopped rather than left to run their own retry ladders out: every error after
  * the first is discarded anyway, so cancelling them costs nothing and turns a
  * four-minute wait for an error that has already happened into an immediate one.
+ *
+ * `opts.alreadyHeld` names parts the storage backend is already holding, from a
+ * previous attempt at this same upload. They are skipped and counted as done.
+ * `opts.chunkSize` is the size that upload was cut on, which the server pins per
+ * upload — a resume must place part N at exactly the byte range the parts
+ * already in the bucket were cut on, and that is not necessarily the range
+ * today's CHUNK_SIZE would give.
  */
 export async function uploadAllParts(
   file: File,
@@ -177,8 +186,11 @@ export async function uploadAllParts(
   controller: AbortController,
   onProgress: (percent: number) => void,
   concurrency: number = UPLOAD_CONCURRENCY,
+  opts?: { chunkSize?: number; alreadyHeld?: readonly number[] },
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
-  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+  const chunkSize = opts?.chunkSize ?? CHUNK_SIZE
+  const held = new Set(opts?.alreadyHeld ?? [])
+  const totalChunks = Math.ceil(file.size / chunkSize)
   const parts: Array<{ PartNumber: number; ETag: string }> = new Array(totalChunks)
 
   // Workers run against their own signal, so a part failing for good can stop
@@ -190,8 +202,12 @@ export async function uploadAllParts(
   else controller.signal.addEventListener('abort', stopPool, { once: true })
 
   let nextIndex = 0
-  let completed = 0
+  // Parts the backend already holds are done before this starts, and progress
+  // has to say so: a resume that reports 0% and then jumps is indistinguishable
+  // from one that is re-sending everything.
+  let completed = held.size
   let firstError: unknown = null
+  if (completed > 0) onProgress(Math.round((completed / totalChunks) * 95))
 
   async function worker(): Promise<void> {
     while (true) {
@@ -204,8 +220,9 @@ export async function uploadAllParts(
       if (index >= totalChunks) return
 
       const partNumber = index + 1
+      if (held.has(partNumber)) continue
       try {
-        const etag = await uploadPart(file, s3Key, uploadId, partNumber, pool)
+        const etag = await uploadPart(file, s3Key, uploadId, partNumber, pool, chunkSize)
         parts[index] = { PartNumber: partNumber, ETag: etag }
         completed += 1
         onProgress(Math.round((completed / totalChunks) * 95))
@@ -239,7 +256,11 @@ export async function uploadAllParts(
     const rejected = results.find((r) => r.status === 'rejected')
     if (rejected && rejected.status === 'rejected') throw rejected.reason
 
-    return parts
+    // Dense, because a skipped part leaves its slot empty and a sparse array
+    // serialises as nulls. On a resume this is therefore what was sent now, not
+    // what the upload consists of -- the caller has to know the difference, and
+    // the one that does sends no list at all.
+    return parts.filter(Boolean)
   } finally {
     controller.signal.removeEventListener('abort', stopPool)
   }
@@ -362,6 +383,33 @@ interface VersionInitiateResponse {
   version_id: string
 }
 
+/** GET /upload/{version_id}/parts — where to carry on, and what is already there. */
+interface ResumeInfo {
+  state: 'resumable' | 'assembled'
+  upload_id: string
+  s3_key: string
+  asset_id: string
+  version_id: string
+  chunk_size_bytes: number
+  file_size_bytes: number
+  original_filename: string
+  mime_type: string
+  held_part_numbers: number[]
+}
+
+/**
+ * A refusal the server will repeat, as opposed to one worth trying again.
+ *
+ * 404 and 409 from the resume endpoint are statements about the upload itself --
+ * the version is gone, or it is no longer `uploading` -- so the row is finished
+ * and offering another resume would send the user round the same loop. Anything
+ * else (a 503, a dropped connection) says nothing about the upload, and the row
+ * stays resumable.
+ */
+function isFinalRefusal(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 404 || err.status === 409)
+}
+
 // AbortControllers for cancellation
 const abortControllers: Record<string, AbortController> = {}
 
@@ -376,6 +424,8 @@ interface UploadStore {
   togglePanel: () => void
   startUpload: (file: File, projectId: string, assetName: string, projectName?: string, folderId?: string | null) => string
   startVersionUpload: (file: File, assetId: string, assetName: string, projectId: string) => string
+  resumeUpload: (fileId: string, file: File) => void
+  discardUpload: (fileId: string) => Promise<void>
   cancelUpload: (fileId: string) => void
   removeFile: (fileId: string) => void
   clearCompleted: () => void
@@ -432,6 +482,39 @@ async function completedVersionStatus(
   if (!asset?.latest_version || asset.latest_version.id !== versionId) return null
   const status = mapProcessingStatus(asset.latest_version.processing_status)
   return status === 'processing' || status === 'complete' ? status : null
+}
+
+/**
+ * Finishes an upload whose object is already whole, without the user asking.
+ *
+ * The case: CompleteMultipartUpload succeeded on the storage side and the status
+ * write behind it did not, so the version is still `uploading` with a full-size
+ * object sitting at its key. Nothing needs re-sending, only the completion needs
+ * repeating -- and `/upload/complete` recognises this and finishes the version.
+ *
+ * This used to be a side effect of `/upload/abort`, which found the object while
+ * discarding the upload and promoted the version on its way past. That abort is
+ * gone, so the question is asked directly instead of as a consequence of a
+ * destructive call.
+ *
+ * Returns whether the version was finished. Never throws: this runs from a catch
+ * that has already decided what to report.
+ */
+async function finishAssembledUpload(versionId: string): Promise<boolean> {
+  try {
+    const info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`)
+    if (info.state !== 'assembled') return false
+    await api.post('/upload/complete', {
+      s3_key: info.s3_key,
+      upload_id: info.upload_id,
+      asset_id: info.asset_id,
+      version_id: info.version_id,
+      parts: [],
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 function mimeFromAssetType(assetType: string): string {
@@ -606,6 +689,12 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
               status: upload_id && version_id ? 'interrupted' : 'failed',
               error: err instanceof Error ? err.message : 'Upload failed',
             })
+            // Only after a completion was attempted can the object be whole with
+            // the version still `uploading`, and only then is it worth a request
+            // to find out.
+            if (completionAttempted && version_id && await finishAssembledUpload(version_id)) {
+              applyLanded('processing')
+            }
           }
         }
 
@@ -707,6 +796,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
               status: upload_id && version_id ? 'interrupted' : 'failed',
               error: err instanceof Error ? err.message : 'Upload failed',
             })
+            if (completionAttempted && version_id && await finishAssembledUpload(version_id)) {
+              applyLanded('processing')
+            }
           }
         }
 
@@ -720,6 +812,139 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     })()
 
     return id
+  },
+
+  resumeUpload: (fileId, file) => {
+    const row = get().files.find((f) => f.id === fileId)
+    if (!row || row.status !== 'interrupted' || !row.versionId) return
+    const versionId = row.versionId
+
+    const updateFile = (patch: Partial<UploadFile>) => {
+      set((s) => ({ files: s.files.map((f) => (f.id === fileId ? { ...f, ...patch } : f)) }))
+    }
+
+    ;(async () => {
+      const controller = new AbortController()
+      abortControllers[fileId] = controller
+      let info: ResumeInfo | undefined
+      let completionAttempted = false
+      retainWakeLock()
+      try {
+        updateFile({ status: 'uploading', progress: 0, error: undefined })
+
+        // Everything needed to carry on comes from the server, including the key
+        // and the upload id: this row may have been rehydrated from history in a
+        // browser that never saw them.
+        info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`)
+
+        // `assembled` means the object is whole and only the completion is
+        // outstanding, so the file is not needed and is not checked -- refusing
+        // it over a rename would strand an upload that has nothing left to send.
+        const held = info.state === 'resumable' ? info.held_part_numbers : []
+        let parts: Array<{ PartNumber: number; ETag: string }> = []
+        if (info.state === 'resumable') {
+          // A browser cannot reopen a local file on its own, so the user picks it
+          // again -- and nothing makes them pick the same one. Name and size are
+          // what can be checked without reading the file; they guard against an
+          // accident rather than prove anything, and a mismatch here is what
+          // would silently corrupt the parts already in the bucket.
+          if (file.size !== info.file_size_bytes || file.name !== info.original_filename) {
+            throw new Error(`Pick the same file again: ${info.original_filename}`)
+          }
+          parts = await uploadAllParts(
+            file, info.s3_key, info.upload_id, controller,
+            (percent) => updateFile({ progress: percent }),
+            UPLOAD_CONCURRENCY,
+            { chunkSize: info.chunk_size_bytes, alreadyHeld: held },
+          )
+        }
+
+        completionAttempted = true
+        await api.post('/upload/complete', {
+          s3_key: info.s3_key,
+          upload_id: info.upload_id,
+          asset_id: info.asset_id,
+          version_id: info.version_id,
+          // Nothing when parts were skipped. This list is only read by a backend
+          // that cannot list its own parts, and a resumed upload cannot produce a
+          // complete one -- it never saw the ETags of the parts it did not send.
+          // Handing over the partial list would complete a truncated object with
+          // no error on most backends; handing over none makes that backend
+          // refuse instead, which is the failure worth having.
+          parts: held.length > 0 ? [] : parts,
+        })
+
+        const isMedia = /^(video|audio|image)\//.test(info.mime_type)
+        updateFile({
+          progress: 100,
+          status: isMedia ? 'processing' : 'complete',
+          processingProgress: 0,
+          assetId: info.asset_id,
+        })
+      } catch (err) {
+        const userCancelled = () => get().files.find((f) => f.id === fileId)?.status === 'cancelled'
+
+        if (isAbortError(err)) {
+          updateFile({ status: 'cancelled', progress: 0 })
+        } else {
+          // See startUpload: the completion may have landed with only its
+          // response lost, and this is the second time round for this version.
+          const landed = completionAttempted && info
+            ? await completedVersionStatus(info.asset_id, info.version_id)
+            : null
+          if (landed) {
+            if (!userCancelled()) {
+              updateFile({
+                progress: 100,
+                status: landed,
+                processingProgress: landed === 'complete' ? 100 : 0,
+              })
+            }
+          } else if (!userCancelled()) {
+            updateFile({
+              // Back to resumable unless the server said this upload is over.
+              // Nothing was aborted here either, so the parts sent this time are
+              // held too and the next attempt starts from further along.
+              status: isFinalRefusal(err) ? 'failed' : 'interrupted',
+              progress: 0,
+              error: err instanceof Error ? err.message : 'Upload failed',
+            })
+          }
+        }
+
+        if (userCancelled() && info) {
+          await api.post('/upload/abort', {
+            s3_key: info.s3_key,
+            upload_id: info.upload_id,
+            version_id: info.version_id,
+          }).catch(() => {})
+        }
+      } finally {
+        releaseWakeLock()
+        delete abortControllers[fileId]
+      }
+    })()
+  },
+
+  discardUpload: async (fileId) => {
+    // The counterpart to no longer aborting on failure. Without it the only way
+    // to be rid of an upload the user does not want back is to wait for the
+    // reaper, and the row would keep offering a resume in the meantime.
+    const row = get().files.find((f) => f.id === fileId)
+    if (!row) return
+    set((s) => ({ files: s.files.filter((f) => f.id !== fileId) }))
+    if (!row.versionId) return
+    try {
+      const info = await api.get<ResumeInfo>(`/upload/${row.versionId}/parts`)
+      await api.post('/upload/abort', {
+        s3_key: info.s3_key,
+        upload_id: info.upload_id,
+        version_id: info.version_id,
+      })
+    } catch {
+      // The row is gone from the panel either way. What is left in the bucket is
+      // the reaper's job, and it has the activity timestamp it needs to do it.
+    }
   },
 
   cancelUpload: (fileId) => {

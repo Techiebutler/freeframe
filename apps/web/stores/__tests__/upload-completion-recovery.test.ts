@@ -221,15 +221,55 @@ describe('races during the recovery read', () => {
     expect(aborts).toHaveLength(1)
   })
 
-  it('asks the server exactly once and leaves the parts where they are', async () => {
-    // This used to read twice: once before the abort and once after, because the
-    // abort itself could promote a version whose object was assembled. Nothing
-    // aborts here any more, so the second read has nothing new to learn -- and
-    // the parts that read was compensating for the loss of are still in place.
+  it('finishes by itself when the object turned out to be assembled', async () => {
+    // The object was assembled and the status write never landed, so the version
+    // is still `uploading` and the asset read says "not landed". This used to be
+    // corrected as a side effect of the abort, which found the object on its way
+    // past. The question is now asked directly, of an endpoint whose whole job is
+    // answering it -- and nothing has to be destroyed to get the answer.
     const { aborts } = mockUploadWithFailingCompletion()
-    let reads = 0
-    vi.mocked(api.get).mockImplementation(() => {
-      reads += 1
+    vi.mocked(api.get).mockImplementation((path: string) => {
+      if (path.endsWith('/parts')) {
+        return Promise.resolve({
+          state: 'assembled',
+          upload_id: 'u1',
+          s3_key: 'raw/p/a/v/original.mp4',
+          asset_id: ASSET_ID,
+          version_id: VERSION_ID,
+          chunk_size_bytes: 10 * 1024 * 1024,
+          file_size_bytes: 1024,
+          original_filename: 'clip.mp4',
+          mime_type: 'video/mp4',
+          held_part_numbers: [],
+        }) as never
+      }
+      return Promise.resolve({
+        id: ASSET_ID,
+        latest_version: { id: PREVIOUS_VERSION_ID, processing_status: 'ready' },
+      }) as never
+    })
+    // The retried completion is the one that succeeds; the first still throws.
+    let completions = 0
+    const originalPost = vi.mocked(api.post).getMockImplementation()!
+    vi.mocked(api.post).mockImplementation((path: string, body?: unknown) => {
+      if (path === '/upload/complete' && ++completions > 1) return Promise.resolve({}) as never
+      return originalPost(path, body)
+    })
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await vi.waitFor(() => expect(rowOf(id).status).toBe('processing'))
+
+    expect(aborts).toEqual([])
+  })
+
+  it('stays interrupted when the object is not assembled after all', async () => {
+    // The other branch of the same question: nothing to finish, so the row keeps
+    // its offer to resume rather than being written off.
+    const { aborts } = mockUploadWithFailingCompletion()
+    vi.mocked(api.get).mockImplementation((path: string) => {
+      if (path.endsWith('/parts')) {
+        return Promise.reject(new Error('Failed to fetch')) as never
+      }
       return Promise.resolve({
         id: ASSET_ID,
         latest_version: { id: PREVIOUS_VERSION_ID, processing_status: 'ready' },
@@ -241,6 +281,5 @@ describe('races during the recovery read', () => {
 
     expect(rowOf(id).status).toBe('interrupted')
     expect(aborts).toEqual([])
-    expect(reads).toBe(1)
   })
 })

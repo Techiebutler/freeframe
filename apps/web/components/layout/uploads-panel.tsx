@@ -14,6 +14,7 @@ import {
   Ban,
   Cog,
   PauseCircle,
+  Trash2,
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
@@ -90,12 +91,24 @@ function StatusBadge({ status }: { status: UploadStatus }) {
 // ─── Upload Item ──────────────────────────────────────────────────────────────
 
 function UploadItem({ upload }: { upload: UploadFile }) {
-  const { cancelUpload, removeFile } = useUploadStore()
+  const { cancelUpload, removeFile, resumeUpload, discardUpload } = useUploadStore()
   const isUploading = upload.status === 'pending' || upload.status === 'uploading'
   const isProcessing = upload.status === 'processing'
+  const isInterrupted = upload.status === 'interrupted'
   const showProgress = isUploading || isProcessing
 
   const progressValue = isProcessing ? upload.processingProgress : upload.progress
+
+  // The browser will not reopen a local file on its own, so resuming needs the
+  // user to hand it back. Re-selection is inherent to every browser-based
+  // resumable uploader, not something this design chose.
+  const filePicker = React.useRef<HTMLInputElement>(null)
+  const onPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0]
+    // Cleared so picking the same file twice in a row still fires a change.
+    e.target.value = ''
+    if (picked) resumeUpload(upload.id, picked)
+  }
 
   return (
     <div className="group flex items-start gap-3 px-4 py-3 hover:bg-bg-hover/50 transition-colors">
@@ -149,7 +162,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
           )}
           {upload.status === 'interrupted' && (
             <span className="text-[11px] text-amber-400/90 truncate">
-              {upload.error ?? 'Transfer stopped'}
+              {upload.error ?? 'Transfer stopped'} &middot; resume to send only what is missing
             </span>
           )}
         </div>
@@ -157,6 +170,31 @@ function UploadItem({ upload }: { upload: UploadFile }) {
 
       {/* Actions */}
       <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        {isInterrupted && (
+          <>
+            <input
+              ref={filePicker}
+              type="file"
+              accept={upload.fileType || undefined}
+              className="hidden"
+              onChange={onPicked}
+            />
+            <button
+              onClick={() => filePicker.current?.click()}
+              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
+              title={`Resume — pick ${upload.fileName} again`}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { void discardUpload(upload.id) }}
+              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-status-error hover:bg-bg-hover transition-colors"
+              title="Discard this upload and free the space it is holding"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
         {isUploading && (
           <button
             onClick={() => cancelUpload(upload.id)}
@@ -175,7 +213,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
             <X className="h-3.5 w-3.5" />
           </button>
         )}
-        {(upload.status === 'failed' || upload.status === 'interrupted') && (
+        {upload.status === 'failed' && (
           <button
             onClick={() => removeFile(upload.id)}
             className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
