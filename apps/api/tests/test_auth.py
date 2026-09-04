@@ -330,3 +330,107 @@ def test_delete_user_rejects_self(client, auth_headers, test_user):
     test_user.is_superadmin = True
     resp = client.delete(f"/users/{test_user.id}", headers=auth_headers)
     assert resp.status_code == 400
+
+
+def _pending_invitee(token: str = "invite-token-1") -> MagicMock:
+    """A user mid-invite: name derived from the email, no password yet."""
+    u = _mock_user("patrick.rosen@example.com")
+    u.name = "patrick.rosen"  # what the Bulk Invite dialog fills in
+    u.status = UserStatus.pending_invite
+    u.email_verified = False
+    u.password_hash = None
+    u.invite_token = token
+    u.invite_token_expires_at = None
+    return u
+
+
+def test_accept_invite_stores_the_name_the_invitee_typed(client, mock_db):
+    """POST /auth/accept-invite — the name on the accept screen reaches the user.
+
+    Issue #320: the screen asked for a full name, validated it and sent it, and
+    AcceptInviteRequest did not declare the field — so pydantic's default
+    extra="ignore" dropped it silently and the invitee kept the local part of
+    their email address as a display name, on their profile, the members list
+    and every comment.
+    """
+    user = _pending_invitee()
+    mock_db.first.return_value = user
+
+    resp = client.post(
+        "/auth/accept-invite",
+        json={"token": "invite-token-1", "password": "securepassword", "name": "Patrick Rosen"},
+    )
+
+    assert resp.status_code == 200
+    assert user.name == "Patrick Rosen", "the typed name is stored, not the one derived from the email"
+
+
+def test_accept_invite_trims_the_name(client, mock_db):
+    """Surrounding whitespace is not part of a display name."""
+    user = _pending_invitee()
+    mock_db.first.return_value = user
+
+    resp = client.post(
+        "/auth/accept-invite",
+        json={"token": "invite-token-1", "password": "securepassword", "name": "  Patrick Rosen  "},
+    )
+
+    assert resp.status_code == 200
+    assert user.name == "Patrick Rosen"
+
+
+def test_accept_invite_rejects_a_blank_name(client, mock_db):
+    """A name of only whitespace is refused rather than stored empty.
+
+    `min_length=1` counts characters, so "   " satisfies it and then strips to
+    "" — which User.name accepts, being String(255) and nullable=False, and
+    which renders as a blank author on every comment. The frontend already
+    rejects it (`if (!name.trim())`); this is the same rule where it is enforced.
+    """
+    user = _pending_invitee()
+    mock_db.first.return_value = user
+
+    resp = client.post(
+        "/auth/accept-invite",
+        json={"token": "invite-token-1", "password": "securepassword", "name": "   "},
+    )
+
+    assert resp.status_code == 422
+    assert user.name == "patrick.rosen", "a rejected request changes nothing"
+
+
+def test_accept_invite_requires_a_name(client, mock_db):
+    """The field is required, so an omission is refused rather than ignored.
+
+    Documenting the contract change: the only caller has always sent this, and a
+    silently-ignored field is the defect being fixed — a 422 says so where the
+    old behaviour said nothing at all.
+    """
+    user = _pending_invitee()
+    mock_db.first.return_value = user
+
+    resp = client.post(
+        "/auth/accept-invite",
+        json={"token": "invite-token-1", "password": "securepassword"},
+    )
+
+    assert resp.status_code == 422
+    assert user.name == "patrick.rosen"
+
+
+def test_accept_invite_still_sets_password_and_activates(client, mock_db):
+    """The control: adding the name must not disturb what accept-invite already did."""
+    user = _pending_invitee()
+    mock_db.first.return_value = user
+
+    resp = client.post(
+        "/auth/accept-invite",
+        json={"token": "invite-token-1", "password": "securepassword", "name": "Patrick Rosen"},
+    )
+
+    assert resp.status_code == 200
+    assert user.password_hash is not None
+    assert user.email_verified is True
+    assert user.status == UserStatus.active
+    assert user.invite_token is None
+    assert user.invite_token_expires_at is None
