@@ -227,14 +227,17 @@ describe('resumeUpload', () => {
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('interrupted'))
 
     expect(global.fetch).not.toHaveBeenCalled()
-    expect(rowOf('row-1').error).toContain('clip.mp4')
+    // Short enough to survive the panel row's truncation, and it says what is
+    // wrong rather than repeating the name of the file just picked.
+    expect(rowOf('row-1').error).toBe('File does not match original')
   })
 
-  it('refuses a file with a different name', async () => {
+  it('refuses a file with a different name and names the one it wants', async () => {
     useUploadStore.getState().resumeUpload('row-1', makeFile(TOTAL, 'other.mp4'))
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('interrupted'))
 
     expect(global.fetch).not.toHaveBeenCalled()
+    expect(rowOf('row-1').error).toBe('Please select clip.mp4')
   })
 
   it('completes an already assembled upload without needing the file at all', async () => {

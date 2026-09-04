@@ -852,15 +852,16 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           // The two checks report separately because they mean different things
           // to whoever has to act on them: the wrong file is picked again, a
           // right-named file of the wrong length is a file that changed.
+          //
+          // Both messages lead with the instruction and stay short enough for
+          // one line. The panel row truncates, and naming the file the user just
+          // picked -- the one thing they already know -- used up the whole line
+          // before reaching the part that says what to do about it.
           if (file.name !== info.original_filename) {
-            throw new Error(
-              `That is ${file.name}. This upload needs ${info.original_filename}.`,
-            )
+            throw new Error(`Please select ${info.original_filename}`)
           }
           if (file.size !== info.file_size_bytes) {
-            throw new Error(
-              `${file.name} is not the file this upload started with: same name, different size.`,
-            )
+            throw new Error('File does not match original')
           }
           parts = await uploadAllParts(
             file, info.s3_key, info.upload_id, controller,
