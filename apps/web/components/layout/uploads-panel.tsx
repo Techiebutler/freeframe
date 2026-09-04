@@ -161,8 +161,18 @@ function UploadItem({ upload }: { upload: UploadFile }) {
             <span className="text-[11px] text-status-error truncate">{upload.error}</span>
           )}
           {upload.status === 'interrupted' && (
-            <span className="text-[11px] text-amber-400/90 truncate">
-              {upload.error ?? 'Transfer stopped'} &middot; resume to send only what is missing
+            // The reason gets the whole line, and red when there is one. A
+            // rejected file is the case that matters: it is the only outcome the
+            // user caused and can correct, and it read as a shrug when it shared
+            // the muted colour of "the network dropped" and had a hint appended
+            // after it that pushed it out of the truncation.
+            <span
+              className={cn(
+                'text-[11px] truncate',
+                upload.error ? 'text-status-error' : 'text-amber-400/90',
+              )}
+            >
+              {upload.error ?? 'Transfer stopped \u00b7 resume to send only what is missing'}
             </span>
           )}
         </div>

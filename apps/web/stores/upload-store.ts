@@ -848,8 +848,19 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           // what can be checked without reading the file; they guard against an
           // accident rather than prove anything, and a mismatch here is what
           // would silently corrupt the parts already in the bucket.
-          if (file.size !== info.file_size_bytes || file.name !== info.original_filename) {
-            throw new Error(`Pick the same file again: ${info.original_filename}`)
+          //
+          // The two checks report separately because they mean different things
+          // to whoever has to act on them: the wrong file is picked again, a
+          // right-named file of the wrong length is a file that changed.
+          if (file.name !== info.original_filename) {
+            throw new Error(
+              `That is ${file.name}. This upload needs ${info.original_filename}.`,
+            )
+          }
+          if (file.size !== info.file_size_bytes) {
+            throw new Error(
+              `${file.name} is not the file this upload started with: same name, different size.`,
+            )
           }
           parts = await uploadAllParts(
             file, info.s3_key, info.upload_id, controller,
