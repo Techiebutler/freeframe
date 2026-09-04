@@ -799,6 +799,7 @@ export function CommentPanel({
   const [filters, setFilters] = React.useState<FilterState>(EMPTY_FILTERS);
   const [replyingTo, setReplyingTo] = React.useState<string | null>(null);
   const [exportOpen, setExportOpen] = React.useState(false);
+  const [exportError, setExportError] = React.useState<string | null>(null);
   const [fpsPromptFormat, setFpsPromptFormat] =
     React.useState<ExportFormat | null>(null);
 
@@ -907,6 +908,7 @@ export function CommentPanel({
 
   async function handleExport(format: ExportFormat, fps?: number) {
     setExportOpen(false);
+    setExportError(null);
     const versionId = exportVersionId ?? currentVersion?.id;
     if (!currentAsset || !versionId) return;
     try {
@@ -920,7 +922,18 @@ export function CommentPanel({
       if (err instanceof FpsRequiredError) {
         setFpsPromptFormat(format);
       } else {
-        console.error(err);
+        // Every other export failure used to go to the console, where nobody
+        // looks: an unsupported frame rate, a non-video asset and a version with
+        // nothing timecoded all produced a click that did nothing at all. Shown
+        // in the panel rather than as a toast, next to the control that failed
+        // and alongside the fps prompt, which is where this component already
+        // answers for this button.
+        // `err.message` and not `err instanceof Error` alone: an Error with an
+        // empty message is falsy, and the line below renders on truthiness --
+        // so the branch meant to explain the failure would show nothing at all.
+        setExportError(
+          (err instanceof Error && err.message) || "Export failed",
+        );
       }
     }
   }
@@ -1230,6 +1243,12 @@ export function CommentPanel({
           </div>
         </div>
       </div>
+
+      {exportError && (
+        <div className="px-4 pb-2 shrink-0">
+          <p className="text-[11px] text-status-error">{exportError}</p>
+        </div>
+      )}
 
       {/* ─── Search bar ───────────────────────────────────────────── */}
       {searchOpen && (

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Exporting comments to an NLE no longer produces a silently empty marker file** — a version whose comments carry no timecode exported to an EDL with a header and nothing after it. The download succeeded, the file opened, and DaVinci Resolve reported nothing to import, so the cause surfaced three applications away from where it was and looked like a broken export rather than an empty one. The export now refuses, and says which of the three reasons applies: the version has no comments, none of them are attached to a timecode, or the only timecoded ones were resolved and excluded. CSV is unaffected and still carries every comment, which is what the message points at. (#84)
+- **A failed comment export now says so** — every error except the frame-rate prompt went to `console.error`, so an unsupported frame rate, a non-video asset and a version with nothing timecoded all produced a click that did nothing visible. The reason is shown in the comment panel, next to the control that failed. Structured error details from the API are read for their message rather than collapsing to "Export failed".
+
 ### Changed
 - **A share link to a single asset now opens the same review screen as one inside a folder** — the two paths rendered entirely different component trees, so sharing an asset on its own gave a plain video element and a bare comment box, while sharing the same asset inside a folder gave the real review stack. The single-asset path now renders that stack too, which brings it timecode-attached comments, annotation and mention controls, and a version switcher with version-scoped streams and comments. (#117, #123)
 
