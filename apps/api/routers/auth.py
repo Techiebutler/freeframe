@@ -168,7 +168,11 @@ def accept_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
     if user.invite_token_expires_at and user.invite_token_expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invite link expired")
     
-    # Set password and activate user
+    # Set password, name and activate user. The name is the one the invitee
+    # typed; until now it was discarded and they kept whatever the invite
+    # dialog derived from their email address (issue #320). Already trimmed and
+    # checked non-blank by DisplayName.
+    user.name = body.name
     user.password_hash = hash_password(body.password)
     user.email_verified = True  # Invited users are pre-verified
     user.status = UserStatus.active

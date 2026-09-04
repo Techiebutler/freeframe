@@ -26,6 +26,26 @@ def _reject_bcrypt_overflow(v: str) -> str:
 # ever being stored truncated.
 NewPassword = Annotated[str, Field(min_length=8), AfterValidator(_reject_bcrypt_overflow)]
 
+
+def _require_non_blank_name(v: str) -> str:
+    """Trim a display name and reject one that is only whitespace.
+
+    `min_length=1` alone counts characters, so "   " satisfies it and then
+    strips to the empty string — which `User.name` accepts, being
+    `String(255), nullable=False`, and which renders as a blank author on every
+    comment. Trimming here rather than at the call site means every consumer of
+    the field gets the stored form, and there is one place to look for the rule.
+    """
+    trimmed = v.strip()
+    if not trimmed:
+        raise ValueError("name must not be blank")
+    return trimmed
+
+
+# A user-visible display name. Bounded to match `User.name` (String(255)); the
+# bound is applied before trimming, so the stored value is always within it.
+DisplayName = Annotated[str, Field(min_length=1, max_length=255), AfterValidator(_require_non_blank_name)]
+
 class LoginRequest(BaseModel):
     email: EmailStr
     # No length bounds on login. A creation-side floor prevents new weak
@@ -97,6 +117,12 @@ class SetPasswordRequest(BaseModel):
 class AcceptInviteRequest(BaseModel):
     token: str
     password: NewPassword
+    # The accept screen has always asked for this, validated it and sent it;
+    # the model did not declare it, so pydantic's default extra="ignore"
+    # dropped it and the invitee kept the name derived from their email
+    # address. Required rather than optional: the only caller already sends it,
+    # and a silently-ignored field is the bug being fixed here.
+    name: DisplayName
 
 class InviteInfoResponse(BaseModel):
     email: str
