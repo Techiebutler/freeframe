@@ -13,6 +13,8 @@ import {
   RotateCcw,
   Ban,
   Cog,
+  PauseCircle,
+  Trash2,
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
@@ -31,9 +33,11 @@ type FilterTab = 'all' | 'active' | 'complete' | 'failed'
 function matchesFilter(status: UploadStatus, filter: FilterTab): boolean {
   switch (filter) {
     case 'all': return true
+    // `interrupted` is deliberately not active: nothing is being transferred, so
+    // listing it here would put a row that cannot move next to ones that are.
     case 'active': return status === 'pending' || status === 'uploading' || status === 'processing'
     case 'complete': return status === 'complete'
-    case 'failed': return status === 'failed' || status === 'cancelled'
+    case 'failed': return status === 'failed' || status === 'cancelled' || status === 'interrupted'
   }
 }
 
@@ -79,18 +83,32 @@ function StatusBadge({ status }: { status: UploadStatus }) {
       return <span className="inline-flex items-center gap-1 rounded-full bg-status-error/10 px-2 py-0.5 text-[10px] font-medium text-status-error"><AlertCircle className="h-2.5 w-2.5" />Failed</span>
     case 'cancelled':
       return <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-tertiary"><Ban className="h-2.5 w-2.5" />Cancelled</span>
+    case 'interrupted':
+      return <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"><PauseCircle className="h-2.5 w-2.5" />Interrupted</span>
   }
 }
 
 // ─── Upload Item ──────────────────────────────────────────────────────────────
 
 function UploadItem({ upload }: { upload: UploadFile }) {
-  const { cancelUpload, removeFile } = useUploadStore()
+  const { cancelUpload, removeFile, resumeUpload, discardUpload } = useUploadStore()
   const isUploading = upload.status === 'pending' || upload.status === 'uploading'
   const isProcessing = upload.status === 'processing'
+  const isInterrupted = upload.status === 'interrupted'
   const showProgress = isUploading || isProcessing
 
   const progressValue = isProcessing ? upload.processingProgress : upload.progress
+
+  // The browser will not reopen a local file on its own, so resuming needs the
+  // user to hand it back. Re-selection is inherent to every browser-based
+  // resumable uploader, not something this design chose.
+  const filePicker = React.useRef<HTMLInputElement>(null)
+  const onPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0]
+    // Cleared so picking the same file twice in a row still fires a change.
+    e.target.value = ''
+    if (picked) resumeUpload(upload.id, picked)
+  }
 
   return (
     <div className="group flex items-start gap-3 px-4 py-3 hover:bg-bg-hover/50 transition-colors">
@@ -142,11 +160,51 @@ function UploadItem({ upload }: { upload: UploadFile }) {
           {upload.status === 'failed' && upload.error && (
             <span className="text-[11px] text-status-error truncate">{upload.error}</span>
           )}
+          {upload.status === 'interrupted' && (
+            // The reason gets the whole line, and red when there is one. A
+            // rejected file is the case that matters: it is the only outcome the
+            // user caused and can correct, and it read as a shrug when it shared
+            // the muted colour of "the network dropped" and had a hint appended
+            // after it that pushed it out of the truncation.
+            <span
+              className={cn(
+                'text-[11px] truncate',
+                upload.error ? 'text-status-error' : 'text-amber-400/90',
+              )}
+            >
+              {upload.error ?? 'Transfer stopped \u00b7 resume to send only what is missing'}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Actions */}
       <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        {isInterrupted && (
+          <>
+            <input
+              ref={filePicker}
+              type="file"
+              accept={upload.fileType || undefined}
+              className="hidden"
+              onChange={onPicked}
+            />
+            <button
+              onClick={() => filePicker.current?.click()}
+              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
+              title={`Resume — pick ${upload.fileName} again`}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { void discardUpload(upload.id) }}
+              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-status-error hover:bg-bg-hover transition-colors"
+              title="Discard this upload and free the space it is holding"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
         {isUploading && (
           <button
             onClick={() => cancelUpload(upload.id)}
@@ -224,7 +282,7 @@ export function UploadsPanel() {
     all: files.length,
     active: files.filter((f) => f.status === 'pending' || f.status === 'uploading' || f.status === 'processing').length,
     complete: files.filter((f) => f.status === 'complete').length,
-    failed: files.filter((f) => f.status === 'failed' || f.status === 'cancelled').length,
+    failed: files.filter((f) => matchesFilter(f.status, 'failed')).length,
   }
 
   const tabs: { id: FilterTab; label: string; count: number }[] = [

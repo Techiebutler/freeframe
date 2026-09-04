@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
@@ -24,7 +25,8 @@ from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
     PresignPartRequest, PresignPartResponse,
     CompleteUploadRequest, CompleteUploadResponse, AbortUploadRequest,
-    ALLOWED_MIME_TYPES, mime_to_asset_type,
+    ResumeUploadResponse,
+    ALLOWED_MIME_TYPES, CHUNK_SIZE_BYTES, mime_to_asset_type,
 )
 from ..services.storage import upload_guard_error
 
@@ -111,6 +113,11 @@ def initiate_upload(
     # bucket and presign-part has nothing to validate against.
     version.upload_id = upload_id
     version.last_activity_at = datetime.now(timezone.utc)
+    # Pin the part size to the upload rather than leaving it to whatever constant
+    # the browser's build carries. A resume has to cut the file on the same
+    # boundaries the parts already in the bucket were cut on, and R2 rejects a
+    # non-final part that is not the same size as its siblings.
+    version.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     # Create MediaFile record
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
@@ -130,6 +137,7 @@ def initiate_upload(
         s3_key=s3_key,
         asset_id=asset.id,
         version_id=version.id,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 
 
@@ -213,6 +221,178 @@ def _already_assembled(s3_key: str, expected_bytes: int, version_id) -> bool | N
         logger.warning("could not check whether upload %s already completed", version_id,
                        exc_info=True)
         return None
+
+
+def _pinned_chunk_size(version, stored: list[dict]) -> int:
+    """The part size this upload is cut on.
+
+    The recorded value wins. It is NULL only for versions created before it was
+    recorded, and for those the parts already in the bucket are better evidence
+    than today's constant: a part that is not the object's last one is a full
+    chunk by definition, and a part whose number is below some other held part's
+    number cannot be the last one. That needs two parts to work, which is why the
+    constant remains the final fallback -- with nothing uploaded there is nothing
+    to be inconsistent with.
+    """
+    if version.chunk_size_bytes:
+        return version.chunk_size_bytes
+    if len(stored) >= 2:
+        highest = max(p["PartNumber"] for p in stored)
+        full = [p["Size"] for p in stored if p["PartNumber"] < highest and p.get("Size")]
+        if full:
+            # max rather than any: a short part would be a broken upload, and
+            # under-reporting the chunk size is the failure that corrupts.
+            return max(full)
+    return CHUNK_SIZE_BYTES
+
+
+def _held_part_numbers(stored: list[dict], chunk_size: int, total_bytes: int) -> list[int]:
+    """Which parts the backend already holds, at the size this upload cuts them at.
+
+    Size, not ETag. ETag-as-MD5 holds on S3, MinIO and Garage, but it is a
+    convention rather than a guarantee: bucket-level default encryption changes
+    it invisibly -- create_multipart_upload passes only Bucket, Key and
+    ContentType, so an operator's SSE-KMS default is not something this code can
+    see -- and rclone ships `use_multipart_etag: false` for R2 and SeaweedFS,
+    which is the reference client saying the vendor docs are wrong. Size is
+    reported by every backend and means the same thing on all of them.
+
+    A part that does not match is simply left out and sent again. That is free:
+    re-PUTting a part number into an open multipart upload replaces it.
+
+    A part number listed more than once is left out too. SeaweedFS keeps both
+    writes of a retried part, and telling them apart needs exactly the ETag
+    comparison this function refuses to rely on. Completion rejects such an
+    upload either way; re-sending is at least the branch that does not assemble
+    bytes we did not choose.
+    """
+    total_parts = math.ceil(total_bytes / chunk_size) if chunk_size > 0 else 0
+    counts: dict[int, int] = {}
+    for part in stored:
+        counts[part["PartNumber"]] = counts.get(part["PartNumber"], 0) + 1
+
+    held = []
+    for part in stored:
+        number = part["PartNumber"]
+        if number < 1 or number > total_parts or counts[number] > 1:
+            continue
+        expected = (
+            total_bytes - (total_parts - 1) * chunk_size
+            if number == total_parts
+            else chunk_size
+        )
+        if part.get("Size") == expected:
+            held.append(number)
+    return sorted(held)
+
+
+@router.get("/{version_id}/parts", response_model=ResumeUploadResponse)
+def list_held_parts(
+    version_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """What an interrupted upload still needs, so the client can send only that.
+
+    Keyed on the version rather than on a client-supplied key and upload id. The
+    upload id is recorded server-side, so the caller does not have to have
+    survived the interruption holding it -- which is the common case, since a
+    closed tab takes it with it. It also means no form of bucket scan is
+    involved: ListMultipartUploads treats its Prefix as an exact key on MinIO
+    (minio/minio#20989) and is served there from a node-local cache that is empty
+    after a restart, so a scan is not a mechanism this can be built on.
+
+    Like the rest of `/upload/*`, this is exempt from the global rate limiter and
+    makes one ListParts call per request.
+    """
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if version.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized for this upload")
+    if version.processing_status != ProcessingStatus.uploading:
+        # Nothing to resume: the version has either finished, been resolved as
+        # failed, or been completed by another tab. The client shows the real
+        # status instead of an offer it cannot honour.
+        raise HTTPException(
+            status_code=409, detail=f"This upload is already {version.processing_status.value}."
+        )
+
+    media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+    if not media_file or not media_file.s3_key_raw:
+        raise HTTPException(status_code=404, detail="Upload not found for this version")
+    if not version.upload_id:
+        # A row from before upload ids were recorded. There is no way to name the
+        # multipart upload it belongs to, so its parts cannot be reached.
+        raise HTTPException(
+            status_code=409,
+            detail="This upload cannot be resumed. Please upload the file again.",
+        )
+
+    s3_key = media_file.s3_key_raw
+    try:
+        stored = list_upload_parts(s3_key, version.upload_id)
+    except MultipartUploadGone:
+        # Either the reaper took it, or CompleteMultipartUpload already ran and
+        # only the status write is missing. HeadObject is what tells those apart,
+        # and getting it wrong in the second direction tells a user whose file is
+        # sitting in the bucket to send all of it again.
+        assembled = _already_assembled(s3_key, media_file.file_size_bytes, version.id)
+        if assembled is None:
+            raise _storage_unreachable()
+        if not assembled:
+            raise HTTPException(
+                status_code=409,
+                detail="This upload is no longer available. Please upload the file again.",
+            )
+        return ResumeUploadResponse(
+            state="assembled",
+            upload_id=version.upload_id,
+            s3_key=s3_key,
+            asset_id=version.asset_id,
+            version_id=version.id,
+            chunk_size_bytes=_pinned_chunk_size(version, []),
+            file_size_bytes=media_file.file_size_bytes,
+            original_filename=media_file.original_filename,
+            mime_type=media_file.mime_type,
+            held_part_numbers=[],
+        )
+    except MultipartListingUnsupported:
+        # No listing, so nothing is known to be held and every part is sent
+        # again. The upload still resumes in the sense that matters -- it goes
+        # into the same multipart upload and completes -- it just saves nothing.
+        logger.info(
+            "storage backend does not support ListParts; upload %s restarts from part 1",
+            version.id,
+        )
+        stored = []
+    except (ClientError, BotoCoreError) as e:
+        logger.warning("listing parts for upload %s failed: %s", version.id, e)
+        raise _storage_unreachable() from e
+
+    chunk_size = _pinned_chunk_size(version, stored)
+    held = _held_part_numbers(stored, chunk_size, media_file.file_size_bytes)
+
+    # Same proof of life presign-part records. Asking to resume is activity, and
+    # without this a resume started just inside the reaper's window races it.
+    version.last_activity_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return ResumeUploadResponse(
+        state="resumable",
+        upload_id=version.upload_id,
+        s3_key=s3_key,
+        asset_id=version.asset_id,
+        version_id=version.id,
+        chunk_size_bytes=chunk_size,
+        file_size_bytes=media_file.file_size_bytes,
+        original_filename=media_file.original_filename,
+        mime_type=media_file.mime_type,
+        held_part_numbers=held,
+    )
 
 
 def _parts_from_listing(stored: list[dict], expected_total_bytes: int) -> list[dict]:

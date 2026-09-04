@@ -17,7 +17,10 @@ from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from .hls_proxy import create_hls_token
-from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, mime_to_asset_type
+from ..schemas.upload import (
+    InitiateUploadRequest, InitiateUploadResponse,
+    ALLOWED_MIME_TYPES, CHUNK_SIZE_BYTES, mime_to_asset_type,
+)
 from ..services.storage import upload_guard_error
 from ..services.s3_service import create_multipart_upload
 
@@ -385,6 +388,9 @@ def initiate_new_version(
     # bucket and presign-part has nothing to validate against.
     version.upload_id = upload_id
     version.last_activity_at = datetime.now(timezone.utc)
+    # See initiate_upload: the part size belongs to the upload, not to the build
+    # of the client that happens to be pushing it.
+    version.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
     media_file = MediaFile(
@@ -403,6 +409,7 @@ def initiate_new_version(
         s3_key=s3_key,
         asset_id=asset_id,
         version_id=version.id,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 
 

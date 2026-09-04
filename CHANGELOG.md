@@ -7,12 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **One migration.** `asset_versions.chunk_size_bytes` records the part size an upload was started with, so a resume places its parts on the boundaries the parts already in the bucket were cut on. Nullable, no backfill: rows created before it derive the size from the parts storage is holding.
+
+### Added
+- **An interrupted upload can be resumed instead of started again** — a transfer that stopped part-way now offers Resume. The server reports which parts the storage backend is already holding, and only the missing ones are sent; a 5 GB file that died at 80% costs the remaining 20%, not another 5 GB. This is the point of no longer aborting on failure: the parts have to still be there for anything to resume from. Because a browser cannot reopen a local file by itself, resuming asks for the same file again — that is inherent to every browser-based resumable uploader — and the name and size are checked against the upload before anything is sent. An upload whose object turned out to be assembled already needs no file and completes on the spot. Discard is the other new button, and is now the only path that throws parts away. (#241)
+
 ### Changed
 - **A share link to a single asset now opens the same review screen as one inside a folder** — the two paths rendered entirely different component trees, so sharing an asset on its own gave a plain video element and a bare comment box, while sharing the same asset inside a folder gave the real review stack. The single-asset path now renders that stack too, which brings it timecode-attached comments, annotation and mention controls, and a version switcher with version-scoped streams and comments. (#117, #123)
 
   Two consequences worth knowing. Guests who had identified themselves on a single-asset link will be asked once more, because the two paths stored that identity under different keys and the shared one wins. And the single-asset page no longer shows the instance's logo and share name above the player, since the folder path's asset view never did; making both show branding is tracked separately.
 
 ### Fixed
+- **An interrupted upload no longer throws away everything it had already transferred** — the client fired `POST /upload/abort` from the `catch` of *any* upload error, not just a user cancel, and that calls `AbortMultipartUpload`, which discards every part the storage backend is holding. A network drop three quarters of the way through a 5 GB file therefore destroyed those bytes at the exact moment they became worth keeping. The abort is now sent only when the user cancels. A transfer that stopped on its own is reported as `Interrupted` rather than `Failed`, which is what it is: the multipart upload is still open and the parts are still there. Such a version is left for the stale-upload reaper to reclaim on its usual schedule if nothing picks it up. (#241)
+- **A stranded upload no longer sits at "Uploading 100%" forever** — a version the server still had at `uploading` was rendered by the uploads panel as a live transfer at full progress, with a Cancel button attached to nothing and a place in the Active tab and the sidebar badge. Nothing ever moved it, because the fallback poll only looked at versions in `processing`. Those rows now read `Interrupted`, sit alongside the other stopped uploads, and are reconciled against the server like processing ones. (#241)
 - **Default logos no longer load an invisible second theme asset** — sidebar, authentication, share-password, attribution and branding-preview fallbacks now share one themed icon/full-logo component. A failed custom authentication logo also falls back to the correct built-in mark and retries when branding supplies a new URL. (#288 by @luozejian)
 
 ## [1.12.0] - 2026-08-29
