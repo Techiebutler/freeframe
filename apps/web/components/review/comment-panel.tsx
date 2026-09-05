@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review-store";
+import type { Asset } from "@/types";
 import type { CommentWithReplies } from "@/hooks/use-comments";
 import {
   exportComments,
@@ -56,6 +57,17 @@ interface CommentPanelProps {
   onShowAnnotation?: (drawingData: Record<string, unknown> | null) => void;
   /** Compare mode: export this pane's version instead of the store's currentVersion. */
   exportVersionId?: string;
+  /**
+   * Export this asset instead of the review store's `currentAsset`.
+   *
+   * Required wherever the panel is rendered outside the review screen. The
+   * store is written by `review-provider.tsx` and nothing clears it -- there is
+   * no unmount cleanup and the back arrow is a client-side navigation -- so on
+   * the project page it still holds whichever asset was opened last. Reading it
+   * there does not fail, it exports the wrong asset's comments under the wrong
+   * name, which is worse than doing nothing.
+   */
+  exportAsset?: Asset | null;
   className?: string;
 }
 
@@ -780,12 +792,17 @@ export function CommentPanel({
   onSeekToTimecode,
   onShowAnnotation,
   exportVersionId,
+  exportAsset,
   className,
 }: CommentPanelProps) {
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId);
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId);
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation);
-  const currentAsset = useReviewStore((s) => s.currentAsset);
+  const storeAsset = useReviewStore((s) => s.currentAsset);
+  // The prop wins where it is given. `undefined` means "not told", so the store
+  // is used; an explicit `null` means "told, and there is nothing selected",
+  // which must not silently fall through to whatever the store still holds.
+  const currentAsset = exportAsset !== undefined ? exportAsset : storeAsset;
   const currentVersion = useReviewStore((s) => s.currentVersion);
 
   // Toolbar state
@@ -910,7 +927,12 @@ export function CommentPanel({
     setExportOpen(false);
     setExportError(null);
     const versionId = exportVersionId ?? currentVersion?.id;
-    if (!currentAsset || !versionId) return;
+    if (!currentAsset || !versionId) {
+      // Folded into the error line rather than returning ahead of it: a guard
+      // that returns silently is the shape of bug this panel just had.
+      setExportError("Select an asset to export its comments");
+      return;
+    }
     try {
       await exportComments({
         assetId: currentAsset.id,
