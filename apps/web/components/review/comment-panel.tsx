@@ -286,7 +286,7 @@ function InlineReplyInput({
       <input
         ref={inputRef}
         type="text"
-        className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
+        className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-[16px] md:text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
         placeholder="Leave your reply here..."
         value={body}
         onChange={(e) => setBody(e.target.value)}
@@ -564,7 +564,7 @@ function CommentItem({
                 onChange={(e) => setEditBody(e.target.value)}
                 autoFocus
                 rows={2}
-                className="w-full rounded-md border border-border bg-bg-tertiary px-2 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 resize-none"
+                className="w-full rounded-md border border-border bg-bg-tertiary px-2 py-1.5 text-[16px] md:text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 resize-none"
               />
               <div className="flex items-center gap-1.5 mt-1">
                 <button
@@ -1239,7 +1239,7 @@ export function CommentPanel({
             <input
               ref={searchRef}
               type="text"
-              className="flex-1 bg-transparent text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none"
+              className="flex-1 bg-transparent text-[16px] md:text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none"
               placeholder="Search..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
