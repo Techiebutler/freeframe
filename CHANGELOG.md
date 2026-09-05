@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Default logos no longer load an invisible second theme asset** — sidebar, authentication, share-password, attribution and branding-preview fallbacks now share one themed icon/full-logo component. A failed custom authentication logo also falls back to the correct built-in mark and retries when branding supplies a new URL. (#288 by @luozejian)
+- **Focusing a comment input zoomed the whole page on iOS Safari** — Safari auto-zooms the page whenever focus lands on a text input with a computed font-size under 16px, and the main comment textarea, the reply input, the comment-edit textarea, and the comment search input were all 13px. Each is now 16px on mobile (the literal iOS threshold), reverting to the original 13px at the `md` breakpoint, where this Safari behavior doesn't apply.
 
 ## [1.12.0] - 2026-08-29
 
