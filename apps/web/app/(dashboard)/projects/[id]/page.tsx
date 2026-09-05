@@ -357,6 +357,10 @@ export default function ProjectDetailPage() {
   // blank space below a short row of cards.
   const dropDepth = React.useRef(0);
   const [isFileDragOver, setIsFileDragOver] = React.useState(false);
+  // Which folder the drag is over, if any. A folder is the more specific
+  // target, so the region gives up its own marking while one is lit -- two
+  // frames at once do not say where the file will land.
+  const [fileDragFolderId, setFileDragFolderId] = React.useState<string | null>(null);
   // Not the trash and not the share-link list: neither can receive an upload,
   // and `canUpload` is owner/editor, so a reviewer never gets an affordance
   // that ends in a 403.
@@ -382,7 +386,10 @@ export default function ProjectDetailPage() {
   const handleFileDragLeave = (e: React.DragEvent) => {
     if (!canDropFiles || !carriesFiles(e)) return;
     dropDepth.current = Math.max(0, dropDepth.current - 1);
-    if (dropDepth.current === 0) setIsFileDragOver(false);
+    if (dropDepth.current === 0) {
+      setIsFileDragOver(false);
+      setFileDragFolderId(null);
+    }
   };
 
   const handleFileDrop = (e: React.DragEvent) => {
@@ -390,6 +397,7 @@ export default function ProjectDetailPage() {
     e.preventDefault();
     dropDepth.current = 0;
     setIsFileDragOver(false);
+    setFileDragFolderId(null);
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
     // Straight to startUpload rather than through the dialog. Dragging a file
@@ -403,6 +411,21 @@ export default function ProjectDetailPage() {
         file.name.replace(/\.[^/.]+$/, ""),
         project?.name,
         currentFolderId,
+      ),
+    );
+  };
+
+  const handleDropFilesToFolder = (targetFolderId: string, files: File[]) => {
+    setFileDragFolderId(null);
+    setIsFileDragOver(false);
+    dropDepth.current = 0;
+    files.forEach((file) =>
+      startUpload(
+        file,
+        projectId,
+        file.name.replace(/\.[^/.]+$/, ""),
+        project?.name,
+        targetFolderId,
       ),
     );
   };
@@ -485,6 +508,8 @@ export default function ProjectDetailPage() {
               mutateAssets();
               mutateSubfolders();
             }}
+            onDropFiles={canDropFiles ? handleDropFilesToFolder : undefined}
+            onFileDragOverFolder={canDropFiles ? setFileDragFolderId : undefined}
             onDropItems={async (targetFolderId, assetIds, folderIds) => {
               await bulkMove(assetIds, folderIds, targetFolderId);
               mutateAssets();
@@ -794,6 +819,8 @@ export default function ProjectDetailPage() {
                 });
                 setShareDialogOpen(true);
               }}
+              onDropFilesToFolder={canDropFiles ? handleDropFilesToFolder : undefined}
+              onFileDragOverFolder={canDropFiles ? setFileDragFolderId : undefined}
               onDropToFolder={async (targetFolderId, assetIds, folderIds) => {
                 await bulkMove(assetIds, folderIds, targetFolderId);
                 mutateAssets();
@@ -984,7 +1011,7 @@ export default function ProjectDetailPage() {
           </Dialog.Root>
         </div>
       </div>
-      {isFileDragOver && (
+      {isFileDragOver && !fileDragFolderId && (
         // pointer-events-none is load-bearing: an overlay that takes the
         // pointer swallows the dragleave and the drop underneath it, so the
         // marking would stick and the drop would never arrive.

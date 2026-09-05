@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { Folder, Film, Music, Image as ImageIcon, Images, MoreHorizontal, Pencil, Trash, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -87,6 +87,12 @@ interface FolderCardProps {
   onDelete?: (folderId: string) => Promise<void>
   onShare?: (folderId: string, folderName: string) => Promise<void>
   onDropItems?: (targetFolderId: string, assetIds: string[], folderIds: string[]) => void
+  /** Files dropped on this folder upload into it. Absent = uploads not allowed here. */
+  onDropFiles?: (targetFolderId: string, files: File[]) => void
+  /** Tells the region above that a file drag is over this folder, so it can
+   *  shrink its own marking to this one -- two frames lit at once do not say
+   *  where the file will land. */
+  onFileDragOverFolder?: (folderId: string | null) => void
   className?: string
 }
 
@@ -99,6 +105,8 @@ export function FolderCard({
   onDelete,
   onShare,
   onDropItems,
+  onDropFiles,
+  onFileDragOverFolder,
   className,
 }: FolderCardProps) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -131,21 +139,64 @@ export function FolderCard({
     [folder.id],
   )
 
+  // Counted, not toggled: dragenter/dragleave fire for the card's own children
+  // too, so a boolean drops the highlight as the pointer crosses the thumbnail.
+  const dragDepth = useRef(0)
+
+  const clearDrag = useCallback(() => {
+    dragDepth.current = 0
+    setIsDragOver(false)
+    onFileDragOverFolder?.(null)
+  }, [onFileDragOverFolder])
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!carriesFiles(e) || !onDropFiles) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepth.current += 1
+    setIsDragOver(true)
+    onFileDragOverFolder?.(folder.id)
+  }, [folder.id, onDropFiles, onFileDragOverFolder])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (carriesFiles(e) && onDropFiles) {
+      e.stopPropagation()
+      dragDepth.current = Math.max(0, dragDepth.current - 1)
+      if (dragDepth.current > 0) return
+    }
+    clearDrag()
+  }, [clearDrag, onDropFiles])
+
   // Drop target
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    // A file dragged from the desktop is not a move: it belongs to the region's
-    // upload handler, which sits above this in the tree. Returning without
-    // preventDefault or stopPropagation lets it through untouched -- otherwise
-    // this folder lights up as a target and then the drop lands somewhere else.
-    if (carriesFiles(e)) return
+    if (carriesFiles(e)) {
+      // A folder is a more specific target than the region behind it, so it
+      // takes the event rather than letting it through. Without onDropFiles
+      // there is nothing to take it with -- a reviewer, or a caller with no
+      // upload path -- and it falls through as before.
+      if (!onDropFiles) return
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'copy'
+      return
+    }
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     setIsDragOver(true)
-  }, [])
+  }, [onDropFiles])
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
-      if (carriesFiles(e)) return
+      if (carriesFiles(e)) {
+        if (!onDropFiles) return
+        e.preventDefault()
+        // Stops the region above uploading the same files into the open folder.
+        e.stopPropagation()
+        clearDrag()
+        const files = Array.from(e.dataTransfer.files)
+        if (files.length > 0) onDropFiles(folder.id, files)
+        return
+      }
       e.preventDefault()
       setIsDragOver(false)
       try {
@@ -155,7 +206,7 @@ export function FolderCard({
         onDropItems?.(folder.id, data.assetIds ?? [], data.folderIds ?? [])
       } catch {}
     },
-    [folder.id, onDropItems],
+    [folder.id, onDropItems, onDropFiles, clearDrag],
   )
 
   return (
@@ -170,8 +221,9 @@ export function FolderCard({
         )}
         draggable
         onDragStart={handleDragStart}
+        onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
-        onDragLeave={() => setIsDragOver(false)}
+        onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onDoubleClick={() => onOpen(folder)}
         onClick={onSelect}

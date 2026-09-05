@@ -50,6 +50,10 @@ interface AssetGridProps {
   onFolderDelete?: (folderId: string) => Promise<void>
   onFolderShare?: (folderId: string, folderName: string) => Promise<void>
   onDropToFolder?: (targetFolderId: string, assetIds: string[], folderIds: string[]) => void
+  /** Files dropped on a folder card upload into it. Absent = uploads not allowed. */
+  onDropFilesToFolder?: (targetFolderId: string, files: File[]) => void
+  /** See FolderCard: lets the region above shrink its marking to one folder. */
+  onFileDragOverFolder?: (folderId: string | null) => void
   /** Share selection mode */
   shareMode?: boolean
   onShareModeChange?: (active: boolean) => void
@@ -102,6 +106,8 @@ export function AssetGrid({
   onFolderDelete,
   onFolderShare,
   onDropToFolder,
+  onDropFilesToFolder,
+  onFileDragOverFolder,
   shareMode = false,
   onShareModeChange,
   onCreateShareLink,
@@ -301,6 +307,8 @@ export function AssetGrid({
                     onDelete={shareMode ? undefined : onFolderDelete}
                     onShare={shareMode ? undefined : onFolderShare}
                     onDropItems={shareMode ? undefined : onDropToFolder}
+                    onDropFiles={shareMode ? undefined : onDropFilesToFolder}
+                    onFileDragOverFolder={shareMode ? undefined : onFileDragOverFolder}
                   />
                 </div>
               )
