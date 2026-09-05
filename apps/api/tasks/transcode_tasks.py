@@ -113,7 +113,7 @@ def process_asset(self, asset_id: str, version_id: str):
 
 
 def _process_video(db, asset, version, media_file, s3, output_prefix):
-    from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder
+    from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, parse_qualities
     from packages.transcoder.base import TranscodeJob
 
     transcoder = FFmpegTranscoder(s3, settings.s3_bucket, settings.s3_endpoint)
@@ -144,7 +144,7 @@ def _process_video(db, asset, version, media_file, s3, output_prefix):
         version_id=str(version.id),
         input_s3_key=media_file.s3_key_raw,
         output_s3_prefix=output_prefix,
-        qualities=["1080p", "720p", "360p"],
+        qualities=parse_qualities(settings.transcoder_qualities),
         progress_cb=_on_progress,
     )
     result = _run_async(transcoder.transcode(job))

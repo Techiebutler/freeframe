@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The quality ladder is configurable** — every upload was encoded into 1080p, 720p and 360p, with the list hardcoded at the call site. `TRANSCODER_QUALITIES` (default `1080p,720p,360p`, unchanged behaviour) lets a deployment build fewer rungs. An instance whose reviewers all watch at full size pays for the smaller rungs in encode time and in storage without anyone ever playing them; a self-hosted box with no GPU feels both. Rungs above the source resolution are still dropped, so this cannot ask for more than the source has. An unrecognised rung name is reported and ignored rather than silently dropped, and a value with no valid rung left falls back to the full ladder — previously that produced `split=0` and an empty `-var_stream_map`, which ffmpeg rejects, so a single typo failed every upload through the whole retry ladder. (#319)
+
 ### Changed
 - **A share link to a single asset now opens the same review screen as one inside a folder** — the two paths rendered entirely different component trees, so sharing an asset on its own gave a plain video element and a bare comment box, while sharing the same asset inside a folder gave the real review stack. The single-asset path now renders that stack too, which brings it timecode-attached comments, annotation and mention controls, and a version switcher with version-scoped streams and comments. (#117, #123)
 
