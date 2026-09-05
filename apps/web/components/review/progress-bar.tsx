@@ -307,8 +307,8 @@ export function ProgressBar({
     [duration],
   )
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       const time = getTimeFromEvent(e.clientX)
       setHoverTime(time)
       const track = trackRef.current
@@ -324,15 +324,15 @@ export function ProgressBar({
     [isDragging, getTimeFromEvent, onSeek, seekPreview],
   )
 
-  const handleMouseLeave = useCallback(() => {
+  const handlePointerLeave = useCallback(() => {
     if (!isDragging) {
       setHoverTime(null)
       clearPreview()
     }
   }, [isDragging, clearPreview])
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault()
       setIsDragging(true)
       onSeek(getTimeFromEvent(e.clientX))
@@ -340,26 +340,26 @@ export function ProgressBar({
     [getTimeFromEvent, onSeek],
   )
 
-  // Global mouse up / move to handle drag outside track
+  // Global pointer up / move to handle drag outside track
   useEffect(() => {
     if (!isDragging) return
 
-    const handleGlobalMouseMove = (e: MouseEvent) => {
+    const handleGlobalPointerMove = (e: PointerEvent) => {
       onSeek(getTimeFromEvent(e.clientX))
     }
 
-    const handleGlobalMouseUp = (e: MouseEvent) => {
+    const handleGlobalPointerUp = (e: PointerEvent) => {
       setIsDragging(false)
       setHoverTime(null)
       clearPreview()
       onSeek(getTimeFromEvent(e.clientX))
     }
 
-    window.addEventListener('mousemove', handleGlobalMouseMove)
-    window.addEventListener('mouseup', handleGlobalMouseUp)
+    window.addEventListener('pointermove', handleGlobalPointerMove)
+    window.addEventListener('pointerup', handleGlobalPointerUp)
     return () => {
-      window.removeEventListener('mousemove', handleGlobalMouseMove)
-      window.removeEventListener('mouseup', handleGlobalMouseUp)
+      window.removeEventListener('pointermove', handleGlobalPointerMove)
+      window.removeEventListener('pointerup', handleGlobalPointerUp)
     }
   }, [isDragging, getTimeFromEvent, onSeek, clearPreview])
 
@@ -376,51 +376,55 @@ export function ProgressBar({
 
   return (
     <div className={cn('relative flex flex-col w-full group/progress py-1', className)}>
-      {/* Track area */}
+      {/* Track hit area — taller invisible touch target wrapping the thin
+          visual bar below, which keeps its original size/appearance. */}
       <div
         ref={trackRef}
-        className="relative w-full h-1 group-hover/progress:h-1.5 transition-all duration-150 cursor-pointer bg-border rounded-full"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-        onMouseDown={handleMouseDown}
+        className="relative w-full h-6 flex items-center cursor-pointer touch-none"
+        onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
+        onPointerDown={handlePointerDown}
       >
-        {/* Buffered range */}
-        <div
-          className="absolute inset-y-0 left-0 bg-border-secondary rounded-full"
-          style={{ width: `${bufferedPercent}%` }}
-        />
+        {/* Visual track */}
+        <div className="relative w-full h-1 group-hover/progress:h-1.5 transition-all duration-150 bg-border rounded-full">
+          {/* Buffered range */}
+          <div
+            className="absolute inset-y-0 left-0 bg-border-secondary rounded-full"
+            style={{ width: `${bufferedPercent}%` }}
+          />
 
-        {/* Time-range comment spans */}
-        {rangeMarkers.map((c) => {
-          if (c.timecode_start === null || c.timecode_end === null) return null
-          const left = timeToPercent(c.timecode_start)
-          const right = timeToPercent(c.timecode_end)
-          return (
-            <div
-              key={c.id}
-              className="absolute inset-y-0 bg-yellow-400/40 rounded-full pointer-events-none"
-              style={{
-                left: `${left}%`,
-                width: `${right - left}%`,
-              }}
-            />
-          )
-        })}
+          {/* Time-range comment spans */}
+          {rangeMarkers.map((c) => {
+            if (c.timecode_start === null || c.timecode_end === null) return null
+            const left = timeToPercent(c.timecode_start)
+            const right = timeToPercent(c.timecode_end)
+            return (
+              <div
+                key={c.id}
+                className="absolute inset-y-0 bg-yellow-400/40 rounded-full pointer-events-none"
+                style={{
+                  left: `${left}%`,
+                  width: `${right - left}%`,
+                }}
+              />
+            )
+          })}
 
-        {/* Playback progress */}
-        <div
-          className="absolute inset-y-0 left-0 rounded-full"
-          style={{
-            width: `${playPercent}%`,
-            background: 'linear-gradient(90deg, #6366f1, #818cf8)',
-          }}
-        />
+          {/* Playback progress */}
+          <div
+            className="absolute inset-y-0 left-0 rounded-full"
+            style={{
+              width: `${playPercent}%`,
+              background: 'linear-gradient(90deg, #6366f1, #818cf8)',
+            }}
+          />
 
-        {/* Playhead thumb */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-accent shadow-lg opacity-0 group-hover/progress:opacity-100 transition-opacity pointer-events-none z-10"
-          style={{ left: `${playPercent}%`, transform: 'translateX(-50%) translateY(-50%)' }}
-        />
+          {/* Playhead thumb */}
+          <div
+            className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-accent shadow-lg opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/progress:opacity-100 transition-opacity pointer-events-none z-10"
+            style={{ left: `${playPercent}%`, transform: 'translateX(-50%) translateY(-50%)' }}
+          />
+        </div>
       </div>
 
       {/* Comment markers row — below the progress bar */}
