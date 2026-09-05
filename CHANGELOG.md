@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Default logos no longer load an invisible second theme asset** — sidebar, authentication, share-password, attribution and branding-preview fallbacks now share one themed icon/full-logo component. A failed custom authentication logo also falls back to the correct built-in mark and retries when branding supplies a new URL. (#288 by @luozejian)
+- **The video scrubber couldn't be dragged on a touchscreen** — the track only wired up mouse events (`onMouseMove`/`onMouseDown`, plus window-level `mousemove`/`mouseup` for drag-outside-track), so a tap happened to seek once (mobile browsers synthesize a single click from a tap) but there was no continuous drag, since the window `mousemove` this relied on never fires from a touch gesture. The clickable/draggable element was also just the 4px-tall visual track itself, too small to reliably grab with a finger. Every handler is now the Pointer Events equivalent — mouse, touch, and pen through one code path — and the visual track sits inside a taller, invisible 24px hit area; the playhead thumb, previously invisible until hover, is now always visible so there's something to see before you grab it.
 
 ## [1.12.0] - 2026-08-29
 
