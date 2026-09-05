@@ -355,6 +355,7 @@ export default function ProjectDetailPage() {
   // empty state -- which is the case that says "Upload your first asset to get
   // started" across an inert rectangle -- accepts a drop too, and so does the
   // blank space below a short row of cards.
+  const dropRegion = React.useRef<HTMLDivElement>(null);
   const dropDepth = React.useRef(0);
   const [isFileDragOver, setIsFileDragOver] = React.useState(false);
   // Which folder the drag is over, if any. A folder is the more specific
@@ -422,10 +423,24 @@ export default function ProjectDetailPage() {
 
   const handleFileDrop = (e: React.DragEvent) => {
     if (!canDropFiles || !carriesFiles(e)) return;
+    // Always, even when the drop is refused below: without it the browser
+    // handles the file itself and navigates away from the app.
     e.preventDefault();
+    // The rule is what the user sees: the pointer has to be inside the region
+    // when the button comes up. An event reaching this handler is not proof of
+    // that -- a drag can end on a target that is no longer under the pointer --
+    // so the release point is checked against the region itself.
+    const rect = dropRegion.current?.getBoundingClientRect();
+    const released =
+      !rect ||
+      (e.clientX >= rect.left &&
+        e.clientX < rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY < rect.bottom);
     dropDepth.current = 0;
     setIsFileDragOver(false);
     setFolderTarget(null);
+    if (!released) return;
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
     // Straight to startUpload rather than through the dialog. Dragging a file
@@ -707,6 +722,7 @@ export default function ProjectDetailPage() {
           scroll, so `inset` on the overlay is the region someone can see rather
           than the whole scroll height, and the border stays where the eye is. */}
       <div
+        ref={dropRegion}
         className="relative flex-1 flex min-w-0 h-full"
         onDragEnter={handleFileDragEnter}
         onDragOver={handleFileDragOver}
