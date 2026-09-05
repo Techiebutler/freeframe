@@ -233,6 +233,58 @@ _NVENC_CQ = {
     "h264_8":  28,   # 8-bit H.264, smaller files
 }
 
+# The rungs a deployment can ask for, as scale target and CRF.
+#
+# Module level rather than local to transcode(), because the names are now
+# configuration and something outside this file has to be able to tell a valid
+# one from a typo before a job is built.
+QUALITY_MAP = {
+    "1080p": ("1920:1080", 20),
+    "720p": ("1280:720", 22),
+    "360p": ("640:360", 26),
+}
+
+# What a deployment gets without saying anything. Unchanged behaviour.
+DEFAULT_QUALITIES = ("1080p", "720p", "360p")
+
+
+def parse_qualities(raw: str | None) -> list[str]:
+    """Turn a configured rung list into one this transcoder can build.
+
+    Silence is the failure mode worth avoiding here. An unrecognised name used
+    to be dropped without a word further down, and a value where *every* name
+    was unrecognised produced `split=0` and an empty `-var_stream_map`, which
+    ffmpeg rejects -- so a single typo failed every upload, through the retry
+    ladder, ending at `failed` with nothing pointing at the setting. The cost of a
+    typo should be a line in the log, not every video.
+
+    Falls back rather than refusing to start, matching how an unrecognised
+    TRANSCODER_OUTPUT already resolves to its default; the difference is that
+    this one says so.
+    """
+    names = [n.strip() for n in (raw or "").split(",") if n.strip()]
+    known = [n for n in names if n in QUALITY_MAP]
+    unknown = [n for n in names if n not in QUALITY_MAP]
+
+    if unknown:
+        print(
+            f"[transcoder] ignoring unknown quality rung(s) {', '.join(unknown)}; "
+            f"valid: {', '.join(QUALITY_MAP)}",
+            flush=True,
+        )
+    if not known:
+        if names:
+            print(
+                "[transcoder] no valid quality rung configured; falling back to "
+                f"{', '.join(DEFAULT_QUALITIES)}",
+                flush=True,
+            )
+        return list(DEFAULT_QUALITIES)
+    # Deduplicated, and ordered as QUALITY_MAP is rather than as typed: the
+    # ladder's order decides the variant indices in the manifest.
+    return [q for q in QUALITY_MAP if q in known]
+
+
 # Output codec / quality selection (TRANSCODER_OUTPUT).
 #   h264_8  -> H.264 8-bit, DEFAULT (broad device compatibility, smaller files)
 #   h265_10 -> HEVC 10-bit, high quality (opt-in via the env var below)
@@ -529,16 +581,14 @@ class FFmpegTranscoder(BaseTranscoder):
             has_audio = bool(json.loads(audio_result).get("streams"))
 
             # 3. Build quality ladder based on available qualities
-            QUALITY_MAP = {
-                "1080p": ("1920:1080", 20),
-                "720p": ("1280:720", 22),
-                "360p": ("640:360", 26),
-            }
             # Filter the ladder against the source resolution so a small
             # source never gets upscaled renditions (upstream #204/#201).
             # force_original_aspect_ratio=decrease prevents distortion but not
             # upscaling, so the ladder itself must be trimmed here.
-            requested = [q for q in job.qualities if q in QUALITY_MAP]
+            # Guarded here as well as at the configuration boundary: this is the
+            # line that turns an unrecognised name into `split=0`, and a job can
+            # reach it from any caller, not only from the configured default.
+            requested = [q for q in job.qualities if q in QUALITY_MAP] or list(DEFAULT_QUALITIES)
             source_height = (meta.height if meta else 0) or 0
             qualities = [
                 q for q in requested

@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     # testing on a LAN via a machine's IP; do not use "*" in production.
     cors_allow_origins: str = ""
     transcoder_engine: str = "ffmpeg"
+    # Which rungs of the quality ladder to build, comma-separated. Valid names
+    # are the keys of packages.transcoder.ffmpeg_transcoder.QUALITY_MAP; the
+    # default is every rung, which is the behaviour this setting replaces.
+    #
+    # An instance whose reviewers all watch at full size pays for the smaller
+    # rungs in encode time and in storage without anyone playing them. Rungs
+    # above the source resolution are still dropped, so this cannot be used to
+    # ask for more than the source has.
+    transcoder_qualities: str = "1080p,720p,360p"
 
     # Maximum size (bytes) for a single uploaded file. 0 = unlimited (no per-file cap).
     # Note: S3 multipart still caps effective size at ~10,000 parts x chunk size.
