@@ -95,7 +95,9 @@ function FolderNode({
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     if (!carriesFiles(e) || !onDropFiles) return
     e.preventDefault()
-    e.stopPropagation()
+    // Deliberately NOT stopPropagation: the region above counts dragenter
+    // against dragleave to know when the pointer has left it entirely, and
+    // swallowing one half of that pair makes its counter drift.
     dragDepth.current += 1
     setIsDragOver(true)
     onFileDragOverFolder?.(node.id)
@@ -117,7 +119,8 @@ function FolderNode({
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     if (carriesFiles(e) && onDropFiles) {
-      e.stopPropagation()
+      // See handleDragEnter: this half bubbles too, or the region's count of
+      // its own children never comes back down.
       dragDepth.current = Math.max(0, dragDepth.current - 1)
       if (dragDepth.current > 0) return
     }

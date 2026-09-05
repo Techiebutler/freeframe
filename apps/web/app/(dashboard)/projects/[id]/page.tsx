@@ -361,6 +361,34 @@ export default function ProjectDetailPage() {
   // target, so the region gives up its own marking while one is lit -- two
   // frames at once do not say where the file will land.
   const [fileDragFolderId, setFileDragFolderId] = React.useState<string | null>(null);
+  const folderClearTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Claiming is immediate, releasing is not. The few pixels of gap between two
+  // folder cards belong to the region, so a pointer crossing from one folder to
+  // the next reports "no folder" in between -- and clearing at once makes the
+  // big frame flash on and off in that gap. Any folder claiming the drag
+  // cancels a pending release, so the handover looks like one thing moving.
+  const setFolderTarget = React.useCallback((folderId: string | null) => {
+    if (folderClearTimer.current) {
+      clearTimeout(folderClearTimer.current);
+      folderClearTimer.current = null;
+    }
+    if (folderId !== null) {
+      setFileDragFolderId(folderId);
+      return;
+    }
+    folderClearTimer.current = setTimeout(() => {
+      folderClearTimer.current = null;
+      setFileDragFolderId(null);
+    }, 90);
+  }, []);
+
+  React.useEffect(
+    () => () => {
+      if (folderClearTimer.current) clearTimeout(folderClearTimer.current);
+    },
+    [],
+  );
   // Not the trash and not the share-link list: neither can receive an upload,
   // and `canUpload` is owner/editor, so a reviewer never gets an affordance
   // that ends in a 403.
@@ -388,7 +416,7 @@ export default function ProjectDetailPage() {
     dropDepth.current = Math.max(0, dropDepth.current - 1);
     if (dropDepth.current === 0) {
       setIsFileDragOver(false);
-      setFileDragFolderId(null);
+      setFolderTarget(null);
     }
   };
 
@@ -397,7 +425,7 @@ export default function ProjectDetailPage() {
     e.preventDefault();
     dropDepth.current = 0;
     setIsFileDragOver(false);
-    setFileDragFolderId(null);
+    setFolderTarget(null);
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
     // Straight to startUpload rather than through the dialog. Dragging a file
@@ -416,7 +444,7 @@ export default function ProjectDetailPage() {
   };
 
   const handleDropFilesToFolder = (targetFolderId: string, files: File[]) => {
-    setFileDragFolderId(null);
+    setFolderTarget(null);
     setIsFileDragOver(false);
     dropDepth.current = 0;
     files.forEach((file) =>
@@ -509,7 +537,7 @@ export default function ProjectDetailPage() {
               mutateSubfolders();
             }}
             onDropFiles={canDropFiles ? handleDropFilesToFolder : undefined}
-            onFileDragOverFolder={canDropFiles ? setFileDragFolderId : undefined}
+            onFileDragOverFolder={canDropFiles ? setFolderTarget : undefined}
             onDropItems={async (targetFolderId, assetIds, folderIds) => {
               await bulkMove(assetIds, folderIds, targetFolderId);
               mutateAssets();
@@ -820,7 +848,7 @@ export default function ProjectDetailPage() {
                 setShareDialogOpen(true);
               }}
               onDropFilesToFolder={canDropFiles ? handleDropFilesToFolder : undefined}
-              onFileDragOverFolder={canDropFiles ? setFileDragFolderId : undefined}
+              onFileDragOverFolder={canDropFiles ? setFolderTarget : undefined}
               onDropToFolder={async (targetFolderId, assetIds, folderIds) => {
                 await bulkMove(assetIds, folderIds, targetFolderId);
                 mutateAssets();
