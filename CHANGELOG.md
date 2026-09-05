@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Files can be dropped onto the asset area to upload them** — the drop target existed but only inside the "Upload asset" dialog, so it could not be reached until after the click it was meant to save, and dropping a file on the page itself made the browser navigate away to display the video. The whole content region now accepts a drop, including the empty state that says "Upload your first asset to get started" and the blank space below a short row of cards. Dropping onto a folder uploads into that folder, and while a folder is the target it is the only thing marked, so it is always visible where the file will land. Dragging an asset between folders is unaffected: an upload only starts for a drag that carries files. (#315)
+
 ### Changed
 - **A share link to a single asset now opens the same review screen as one inside a folder** — the two paths rendered entirely different component trees, so sharing an asset on its own gave a plain video element and a bare comment box, while sharing the same asset inside a folder gave the real review stack. The single-asset path now renders that stack too, which brings it timecode-attached comments, annotation and mention controls, and a version switcher with version-scoped streams and comments. (#117, #123)
 
