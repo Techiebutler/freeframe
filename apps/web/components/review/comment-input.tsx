@@ -465,7 +465,7 @@ export function CommentInput({
             )}
             <textarea
               ref={textareaRef}
-              className="flex-1 resize-none bg-transparent px-2.5 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none min-h-[38px] max-h-[120px]"
+              className="flex-1 resize-none bg-transparent px-2.5 py-2.5 text-[16px] md:text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none min-h-[38px] max-h-[120px]"
               placeholder={
                 replyToId ? "Write a reply..." : "Leave your comment..."
               }
