@@ -33,6 +33,7 @@ import { Avatar } from "@/components/shared/avatar";
 import { AssetGrid } from "@/components/projects/asset-grid";
 import { CommentPanel } from "@/components/review/comment-panel";
 import { UploadZone } from "@/components/upload/upload-zone";
+import { carriesFiles } from "@/lib/drag";
 import { useUploadStore } from "@/stores/upload-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useViewStore } from "@/stores/view-store";
@@ -348,6 +349,130 @@ export default function ProjectDetailPage() {
     if (files.length > 0) setAssetName(files[0].name.replace(/\.[^/.]+$/, ""));
   };
 
+  // ─── Drop files onto the asset area ─────────────────────────────────────
+  //
+  // The drop target is the whole content region rather than the grid, so the
+  // empty state -- which is the case that says "Upload your first asset to get
+  // started" across an inert rectangle -- accepts a drop too, and so does the
+  // blank space below a short row of cards.
+  const dropRegion = React.useRef<HTMLDivElement>(null);
+  const dropDepth = React.useRef(0);
+  const [isFileDragOver, setIsFileDragOver] = React.useState(false);
+  // Which folder the drag is over, if any. A folder is the more specific
+  // target, so the region gives up its own marking while one is lit -- two
+  // frames at once do not say where the file will land.
+  const [fileDragFolderId, setFileDragFolderId] = React.useState<string | null>(null);
+  const folderClearTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Claiming is immediate, releasing is not. The few pixels of gap between two
+  // folder cards belong to the region, so a pointer crossing from one folder to
+  // the next reports "no folder" in between -- and clearing at once makes the
+  // big frame flash on and off in that gap. Any folder claiming the drag
+  // cancels a pending release, so the handover looks like one thing moving.
+  const setFolderTarget = React.useCallback((folderId: string | null) => {
+    if (folderClearTimer.current) {
+      clearTimeout(folderClearTimer.current);
+      folderClearTimer.current = null;
+    }
+    if (folderId !== null) {
+      setFileDragFolderId(folderId);
+      return;
+    }
+    folderClearTimer.current = setTimeout(() => {
+      folderClearTimer.current = null;
+      setFileDragFolderId(null);
+    }, 90);
+  }, []);
+
+  React.useEffect(
+    () => () => {
+      if (folderClearTimer.current) clearTimeout(folderClearTimer.current);
+    },
+    [],
+  );
+  // Not the trash and not the share-link list: neither can receive an upload,
+  // and `canUpload` is owner/editor, so a reviewer never gets an affordance
+  // that ends in a 403.
+  const canDropFiles = canUpload && !showTrash && !showShareLinks;
+
+  const handleFileDragEnter = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    e.preventDefault();
+    // Counted rather than toggled: dragenter and dragleave fire for every child
+    // the pointer crosses, so a boolean flickers off on each card it passes.
+    dropDepth.current += 1;
+    setIsFileDragOver(true);
+  };
+
+  const handleFileDragOver = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    // Without this the browser handles the drop itself and navigates away from
+    // the app to display the file.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    dropDepth.current = Math.max(0, dropDepth.current - 1);
+    if (dropDepth.current === 0) {
+      setIsFileDragOver(false);
+      setFolderTarget(null);
+    }
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    // Always, even when the drop is refused below: without it the browser
+    // handles the file itself and navigates away from the app.
+    e.preventDefault();
+    // The rule is what the user sees: the pointer has to be inside the region
+    // when the button comes up. An event reaching this handler is not proof of
+    // that -- a drag can end on a target that is no longer under the pointer --
+    // so the release point is checked against the region itself.
+    const rect = dropRegion.current?.getBoundingClientRect();
+    const released =
+      !rect ||
+      (e.clientX >= rect.left &&
+        e.clientX < rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY < rect.bottom);
+    dropDepth.current = 0;
+    setIsFileDragOver(false);
+    setFolderTarget(null);
+    if (!released) return;
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    // Straight to startUpload rather than through the dialog. Dragging a file
+    // onto the project has already said everything the dialog asks: which file,
+    // which folder, and the name comes from the file. The single-file rename
+    // field is skipped, and renaming afterwards from the grid covers that.
+    files.forEach((file) =>
+      startUpload(
+        file,
+        projectId,
+        file.name.replace(/\.[^/.]+$/, ""),
+        project?.name,
+        currentFolderId,
+      ),
+    );
+  };
+
+  const handleDropFilesToFolder = (targetFolderId: string, files: File[]) => {
+    setFolderTarget(null);
+    setIsFileDragOver(false);
+    dropDepth.current = 0;
+    files.forEach((file) =>
+      startUpload(
+        file,
+        projectId,
+        file.name.replace(/\.[^/.]+$/, ""),
+        project?.name,
+        targetFolderId,
+      ),
+    );
+  };
+
   const handleStartUpload = () => {
     pendingFiles.forEach((file) => {
       const name =
@@ -426,6 +551,8 @@ export default function ProjectDetailPage() {
               mutateAssets();
               mutateSubfolders();
             }}
+            onDropFiles={canDropFiles ? handleDropFilesToFolder : undefined}
+            onFileDragOverFolder={canDropFiles ? setFolderTarget : undefined}
             onDropItems={async (targetFolderId, assetIds, folderIds) => {
               await bulkMove(assetIds, folderIds, targetFolderId);
               mutateAssets();
@@ -591,6 +718,17 @@ export default function ProjectDetailPage() {
       </div>
 
       {/* ─── Main Content ───────────────────────────────────────────────── */}
+      {/* The wrapper carries the drag handlers and the overlay. It does not
+          scroll, so `inset` on the overlay is the region someone can see rather
+          than the whole scroll height, and the border stays where the eye is. */}
+      <div
+        ref={dropRegion}
+        className="relative flex-1 flex min-w-0 h-full"
+        onDragEnter={handleFileDragEnter}
+        onDragOver={handleFileDragOver}
+        onDragLeave={handleFileDragLeave}
+        onDrop={handleFileDrop}
+      >
       <div
         className="flex-1 flex flex-col min-w-0 bg-bg-primary h-full overflow-y-auto"
         onClick={() => setSelectedAsset(null)}
@@ -725,6 +863,8 @@ export default function ProjectDetailPage() {
                 });
                 setShareDialogOpen(true);
               }}
+              onDropFilesToFolder={canDropFiles ? handleDropFilesToFolder : undefined}
+              onFileDragOverFolder={canDropFiles ? setFolderTarget : undefined}
               onDropToFolder={async (targetFolderId, assetIds, folderIds) => {
                 await bulkMove(assetIds, folderIds, targetFolderId);
                 mutateAssets();
@@ -914,6 +1054,17 @@ export default function ProjectDetailPage() {
             </Dialog.Portal>
           </Dialog.Root>
         </div>
+      </div>
+      {isFileDragOver && !fileDragFolderId && (
+        // pointer-events-none is load-bearing: an overlay that takes the
+        // pointer swallows the dragleave and the drop underneath it, so the
+        // marking would stick and the drop would never arrive.
+        <div className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center rounded-xl border-2 border-accent bg-accent/10">
+          <span className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white shadow-lg">
+            Drop to upload
+          </span>
+        </div>
+      )}
       </div>
 
       {/* ─── Right Panel (Comments + Fields tabs, or Share Link Settings) ─ */}

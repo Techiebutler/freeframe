@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
+import { carriesFiles } from '@/lib/drag'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -240,6 +241,15 @@ export function UploadsPanel() {
       <div
         className="fixed inset-0 z-40"
         onClick={() => setPanelOpen(false)}
+        // A file dragged onto the page is aimed at what is behind this, not at
+        // it. The backdrop exists to catch a click outside the panel, but it
+        // covers the viewport, so leaving it in the way makes every drop target
+        // on the page dead for as long as the panel is open. Stepping aside is
+        // the honest reading of the gesture -- the drag then continues onto the
+        // asset area underneath.
+        onDragEnter={(e) => {
+          if (carriesFiles(e)) setPanelOpen(false)
+        }}
       />
 
       {/* Panel */}
