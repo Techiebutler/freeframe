@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FolderTreeNode } from '@/types'
+import { carriesFiles } from '@/lib/drag'
 
 interface FolderTreeProps {
   tree: FolderTreeNode[]
@@ -73,6 +74,11 @@ function FolderNode({
 
   // Drag-drop target
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    // A file dragged from the desktop is not a move: it belongs to the region's
+    // upload handler, which sits above this in the tree. Returning without
+    // preventDefault or stopPropagation lets it through untouched -- otherwise
+    // this folder lights up as a target and then the drop lands somewhere else.
+    if (carriesFiles(e)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     setIsDragOver(true)
@@ -82,6 +88,7 @@ function FolderNode({
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
+      if (carriesFiles(e)) return
       e.preventDefault()
       setIsDragOver(false)
       try {

@@ -8,6 +8,7 @@ import { api } from '@/lib/api'
 import { NameDialog } from './name-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import type { Folder as FolderType, AssetResponse } from '@/types'
+import { carriesFiles } from '@/lib/drag'
 
 const assetTypeIcons = {
   video: Film,
@@ -132,6 +133,11 @@ export function FolderCard({
 
   // Drop target
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    // A file dragged from the desktop is not a move: it belongs to the region's
+    // upload handler, which sits above this in the tree. Returning without
+    // preventDefault or stopPropagation lets it through untouched -- otherwise
+    // this folder lights up as a target and then the drop lands somewhere else.
+    if (carriesFiles(e)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     setIsDragOver(true)
@@ -139,6 +145,7 @@ export function FolderCard({
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
+      if (carriesFiles(e)) return
       e.preventDefault()
       setIsDragOver(false)
       try {

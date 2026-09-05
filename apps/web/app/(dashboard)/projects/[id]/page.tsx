@@ -33,6 +33,7 @@ import { Avatar } from "@/components/shared/avatar";
 import { AssetGrid } from "@/components/projects/asset-grid";
 import { CommentPanel } from "@/components/review/comment-panel";
 import { UploadZone } from "@/components/upload/upload-zone";
+import { carriesFiles } from "@/lib/drag";
 import { useUploadStore } from "@/stores/upload-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useViewStore } from "@/stores/view-store";
@@ -348,6 +349,64 @@ export default function ProjectDetailPage() {
     if (files.length > 0) setAssetName(files[0].name.replace(/\.[^/.]+$/, ""));
   };
 
+  // ─── Drop files onto the asset area ─────────────────────────────────────
+  //
+  // The drop target is the whole content region rather than the grid, so the
+  // empty state -- which is the case that says "Upload your first asset to get
+  // started" across an inert rectangle -- accepts a drop too, and so does the
+  // blank space below a short row of cards.
+  const dropDepth = React.useRef(0);
+  const [isFileDragOver, setIsFileDragOver] = React.useState(false);
+  // Not the trash and not the share-link list: neither can receive an upload,
+  // and `canUpload` is owner/editor, so a reviewer never gets an affordance
+  // that ends in a 403.
+  const canDropFiles = canUpload && !showTrash && !showShareLinks;
+
+  const handleFileDragEnter = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    e.preventDefault();
+    // Counted rather than toggled: dragenter and dragleave fire for every child
+    // the pointer crosses, so a boolean flickers off on each card it passes.
+    dropDepth.current += 1;
+    setIsFileDragOver(true);
+  };
+
+  const handleFileDragOver = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    // Without this the browser handles the drop itself and navigates away from
+    // the app to display the file.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    dropDepth.current = Math.max(0, dropDepth.current - 1);
+    if (dropDepth.current === 0) setIsFileDragOver(false);
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    if (!canDropFiles || !carriesFiles(e)) return;
+    e.preventDefault();
+    dropDepth.current = 0;
+    setIsFileDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    // Straight to startUpload rather than through the dialog. Dragging a file
+    // onto the project has already said everything the dialog asks: which file,
+    // which folder, and the name comes from the file. The single-file rename
+    // field is skipped, and renaming afterwards from the grid covers that.
+    files.forEach((file) =>
+      startUpload(
+        file,
+        projectId,
+        file.name.replace(/\.[^/.]+$/, ""),
+        project?.name,
+        currentFolderId,
+      ),
+    );
+  };
+
   const handleStartUpload = () => {
     pendingFiles.forEach((file) => {
       const name =
@@ -591,6 +650,16 @@ export default function ProjectDetailPage() {
       </div>
 
       {/* ─── Main Content ───────────────────────────────────────────────── */}
+      {/* The wrapper carries the drag handlers and the overlay. It does not
+          scroll, so `inset` on the overlay is the region someone can see rather
+          than the whole scroll height, and the border stays where the eye is. */}
+      <div
+        className="relative flex-1 flex min-w-0 h-full"
+        onDragEnter={handleFileDragEnter}
+        onDragOver={handleFileDragOver}
+        onDragLeave={handleFileDragLeave}
+        onDrop={handleFileDrop}
+      >
       <div
         className="flex-1 flex flex-col min-w-0 bg-bg-primary h-full overflow-y-auto"
         onClick={() => setSelectedAsset(null)}
@@ -914,6 +983,17 @@ export default function ProjectDetailPage() {
             </Dialog.Portal>
           </Dialog.Root>
         </div>
+      </div>
+      {isFileDragOver && (
+        // pointer-events-none is load-bearing: an overlay that takes the
+        // pointer swallows the dragleave and the drop underneath it, so the
+        // marking would stick and the drop would never arrive.
+        <div className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center rounded-xl border-2 border-accent bg-accent/10">
+          <span className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white shadow-lg">
+            Drop to upload
+          </span>
+        </div>
+      )}
       </div>
 
       {/* ─── Right Panel (Comments + Fields tabs, or Share Link Settings) ─ */}
