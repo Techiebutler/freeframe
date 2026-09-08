@@ -81,6 +81,15 @@ Frontend receives  ◀────────── SSE: transcode_complete
 transcode_complete             (or transcode_failed)
 ```
 
+A transfer that stops part-way leaves the multipart upload open and its parts in
+the bucket. `AbortMultipartUpload` is only ever called for an explicit user
+cancel (or by the stale-upload reaper), so the version stays `uploading` and the
+panel offers to resume it. `GET /upload/{version_id}/parts` reports which parts
+storage already holds — matched on size, not ETag, which is not portable — plus
+the key, the upload id and the chunk size that upload was pinned to, and the
+client sends only what is missing. The browser cannot reopen a local file on its
+own, so resuming asks the user to select it again.
+
 ### Review and Approval
 
 ```

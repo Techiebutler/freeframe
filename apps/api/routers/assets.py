@@ -17,7 +17,10 @@ from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from .hls_proxy import create_hls_token
-from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, mime_to_asset_type
+from ..schemas.upload import (
+    InitiateUploadRequest, InitiateUploadResponse,
+    ALLOWED_MIME_TYPES, CHUNK_SIZE_BYTES, mime_to_asset_type,
+)
 from ..services.storage import upload_guard_error
 from ..services.s3_service import create_multipart_upload
 
@@ -361,9 +364,23 @@ def initiate_new_version(
     if guard_error:
         raise HTTPException(status_code=400, detail=guard_error)
 
+    # Numbered across every version this asset has ever had, soft-deleted ones
+    # included. `uq_asset_versions_asset_version` spans (asset_id,
+    # version_number) with no regard for `deleted_at`, so counting only live
+    # versions hands back a number the table is still holding: the INSERT dies
+    # on the constraint with a 500, and it does so for good -- the asset can
+    # never be given a version at that number again.
+    #
+    # Reachable without anything unusual happening. The stale-upload reaper
+    # soft-deletes a version whose transfer stopped, so an asset that has had
+    # one upload reclaimed refuses the next one, a day later, with an error
+    # about a database constraint. Discarding an upload does the same in
+    # seconds, which is how this was found.
+    #
+    # Version numbers are therefore monotonic and never reused: after a
+    # discarded v2, the next upload is v3.
     last_version = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset_id,
-        AssetVersion.deleted_at.is_(None),
     ).order_by(AssetVersion.version_number.desc()).first()
     next_version_number = (last_version.version_number + 1) if last_version else 1
 
@@ -385,6 +402,9 @@ def initiate_new_version(
     # bucket and presign-part has nothing to validate against.
     version.upload_id = upload_id
     version.last_activity_at = datetime.now(timezone.utc)
+    # See initiate_upload: the part size belongs to the upload, not to the build
+    # of the client that happens to be pushing it.
+    version.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
     media_file = MediaFile(
@@ -403,6 +423,7 @@ def initiate_new_version(
         s3_key=s3_key,
         asset_id=asset_id,
         version_id=version.id,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 
 

@@ -3,6 +3,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import text, func
+from sqlalchemy.orm import Session
 
 from .celery_app import celery_app
 from ..database import SessionLocal
@@ -219,6 +220,59 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+def _strip_asset_with_no_versions(db: Session, asset_id) -> bool:
+    """Soft-delete an asset whose last live version has just gone.
+
+    Left alone it reappears in the project grid, because `list_assets`
+    deliberately shows assets with no versions yet (a just-created one) and a
+    stripped asset is indistinguishable from that -- so a discarded or reclaimed
+    upload comes back as a card that cannot be opened, streamed or re-versioned.
+    Mutates `db` without committing. Returns whether the asset was removed.
+    """
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id, Asset.deleted_at.is_(None)
+    ).first()
+    if asset is None:
+        return False
+    still_live = db.query(AssetVersion).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if still_live is not None:
+        return False
+    asset.deleted_at = datetime.now(timezone.utc)
+    return True
+
+
+def _dispose_version_files(db: Session, v: AssetVersion) -> None:
+    """Throw one upload's bytes away and soft-delete the version row.
+
+    Shared with `POST /upload/abort` when a user discards an upload: the two
+    have to agree, or discarding by hand and being reclaimed a day later leave
+    the asset in different states. Mutates `db` without committing.
+    """
+    # Abort this version's own multipart upload, if it has one still open.
+    #
+    # Driven off our own row rather than off a bucket listing. A listing pass
+    # was wrong twice over: it aborted uploads that were still transferring,
+    # because it aged them by when the multipart was initiated rather than by
+    # whether anything was still happening; and on MinIO, the default backend,
+    # it found nothing at all after a restart, because ListMultipartUploads
+    # there is served from a node-local in-memory cache -- measured 3 open
+    # uploads before a restart and 0 after, with the parts still present.
+    # AbortMultipartUpload on a known (key, upload id) works on every backend
+    # regardless of what its listing does.
+    for mf in db.query(MediaFile).filter(MediaFile.version_id == v.id).all():
+        if v.upload_id:
+            _safe(abort_multipart_upload, mf.s3_key_raw, v.upload_id)
+        _safe(delete_object, mf.s3_key_raw)
+        if mf.s3_key_processed:
+            _safe(delete_prefix, mf.s3_key_processed)
+        if mf.s3_key_thumbnail:
+            _safe(delete_object, mf.s3_key_thumbnail)
+    v.deleted_at = datetime.now(timezone.utc)
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
@@ -242,30 +296,7 @@ def _reap_stale_uploads(db) -> int:
         func.coalesce(AssetVersion.last_activity_at, AssetVersion.created_at) < cutoff,
     ).all()
     for v in versions:
-        # Abort this version's own multipart upload, if it has one still open.
-        #
-        # This used to be a separate pass that listed every in-progress upload in
-        # the bucket and aborted anything older than the cutoff, with no reference
-        # to the database at all. That was wrong twice over. It aborted uploads
-        # that were still actively transferring, because it aged them by when the
-        # multipart was *initiated* rather than by whether anything was still
-        # happening. And on MinIO, the default backend, it found nothing at all
-        # after a restart, because ListMultipartUploads there is served from a
-        # node-local in-memory cache: measured 3 open uploads before a restart and
-        # 0 after, with the parts themselves still present.
-        #
-        # Driving off our own rows fixes both. It inherits the activity-based
-        # cutoff above, and AbortMultipartUpload on a known (key, upload id) works
-        # on every backend regardless of what their listing does.
-        for mf in db.query(MediaFile).filter(MediaFile.version_id == v.id).all():
-            if v.upload_id:
-                _safe(abort_multipart_upload, mf.s3_key_raw, v.upload_id)
-            _safe(delete_object, mf.s3_key_raw)
-            if mf.s3_key_processed:
-                _safe(delete_prefix, mf.s3_key_processed)
-            if mf.s3_key_thumbnail:
-                _safe(delete_object, mf.s3_key_thumbnail)
-        v.deleted_at = datetime.now(timezone.utc)
+        _dispose_version_files(db, v)
     db.flush()
 
     # An asset whose last live version has just been reclaimed is not a usable
@@ -273,20 +304,10 @@ def _reap_stale_uploads(db) -> int:
     # deliberately shows assets with no versions yet (a just-created one), and a
     # stripped asset is indistinguishable from that -- so a failed upload comes
     # back a day later as a card that cannot be opened, streamed or re-versioned.
-    stripped = 0
-    for asset_id in {v.asset_id for v in versions}:
-        asset = db.query(Asset).filter(
-            Asset.id == asset_id, Asset.deleted_at.is_(None)
-        ).first()
-        if asset is None:
-            continue
-        still_live = db.query(AssetVersion).filter(
-            AssetVersion.asset_id == asset_id,
-            AssetVersion.deleted_at.is_(None),
-        ).first()
-        if still_live is None:
-            asset.deleted_at = datetime.now(timezone.utc)
-            stripped += 1
+    stripped = sum(
+        1 for asset_id in {v.asset_id for v in versions}
+        if _strip_asset_with_no_versions(db, asset_id)
+    )
 
     # 3. Best-effort second pass for multipart uploads that no row owns at all.
     #
