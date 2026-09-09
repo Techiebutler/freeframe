@@ -242,7 +242,14 @@ def test_source_smaller_than_ladder_drops_upscaled_renditions():
 
 def test_source_smaller_than_all_requested_keeps_smallest():
     """A source below every requested quality must still yield exactly one
-    rendition (the smallest requested), never zero."""
+    rendition, never zero -- and at the source's own size.
+
+    The rendition kept here used to be the smallest requested rung at its
+    nominal size, which `force_original_aspect_ratio=decrease` then upscaled to:
+    a 426x240 source came out as one 1280x720 rendition, larger and more
+    expensive than the source. It is clamped to the source now, which is the
+    only reading of "one rung above the source" that saves anything.
+    """
     with patch("subprocess.run", side_effect=_mock_probe_side_effect(426, 240)) as mock_run:
         s3_mock = MagicMock()
         s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
@@ -262,7 +269,8 @@ def test_source_smaller_than_all_requested_keeps_smallest():
         filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
 
         assert "1920:1080" not in filter_complex
-        assert "1280:720" in filter_complex, "smallest requested quality (720p) must survive as fallback"
+        assert "1280:720" not in filter_complex, "the kept rung must not upscale the source"
+        assert "426:240" in filter_complex, "the smallest requested rung survives, at source size"
         assert "split=1" in filter_complex
 
 
