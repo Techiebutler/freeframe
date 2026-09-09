@@ -35,8 +35,14 @@ export async function exportComments(opts: {
 
   if (res.status === 422) {
     const body = await res.json().catch(() => null)
-    if (body?.detail?.code === 'fps_required') throw new FpsRequiredError()
-    throw new Error(typeof body?.detail === 'string' ? body.detail : 'Export failed')
+    const detail = body?.detail
+    if (detail?.code === 'fps_required') throw new FpsRequiredError()
+    // A structured detail carries the explanation in `message`. Reading only the
+    // string form turned every one of those into a bare "Export failed", which
+    // is the same amount of information as saying nothing.
+    throw new Error(
+      typeof detail === 'string' ? detail : detail?.message || 'Export failed',
+    )
   }
   if (!res.ok) throw new Error(`Export failed (${res.status})`)
 

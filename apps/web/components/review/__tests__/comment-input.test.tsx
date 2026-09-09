@@ -212,3 +212,15 @@ describe('CommentInput compare drawing props (annotationActive / onToggleAnnotat
     expect(screen.getByTitle('Draw annotation').className).not.toContain('text-accent')
   })
 })
+
+describe('CommentInput iOS auto-zoom guard', () => {
+  it('sizes the textarea at the 16px iOS zoom threshold, and reverts to compact only under a real hover/pointer query — never a viewport-width breakpoint', () => {
+    render(<CommentInput assetId="a1" projectId="p1" assetType="video" onSubmit={vi.fn()} />)
+    const textarea = screen.getByPlaceholderText('Leave your comment...')
+    expect(textarea.className).toContain('text-[16px]')
+    // A `md:` (or any other width) breakpoint here would still trigger Safari's
+    // auto-zoom on a landscape phone, which is wider than the breakpoint.
+    expect(textarea.className).not.toMatch(/\bmd:text-/)
+    expect(textarea.className).toContain('[@media(hover:hover)]:text-[13px]')
+  })
+})

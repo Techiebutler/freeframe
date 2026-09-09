@@ -703,6 +703,31 @@ def comment_deep_link(
     return {"url": url}
 
 
+def _no_markers_reason(rows: list, include_resolved: bool) -> str:
+    """Why a marker export has nothing to place on a timeline.
+
+    Three different situations produce the same empty file and need different
+    answers from whoever is looking at it -- most of all the middle one, where
+    the comments are right there on screen and only the timecode is missing.
+    """
+    tops = [r for r in rows if r.parent_id is None]
+    if not tops:
+        return "This version has no comments to export."
+    if not any(r.timecode_start is not None for r in tops):
+        return (
+            "None of this version's comments are attached to a timecode, so there is "
+            "nothing to place on a timeline. A comment carries a timecode when it is "
+            "written with the clock attached in the review screen; a time typed into "
+            "the text is not one. Export as CSV to get the comment text instead."
+        )
+    if not include_resolved:
+        return (
+            "Every timecoded comment in this version is resolved, and this export "
+            "excludes resolved comments."
+        )
+    return "This version has no timecoded comments to export."
+
+
 @router.get("/assets/{asset_id}/comments/export")
 def export_comments(
     asset_id: uuid.UUID,
@@ -810,6 +835,15 @@ def export_comments(
         content = "\ufeff" + comment_export.to_csv(rows, spec)  # BOM for Excel
     else:
         markers = comment_export.build_markers(rows, spec, include_resolved)
+        if not markers:
+            # An empty marker file is the worst answer available here. The
+            # download succeeds, the file opens, and the NLE reports nothing to
+            # import -- so the failure surfaces three applications away from its
+            # cause, and looks like a broken export rather than an empty one.
+            raise HTTPException(status_code=422, detail={
+                "code": "no_timecoded_comments",
+                "message": _no_markers_reason(rows, include_resolved),
+            })
         if format == "edl":
             if len(markers) > comment_export.EDL_MAX_EVENTS:
                 log.warning(

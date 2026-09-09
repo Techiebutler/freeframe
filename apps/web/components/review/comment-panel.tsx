@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review-store";
+import type { Asset } from "@/types";
 import type { CommentWithReplies } from "@/hooks/use-comments";
 import {
   exportComments,
@@ -56,6 +57,17 @@ interface CommentPanelProps {
   onShowAnnotation?: (drawingData: Record<string, unknown> | null) => void;
   /** Compare mode: export this pane's version instead of the store's currentVersion. */
   exportVersionId?: string;
+  /**
+   * Export this asset instead of the review store's `currentAsset`.
+   *
+   * Required wherever the panel is rendered outside the review screen. The
+   * store is written by `review-provider.tsx` and nothing clears it -- there is
+   * no unmount cleanup and the back arrow is a client-side navigation -- so on
+   * the project page it still holds whichever asset was opened last. Reading it
+   * there does not fail, it exports the wrong asset's comments under the wrong
+   * name, which is worse than doing nothing.
+   */
+  exportAsset?: Asset | null;
   className?: string;
 }
 
@@ -286,7 +298,7 @@ function InlineReplyInput({
       <input
         ref={inputRef}
         type="text"
-        className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
+        className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-[16px] [@media(hover:hover)]:text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
         placeholder="Leave your reply here..."
         value={body}
         onChange={(e) => setBody(e.target.value)}
@@ -564,7 +576,7 @@ function CommentItem({
                 onChange={(e) => setEditBody(e.target.value)}
                 autoFocus
                 rows={2}
-                className="w-full rounded-md border border-border bg-bg-tertiary px-2 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 resize-none"
+                className="w-full rounded-md border border-border bg-bg-tertiary px-2 py-1.5 text-[16px] [@media(hover:hover)]:text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 resize-none"
               />
               <div className="flex items-center gap-1.5 mt-1">
                 <button
@@ -780,12 +792,17 @@ export function CommentPanel({
   onSeekToTimecode,
   onShowAnnotation,
   exportVersionId,
+  exportAsset,
   className,
 }: CommentPanelProps) {
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId);
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId);
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation);
-  const currentAsset = useReviewStore((s) => s.currentAsset);
+  const storeAsset = useReviewStore((s) => s.currentAsset);
+  // The prop wins where it is given. `undefined` means "not told", so the store
+  // is used; an explicit `null` means "told, and there is nothing selected",
+  // which must not silently fall through to whatever the store still holds.
+  const currentAsset = exportAsset !== undefined ? exportAsset : storeAsset;
   const currentVersion = useReviewStore((s) => s.currentVersion);
 
   // Toolbar state
@@ -799,8 +816,18 @@ export function CommentPanel({
   const [filters, setFilters] = React.useState<FilterState>(EMPTY_FILTERS);
   const [replyingTo, setReplyingTo] = React.useState<string | null>(null);
   const [exportOpen, setExportOpen] = React.useState(false);
+  const [exportError, setExportError] = React.useState<string | null>(null);
   const [fpsPromptFormat, setFpsPromptFormat] =
     React.useState<ExportFormat | null>(null);
+
+  // The refusal is about one asset and one version, so it has to go when
+  // either of them changes. Nothing here remounts on its own: the version
+  // switcher is a sibling of this panel with no `key`, so a message about v2
+  // would otherwise sit above v1's fully timecoded comments, and in compare
+  // mode above the other pane's.
+  React.useEffect(() => {
+    setExportError(null);
+  }, [currentAsset?.id, currentVersion?.id, exportVersionId]);
 
   const searchRef = React.useRef<HTMLInputElement>(null);
 
@@ -907,8 +934,14 @@ export function CommentPanel({
 
   async function handleExport(format: ExportFormat, fps?: number) {
     setExportOpen(false);
+    setExportError(null);
     const versionId = exportVersionId ?? currentVersion?.id;
-    if (!currentAsset || !versionId) return;
+    if (!currentAsset || !versionId) {
+      // Folded into the error line rather than returning ahead of it: a guard
+      // that returns silently is the shape of bug this panel just had.
+      setExportError("Select an asset to export its comments");
+      return;
+    }
     try {
       await exportComments({
         assetId: currentAsset.id,
@@ -920,7 +953,18 @@ export function CommentPanel({
       if (err instanceof FpsRequiredError) {
         setFpsPromptFormat(format);
       } else {
-        console.error(err);
+        // Every other export failure used to go to the console, where nobody
+        // looks: an unsupported frame rate, a non-video asset and a version with
+        // nothing timecoded all produced a click that did nothing at all. Shown
+        // in the panel rather than as a toast, next to the control that failed
+        // and alongside the fps prompt, which is where this component already
+        // answers for this button.
+        // `err.message` and not `err instanceof Error` alone: an Error with an
+        // empty message is falsy, and the line below renders on truthiness --
+        // so the branch meant to explain the failure would show nothing at all.
+        setExportError(
+          (err instanceof Error && err.message) || "Export failed",
+        );
       }
     }
   }
@@ -1181,6 +1225,9 @@ export function CommentPanel({
               )}
               title="Export comments"
               onClick={() => {
+                // Opening the menu is the start of a new attempt, so the
+                // previous refusal stops being the answer to anything.
+                if (!exportOpen) setExportError(null);
                 setExportOpen((p) => !p);
                 setVisOpen(false);
                 setFilterOpen(false);
@@ -1231,6 +1278,12 @@ export function CommentPanel({
         </div>
       </div>
 
+      {exportError && (
+        <div className="px-4 pb-2 shrink-0">
+          <p className="text-[11px] text-status-error">{exportError}</p>
+        </div>
+      )}
+
       {/* ─── Search bar ───────────────────────────────────────────── */}
       {searchOpen && (
         <div className="px-4 pb-2 shrink-0">
@@ -1239,7 +1292,7 @@ export function CommentPanel({
             <input
               ref={searchRef}
               type="text"
-              className="flex-1 bg-transparent text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none"
+              className="flex-1 bg-transparent text-[16px] [@media(hover:hover)]:text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none"
               placeholder="Search..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}

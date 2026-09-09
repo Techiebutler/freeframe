@@ -966,6 +966,17 @@ export default function ProjectDetailPage() {
                       <CommentPanel
                         comments={comments as any}
                         currentUserId={user?.id}
+                        // Without these the panel reads the review store, which
+                        // still holds whatever asset was opened last -- so the
+                        // export ran against the wrong asset instead of the one
+                        // selected here.
+                        //
+                        // "This version" means the latest one here, which is what
+                        // the grid shows and what the comments above were loaded
+                        // for. The review screen exports whatever its version
+                        // switcher has selected; there is no switcher on this page.
+                        exportAsset={selectedAsset ?? null}
+                        exportVersionId={selectedVersionId ?? undefined}
                         onResolve={resolveComment}
                         onDelete={deleteComment}
                         onAddReaction={addReaction}
