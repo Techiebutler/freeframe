@@ -228,6 +228,9 @@ function ShareReviewInner({
               <>
                 <CommentPanel
                   comments={comments}
+                  // A guest has no access token, and `exportComments` sends
+                  // nothing else, so the control could only ever 401 here.
+                  canExport={false}
                   onResolve={() => {}}
                   onDelete={() => {}}
                   onAddReaction={() => {}}
