@@ -134,7 +134,10 @@ class ChangePasswordRequest(BaseModel):
     new_password: NewPassword
 
 class UpdateProfileRequest(BaseModel):
-    name: str | None = None
+    # Same rule as the accept-invite screen: this writes `User.name`, and a name
+    # that trims to empty renders as a blank author everywhere it is shown.
+    # Optional because this is a PATCH; a body that omits it leaves it alone.
+    name: DisplayName | None = None
     avatar_url: str | None = None
 
 class UpdateUserRoleRequest(BaseModel):

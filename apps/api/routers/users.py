@@ -92,7 +92,8 @@ def update_user(user_id: uuid.UUID, body: UpdateProfileRequest, db: Session = De
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if body.name is not None:
-        user.name = body.name.strip()
+        # Already trimmed and checked non-blank by `DisplayName`.
+        user.name = body.name
     if body.avatar_url is not None:
         user.avatar_url = body.avatar_url
     db.commit()
