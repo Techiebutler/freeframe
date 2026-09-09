@@ -68,6 +68,16 @@ interface CommentPanelProps {
    * name, which is worse than doing nothing.
    */
   exportAsset?: Asset | null;
+  /**
+   * Whether to offer the comment export control. Defaults to true.
+   *
+   * `exportComments` authenticates with `Bearer ${getAccessToken()}` and nothing
+   * else, so on a share link, where the viewer is a guest with no token, the
+   * request can only 401. Set this false wherever the panel is rendered for
+   * someone who cannot authenticate, so the control is absent rather than
+   * present and guaranteed to fail.
+   */
+  canExport?: boolean;
   className?: string;
 }
 
@@ -793,6 +803,7 @@ export function CommentPanel({
   onShowAnnotation,
   exportVersionId,
   exportAsset,
+  canExport = true,
   className,
 }: CommentPanelProps) {
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId);
@@ -1215,66 +1226,68 @@ export function CommentPanel({
           </button>
 
           {/* Export */}
-          <div className="relative">
-            <button
-              className={cn(
-                "h-7 w-7 flex items-center justify-center rounded-md transition-colors",
-                exportOpen
-                  ? "text-accent bg-accent/10"
-                  : "text-text-tertiary hover:text-text-secondary hover:bg-bg-tertiary",
-              )}
-              title="Export comments"
-              onClick={() => {
-                // Opening the menu is the start of a new attempt, so the
-                // previous refusal stops being the answer to anything.
-                if (!exportOpen) setExportError(null);
-                setExportOpen((p) => !p);
-                setVisOpen(false);
-                setFilterOpen(false);
-                setSortOpen(false);
-              }}
-            >
-              <Download className="h-4 w-4" />
-            </button>
-            <Dropdown
-              open={exportOpen}
-              onClose={() => setExportOpen(false)}
-              align="right"
-              className="w-56"
-            >
-              <div className="px-3 py-2 text-[11px] text-text-tertiary uppercase tracking-wider font-medium">
-                Export comments
-              </div>
-              {currentAsset?.asset_type === "video" && (
-                <>
-                  <button
-                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
-                    onClick={() => handleExport("edl")}
-                  >
-                    DaVinci Resolve (EDL)
-                  </button>
-                  <button
-                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
-                    onClick={() => handleExport("fcpxml")}
-                  >
-                    Final Cut Pro (FCPXML)
-                  </button>
-                  <button
-                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
-                    onClick={() => handleExport("premiere_xml")}
-                  >
-                    Premiere Pro (XML)
-                  </button>
-                </>
-              )}
+          {canExport && (
+            <div className="relative">
               <button
-                className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
-                onClick={() => handleExport("csv")}
+                className={cn(
+                  "h-7 w-7 flex items-center justify-center rounded-md transition-colors",
+                  exportOpen
+                    ? "text-accent bg-accent/10"
+                    : "text-text-tertiary hover:text-text-secondary hover:bg-bg-tertiary",
+                )}
+                title="Export comments"
+                onClick={() => {
+                  // Opening the menu is the start of a new attempt, so the
+                  // previous refusal stops being the answer to anything.
+                  if (!exportOpen) setExportError(null);
+                  setExportOpen((p) => !p);
+                  setVisOpen(false);
+                  setFilterOpen(false);
+                  setSortOpen(false);
+                }}
               >
-                CSV
+                <Download className="h-4 w-4" />
               </button>
-            </Dropdown>
-          </div>
+              <Dropdown
+                open={exportOpen}
+                onClose={() => setExportOpen(false)}
+                align="right"
+                className="w-56"
+              >
+                <div className="px-3 py-2 text-[11px] text-text-tertiary uppercase tracking-wider font-medium">
+                  Export comments
+                </div>
+                {currentAsset?.asset_type === "video" && (
+                  <>
+                    <button
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                      onClick={() => handleExport("edl")}
+                    >
+                      DaVinci Resolve (EDL)
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                      onClick={() => handleExport("fcpxml")}
+                    >
+                      Final Cut Pro (FCPXML)
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                      onClick={() => handleExport("premiere_xml")}
+                    >
+                      Premiere Pro (XML)
+                    </button>
+                  </>
+                )}
+                <button
+                  className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-text-secondary hover:bg-bg-tertiary transition-colors"
+                  onClick={() => handleExport("csv")}
+                >
+                  CSV
+                </button>
+              </Dropdown>
+            </div>
+          )}
         </div>
       </div>
 
