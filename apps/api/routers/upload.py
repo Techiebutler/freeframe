@@ -27,6 +27,7 @@ from ..schemas.upload import (
     ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
 from ..services.storage import upload_guard_error
+from ..services.versions import next_version_number
 
 logger = logging.getLogger(__name__)
 
@@ -83,17 +84,12 @@ def initiate_upload(
         db.add(asset)
         db.flush()
 
-    # Get next version number
-    last_version = db.query(AssetVersion).filter(
-        AssetVersion.asset_id == asset.id,
-        AssetVersion.deleted_at.is_(None),
-    ).order_by(AssetVersion.version_number.desc()).first()
-    next_version_number = (last_version.version_number + 1) if last_version else 1
+    next_version = next_version_number(db, asset.id)
 
     # Build S3 key: raw/{project_id}/{asset_id}/{version_id}/{filename}
     version = AssetVersion(
         asset_id=asset.id,
-        version_number=next_version_number,
+        version_number=next_version,
         processing_status=ProcessingStatus.uploading,
         created_by=current_user.id,
     )

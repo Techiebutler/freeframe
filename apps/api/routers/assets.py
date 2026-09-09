@@ -19,6 +19,7 @@ from ..services.s3_service import generate_presigned_get_url, build_download_fil
 from .hls_proxy import create_hls_token
 from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, mime_to_asset_type
 from ..services.storage import upload_guard_error
+from ..services.versions import next_version_number
 from ..services.s3_service import create_multipart_upload
 
 router = APIRouter(tags=["assets"])
@@ -361,15 +362,11 @@ def initiate_new_version(
     if guard_error:
         raise HTTPException(status_code=400, detail=guard_error)
 
-    last_version = db.query(AssetVersion).filter(
-        AssetVersion.asset_id == asset_id,
-        AssetVersion.deleted_at.is_(None),
-    ).order_by(AssetVersion.version_number.desc()).first()
-    next_version_number = (last_version.version_number + 1) if last_version else 1
+    next_version = next_version_number(db, asset_id)
 
     version = AssetVersion(
         asset_id=asset_id,
-        version_number=next_version_number,
+        version_number=next_version,
         processing_status=ProcessingStatus.uploading,
         created_by=current_user.id,
     )
