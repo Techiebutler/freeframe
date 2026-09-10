@@ -14,6 +14,10 @@ import * as React from 'react'
 import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
+import { MobileCommentSheet, PEEK_PX, type SheetState } from '@/components/review/mobile-comment-sheet'
+import { useMediaQuery } from '@/hooks/use-media-query'
+import { useMediaTransport } from '@/hooks/use-media-transport'
+import { formatTimecode } from '@/lib/utils'
 import type { SharePermission } from '@/types'
 import { handleDownload } from './share-download'
 
@@ -83,8 +87,31 @@ function ShareReviewInner({
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
-  const { currentVersion, isDrawingMode, focusedCommentId } = useReviewStore()
+  const { currentVersion, isDrawingMode, focusedCommentId, playheadTime } = useReviewStore()
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
+
+  // Same rule as the project review screen: a bottom sheet on a portrait phone
+  // so the media stays in view, the side-by-side column on a landscape one.
+  const isWide = useMediaQuery('(min-width: 768px)')
+  const isLandscape = useMediaQuery('(orientation: landscape)')
+  const useSheet = !isWide && !isLandscape
+  const [sheetState, setSheetState] = React.useState<SheetState>('peek')
+  const [sheetHeight, setSheetHeight] = React.useState(PEEK_PX)
+  const { isPlaying, togglePlay } = useMediaTransport()
+  const reviewRootRef = React.useRef<HTMLDivElement>(null)
+  const handleSheetHeight = React.useCallback((px: number) => setSheetHeight(px), [])
+
+  React.useEffect(() => {
+    const root = reviewRootRef.current
+    if (!root) return
+    if (!useSheet) {
+      root.style.removeProperty('--ff-media-shift')
+      return
+    }
+    const shift =
+      asset?.asset_type === 'audio' ? 0 : Math.max(0, (sheetHeight - PEEK_PX - 60) / 2)
+    root.style.setProperty('--ff-media-shift', `${shift}px`)
+  }, [useSheet, sheetHeight, asset?.asset_type])
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
   const [AnnotationCanvas, setAnnotationCanvas] = React.useState<any>(null)
@@ -142,6 +169,54 @@ function ShareReviewInner({
     return <div className="flex items-center justify-center h-dvh bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
   }
 
+  // Defined once so the desktop sidebar and the mobile sheet render the same
+  // nodes and cannot drift apart.
+  const panelTabs = (
+    <div className="px-4 pt-3 pb-2 shrink-0">
+      <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
+        <button onClick={() => setActiveTab('comments')} className={`flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all ${activeTab === 'comments' ? 'bg-bg-hover text-text-primary shadow-sm' : 'text-text-tertiary'}`}>
+          Comments
+        </button>
+        <button onClick={() => setActiveTab('fields')} className={`flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all ${activeTab === 'fields' ? 'bg-bg-hover text-text-primary shadow-sm' : 'text-text-tertiary'}`}>
+          Fields
+        </button>
+      </div>
+    </div>
+  )
+
+  const commentPanelNode = CommentPanel ? (
+    <CommentPanel
+      comments={comments}
+      // A guest has no access token, and `exportComments` sends
+      // nothing else, so the control could only ever 401 here.
+      canExport={false}
+      onResolve={() => {}}
+      onDelete={() => {}}
+      onAddReaction={() => {}}
+      onRemoveReaction={() => {}}
+      onReply={() => {}}
+      onSubmitReply={async () => {}}
+    />
+  ) : null
+
+  const commentInputNode = canComment && CommentInput ? (
+    <CommentInput
+      assetId={asset.id}
+      projectId=""
+      assetType={asset.asset_type}
+      onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
+        const hasAuth = !!localStorage.getItem('ff_access_token')
+        const hasGuest = !!localStorage.getItem('ff_guest_identity')
+        if (!hasAuth && !hasGuest) {
+          pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData }
+          setShowGuestPrompt(true)
+          return
+        }
+        await submitComment(body, timecodeStart, timecodeEnd, annotationData)
+      }}
+    />
+  ) : null
+
   return (
     <div className="flex flex-col h-dvh bg-bg-primary text-text-primary">
       {/* Top bar — same style as project review */}
@@ -172,9 +247,17 @@ function ShareReviewInner({
       </div>
 
       {/* Main: viewer + sidebar */}
-      <div className="relative flex flex-1 overflow-hidden min-h-0">
+      {/* pb-14 reserves the sheet's peek band so the player's own transport
+          row stays on screen and tappable underneath it. */}
+      <div
+        ref={reviewRootRef}
+        className={`relative flex flex-1 overflow-hidden min-h-0 ${useSheet ? 'pb-14' : ''}`}
+      >
         {/* Media viewer — reuses project components */}
-        <div className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0">
+        <div
+          className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0"
+          style={{ transform: 'translateY(calc(-1 * var(--ff-media-shift, 0px)))' }}
+        >
           {asset.asset_type === 'video' && versionReady && VideoPlayer ? (
             <VideoPlayer
               assetId={asset.id}
@@ -210,56 +293,41 @@ function ShareReviewInner({
           )}
         </div>
 
-        {/* Right sidebar — reuses project comment panel */}
-        {sidebarOpen && (
+        {/* Right sidebar. A column beside the media above `md` and on a
+            landscape phone; below that the same nodes go into the sheet. */}
+        {sidebarOpen && !useSheet && (
           <div className="w-full md:w-[360px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto max-md:landscape:static max-md:landscape:inset-auto max-md:landscape:w-[45%] max-md:landscape:max-w-[360px] flex flex-col border-l-0 md:border-l max-md:landscape:border-l border-border bg-bg-secondary shrink-0">
-            <div className="px-4 pt-3 pb-2 shrink-0">
-              <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
-                <button onClick={() => setActiveTab('comments')} className={`flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all ${activeTab === 'comments' ? 'bg-bg-hover text-text-primary shadow-sm' : 'text-text-tertiary'}`}>
-                  Comments
-                </button>
-                <button onClick={() => setActiveTab('fields')} className={`flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all ${activeTab === 'fields' ? 'bg-bg-hover text-text-primary shadow-sm' : 'text-text-tertiary'}`}>
-                  Fields
-                </button>
-              </div>
-            </div>
-
-            {activeTab === 'comments' && CommentPanel && (
+            {panelTabs}
+            {activeTab === 'comments' && (
               <>
-                <CommentPanel
-                  comments={comments}
-                  // A guest has no access token, and `exportComments` sends
-                  // nothing else, so the control could only ever 401 here.
-                  canExport={false}
-                  onResolve={() => {}}
-                  onDelete={() => {}}
-                  onAddReaction={() => {}}
-                  onRemoveReaction={() => {}}
-                  onReply={() => {}}
-                  onSubmitReply={async () => {}}
-                />
-                {canComment && CommentInput && (
-                  <CommentInput
-                    assetId={asset.id}
-                    projectId=""
-                    assetType={asset.asset_type}
-                    onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
-                      const hasAuth = !!localStorage.getItem('ff_access_token')
-                      const hasGuest = !!localStorage.getItem('ff_guest_identity')
-                      if (!hasAuth && !hasGuest) {
-                        pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData }
-                        setShowGuestPrompt(true)
-                        return
-                      }
-                      await submitComment(body, timecodeStart, timecodeEnd, annotationData)
-                    }}
-                  />
-                )}
+                {commentPanelNode}
+                {commentInputNode}
               </>
             )}
           </div>
         )}
       </div>
+
+      {useSheet && (
+        <MobileCommentSheet
+          state={sheetState}
+          onStateChange={setSheetState}
+          onHeightChange={handleSheetHeight}
+          commentCount={comments.length}
+          isPlaying={isPlaying}
+          onTogglePlay={togglePlay}
+          currentTime={
+            asset.asset_type === 'video' || asset.asset_type === 'audio'
+              ? formatTimecode(playheadTime ?? 0)
+              : ''
+          }
+          lockedToCompose={isDrawingMode}
+          composer={activeTab === 'comments' ? commentInputNode : undefined}
+        >
+          {panelTabs}
+          {activeTab === 'comments' ? commentPanelNode : null}
+        </MobileCommentSheet>
+      )}
 
       {/* Guest identity prompt */}
       {showGuestPrompt && (
