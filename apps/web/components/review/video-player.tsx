@@ -334,7 +334,11 @@ export function VideoPlayer({
     <div
       ref={containerRef}
       className={cn(
-        "flex flex-col h-full w-full",
+        // justify-center below md in portrait: the stage is a fixed-ratio box
+        // capped at 70dvh, so on a tall source this root is taller than its
+        // contents and the slack pools under the transport row (131px on an
+        // iPhone 16 Pro Max). Centring splits it above and below instead.
+        "flex flex-col h-full w-full max-md:portrait:justify-center",
         isFullscreen && "fixed inset-0 z-50",
         className,
       )}
@@ -350,7 +354,17 @@ export function VideoPlayer({
         // before, so desktop is untouched.
         className={cn(
           "relative min-h-0 bg-black overflow-hidden cursor-pointer",
-          "flex-1 max-md:portrait:flex-none max-md:portrait:aspect-[var(--stage-aspect)]",
+          // w-full is load-bearing. With only `aspect-ratio` + `max-height`, the
+          // clamped height makes the width definite via the ratio, so
+          // `align-items: stretch` no longer applies and the stage ends up
+          // narrower than the column and flush left: a 608x1080 source measured
+          // 302px wide in a 440px column on an iPhone 16 Pro Max, with all 138px
+          // of letterbox on the right. Pinning the width instead lets
+          // `object-contain` centre the picture and split the bands evenly.
+          // (Do not reach for `mx-auto` here: auto cross-axis margins also
+          // disable stretch, and the width then collapses to the content width,
+          // which is 0 because the video is absolutely positioned.)
+          "flex-1 max-md:portrait:flex-none max-md:portrait:w-full max-md:portrait:aspect-[var(--stage-aspect)]",
           // A vertical source (9:16) is taller than the screen at full width, so
           // the ratio alone would push the controls back off the bottom. Cap it
           // and let `object-contain` do the rest.
