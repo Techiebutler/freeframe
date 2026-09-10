@@ -1,3 +1,4 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -38,8 +39,26 @@ def _require_project_owner(db: Session, project_id: uuid.UUID, user: User) -> Pr
         raise HTTPException(status_code=403, detail="Project owner access required")
     return member
 
+def _check_description_requirement(description: str | None) -> None:
+    """Enforce settings.require_project_description_pattern, when an instance sets one.
+
+    Off by default: an empty pattern skips this entirely, so existing instances see no change.
+    """
+    pattern = (settings.require_project_description_pattern or "").strip()
+    if not pattern:
+        return
+    if description and re.search(pattern, description, re.IGNORECASE):
+        return
+    hint = (settings.require_project_description_hint or "").strip()
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=hint or "This instance requires a link in the project description.",
+    )
+
+
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(body: ProjectCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _check_description_requirement(body.description)
     project = Project(
         name=body.name,
         description=body.description,
@@ -154,6 +173,9 @@ def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: Session = Dep
     if body.name is not None:
         project.name = body.name
     if body.description is not None:
+        # Closing the same door on the way out: a project that had to carry the link to be
+        # created should not be able to drop it on the next edit.
+        _check_description_requirement(body.description)
         project.description = body.description
     if body.is_public is not None:
         project.is_public = body.is_public

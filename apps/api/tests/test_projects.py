@@ -178,3 +178,49 @@ def test_update_project(client, auth_headers, mock_db, test_user):
     )
     assert resp.status_code == 200
     assert resp.json()["name"] == "New Name"
+
+
+# ── settings.require_project_description_pattern ────────────────────────────────────────────
+#
+# Off by default, so nothing changes for an instance that does not set it. When it is set, a
+# project cannot be created - or edited - without whatever the pattern asks for, which is how an
+# automation reading projects over the API can find its way back to the brief.
+
+def test_description_requirement_is_off_by_default():
+    from apps.api.routers.projects import _check_description_requirement
+    from apps.api.config import settings
+
+    original = settings.require_project_description_pattern
+    settings.require_project_description_pattern = ""
+    try:
+        _check_description_requirement(None)          # must not raise
+        _check_description_requirement("anything")
+    finally:
+        settings.require_project_description_pattern = original
+
+
+def test_description_requirement_rejects_a_missing_link():
+    import pytest
+    from fastapi import HTTPException
+    from apps.api.routers.projects import _check_description_requirement
+    from apps.api.config import settings
+
+    original = (settings.require_project_description_pattern, settings.require_project_description_hint)
+    settings.require_project_description_pattern = r"trello\.com/c/"
+    settings.require_project_description_hint = "Paste the Trello card link."
+    try:
+        with pytest.raises(HTTPException) as e:
+            _check_description_requirement("no link here")
+        assert e.value.status_code == 400
+        # The message has to say what to paste; "invalid description" sends people hunting for a
+        # formatting rule.
+        assert "Trello card link" in e.value.detail
+
+        with pytest.raises(HTTPException):
+            _check_description_requirement(None)
+
+        # And accepts a real one, wherever it sits in the text, in either case.
+        _check_description_requirement("Brief: https://trello.com/c/m8O3AF67/80-bsgv17")
+        _check_description_requirement("HTTPS://TRELLO.COM/C/abc123 - winter campaign")
+    finally:
+        settings.require_project_description_pattern, settings.require_project_description_hint = original

@@ -66,6 +66,22 @@ class Settings(BaseSettings):
     # smallest rung at the source's own size.
     transcoder_qualities: str = "1080p,720p,360p"
 
+    # Require every project's description to carry something - typically a link to the brief in
+    # whatever tool the team plans in (Trello, Notion, Asana, a ticket).
+    #
+    # A regex, matched against the description on create and update. Empty (the default) is off
+    # and nothing changes. The hint is what the user is told when it does not match: say what to
+    # paste, because "description is invalid" sends people looking for a formatting rule.
+    #
+    #   REQUIRE_PROJECT_DESCRIPTION_PATTERN=trello\.com/c/
+    #   REQUIRE_PROJECT_DESCRIPTION_HINT=Paste the Trello card link for this project.
+    #
+    # Why an instance would want this: anything reading projects over the API - an automation, a
+    # reporting job, a review bot - has no way back to the brief a project was made from unless
+    # somebody wrote it down, and asking after the fact never works.
+    require_project_description_pattern: str = ""
+    require_project_description_hint: str = ""
+
     # Maximum size (bytes) for a single uploaded file. 0 = unlimited (no per-file cap).
     # Note: S3 multipart still caps effective size at ~10,000 parts x chunk size.
     max_upload_bytes: int = 0
