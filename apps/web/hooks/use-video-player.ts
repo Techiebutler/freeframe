@@ -126,13 +126,28 @@ export function useVideoPlayer(
     }
   }, [seekTarget, detached])
 
-  // Fullscreen change listener
+  // Fullscreen change listener.
+  //
+  // Three sources, because the modes report differently: the standard event,
+  // Safari's prefixed one (iPadOS, desktop), and the video element's own
+  // begin/end events, which are the ONLY signal on an iPhone, where the
+  // picture goes fullscreen through the native player rather than the document.
   useEffect(() => {
-    const handleFsChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
+    const doc = document as Document & { webkitFullscreenElement?: Element | null }
+    const video = videoRef.current
+    const readDoc = () => setIsFullscreen(!!(document.fullscreenElement || doc.webkitFullscreenElement))
+    const enter = () => setIsFullscreen(true)
+    const leave = () => setIsFullscreen(false)
+    document.addEventListener('fullscreenchange', readDoc)
+    document.addEventListener('webkitfullscreenchange', readDoc)
+    video?.addEventListener('webkitbeginfullscreen', enter)
+    video?.addEventListener('webkitendfullscreen', leave)
+    return () => {
+      document.removeEventListener('fullscreenchange', readDoc)
+      document.removeEventListener('webkitfullscreenchange', readDoc)
+      video?.removeEventListener('webkitbeginfullscreen', enter)
+      video?.removeEventListener('webkitendfullscreen', leave)
     }
-    document.addEventListener('fullscreenchange', handleFsChange)
-    return () => document.removeEventListener('fullscreenchange', handleFsChange)
   }, [])
 
   // HLS + video element setup
@@ -308,11 +323,40 @@ export function useVideoPlayer(
     video.muted = !video.muted
   }, [])
 
+  // An iPhone has no element fullscreen at all: `Element.requestFullscreen` is
+  // undefined there, so this threw "not a function" and the button did nothing.
+  // Safari on iPadOS and the desktop has the prefixed element API; an iPhone
+  // has only the video element's own native player. Try them in that order.
+  //
+  // The iPhone path shows the system player, so the annotation overlay and our
+  // transport are not visible while it is up. That is a platform limit, not a
+  // choice: there is no way to put custom chrome over a fullscreen video there.
   const toggleFullscreen = useCallback((containerEl: HTMLElement) => {
-    if (!document.fullscreenElement) {
-      containerEl.requestFullscreen().catch(() => {})
-    } else {
-      document.exitFullscreen().catch(() => {})
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null
+      webkitExitFullscreen?: () => Promise<void> | void
+    }
+    const el = containerEl as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }
+    const video = videoRef.current as (HTMLVideoElement & {
+      webkitEnterFullscreen?: () => void
+      webkitDisplayingFullscreen?: boolean
+    }) | null
+
+    const active = !!(document.fullscreenElement || doc.webkitFullscreenElement)
+    if (!active && !video?.webkitDisplayingFullscreen) {
+      if (typeof el.requestFullscreen === 'function') {
+        void Promise.resolve(el.requestFullscreen()).catch(() => {})
+      } else if (typeof el.webkitRequestFullscreen === 'function') {
+        void Promise.resolve(el.webkitRequestFullscreen()).catch(() => {})
+      } else if (video && typeof video.webkitEnterFullscreen === 'function') {
+        video.webkitEnterFullscreen()
+      }
+      return
+    }
+    if (typeof document.exitFullscreen === 'function') {
+      void Promise.resolve(document.exitFullscreen()).catch(() => {})
+    } else if (typeof doc.webkitExitFullscreen === 'function') {
+      void Promise.resolve(doc.webkitExitFullscreen()).catch(() => {})
     }
   }, [])
 
