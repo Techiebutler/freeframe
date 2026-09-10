@@ -60,7 +60,12 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   usePageTitle(asset?.name ?? null)
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
   const [activeTab, setActiveTab] = useState<'comments' | 'fields'>('comments')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Open on a desktop-width viewport, closed on a phone. A 360px sidebar on a
+  // 390px screen left roughly 30px for the video (#331). The share screen has
+  // always done this; the project page never did.
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window === 'undefined' || window.matchMedia('(min-width: 768px)').matches,
+  )
   const deepLinkApplied = useRef(false)
 
   // Fetch folder tree to build the folder path for the breadcrumb
@@ -458,7 +463,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       {compareOpen && asset && currentVersion && canCompare(asset.asset_type, versions) ? (
         <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} />
       ) : (
-      <div className="flex flex-1 overflow-hidden min-h-0">
+      <div className="relative flex flex-1 overflow-hidden min-h-0">
         {/* Left: viewer column */}
         <div className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0">
           {/* Media viewer */}
@@ -467,7 +472,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 
         {/* Right: comments sidebar */}
         {sidebarOpen && (
-          <div className="w-[360px] flex flex-col border-l border-border bg-bg-secondary shrink-0 animate-in slide-in-from-right-2 duration-150">
+          <div className="w-full md:w-[360px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto max-md:landscape:static max-md:landscape:inset-auto max-md:landscape:w-[45%] max-md:landscape:max-w-[360px] flex flex-col border-l-0 md:border-l max-md:landscape:border-l border-border bg-bg-secondary shrink-0 animate-in slide-in-from-right-2 duration-150">
             {/* Tabs (Frame.io pill style) */}
             <div className="px-4 pt-3 pb-2 shrink-0">
               <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">

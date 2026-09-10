@@ -136,6 +136,10 @@ export function VideoPlayer({
     useReviewStore();
   const { registerPauseHandler } = useReview();
   const [timeFormatOpen, setTimeFormatOpen] = useState(false);
+  // The media's own width/height ratio, used to size the stage on a portrait
+  // phone. 16/9 until `loadedmetadata` lands, so nothing jumps in the common
+  // case. See the stage below for why this is needed at all.
+  const [mediaAspect, setMediaAspect] = useState(16 / 9);
   const timeFormatRef = useRef<HTMLDivElement>(null);
 
   // Close time format dropdown on outside click
@@ -231,6 +235,26 @@ export function VideoPlayer({
     toggleFullscreen,
   } = player;
 
+  // A source can be vertical or 4:3, so the stage must not assume 16:9.
+  // `resize` covers a version switch that changes the dimensions without
+  // remounting the element.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const read = () => {
+      if (video.videoWidth && video.videoHeight) {
+        setMediaAspect(video.videoWidth / video.videoHeight);
+      }
+    };
+    read();
+    video.addEventListener("loadedmetadata", read);
+    video.addEventListener("resize", read);
+    return () => {
+      video.removeEventListener("loadedmetadata", read);
+      video.removeEventListener("resize", read);
+    };
+  }, [videoRef, streamUrl]);
+
   // Register pause handler with review provider
   useEffect(() => {
     registerPauseHandler(pause);
@@ -317,7 +341,22 @@ export function VideoPlayer({
     >
       {/* Video area — fills available space, object-contain preserves aspect ratio with letterbox */}
       <div
-        className="flex-1 relative min-h-0 bg-black overflow-hidden cursor-pointer"
+        // On a portrait phone the stage used to be `flex-1` with no relationship
+        // to the media, so it took every pixel the column had left and
+        // `object-contain` letterboxed a 16:9 video inside a box twice its
+        // height: ~200px of black above and below, with the controls pushed off
+        // the bottom (#331). Below `md` in portrait it is sized from the media's
+        // own ratio instead. Everywhere else it fills the column exactly as
+        // before, so desktop is untouched.
+        className={cn(
+          "relative min-h-0 bg-black overflow-hidden cursor-pointer",
+          "flex-1 max-md:portrait:flex-none max-md:portrait:aspect-[var(--stage-aspect)]",
+          // A vertical source (9:16) is taller than the screen at full width, so
+          // the ratio alone would push the controls back off the bottom. Cap it
+          // and let `object-contain` do the rest.
+          "max-md:portrait:max-h-[70dvh]",
+        )}
+        style={{ "--stage-aspect": String(mediaAspect) } as React.CSSProperties}
         onClick={handleContainerClick}
       >
         <video
