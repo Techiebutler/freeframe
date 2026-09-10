@@ -573,7 +573,12 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
           </button>
           <ShareDialog assetId={asset.id} assetName={asset.name} projectId={projectId} asset={asset} />
           <button
-            onClick={() => setSidebarOpen((p) => !p)}
+            // When the sheet is the comment surface, this button drives the
+            // sheet. Toggling `sidebarOpen` there would do nothing visible,
+            // since the sidebar is suppressed and the sheet never reads it.
+            onClick={() =>
+              useSheet ? setSheetState((st) => (st === 'peek' ? 'half' : 'peek')) : setSidebarOpen((p) => !p)
+            }
             className={cn(
               'flex items-center justify-center h-8 w-8 rounded-md transition-colors',
               sidebarOpen
