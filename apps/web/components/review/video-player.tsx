@@ -11,12 +11,14 @@ import {
   ChevronUp,
   Check,
   Repeat,
+  MoreHorizontal,
 } from "lucide-react";
 import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
 import { renderedMediaBox } from "@/lib/media-frame";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
+import { useMediaQuery, MEDIA_SM } from "@/hooks/use-media-query";
 import { useReview } from "./review-provider";
 import { ProgressBar } from "./progress-bar";
 import type { Comment } from "@/types";
@@ -140,7 +142,27 @@ export function VideoPlayer({
   // phone. 16/9 until `loadedmetadata` lands, so nothing jumps in the common
   // case. See the stage below for why this is needed at all.
   const [mediaAspect, setMediaAspect] = useState(16 / 9);
+
+  // Below `sm` the transport row runs out of width and the controls crowd, so
+  // the secondary ones move behind an overflow menu and the primary ones get a
+  // 44px touch target instead of 28px.
+  const compact = !useMediaQuery(MEDIA_SM);
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const overflowRef = useRef<HTMLDivElement>(null);
   const timeFormatRef = useRef<HTMLDivElement>(null);
+
+  // Close the overflow menu on an outside press. `pointerdown`, not
+  // `mousedown`: the scrubber calls preventDefault on its own pointer events,
+  // and a touch there would otherwise never produce the compatibility mouse
+  // event this needs to hear.
+  useEffect(() => {
+    if (!overflowOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!overflowRef.current?.contains(e.target as Node)) setOverflowOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [overflowOpen]);
 
   // Close time format dropdown on outside click
   useEffect(() => {
@@ -334,11 +356,16 @@ export function VideoPlayer({
     <div
       ref={containerRef}
       className={cn(
-        // justify-center below md in portrait: the stage is a fixed-ratio box
-        // capped at 70dvh, so on a tall source this root is taller than its
-        // contents and the slack pools under the transport row (131px on an
-        // iPhone 16 Pro Max). Centring splits it above and below instead.
-        "flex flex-col h-full w-full max-md:portrait:justify-center",
+        // Top-aligned in portrait, deliberately. The stage is a fixed-ratio box,
+        // so on a portrait phone there is almost always leftover height, and how
+        // much depends entirely on the source: a 9:16 clip leaves ~65px, a
+        // cinematic one leaves ~470px because it is only ~180px tall at full
+        // width. Centring that much slack floats the picture in the middle of
+        // the screen with a large gap above it, and pushes the drawing surface
+        // away from the thumb. Keeping the media under the header puts the
+        // leftover between the controls and the comment sheet, which is where
+        // the sheet expands into anyway.
+        "flex flex-col h-full w-full",
         isFullscreen && "fixed inset-0 z-50",
         className,
       )}
@@ -368,7 +395,11 @@ export function VideoPlayer({
           // A vertical source (9:16) is taller than the screen at full width, so
           // the ratio alone would push the controls back off the bottom. Cap it
           // and let `object-contain` do the rest.
-          "max-md:portrait:max-h-[70dvh]",
+          // The consumer sets --ff-stage-max to the height actually left above
+          // the comment sheet, so the whole frame stays visible as the sheet
+          // opens. 70dvh is the fallback for surfaces with no sheet, where the
+          // only job is to stop a vertical source pushing the controls off.
+          "max-md:portrait:max-h-[var(--ff-stage-max,70dvh)]",
         )}
         style={{ "--stage-aspect": String(mediaAspect) } as React.CSSProperties}
         onClick={handleContainerClick}
@@ -418,12 +449,21 @@ export function VideoPlayer({
       </div>
 
       {/* Bottom transport bar (matches audio player style) */}
-      <div className="flex items-center justify-between h-12 px-4 bg-bg-secondary/80 border-t border-border shrink-0">
+      <div
+        className={cn(
+          "flex items-center justify-between bg-bg-secondary/80 border-t border-border shrink-0",
+          // min-h, not h: the row carries its own safe-area padding below, and a
+          // fixed height would let that padding eat into the 44px buttons rather
+          // than growing the row.
+          compact ? "min-h-12 gap-1 px-3" : "h-12 px-4",
+        )}
+        style={compact ? { paddingBottom: "env(safe-area-inset-bottom)" } : undefined}
+      >
         {/* Left: Play, Loop, Speed, Volume */}
         <div className="flex items-center gap-2">
           <button
             onClick={togglePlay}
-            className="flex h-7 w-7 items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors"
+            className={cn("flex items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors", compact ? "h-11 w-11" : "h-7 w-7")}
             aria-label={isPlaying ? "Pause" : "Play"}
           >
             {isPlaying ? (
@@ -433,38 +473,42 @@ export function VideoPlayer({
             )}
           </button>
 
-          <button
-            onClick={() => setLoop((p) => !p)}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded transition-colors",
-              loop
-                ? "text-accent bg-accent/10"
-                : "text-text-tertiary hover:text-text-secondary hover:bg-bg-hover",
+            {!compact && (
+              <>
+            <button
+              onClick={() => setLoop((p) => !p)}
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded transition-colors",
+                loop
+                  ? "text-accent bg-accent/10"
+                  : "text-text-tertiary hover:text-text-secondary hover:bg-bg-hover",
+              )}
+              aria-label="Loop"
+            >
+              <Repeat className="h-4 w-4" />
+            </button>
+  
+            <button
+              onClick={handleSpeedCycle}
+              className="flex h-7 items-center justify-center rounded px-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors tabular-nums"
+              aria-label="Playback speed"
+            >
+              {playbackRate}x
+            </button>
+  
+            <button
+              onClick={toggleMute}
+              className="flex h-7 w-7 items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+              aria-label={isMuted ? "Unmute" : "Mute"}
+            >
+              {isMuted || volume === 0 ? (
+                <VolumeX className="h-4 w-4" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
+            </button>
+              </>
             )}
-            aria-label="Loop"
-          >
-            <Repeat className="h-4 w-4" />
-          </button>
-
-          <button
-            onClick={handleSpeedCycle}
-            className="flex h-7 items-center justify-center rounded px-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors tabular-nums"
-            aria-label="Playback speed"
-          >
-            {playbackRate}x
-          </button>
-
-          <button
-            onClick={toggleMute}
-            className="flex h-7 w-7 items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
-            aria-label={isMuted ? "Unmute" : "Mute"}
-          >
-            {isMuted || volume === 0 ? (
-              <VolumeX className="h-4 w-4" />
-            ) : (
-              <Volume2 className="h-4 w-4" />
-            )}
-          </button>
         </div>
 
         {/* Center: Timecode display with format picker */}
@@ -528,6 +572,43 @@ export function VideoPlayer({
 
         {/* Right: Quality, Fullscreen */}
         <div className="flex items-center gap-2">
+          {compact && (
+            <div className="relative" ref={overflowRef}>
+              <button
+                onClick={() => setOverflowOpen((p) => !p)}
+                className="flex h-11 w-11 items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                aria-label="More controls"
+                aria-expanded={overflowOpen}
+              >
+                <MoreHorizontal className="h-5 w-5" />
+              </button>
+              {overflowOpen && (
+                <div className="absolute bottom-full right-0 mb-2 z-50 w-44 rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5">
+                  <button
+                    onClick={() => { setLoop((v) => !v); setOverflowOpen(false); }}
+                    className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                  >
+                    Loop
+                    {loop && <Check className="h-4 w-4 text-accent" />}
+                  </button>
+                  <button
+                    onClick={() => { handleSpeedCycle(); }}
+                    className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                  >
+                    Speed
+                    <span className="tabular-nums text-text-tertiary">{playbackRate}x</span>
+                  </button>
+                  <button
+                    onClick={() => { toggleMute(); setOverflowOpen(false); }}
+                    className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                  >
+                    {isMuted || volume === 0 ? 'Unmute' : 'Mute'}
+                    {isMuted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           {/* Quality selector */}
           {qualityLevels.length > 0 && (
             <select

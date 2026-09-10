@@ -11,11 +11,10 @@ export interface MobileCommentSheetProps {
   state: SheetState
   onStateChange: (next: SheetState) => void
   /** Reports the sheet's PIXEL HEIGHT on every change (drag included). The
-   *  consumer turns it into `--ff-media-shift` with
-   *  max(0, (h - PEEK_PX - 60) / 2), which is 0 at peek. PEEK_PX comes out
-   *  because the media area already excludes the peek band (the wrapper
-   *  reserves it with `pb-14 md:pb-0`), so only the sheet's growth PAST peek
-   *  has to be re-centred. Must be a stable reference (useCallback) — it is an
+   *  consumer turns it into `--ff-stage-max`, the height left above the sheet,
+   *  so the media is capped to fit rather than moved: the stage is sized from
+   *  the media's own ratio and has no slack to slide within, so shifting it
+   *  would crop the frame. Must be a stable reference (useCallback) — it is an
    *  effect dependency here, and an unstable one would re-fire every render. */
   onHeightChange: (px: number) => void
   commentCount: number
@@ -41,6 +40,9 @@ export interface MobileCommentSheetProps {
  * transport row ended up permanently behind the sheet.
  */
 export const PEEK_PX = 56
+/** Handle row + composer, and the drawing toolbar beneath it when marking up a
+ *  frame. No comment list at this height, which is the point: someone drawing
+ *  is not reading older comments and the media needs the room more. */
 const COMPOSE_PX = 220
 const HALF_RATIO = 0.55
 const FULL_RATIO = 0.9

@@ -86,25 +86,38 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   // unstable reference would re-fire it on every render.
   const handleSheetHeight = useCallback((px: number) => setSheetHeight(px), [])
 
-  // `--ff-media-shift` is a POSITIVE UPWARD distance the media column negates,
-  // so the picture stays centred in the space the sheet leaves rather than
-  // hiding behind it. 60px is the nominal control stack (12px progress wrapper
-  // + 48px transport row). PEEK_PX comes out because the media row already
-  // stops PEEK_PX above the bottom while the sheet is in use, so only growth
-  // past `peek` covers anything and `peek` itself yields 0. Audio is pinned to
-  // 0: its waveform fills its box rather than being letterboxed inside it, so
-  // translating it would clip it.
+  // Drawing collapses the sheet to `compose`, which drops the comment list and
+  // leaves only the composer and the drawing toolbar. Someone marking up a
+  // frame is not reading older comments, and on a wide source the media is
+  // short enough that the list was taking room the drawing surface needed.
+  // Restored to `peek` on the way out rather than to whatever it was, so the
+  // media is never left half covered by a sheet the user did not reopen.
+  useEffect(() => {
+    if (!useSheet) return
+    setSheetState(isDrawingMode ? 'compose' : 'peek')
+  }, [isDrawingMode, useSheet])
+
+  // The sheet OVERLAYS the media, so the media has to fit in what is left above
+  // it or the picture gets cropped: the stage is sized from the media's own
+  // ratio (#344) and therefore has no slack to slide within, which is what made
+  // the earlier translate-based version clip the top of the frame while the
+  // sheet covered the bottom.
+  //
+  // Capping instead of shifting means the whole frame stays visible at every
+  // sheet state and the picture scales rather than moves. 60px is the control
+  // stack below it (12px progress wrapper + 48px transport row).
   useEffect(() => {
     const root = reviewRootRef.current
     if (!root) return
     if (!useSheet) {
-      root.style.removeProperty('--ff-media-shift')
+      root.style.removeProperty('--ff-stage-max')
       return
     }
-    const shift =
-      asset?.asset_type === 'audio' ? 0 : Math.max(0, (sheetHeight - PEEK_PX - 60) / 2)
-    root.style.setProperty('--ff-media-shift', `${shift}px`)
-  }, [useSheet, sheetHeight, asset?.asset_type])
+    const available = root.clientHeight - sheetHeight - 60
+    root.style.setProperty('--ff-stage-max', `${Math.max(80, available)}px`)
+  }, [useSheet, sheetHeight])
+
+
   const deepLinkApplied = useRef(false)
 
   // Fetch folder tree to build the folder path for the breadcrumb
@@ -612,7 +625,6 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
         {/* Left: viewer column */}
         <div
           className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0"
-          style={{ transform: 'translateY(calc(-1 * var(--ff-media-shift, 0px)))' }}
         >
           {/* Media viewer */}
           {renderMediaViewer()}
