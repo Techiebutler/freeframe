@@ -243,7 +243,7 @@ export function UploadsPanel() {
       />
 
       {/* Panel */}
-      <div className="fixed left-[52px] top-0 z-50 h-screen w-[380px] border-r border-border bg-bg-secondary shadow-2xl flex flex-col animate-in slide-in-from-left-4 duration-150">
+      <div className="fixed left-safe [--ff-left:52px] top-0 z-50 h-dvh w-[380px] border-r border-border bg-bg-secondary shadow-2xl flex flex-col pb-safe animate-in slide-in-from-left-4 duration-150">
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
           <h2 className="text-sm font-semibold text-text-primary">

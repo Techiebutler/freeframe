@@ -157,6 +157,27 @@
 }
 
 @layer utilities {
+
+  /* Safe-area helpers.
+   *
+   * These are only non-zero once the viewport is `viewport-fit=cover`, which
+   * the root layout sets. Without it iOS resolves every env(safe-area-inset-*)
+   * to 0, so padding written against them looks present in the source and does
+   * nothing at runtime. That trap is why `cover` and these landed together.
+   *
+   * max() rather than the raw env(): most of these surfaces already want some
+   * padding of their own, and on a device with no inset the env() is 0, which
+   * would otherwise remove it. */
+  .pb-safe { padding-bottom: max(var(--ff-pb, 0px), env(safe-area-inset-bottom)); }
+  .pt-safe { padding-top: max(var(--ff-pt, 0px), env(safe-area-inset-top)); }
+  .pl-safe { padding-left: max(var(--ff-pl, 0px), env(safe-area-inset-left)); }
+  .pr-safe { padding-right: max(var(--ff-pr, 0px), env(safe-area-inset-right)); }
+
+  /* For an element positioned against an edge rather than padded away from it. */
+  .bottom-safe { bottom: calc(var(--ff-bottom, 0px) + env(safe-area-inset-bottom)); }
+  .right-safe { right: calc(var(--ff-right, 0px) + env(safe-area-inset-right)); }
+  .left-safe { left: calc(var(--ff-left, 0px) + env(safe-area-inset-left)); }
+
   .text-balance {
     text-wrap: balance;
   }
