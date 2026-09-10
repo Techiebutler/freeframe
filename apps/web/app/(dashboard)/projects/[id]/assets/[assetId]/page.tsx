@@ -6,6 +6,9 @@ import useSWR from 'swr'
 import { ReviewProvider, useReview } from '@/components/review/review-provider'
 import { VideoPlayer } from '@/components/review/video-player'
 import { AudioPlayer } from '@/components/review/audio-player'
+import { MobileCommentSheet, PEEK_PX, type SheetState } from '@/components/review/mobile-comment-sheet'
+import { useMediaQuery } from '@/hooks/use-media-query'
+import { useMediaTransport } from '@/hooks/use-media-transport'
 import { ImageViewer } from '@/components/review/image-viewer'
 import { AnnotationCanvas } from '@/components/review/annotation-canvas'
 import { AnnotationOverlay } from '@/components/review/annotation-overlay'
@@ -34,7 +37,7 @@ import {
   GitCompareArrows,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn } from '@/lib/utils'
+import { cn, formatTimecode } from '@/lib/utils'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import { usePageTitle } from '@/hooks/use-page-title'
 import type { Project, AssetResponse, ProjectMember, FolderTreeNode } from '@/types'
@@ -51,7 +54,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
-  const { currentVersion, isDrawingMode, focusedCommentId, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
+  const { currentVersion, isDrawingMode, focusedCommentId, playheadTime, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
   const { user } = useAuthStore()
   const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
   const versionFileInputRef = useRef<HTMLInputElement>(null)
@@ -66,6 +69,42 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window === 'undefined' || window.matchMedia('(min-width: 768px)').matches,
   )
+
+  // Below `md` the comment panel becomes a bottom sheet so the video stays in
+  // view while reading or writing. A landscape phone keeps the side-by-side
+  // column instead (#338): there the room is horizontal, and a sheet would eat
+  // the little height there is.
+  const isWide = useMediaQuery('(min-width: 768px)')
+  const isLandscape = useMediaQuery('(orientation: landscape)')
+  const useSheet = !isWide && !isLandscape
+  const [sheetState, setSheetState] = useState<SheetState>('peek')
+  const [sheetHeight, setSheetHeight] = useState(PEEK_PX)
+  const { isPlaying, togglePlay } = useMediaTransport()
+  const reviewRootRef = useRef<HTMLDivElement>(null)
+
+  // MUST be stable: MobileCommentSheet lists it as an effect dependency, so an
+  // unstable reference would re-fire it on every render.
+  const handleSheetHeight = useCallback((px: number) => setSheetHeight(px), [])
+
+  // `--ff-media-shift` is a POSITIVE UPWARD distance the media column negates,
+  // so the picture stays centred in the space the sheet leaves rather than
+  // hiding behind it. 60px is the nominal control stack (12px progress wrapper
+  // + 48px transport row). PEEK_PX comes out because the media row already
+  // stops PEEK_PX above the bottom while the sheet is in use, so only growth
+  // past `peek` covers anything and `peek` itself yields 0. Audio is pinned to
+  // 0: its waveform fills its box rather than being letterboxed inside it, so
+  // translating it would clip it.
+  useEffect(() => {
+    const root = reviewRootRef.current
+    if (!root) return
+    if (!useSheet) {
+      root.style.removeProperty('--ff-media-shift')
+      return
+    }
+    const shift =
+      asset?.asset_type === 'audio' ? 0 : Math.max(0, (sheetHeight - PEEK_PX - 60) / 2)
+    root.style.setProperty('--ff-media-shift', `${shift}px`)
+  }, [useSheet, sheetHeight, asset?.asset_type])
   const deepLinkApplied = useRef(false)
 
   // Fetch folder tree to build the folder path for the breadcrumb
@@ -346,6 +385,99 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     }
   }
 
+  // The comment panel's pieces are defined once and rendered by either the
+  // desktop sidebar or the mobile sheet, so the two surfaces cannot drift.
+  const panelTabs = (
+    <>
+      {/* Tabs (Frame.io pill style) */}
+      <div className="px-4 pt-3 pb-2 shrink-0">
+        <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
+          <button
+            onClick={() => setActiveTab('comments')}
+            className={cn(
+              'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
+              activeTab === 'comments'
+                ? 'bg-bg-hover text-text-primary shadow-sm'
+                : 'text-text-tertiary hover:text-text-secondary',
+            )}
+          >
+            Comments
+          </button>
+          <button
+            onClick={() => setActiveTab('fields')}
+            className={cn(
+              'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
+              activeTab === 'fields'
+                ? 'bg-bg-hover text-text-primary shadow-sm'
+                : 'text-text-tertiary hover:text-text-secondary',
+            )}
+          >
+            Fields
+          </button>
+        </div>
+      </div>
+    </>
+  )
+
+  const commentPanelNode = (
+    <CommentPanel
+      comments={comments as any}
+      currentUserId={user?.id}
+      onResolve={resolveComment}
+      onDelete={deleteComment}
+      onAddReaction={addReaction}
+      onRemoveReaction={removeReaction}
+      onReply={() => {}}
+      onSubmitReply={handleSubmitReply}
+    />
+  )
+
+  const commentInputNode = canComment ? (
+    <CommentInput
+      assetId={asset.id}
+      projectId={asset.project_id}
+      assetType={asset.asset_type}
+      onSubmit={handleSubmitComment}
+      annotationData={annotationData}
+    />
+  ) : null
+
+  const fieldsBody = (
+    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-tertiary">Name</span>
+          <span className="text-xs text-text-primary font-medium truncate ml-4">{asset.name}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-tertiary">Type</span>
+          <span className="text-xs text-text-primary capitalize">{asset.asset_type.replace('_', ' ')}</span>
+        </div>
+        {currentVersion && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-tertiary">Version</span>
+            <span className="text-xs text-text-primary">v{currentVersion.version_number}</span>
+          </div>
+        )}
+        {currentVersion && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-tertiary">Processing</span>
+            <span className={cn(
+              'text-xs capitalize',
+              currentVersion.processing_status === 'ready' && 'text-status-success',
+              currentVersion.processing_status === 'processing' && 'text-status-warning',
+              currentVersion.processing_status === 'failed' && 'text-status-error',
+              currentVersion.processing_status === 'uploading' && 'text-text-tertiary',
+            )}>
+              {currentVersion.processing_status}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
       {/* ─── Top bar (Frame.io style) ──────────────────────────────────── */}
@@ -463,106 +595,68 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       {compareOpen && asset && currentVersion && canCompare(asset.asset_type, versions) ? (
         <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} />
       ) : (
-      <div className="relative flex flex-1 overflow-hidden min-h-0">
+      <>
+      {/* pb-14 (3.5rem = PEEK_PX) reserves the sheet's peek band so the
+          player's transport row stays on screen and tappable underneath it.
+          Without it the media column runs to the bottom and the sheet, which
+          is opaque and present in every state, sits on those controls. */}
+      <div
+        ref={reviewRootRef}
+        className={cn("relative flex flex-1 overflow-hidden min-h-0", useSheet && "pb-14")}
+      >
         {/* Left: viewer column */}
-        <div className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0">
+        <div
+          className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0"
+          style={{ transform: 'translateY(calc(-1 * var(--ff-media-shift, 0px)))' }}
+        >
           {/* Media viewer */}
           {renderMediaViewer()}
         </div>
 
-        {/* Right: comments sidebar */}
-        {sidebarOpen && (
+        {/* Right: comments sidebar. Above `md`, and on a landscape phone where
+            the spare room is horizontal, this stays a column beside the media.
+            Below that the same nodes go into MobileCommentSheet instead, so the
+            panel keeps the video in view rather than covering it. */}
+        {sidebarOpen && !useSheet && (
           <div className="w-full md:w-[360px] absolute inset-y-0 right-0 z-20 md:static md:inset-auto max-md:landscape:static max-md:landscape:inset-auto max-md:landscape:w-[45%] max-md:landscape:max-w-[360px] flex flex-col border-l-0 md:border-l max-md:landscape:border-l border-border bg-bg-secondary shrink-0 animate-in slide-in-from-right-2 duration-150">
-            {/* Tabs (Frame.io pill style) */}
-            <div className="px-4 pt-3 pb-2 shrink-0">
-              <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
-                <button
-                  onClick={() => setActiveTab('comments')}
-                  className={cn(
-                    'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
-                    activeTab === 'comments'
-                      ? 'bg-bg-hover text-text-primary shadow-sm'
-                      : 'text-text-tertiary hover:text-text-secondary',
-                  )}
-                >
-                  Comments
-                </button>
-                <button
-                  onClick={() => setActiveTab('fields')}
-                  className={cn(
-                    'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
-                    activeTab === 'fields'
-                      ? 'bg-bg-hover text-text-primary shadow-sm'
-                      : 'text-text-tertiary hover:text-text-secondary',
-                  )}
-                >
-                  Fields
-                </button>
-              </div>
-            </div>
-
-            {/* Content */}
+            {panelTabs}
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {activeTab === 'comments' ? (
                 <>
-                  <CommentPanel
-                    comments={comments as any}
-                    currentUserId={user?.id}
-                    onResolve={resolveComment}
-                    onDelete={deleteComment}
-                    onAddReaction={addReaction}
-                    onRemoveReaction={removeReaction}
-                    onReply={() => {}}
-                    onSubmitReply={handleSubmitReply}
-                  />
-                  {canComment && (
-                    <CommentInput
-                      assetId={asset.id}
-                      projectId={asset.project_id}
-                      assetType={asset.asset_type}
-                      onSubmit={handleSubmitComment}
-                      annotationData={annotationData}
-                    />
-                  )}
+                  {commentPanelNode}
+                  {commentInputNode}
                 </>
               ) : (
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-text-tertiary">Name</span>
-                      <span className="text-xs text-text-primary font-medium truncate ml-4">{asset.name}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-text-tertiary">Type</span>
-                      <span className="text-xs text-text-primary capitalize">{asset.asset_type.replace('_', ' ')}</span>
-                    </div>
-                    {currentVersion && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-text-tertiary">Version</span>
-                        <span className="text-xs text-text-primary">v{currentVersion.version_number}</span>
-                      </div>
-                    )}
-                    {currentVersion && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-text-tertiary">Processing</span>
-                        <span className={cn(
-                          'text-xs capitalize',
-                          currentVersion.processing_status === 'ready' && 'text-status-success',
-                          currentVersion.processing_status === 'processing' && 'text-status-warning',
-                          currentVersion.processing_status === 'failed' && 'text-status-error',
-                          currentVersion.processing_status === 'uploading' && 'text-text-tertiary',
-                        )}>
-                          {currentVersion.processing_status}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                fieldsBody
               )}
             </div>
           </div>
         )}
       </div>
+
+      {useSheet && (
+        <MobileCommentSheet
+          state={sheetState}
+          onStateChange={setSheetState}
+          onHeightChange={handleSheetHeight}
+          commentCount={comments.length}
+          isPlaying={isPlaying}
+          onTogglePlay={togglePlay}
+          // Empty string for anything without a timeline: it suppresses the
+          // sheet's mini transport rather than leaving a dead play button.
+          currentTime={
+            asset.asset_type === 'video' || asset.asset_type === 'audio'
+              ? formatTimecode(playheadTime ?? 0)
+              : ''
+          }
+          lockedToCompose={isDrawingMode}
+          composer={activeTab === 'comments' ? commentInputNode : undefined}
+        >
+          {panelTabs}
+          {activeTab === 'comments' ? commentPanelNode : fieldsBody}
+        </MobileCommentSheet>
+      )}
+      </>
       )}
     </div>
   )
