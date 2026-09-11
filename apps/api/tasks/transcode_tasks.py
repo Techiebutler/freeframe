@@ -168,6 +168,9 @@ def _process_video(db, asset, version, media_file, s3, output_prefix):
         raise RuntimeError(f"Transcode failed: {result.error}")
 
     media_file.s3_key_processed = result.hls_prefix
+    # None when the remux failed. Recorded either way so a re-run of a version
+    # that once had a download rung and now does not stops advertising it.
+    media_file.s3_key_download = result.mp4_key
     if result.thumbnail_keys:
         media_file.s3_key_thumbnail = result.thumbnail_keys[0]
     if result.duration_seconds:

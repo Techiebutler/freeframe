@@ -416,21 +416,60 @@ def head_object_size(s3_key: str) -> int | None:
         )
     return size
 
-def build_download_filename(display_name: str, source: str | None) -> str:
-    """Return display_name with an extension appended from `source` if missing.
+# Extensions a display name may have inherited from the file it was created
+# from, and which are therefore safe to replace with the extension of the bytes
+# being served. Deliberately an allowlist: an asset name is free text, so
+# "Scene 2.5" must keep all of itself rather than be read as a name plus a ".5"
+# extension.
+_REPLACEABLE_EXTENSIONS = frozenset({
+    # video containers
+    ".mp4", ".m4v", ".mov", ".avi", ".mkv", ".webm", ".mpg", ".mpeg", ".m2v",
+    ".mts", ".m2ts", ".ts", ".mxf", ".wmv", ".flv", ".3gp", ".ogv",
+    # audio
+    ".wav", ".wave", ".mp3", ".aac", ".m4a", ".flac", ".aif", ".aiff", ".ogg",
+    ".oga", ".opus", ".wma", ".caf",
+    # stills
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic",
+    ".heif", ".avif",
+})
 
-    `source` is an original upload filename or an S3 key — whichever is most
-    authoritative for the file's real extension. If the display name already
-    ends with that extension (case-insensitive), it is returned unchanged.
+
+def build_download_filename(
+    display_name: str,
+    served_key: str | None,
+    original_filename: str | None = None,
+) -> str:
+    """Name a download after the bytes it actually carries.
+
+    `served_key` is the S3 key being handed out, so its extension is the only
+    one that describes the file the user receives. This used to be taken from
+    the upload's own filename instead, which is right only while the two are the
+    same file: audio is served as the MP3 the transcode produced and a still as
+    the WebP, so a `Mix.wav` upload downloaded as `Mix.wav` carrying MP3 bytes,
+    and most image tools and several players refuse that outright.
+
+    `original_filename` is never used for the extension, only as a fallback when
+    the served key has none of its own (a video's processed key is an HLS
+    prefix). The stem is the display name, since that is what the user
+    recognises, with a media extension it inherited from a filename dropped
+    rather than kept in front of the real one — `Mix.mp3`, not `Mix.wav.mp3`.
     """
-    if not source:
-        return display_name
-    ext = os.path.splitext(source)[1]
+    ext = os.path.splitext(served_key or "")[1]
+    if not ext:
+        ext = os.path.splitext(original_filename or "")[1]
     if not ext:
         return display_name
     if display_name.lower().endswith(ext.lower()):
         return display_name
-    return f"{display_name}{ext}"
+
+    stem, stale_ext = os.path.splitext(display_name)
+    upload_ext = os.path.splitext(original_filename or "")[1]
+    replaceable = stale_ext.lower() in _REPLACEABLE_EXTENSIONS or (
+        upload_ext and stale_ext.lower() == upload_ext.lower()
+    )
+    if not (stem and replaceable):  # not an extension, or nothing left without it
+        stem = display_name
+    return f"{stem}{ext}"
 
 
 MAX_DOWNLOAD_FILENAME_LEN = 200

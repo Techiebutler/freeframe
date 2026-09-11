@@ -57,7 +57,8 @@ def test_reap_logic_soft_deletes_and_deletes_s3(mock_db, monkeypatch):
     monkeypatch.setattr(ct, "delete_prefix", lambda k: deleted.append(k))
 
     version = MagicMock(deleted_at=None)
-    media = MagicMock(s3_key_raw="raw/x", s3_key_processed="processed/x", s3_key_thumbnail="thumb/x")
+    media = MagicMock(s3_key_raw="raw/x", s3_key_processed="processed/x",
+                      s3_key_download="processed/x/download.mp4", s3_key_thumbnail="thumb/x")
     # versions query returns [version]; media-files query (inside the loop) returns [media]
     mock_db.all.side_effect = [[version], [media]]
 
@@ -65,7 +66,7 @@ def test_reap_logic_soft_deletes_and_deletes_s3(mock_db, monkeypatch):
 
     assert n == 1
     assert version.deleted_at is not None
-    assert set(deleted) == {"raw/x", "processed/x", "thumb/x"}
+    assert set(deleted) == {"raw/x", "processed/x", "processed/x/download.mp4", "thumb/x"}
 
 
 def _seed_version(db, status, created_shift_hours):

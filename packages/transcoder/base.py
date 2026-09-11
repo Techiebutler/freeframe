@@ -23,6 +23,12 @@ class TranscodeResult:
     # it to the audio pipeline instead of surfacing an error.
     no_video_stream: bool = False
     hls_prefix: Optional[str] = None
+    # One MP4 holding the whole of the best rendition, for download. The ladder
+    # itself is segments, which cannot be handed to anyone as "the video", so
+    # without this the only single file a download has is the camera master.
+    # None when the remux failed: the ladder is the product, and a caller is
+    # expected to fall back rather than treat the transcode as failed.
+    mp4_key: Optional[str] = None
     thumbnail_keys: list[str] = field(default_factory=list)
     waveform_key: Optional[str] = None
     error: Optional[str] = None

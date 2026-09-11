@@ -249,6 +249,11 @@ QUALITY_MAP = {
 DEFAULT_QUALITIES = ("1080p", "720p", "360p")
 
 
+def rung_height(name: str) -> int:
+    """The vertical resolution a rung encodes to (QUALITY_MAP holds `w:h`)."""
+    return int(QUALITY_MAP[name][0].split(":")[1])
+
+
 def parse_qualities(raw: str | None) -> list[str]:
     """Turn a configured rung list into one this transcoder can build.
 
@@ -547,6 +552,74 @@ class FFmpegTranscoder(BaseTranscoder):
         )
         return uploaded
 
+    def _build_download_mp4(
+        self,
+        hls_dir: Path,
+        qualities: list[str],
+        work_dir: Path,
+        output_prefix: str,
+    ) -> Optional[str]:
+        """Remux the best rendition's segments into one MP4, for download.
+
+        The ladder is HLS, which is a playlist and a few hundred `.ts` files:
+        there is nothing in it that can be handed to someone as "the video", so
+        a download had only the camera master to offer — often an order of
+        magnitude larger than what the reviewer actually watched, and on a slow
+        link a bad default.
+
+        The segments of one variant are a single continuous MPEG-TS stream that
+        we encoded ourselves, so this is `-c copy`: no decode, no encode, and
+        the same bytes the reviewer streamed. `-movflags +faststart` moves the
+        moov atom to the front so the file plays while it is still arriving,
+        which is the whole point of downloading a proxy instead of the master.
+
+        It costs one more object per version, about the size of the top rung,
+        and the same again on the worker's disk while it is being written.
+
+        Best-effort by design. The ladder is the product; if this fails the
+        transcode still succeeded, the caller records no download rung, and the
+        download path falls back to the raw master as it always did.
+        """
+        if not qualities:
+            return None
+        # `-var_stream_map` carries no `name:` field, so ffmpeg writes variant
+        # *i* to a directory named `i`, in the order the rungs were mapped. The
+        # tallest rung is the closest thing to what was reviewed.
+        best = max(range(len(qualities)), key=lambda i: rung_height(qualities[i]))
+        playlist = hls_dir / str(best) / "playlist.m3u8"
+        mp4_path = work_dir / "download.mp4"
+        key = f"{output_prefix}/download.mp4"
+        try:
+            self._run(
+                [
+                    "ffmpeg", "-y",
+                    "-i", str(playlist),
+                    "-c", "copy",
+                    # AAC inside MPEG-TS is ADTS-framed and MP4 wants the bare
+                    # stream with an ASC in the sample entry. Recent ffmpeg
+                    # inserts this filter itself (7.1 produces byte-identical
+                    # output with and without it) and ignores it on a variant
+                    # that carries no audio at all, so saying it costs nothing
+                    # and keeps the requirement visible.
+                    "-bsf:a", "aac_adtstoasc",
+                    "-movflags", "+faststart",
+                    str(mp4_path),
+                ],
+                timeout=3600,
+                label="ffmpeg",
+            )
+            self.s3.upload_file(
+                str(mp4_path), self.bucket, key,
+                ExtraArgs={"ContentType": "video/mp4", "CacheControl": "max-age=86400"},
+            )
+        except Exception as exc:  # noqa: BLE001 - never fail a good ladder over this
+            print(
+                f"[transcoder] no download MP4 for {output_prefix}: {exc}",
+                flush=True,
+            )
+            return None
+        return key
+
     async def get_video_metadata(self, s3_key: str) -> VideoMetadata:
         """Get video metadata using streaming (no full download)."""
         input_url = self._get_presigned_url(s3_key)
@@ -650,10 +723,7 @@ class FFmpegTranscoder(BaseTranscoder):
             source_height = (meta.height if meta else 0) or 0
             source_width = (meta.width if meta else 0) or 0
 
-            def _rung_height(name: str) -> int:
-                return int(QUALITY_MAP[name][0].split(":")[1])
-
-            qualities = [q for q in requested if _rung_height(q) <= source_height]
+            qualities = [q for q in requested if rung_height(q) <= source_height]
             # What each rung scales to. Its own nominal size, except for the one
             # kept below.
             scale_targets = {q: QUALITY_MAP[q][0] for q in requested}
@@ -668,7 +738,7 @@ class FFmpegTranscoder(BaseTranscoder):
                 # source means "source size", which is the only useful reading
                 # of it. Without probed dimensions there is nothing to clamp
                 # against, so the rung stands as before.
-                smallest = min(requested, key=_rung_height)
+                smallest = min(requested, key=rung_height)
                 qualities = [smallest]
                 if source_width and source_height:
                     scale_targets[smallest] = f"{source_width}:{source_height}"
@@ -885,10 +955,14 @@ class FFmpegTranscoder(BaseTranscoder):
                     shutil.rmtree(hls_dir, ignore_errors=True)
                     hls_dir.mkdir(exist_ok=True)
 
-            # 4. Upload HLS files to S3
+            # 4. One downloadable file, remuxed from the rendition just encoded.
+            mp4_key = self._build_download_mp4(hls_dir, qualities, work_dir,
+                                               job.output_s3_prefix)
+
+            # 5. Upload HLS files to S3
             uploaded_keys = self._upload_directory(hls_dir, job.output_s3_prefix)
 
-            # 5. Generate and upload thumbnail (using streaming URL)
+            # 6. Generate and upload thumbnail (using streaming URL)
             thumb_path = work_dir / "thumb_0001.jpg"
             thumb_vf = "thumbnail"
             if dv_software:
@@ -923,6 +997,7 @@ class FFmpegTranscoder(BaseTranscoder):
             return TranscodeResult(
                 success=True,
                 hls_prefix=job.output_s3_prefix,
+                mp4_key=mp4_key,
                 thumbnail_keys=[thumbnail_key] if uploaded_thumb else [],
                 duration_seconds=(meta.duration_seconds or None) if meta else None,
                 width=(meta.width or None) if meta else None,
