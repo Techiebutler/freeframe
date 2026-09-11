@@ -24,7 +24,8 @@ export default function DashboardLayout({
   const { fetchUser } = useAuthStore();
   const { fetchHistory } = useUploadStore();
 
-  // Hide header on asset viewer pages — the viewer has its own top bar
+  // The asset viewer renders its own top bar, carrying both the header's role
+  // and the attribution credit, so the shell supplies neither here.
   const isAssetViewer = /\/projects\/[^/]+\/assets\/[^/]+/.test(pathname);
 
   React.useEffect(() => {
@@ -77,8 +78,17 @@ export default function DashboardLayout({
       {/* Attribution floats over the content rather than living in the sidebar,
           so it stays put whether the rail is collapsed or expanded and doesn't
           compete with the org name for the 48px logo header. Renders nothing
-          when an admin turns "Powered by FreeFrame" off. */}
-      <PoweredByBadge className="fixed bottom-safe right-safe [--ff-bottom:1rem] [--ff-right:1rem] z-20 rounded-full border border-border bg-bg-elevated/90 px-3 py-1.5 shadow-lg backdrop-blur-sm" />
+          when an admin turns "Powered by FreeFrame" off.
+
+          Not on the asset viewer. That route carries its own credit centred in
+          the top bar it renders in place of the header, so the floating one was
+          a second copy -- and at 173px wide it covered the 28px send button in
+          the corner of the comment composer completely, so every click on Send
+          opened the repository in a new tab instead of posting the comment.
+          Enter still posted, which is why it went unseen. */}
+      {!isAssetViewer && (
+        <PoweredByBadge className="fixed bottom-safe right-safe [--ff-bottom:1rem] [--ff-right:1rem] z-20 rounded-full border border-border bg-bg-elevated/90 px-3 py-1.5 shadow-lg backdrop-blur-sm" />
+      )}
 
       <UploadsPanel />
       <UploadSSEBridge />
