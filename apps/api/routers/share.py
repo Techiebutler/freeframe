@@ -1454,7 +1454,13 @@ def get_share_stream_url(
 
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
         if download:
-            s3_key = media_file.s3_key_raw or media_file.s3_key_processed
+            # The MP4 rung remuxed from the top rendition, falling back to the
+            # camera master for versions that predate it (see routers/assets.py).
+            s3_key = (
+                media_file.s3_key_download
+                or media_file.s3_key_raw
+                or media_file.s3_key_processed
+            )
             filename = build_download_filename(asset.name, s3_key, media_file.original_filename)
             url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:

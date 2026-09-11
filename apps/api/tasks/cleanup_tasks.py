@@ -89,6 +89,12 @@ def _reclaim_media_s3(mf, counts: PurgeCounts) -> None:
     if mf.s3_key_processed:
         _safe(delete_prefix, mf.s3_key_processed)
         counts.s3_deletes += 1
+    if mf.s3_key_download:
+        # Written under the processed prefix, so the sweep above reclaims it in
+        # practice. Named anyway: the download rung is a whole rendition, and
+        # its reclamation must not rest on the two keys happening to be related.
+        _safe(delete_object, mf.s3_key_download)
+        counts.s3_deletes += 1
     if mf.s3_key_thumbnail:
         _safe(delete_object, mf.s3_key_thumbnail)
         counts.s3_deletes += 1
@@ -263,6 +269,8 @@ def _reap_stale_uploads(db) -> int:
             _safe(delete_object, mf.s3_key_raw)
             if mf.s3_key_processed:
                 _safe(delete_prefix, mf.s3_key_processed)
+            if mf.s3_key_download:
+                _safe(delete_object, mf.s3_key_download)
             if mf.s3_key_thumbnail:
                 _safe(delete_object, mf.s3_key_thumbnail)
         v.deleted_at = datetime.now(timezone.utc)
@@ -512,10 +520,13 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
     """Report (and optionally delete) S3 keys under raw/ and processed/ that no MediaFile row owns.
     Report-only unless orphan_sweep_delete is True. Only keys older than orphan_sweep_grace_hours
     (0 disables) are considered. Read-only on the DB (no commit). A key is LIVE if it is a
-    MediaFile.s3_key_raw / s3_key_thumbnail, or lives under processed/{project_id}/{asset_id}/{version_id}/
-    (= the transcode output_prefix) for some MediaFile — derived from the raw key
-    `raw/{project_id}/{asset_id}/{version_id}/...`. MediaFile is queried UNFILTERED on purpose: a
-    soft-deleted-but-not-yet-purged asset still owns its S3 and belongs to the retention GC, not here."""
+    MediaFile.s3_key_raw / s3_key_thumbnail / s3_key_download, or lives under
+    processed/{project_id}/{asset_id}/{version_id}/ (= the transcode output_prefix) for some MediaFile
+    — derived from the raw key `raw/{project_id}/{asset_id}/{version_id}/...`. MediaFile is queried
+    UNFILTERED on purpose: a soft-deleted-but-not-yet-purged asset still owns its S3 and belongs to
+    the retention GC, not here. The download MP4 is written under the processed prefix and so is
+    already covered by that rule; it is named as well so that a row whose raw key is missing or
+    oddly shaped, and which therefore contributes no processed root, cannot have it swept."""
     grace = settings.orphan_sweep_grace_hours
     counts = OrphanSweepCounts(grace_hours=grace, delete_enabled=settings.orphan_sweep_delete)
     if grace <= 0:
@@ -525,7 +536,9 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
 
     exact_live: set = set()
     processed_roots: set = set()
-    for raw, thumb in db.query(MediaFile.s3_key_raw, MediaFile.s3_key_thumbnail).all():
+    for raw, thumb, download in db.query(
+        MediaFile.s3_key_raw, MediaFile.s3_key_thumbnail, MediaFile.s3_key_download
+    ).all():
         if raw:
             exact_live.add(raw)
             parts = raw.split("/")  # raw/{project_id}/{asset_id}/{version_id}/original.ext
@@ -533,6 +546,8 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
                 processed_roots.add("processed/" + "/".join(parts[1:4]) + "/")
         if thumb:
             exact_live.add(thumb)
+        if download:
+            exact_live.add(download)
 
     def _is_live(key):
         return key in exact_live or any(key.startswith(root) for root in processed_roots)

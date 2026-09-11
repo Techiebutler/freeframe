@@ -93,10 +93,12 @@ def test_purge_comment_removes_subtree_and_attachment_s3(real_db, monkeypatch):
     assert counts.comments == 2  # parent + reply
 
 
-def _media(db, version, ftype=FileType.video, processed="processed/x/", thumb="thumb/x"):
+def _media(db, version, ftype=FileType.video, processed="processed/x/", thumb="thumb/x",
+           download="processed/x/download.mp4"):
     mf = MediaFile(version_id=version.id, file_type=ftype, original_filename="f.mp4",
                    mime_type="video/mp4", file_size_bytes=10, s3_key_raw=f"raw/{version.id}",
-                   s3_key_processed=processed, s3_key_thumbnail=thumb)
+                   s3_key_processed=processed, s3_key_download=download,
+                   s3_key_thumbnail=thumb)
     db.add(mf); db.flush()
     return mf
 
@@ -126,7 +128,10 @@ def test_purge_version_removes_media_carousel_and_s3(real_db, monkeypatch):
     assert real_db.query(Comment).filter_by(version_id=version.id).count() == 0
     assert real_db.query(Approval).filter_by(version_id=version.id).count() == 0
     assert real_db.query(Asset).filter_by(id=asset.id).count() == 1  # asset untouched
-    assert set(deleted) == {f"raw/{version.id}", "processed/x/", "thumb/x"}
+    # The download MP4 is named on its own rather than left to the processed
+    # prefix sweep -- it is a whole rendition, and the largest object here.
+    assert set(deleted) == {f"raw/{version.id}", "processed/x/",
+                            "processed/x/download.mp4", "thumb/x"}
     assert counts.versions == 1 and counts.media_files == 1
 
 

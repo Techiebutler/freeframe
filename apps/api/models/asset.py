@@ -86,6 +86,12 @@ class MediaFile(Base):
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     s3_key_raw: Mapped[str] = mapped_column(String(1000), nullable=False)
     s3_key_processed: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    # The single downloadable file for a video: one MP4 remuxed from the top HLS
+    # rung. NULL for every version transcoded before this existed, for any
+    # transcode where the remux failed, and for audio and stills (whose
+    # `s3_key_processed` is already a single object). Treat NULL as "fall back to
+    # the raw master", never as "this version has no download".
+    s3_key_download: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     s3_key_thumbnail: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
