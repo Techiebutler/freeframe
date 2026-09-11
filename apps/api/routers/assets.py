@@ -324,7 +324,7 @@ def get_stream_url(
         if download:
             # For video downloads, use the raw file (original upload) so user gets a single file
             s3_key = media_file.s3_key_raw or media_file.s3_key_processed
-            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
+            filename = build_download_filename(asset.name, s3_key, media_file.original_filename)
             url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:
             # Route through the HLS proxy so the master playlist, variant
@@ -335,7 +335,7 @@ def get_stream_url(
     else:
         s3_key = media_file.s3_key_processed or media_file.s3_key_raw
         if download:
-            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
+            filename = build_download_filename(asset.name, s3_key, media_file.original_filename)
             url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:
             url = generate_presigned_get_url(s3_key)
