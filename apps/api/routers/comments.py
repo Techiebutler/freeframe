@@ -118,6 +118,13 @@ def _build_comment_response(
     if depth > 0:
         replies_raw = db.query(Comment).filter(
             Comment.parent_id == comment.id,
+            # A reply lives on the same asset as the comment it answers. Keying
+            # on parent_id alone rendered any row that merely claimed this
+            # parent, whatever asset it was filed under, so a comment written
+            # against an asset the author could reach appeared inside a thread
+            # on one they could not. The write path refuses that parent now, but
+            # this is what any row already committed is read back through.
+            Comment.asset_id == comment.asset_id,
             Comment.deleted_at.is_(None),
         ).order_by(Comment.created_at).all()
 
@@ -361,6 +368,21 @@ def create_comment(
     if not version:
         raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
 
+    # A parent has to be a live comment on THIS asset. Without the check the
+    # id was written straight through, and replies are read back by parent_id
+    # alone with no asset filter, so a comment created here could be rendered
+    # inside a thread on an asset the author cannot open. The weaker failure is
+    # the same bug pointed at a deleted parent: a 201 for a reply no read path
+    # will ever return.
+    if body.parent_id is not None:
+        parent = db.query(Comment).filter(
+            Comment.id == body.parent_id,
+            Comment.asset_id == asset_id,
+            Comment.deleted_at.is_(None),
+        ).first()
+        if not parent:
+            raise HTTPException(status_code=400, detail="parent_id does not belong to this asset")
+
     comment = Comment(
         asset_id=asset_id,
         version_id=body.version_id,
@@ -426,16 +448,37 @@ def reply_to_comment(
     if not parent:
         raise HTTPException(status_code=404, detail="Parent comment not found")
 
-    # Force body's version_id to match parent
+    # These four were dropped on the floor before. The endpoint takes a full
+    # CommentCreate, so a client sending a timecoded or annotated reply got a
+    # 201 back with all of it silently missing, and the annotation is the part
+    # a reviewer cannot reproduce by retyping. `version_id` is still forced to
+    # the parent's, since a reply belongs to the same version as what it
+    # answers.
     reply = Comment(
         asset_id=asset_id,
         version_id=parent.version_id,
         parent_id=comment_id,
         author_id=current_user.id,
         body=body.body,
+        timecode_start=body.timecode_start,
+        timecode_end=body.timecode_end,
+        visibility=body.visibility or "public",
     )
     db.add(reply)
     db.flush()
+
+    # Same as create_comment: an annotation is a row of its own keyed on the
+    # comment, so it has to be written after the flush that gives the reply an
+    # id. Dropping it here meant a drawing made on a reply was gone the moment
+    # it was sent, with a 201 to say it had worked.
+    if body.annotation:
+        db.add(Annotation(
+            comment_id=reply.id,
+            drawing_data=body.annotation.drawing_data,
+            frame_number=body.annotation.frame_number,
+            carousel_position=body.annotation.carousel_position,
+        ))
+
     _create_mentions(db, reply, asset, body.body, current_user.name, body.mention_user_ids)
 
     # Notify parent comment author about the reply (unless they're the replier)
