@@ -12,7 +12,7 @@ import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { Button } from '@/components/ui/button'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import { ShareReviewScreen } from '@/components/share/share-review-screen'
-import { useBrandingStore } from '@/stores/branding-store'
+import { useBranding, useEnsureBranding } from '@/components/shared/branding-provider'
 import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
@@ -135,8 +135,7 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
     if (password.trim()) onSubmit(password.trim())
   }
 
-  const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } =
-    useBrandingStore()
+  const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } = useBranding()
   const theme = useResolvedTheme()
   const displayLogo = resolveBrandingLogo({
     theme,
@@ -280,11 +279,7 @@ export default function SharePage({
   const [state, setState] = React.useState<PageState>({ stage: 'loading' })
   const [shareSession, setShareSession] = React.useState<string | null>(null)
   const openLogged = React.useRef(false)
-  const { fetchBranding, loaded } = useBrandingStore()
-
-  React.useEffect(() => {
-    if (!loaded) fetchBranding()
-  }, [loaded, fetchBranding])
+  useEnsureBranding()
 
   async function validate(password?: string) {
     if (password) {

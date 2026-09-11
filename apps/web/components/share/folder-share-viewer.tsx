@@ -25,7 +25,7 @@ import { useReview, type CreateCommentPayload } from '@/components/review/review
 import { useReviewStore } from '@/stores/review-store'
 import { fetchDownloadUrl, handleDownload, triggerDownload } from './share-download'
 import { ShareReviewScreen } from './share-review-screen'
-import { useBrandingStore } from '@/stores/branding-store'
+import { useBranding } from '@/components/shared/branding-provider'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -741,7 +741,7 @@ export function FolderShareViewer({
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   // Set page title — subscribe to orgName so the title updates once branding loads
-  const orgName = useBrandingStore((s) => s.orgName) || 'FreeFrame'
+  const orgName = useBranding().orgName || 'FreeFrame'
   React.useEffect(() => {
     document.title = title ? `${title} – ${orgName}` : orgName
     return () => { document.title = orgName }

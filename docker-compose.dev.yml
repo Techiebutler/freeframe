@@ -210,6 +210,10 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      # Server-to-server, for the branding Next renders into the first byte.
+      # NEXT_PUBLIC_API_URL is written for the browser, and inside this
+      # container `localhost:8000` is this container, not the API.
+      - API_INTERNAL_URL=${API_INTERNAL_URL:-http://api:8000}
       - NODE_ENV=development
       - HOSTNAME=0.0.0.0
     volumes:

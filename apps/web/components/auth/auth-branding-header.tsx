@@ -1,21 +1,17 @@
 'use client'
 
 import * as React from 'react'
-import { useBrandingStore } from '@/stores/branding-store'
+import { useBranding, useEnsureBranding } from '@/components/shared/branding-provider'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
 import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
 
 /** Brand mark shown above the card on every auth screen (login, setup, invite). */
 export function AuthBrandingHeader() {
-  const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark, fetchBranding, loaded } =
-    useBrandingStore()
+  const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } = useBranding()
+  useEnsureBranding()
   const theme = useResolvedTheme()
   const [logoErrored, setLogoErrored] = React.useState(false)
-
-  React.useEffect(() => {
-    if (!loaded) fetchBranding()
-  }, [loaded, fetchBranding])
 
   const displayLogo = resolveBrandingLogo({
     theme,

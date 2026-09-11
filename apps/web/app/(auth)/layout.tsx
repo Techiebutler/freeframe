@@ -1,8 +1,14 @@
 import type { Metadata } from "next"
 import { AuthBrandingHeader } from "@/components/auth/auth-branding-header"
+import { getServerBranding } from "@/lib/branding-server"
 
-export const metadata: Metadata = {
-  title: "FreeFrame — Auth",
+// A static "FreeFrame — Auth" here overrode the root layout's title, so the
+// sign-in tab named the product no matter how the instance was branded. The
+// name is resolved on the server for the same reason it is in the root layout:
+// the tab is readable before any script has run.
+export async function generateMetadata(): Promise<Metadata> {
+  const branding = await getServerBranding()
+  return { title: `${branding?.org_name || "FreeFrame"} — Auth` }
 }
 
 export default function AuthLayout({

@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import { useUploadStore } from '@/stores/upload-store'
 import { useNotificationStore } from '@/stores/notification-store'
-import { useBrandingStore } from '@/stores/branding-store'
+import { useBranding } from '@/components/shared/branding-provider'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
 import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { Avatar } from '@/components/shared/avatar'
@@ -48,8 +48,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, logout, isSuperAdmin } = useAuthStore()
   const { files: uploadFiles, togglePanel, panelOpen } = useUploadStore()
   const { unreadCount, fetchNotifications } = useNotificationStore()
-  const { orgName, orgLogoDark, orgLogoLight } =
-    useBrandingStore()
+  const { orgName, orgLogoDark, orgLogoLight } = useBranding()
   // Resolved, not the raw preference: 'system' is neither 'light' nor 'dark',
   // so comparing it directly handed a system-light viewer the dark-background
   // logo on a light page.

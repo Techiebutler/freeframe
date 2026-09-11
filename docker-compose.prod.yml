@@ -227,6 +227,12 @@ services:
         NEXT_PUBLIC_UPLOAD_CONCURRENCY: ${NEXT_PUBLIC_UPLOAD_CONCURRENCY:-5}
     env_file:
       - .env.prod
+    environment:
+      # Server-to-server, for the branding Next renders into the first byte.
+      # It cannot reuse NEXT_PUBLIC_API_URL here: that is `/api`, a path the
+      # browser resolves against the current origin and Traefik routes. A fetch
+      # from inside this container has no origin to resolve it against.
+      - API_INTERNAL_URL=${API_INTERNAL_URL:-http://api:8000}
     depends_on:
       - api
     healthcheck:

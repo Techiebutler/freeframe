@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { useBrandingStore } from '@/stores/branding-store'
+import { useBranding } from '@/components/shared/branding-provider'
 import { cn } from '@/lib/utils'
 import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
 
@@ -18,7 +18,7 @@ export function PoweredByBadge({
   showOrgName,
   showIcon = true,
 }: PoweredByBadgeProps) {
-  const { poweredByFreeframe, orgName } = useBrandingStore()
+  const { poweredByFreeframe, orgName } = useBranding()
 
   if (!poweredByFreeframe) return null
 

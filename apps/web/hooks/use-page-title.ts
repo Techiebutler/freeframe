@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useBrandingStore } from '@/stores/branding-store'
+import { useBranding } from '@/components/shared/branding-provider'
 
 export function usePageTitle(title: string | null | undefined) {
-  const orgName = useBrandingStore((s) => s.orgName) || 'FreeFrame'
+  const orgName = useBranding().orgName || 'FreeFrame'
 
   useEffect(() => {
     document.title = title ? `${title} – ${orgName}` : orgName

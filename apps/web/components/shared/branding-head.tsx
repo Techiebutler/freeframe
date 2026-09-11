@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { useBrandingStore } from '@/stores/branding-store'
+import { useBranding, useEnsureBranding } from '@/components/shared/branding-provider'
 import { accentVars, ACCENT_VAR_NAMES } from '@/lib/accent'
 
 const DATA_ATTR = 'data-ff-branding'
@@ -52,12 +52,8 @@ function setIcon(rel: string, href: string) {
 }
 
 export function BrandingHead() {
-  const { orgName, faviconUrl, appleIconUrl, primaryColor, fetchBranding, loaded } =
-    useBrandingStore()
-
-  React.useEffect(() => {
-    if (!loaded) fetchBranding()
-  }, [loaded, fetchBranding])
+  const { orgName, faviconUrl, appleIconUrl, primaryColor } = useBranding()
+  useEnsureBranding()
 
   React.useEffect(() => {
     const org = orgName || 'FreeFrame'

@@ -22,7 +22,8 @@ export interface InstanceBranding {
   updated_at: string
 }
 
-interface BrandingState {
+/** The branding fields that decide what gets painted, with no store plumbing. */
+export interface BrandingValues {
   orgName: string
   orgLogoDark: string | null
   orgLogoLight: string | null
@@ -31,6 +32,9 @@ interface BrandingState {
   loginLogoUrl: string | null
   poweredByFreeframe: boolean
   primaryColor: string | null
+}
+
+interface BrandingState extends BrandingValues {
   /** When branding was last synced from the server — used to expire persisted logo URLs. */
   brandingFetchedAt: number | null
   loaded: boolean
@@ -46,6 +50,30 @@ interface BrandingState {
   setPrimaryColor: (color: string | null) => void
   fetchBranding: () => Promise<void>
   syncBranding: (data: InstanceBranding) => void
+}
+
+/**
+ * The API's branding row as the values the app paints with.
+ *
+ * Shared with the server-rendered path so an SSR'd page and a client sync can
+ * never disagree about what a field means -- in particular `primary_color`,
+ * where `null` has to stay `null`.
+ */
+export function brandingValuesFromApi(data: InstanceBranding): BrandingValues {
+  return {
+    orgName: data.org_name || HARDCODED_DEFAULTS.orgName,
+    orgLogoDark: data.logo_dark_url ?? null,
+    orgLogoLight: data.logo_light_url ?? null,
+    faviconUrl: data.favicon_url ?? null,
+    appleIconUrl: data.apple_icon_url ?? null,
+    loginLogoUrl: data.login_logo_url ?? null,
+    poweredByFreeframe: data.powered_by_freeframe ?? true,
+    // No coercion to a default here, unlike the fields above. `null` means no
+    // accent was ever configured, and it has to survive as `null` so the accent
+    // tokens are handed back to the stylesheet rather than repainting every
+    // un-branded instance in the default colour.
+    primaryColor: data.primary_color ?? null,
+  }
 }
 
 export const HARDCODED_DEFAULTS = {
@@ -83,22 +111,7 @@ export const useBrandingStore = create<BrandingState>()(
 
       syncBranding: (data: InstanceBranding) => {
         set({
-          orgName: data.org_name || HARDCODED_DEFAULTS.orgName,
-          orgLogoDark: data.logo_dark_url ?? null,
-          orgLogoLight: data.logo_light_url ?? null,
-          faviconUrl: data.favicon_url ?? null,
-          appleIconUrl: data.apple_icon_url ?? null,
-          loginLogoUrl: data.login_logo_url ?? null,
-          poweredByFreeframe: data.powered_by_freeframe ?? true,
-          // No coercion to a default here, unlike the fields above. `null` means
-          // no accent was ever configured, and it has to survive as `null` so
-          // BrandingHead hands the accent tokens back to the stylesheet. Filling
-          // in HARDCODED_DEFAULTS instead was harmless while the colour went to a
-          // variable nothing read, but now that it reaches `--accent` it would
-          // repaint every un-branded instance from the product blue to that
-          // default -- on upgrade, with the settings screen still reporting no
-          // custom branding, and with "Reset all branding" unable to undo it.
-          primaryColor: data.primary_color ?? null,
+          ...brandingValuesFromApi(data),
           brandingFetchedAt: Date.now(),
           loaded: true,
           loading: false,
