@@ -25,33 +25,33 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "fabric": "^7.4.0",
-    "hls.js": "^1.6.16",
+    "hls.js": "^1.7.1",
     "lucide-react": "^0.577.0",
     "next": "14.2.35",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-zoom-pan-pinch": "^3.7.0",
-    "swr": "^2.4.2",
+    "swr": "^2.5.1",
     "tailwind-merge": "^3.6.0",
     "wavesurfer.js": "^7.12.11",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
     "@types/fabric": "^5.3.11",
     "@types/node": "^22.20.1",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^6.0.5",
+    "@vitejs/plugin-react": "^6.1.0",
     "autoprefixer": "^10.5.4",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.35",
     "jsdom": "^29.1.1",
-    "postcss": "^8.5.25",
+    "postcss": "^8.5.26",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }
