@@ -64,7 +64,14 @@ async function _doRefresh(): Promise<string | null> {
     })
 
     if (!response.ok) {
-      clearTokens()
+      // Only a refusal ends the session. 401 or 403 is the server saying this
+      // refresh token is no longer valid, which is what signing out is for.
+      // Anything else -- a 502 from a proxy mid-deploy, a 500, a rate limit --
+      // is the server being briefly unavailable, and signing the user out for
+      // it loses whatever they had open.
+      if (response.status === 401 || response.status === 403) {
+        clearTokens()
+      }
       return null
     }
 
@@ -75,7 +82,15 @@ async function _doRefresh(): Promise<string | null> {
     setTokens(newAccessToken, newRefreshToken)
     return newAccessToken
   } catch {
-    clearTokens()
+    // `fetch` rejects only on a transport failure; an HTTP error status
+    // resolves and is handled above. So reaching here means the request never
+    // got an answer: no network, DNS, a dropped connection. Clearing tokens
+    // here signed people out for going through a tunnel, and took the page
+    // they were on with it, since `clearTokens` navigates to /login.
+    //
+    // Callers treat null as "could not refresh" and let the original failure
+    // surface, so keeping the tokens costs nothing and the session survives
+    // until the network comes back.
     return null
   }
 }
