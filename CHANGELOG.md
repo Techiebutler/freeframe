@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An interrupted upload can be resumed instead of started again** — a transfer that stopped part-way now offers Resume. The server reports which parts the storage backend is already holding, and only the missing ones are sent; a 5 GB file that died at 80% costs the remaining 20%, not another 5 GB. This is the point of no longer aborting on failure: the parts have to still be there for anything to resume from. Because a browser cannot reopen a local file by itself, resuming asks for the same file again — that is inherent to every browser-based resumable uploader — and the name and size are checked against the upload before anything is sent. An upload whose object turned out to be assembled already needs no file and completes on the spot. Discard is the other new button, and is now the only path that throws parts away. (#241, #312 by @Lennart-Pingpong)
 
 ### Changed
+- **The frontend's dev tooling is on newer, non-vulnerable versions** — Vite moved from 8.0.1 to 8.3.0 and is
+  now declared as a direct devDependency (it was only ever reaching the tree transitively), Vitest
+  to 4.1.11, and the build-time transitives Dependabot flags were bumped inside their existing ranges:
+  PostCSS to 8.5.25, `nanoid@3` to 3.3.18, `glob@10` to 10.5.0, js-yaml to 4.3.1 and
+  `brace-expansion@1` to 1.1.18. The pins are overrides declared both npm- and pnpm-style, so they hold
+  whichever install path is used (the Docker Compose dev stack installs with `npm`, CI and local dev with
+  pnpm). `apps/web` now declares its Node engine (`^20.19 || ^22.12 || >24`) and the contributing guide's
+  prerequisite is corrected to match. Everything here is dev/build-only (no runtime behaviour), and the
+  full web gate — type check, 487 tests, production build, lint — stays green.
 - **The video transport row collapses on a phone** — below `sm` it ran out of width and the controls crowded together at a 28px target. Loop, speed and mute move behind an overflow menu, the remaining controls get the platform's 44px minimum, and the row carries the home-indicator inset. Above `sm`, including a landscape phone, everything stays inline exactly as before. (#341)
 
 ### Fixed

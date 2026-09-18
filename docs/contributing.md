@@ -10,7 +10,8 @@ Thanks for your interest in contributing! This guide will help you get set up fo
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
 - [Git](https://git-scm.com/)
-- [Node.js 18+](https://nodejs.org/) (optional, for running frontend outside Docker)
+- [Node.js 20.19+ or 22 LTS](https://nodejs.org/) (optional, for running frontend outside Docker — the
+  vite/vitest test toolchain requires it; `apps/web`'s `engines` field enforces the same)
 - [Python 3.11+](https://python.org/) (optional, for running backend outside Docker)
 
 ### Getting Started
