@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An interrupted upload can be resumed instead of started again** — a transfer that stopped part-way now offers Resume. The server reports which parts the storage backend is already holding, and only the missing ones are sent; a 5 GB file that died at 80% costs the remaining 20%, not another 5 GB. This is the point of no longer aborting on failure: the parts have to still be there for anything to resume from. Because a browser cannot reopen a local file by itself, resuming asks for the same file again — that is inherent to every browser-based resumable uploader — and the name and size are checked against the upload before anything is sent. An upload whose object turned out to be assembled already needs no file and completes on the spot. Discard is the other new button, and is now the only path that throws parts away. (#241, #312 by @Lennart-Pingpong)
 
 ### Changed
+- **The API test tooling moves to pytest 9, and out of the runtime image** — pytest 8.4.2 was pinned in
+  `apps/api/requirements.txt`, hits the CVE-2025-71176 advisory, and because the Dockerfile installs that
+  file it was shipping the test runner in the production image. Test-only deps now live in a new
+  `apps/api/requirements-dev.txt` (`-r requirements.txt` + pytest 9.0.3 + pytest-asyncio 1.4.0) that CI and
+  local dev install; the image installs the runtime file alone. pytest-asyncio comes along because 0.26.0
+  pins `pytest<9`; the suite drives asyncio via `asyncio.run()` in sync tests, so the 0.x → 1.x jump is
+  dependencies-only here. The full backend suite (475 tests, `python -m pytest apps/api/tests/`) stays green
+  under the new pair.
 - **The video transport row collapses on a phone** — below `sm` it ran out of width and the controls crowded together at a 28px target. Loop, speed and mute move behind an overflow menu, the remaining controls get the platform's 44px minimum, and the row carries the home-indicator inset. Above `sm`, including a landscape phone, everything stays inline exactly as before. (#341)
 
 ### Fixed

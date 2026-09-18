@@ -1,0 +1,12 @@
+# Test-only dependencies, layered on the runtime requirements. The production
+# image (apps/api/Dockerfile) installs requirements.txt alone so the shipped
+# service never carries the test runner; CI and local dev install this file
+# (see .github/workflows/ci.yml).
+#
+# pytest 9.0.3:  clears CVE-2025-71176 (8.4.2 was affected, no 8.x patch).
+# pytest-asyncio 1.4.0:  pytest-asyncio 0.26.0 pinned pytest<9, so it must move
+#   alongside; the suite drives asyncio via asyncio.run() in sync tests rather
+#   than the plugin's markers, so the 0.x -> 1.x jump is dependencies-only here.
+-r requirements.txt
+pytest==9.0.3
+pytest-asyncio==1.4.0
