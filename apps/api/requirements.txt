@@ -23,8 +23,6 @@ botocore==1.43.94
 celery[redis]==5.6.3
 redis==5.3.1
 httpx==0.28.1
-pytest==8.4.2
-pytest-asyncio==0.26.0
 email-validator==2.3.0
 jinja2==3.1.6
 kombu==5.6.2
