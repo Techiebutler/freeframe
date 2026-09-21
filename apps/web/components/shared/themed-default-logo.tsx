@@ -1,4 +1,5 @@
 import type { ComponentPropsWithoutRef } from 'react'
+import { withBasePath } from '@/lib/base-path'
 import { cn } from '@/lib/utils'
 
 type LogoVariant = 'icon' | 'full'
@@ -40,7 +41,7 @@ export function ThemedDefaultLogo({
     // eslint-disable-next-line @next/next/no-img-element
     <img
       {...props}
-      src={LOGO_SOURCES[variant]}
+      src={withBasePath(LOGO_SOURCES[variant])}
       srcSet={undefined}
       style={undefined}
       alt={decorative ? '' : alt}

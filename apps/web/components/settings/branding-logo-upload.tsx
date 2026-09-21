@@ -5,6 +5,7 @@ import { Upload, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 import { api } from '@/lib/api'
+import { withBasePath } from '@/lib/base-path'
 
 const TYPE_MAP: Record<string, string> = {
   logo_light: 'logo-light',
@@ -144,7 +145,7 @@ export function BrandingLogoUpload({
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={defaultUrl || `/logo-icon.png`}
+            src={withBasePath(defaultUrl || '/logo-icon.png')}
             alt="Default"
             className="h-full w-full object-contain p-1 opacity-40"
           />

@@ -17,6 +17,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -162,7 +163,7 @@ function CollectionShareDialog({
         body,
       );
       const newShare = res.share;
-      const url = `${window.location.origin}/share/collection/${newShare.token}`;
+      const url = `${window.location.origin}${withBasePath(`/share/collection/${newShare.token}`)}`;
       setGeneratedUrl(url);
       setShares((prev) => [...prev, newShare]);
     } catch (err) {
@@ -274,7 +275,7 @@ function CollectionShareDialog({
                 ) : (
                   <div className="space-y-1.5 max-h-36 overflow-y-auto">
                     {shares.map((share) => {
-                      const url = `${typeof window !== "undefined" ? window.location.origin : ""}/share/collection/${share.token}`;
+                      const url = `${typeof window !== "undefined" ? window.location.origin : ""}${withBasePath(`/share/collection/${share.token}`)}`;
                       return (
                         <div
                           key={share.id}

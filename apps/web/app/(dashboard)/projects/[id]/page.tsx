@@ -33,6 +33,7 @@ import {
   uploadNameForFile,
 } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { withBasePath } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/shared/avatar";
@@ -596,7 +597,7 @@ export default function ProjectDetailPage() {
                           className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
                           onSelect={() =>
                             window.open(
-                              `${window.location.origin}/share/${link.token}`,
+                              `${window.location.origin}${withBasePath(`/share/${link.token}`)}`,
                               "_blank",
                             )
                           }
@@ -608,7 +609,7 @@ export default function ProjectDetailPage() {
                           className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
                           onSelect={() =>
                             navigator.clipboard.writeText(
-                              `${window.location.origin}/share/${link.token}`,
+                              `${window.location.origin}${withBasePath(`/share/${link.token}`)}`,
                             )
                           }
                         >

@@ -4,6 +4,7 @@ import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal, Check, Share2, Download, Link as LinkIcon, Pencil, Trash2 } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { withBasePath } from '@/lib/base-path'
 import type { Asset, AssetType, User } from '@/types'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
 
@@ -196,7 +197,7 @@ export function AssetCard({
                   </DropdownMenu.Item>
                   <DropdownMenu.Item
                     onSelect={() => {
-                      const url = `${window.location.origin}/projects/${asset.project_id}/assets/${asset.id}`
+                      const url = `${window.location.origin}${withBasePath(`/projects/${asset.project_id}/assets/${asset.id}`)}`
                       navigator.clipboard.writeText(url)
                     }}
                     className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"

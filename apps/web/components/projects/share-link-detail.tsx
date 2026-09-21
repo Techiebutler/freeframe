@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
@@ -639,7 +640,7 @@ export function ShareLinkContent({
     }
   }, [shareLink, projectId]);
 
-  const shareUrl = `${frontendUrl}/share/${token}`;
+  const shareUrl = `${frontendUrl}${withBasePath(`/share/${token}`)}`;
 
   if (!shareLink) {
     return (
@@ -830,8 +831,8 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
 
   const shareUrl =
     typeof window !== "undefined"
-      ? `${window.location.origin}/share/${token}`
-      : `/share/${token}`;
+      ? `${window.location.origin}${withBasePath(`/share/${token}`)}`
+      : withBasePath(`/share/${token}`);
 
   if (!shareLink) {
     return (

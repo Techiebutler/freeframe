@@ -5,6 +5,7 @@ import * as Switch from '@radix-ui/react-switch'
 import { Search, Folder, File, Copy, Check, Eye } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/lib/utils'
+import { withBasePath } from '@/lib/base-path'
 import type { ShareLinkListItem } from '@/types'
 
 interface ShareLinksTableProps {
@@ -34,7 +35,7 @@ export function ShareLinksTable({
   const handleCopy = React.useCallback(
     async (token: string, e: React.MouseEvent) => {
       e.stopPropagation()
-      const url = `${frontendUrl}/share/${token}`
+      const url = `${frontendUrl}${withBasePath(`/share/${token}`)}`
       await navigator.clipboard.writeText(url)
       setCopiedToken(token)
       setTimeout(() => setCopiedToken(null), 2000)
@@ -95,7 +96,7 @@ export function ShareLinksTable({
             </thead>
             <tbody>
               {filtered.map((link, i) => {
-                const shareUrl = `${frontendUrl}/share/${link.token}`
+                const shareUrl = `${frontendUrl}${withBasePath(`/share/${link.token}`)}`
                 const isCopied = copiedToken === link.token
                 const isLast = i === filtered.length - 1
 

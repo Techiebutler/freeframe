@@ -5,6 +5,7 @@ import useSWR, { mutate } from "swr";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Users, Plus, X, Shield, Link2, Check } from "lucide-react";
 import { cn, copyToClipboard } from "@/lib/utils";
+import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -216,7 +217,7 @@ export default function AdminPage() {
 
   const handleCopyInviteLink = async (u: User) => {
     if (!u.invite_token) return;
-    const link = `${window.location.origin}/invite/${u.invite_token}`;
+    const link = `${window.location.origin}${withBasePath(`/invite/${u.invite_token}`)}`;
     // copyToClipboard falls back to execCommand in insecure contexts (e.g. plain
     // HTTP on a LAN IP), where navigator.clipboard is undefined and would throw.
     if (await copyToClipboard(link)) {

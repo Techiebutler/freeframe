@@ -133,6 +133,27 @@ If FreeFrame sits behind another proxy that already handles SSL:
 4. For **Cloudflare**: set SSL mode to "Full"
 5. Set `FRONTEND_URL` in `.env.prod` to your `https://` URL
 
+### Sub-path Deployments
+
+To serve FreeFrame under a path instead of the domain root — `https://example.com/freeframe/` — set the base path and rebuild the web image:
+
+```
+NEXT_PUBLIC_BASE_PATH=/freeframe
+FRONTEND_URL=https://example.com/freeframe
+```
+
+`NEXT_PUBLIC_BASE_PATH` is a **build-time** variable (Compose passes it as a build arg), so changing it needs `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build web`, not a restart. Everything the web app serves moves under the prefix: pages, links, static assets, icons and raw navigations. The API stays at the origin root (`/api`), so API requests, CORS and emails are unaffected.
+
+If something sits in front of FreeFrame (a landing page, another app), forward the sub-path to FreeFrame **unchanged** — Next expects the prefix. With nginx that is a `proxy_pass` without a URI part:
+
+```nginx
+location /freeframe/ {
+    proxy_pass http://127.0.0.1:80;
+}
+```
+
+Traefik in the bundled Compose already routes `PathPrefix('/')` to the web app, so requests for the sub-path work without extra rules. Leave `NEXT_PUBLIC_BASE_PATH` empty for a root deployment (the default).
+
 ---
 
 ## Bring Your Own Infrastructure

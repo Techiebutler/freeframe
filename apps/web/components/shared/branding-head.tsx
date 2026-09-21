@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { useBranding, useEnsureBranding } from '@/components/shared/branding-provider'
 import { accentVars, ACCENT_VAR_NAMES } from '@/lib/accent'
+import { withBasePath } from '@/lib/base-path'
 
 const DATA_ATTR = 'data-ff-branding'
 
@@ -75,14 +76,14 @@ export function BrandingHead() {
   }, [orgName])
 
   React.useEffect(() => {
-    const href = faviconUrl || DEFAULT_FAVICON
+    const href = faviconUrl || withBasePath(DEFAULT_FAVICON)
     setIcon('icon', href)
     // Legacy rel too: without it a stale /favicon.ico can still win in some browsers.
     setIcon('shortcut icon', href)
   }, [faviconUrl])
 
   React.useEffect(() => {
-    setIcon('apple-touch-icon', appleIconUrl || DEFAULT_APPLE_ICON)
+    setIcon('apple-touch-icon', appleIconUrl || withBasePath(DEFAULT_APPLE_ICON))
   }, [appleIconUrl])
 
   React.useEffect(() => {

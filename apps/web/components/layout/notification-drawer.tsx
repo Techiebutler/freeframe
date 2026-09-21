@@ -11,6 +11,7 @@ import {
   Settings,
 } from 'lucide-react'
 import Link from 'next/link'
+import { withBasePath } from '@/lib/base-path'
 import { useNotificationStore } from '@/stores/notification-store'
 import { formatRelativeTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
@@ -53,7 +54,9 @@ function NotificationItem({ notification, onClose }: { notification: Notificatio
     // Navigate to asset if possible
     if (notification.project_id && notification.asset_id) {
       const qs = notification.comment_id ? `?commentId=${notification.comment_id}` : ''
-      window.location.href = `/projects/${notification.project_id}/assets/${notification.asset_id}${qs}`
+      window.location.href = withBasePath(
+        `/projects/${notification.project_id}/assets/${notification.asset_id}${qs}`,
+      )
       onClose()
     }
   }

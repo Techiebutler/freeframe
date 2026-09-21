@@ -4,6 +4,7 @@ import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images, Link as LinkIcon, Pencil } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
@@ -619,7 +620,7 @@ export function AssetGrid({
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           onSelect={() => {
-                            const url = `${window.location.origin}/projects/${asset.project_id}/assets/${asset.id}`
+                            const url = `${window.location.origin}${withBasePath(`/projects/${asset.project_id}/assets/${asset.id}`)}`
                             navigator.clipboard.writeText(url)
                           }}
                           className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
