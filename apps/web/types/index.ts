@@ -136,6 +136,8 @@ export interface AssetVersion {
   created_by: string;
   created_at: string;
   deleted_at: string | null;
+  /** When the upload last moved; see `mergeHistoryAssets`. */
+  last_activity_at?: string | null;
   files?: MediaFile[];
 }
 

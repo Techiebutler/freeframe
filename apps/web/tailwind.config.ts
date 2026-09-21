@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss'
+import animate from 'tailwindcss-animate'
 
 const config: Config = {
   darkMode: 'class',
@@ -97,7 +98,11 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  // `animate-in`, `fade-out-0`, `zoom-in-95` and the rest of that vocabulary are
+  // used on 194 class slots across 27 files, 183 of them gated on Radix
+  // `data-[state=...]`. Tailwind only emits classes it knows about, so without
+  // this every one of them was dropped and the animations were inert (#365).
+  plugins: [animate],
 }
 
 export default config

@@ -29,6 +29,9 @@ class AssetVersionResponse(BaseModel):
     processing_status: ProcessingStatus
     created_by: uuid.UUID
     created_at: datetime
+    # When the upload last moved. Lets a client that only has history to go on
+    # tell an upload still running on another device from one that stopped.
+    last_activity_at: Optional[datetime] = None
     files: list[MediaFileResponse] = []
     model_config = {"from_attributes": True}
 

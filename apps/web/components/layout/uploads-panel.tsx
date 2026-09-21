@@ -13,10 +13,15 @@ import {
   RotateCcw,
   Ban,
   Cog,
+  PauseCircle,
+  Trash2,
+  MonitorUp,
+  Pencil,
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
 import { carriesFiles } from '@/lib/drag'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -32,9 +37,12 @@ type FilterTab = 'all' | 'active' | 'complete' | 'failed'
 function matchesFilter(status: UploadStatus, filter: FilterTab): boolean {
   switch (filter) {
     case 'all': return true
-    case 'active': return status === 'pending' || status === 'uploading' || status === 'processing'
+    // `interrupted` is deliberately not active: nothing is being transferred, so
+    // listing it here would put a row that cannot move next to ones that are.
+    // `elsewhere` is: bytes are moving, just not from this tab.
+    case 'active': return status === 'pending' || status === 'uploading' || status === 'processing' || status === 'elsewhere'
     case 'complete': return status === 'complete'
-    case 'failed': return status === 'failed' || status === 'cancelled'
+    case 'failed': return status === 'failed' || status === 'cancelled' || status === 'interrupted'
   }
 }
 
@@ -80,18 +88,146 @@ function StatusBadge({ status }: { status: UploadStatus }) {
       return <span className="inline-flex items-center gap-1 rounded-full bg-status-error/10 px-2 py-0.5 text-[10px] font-medium text-status-error"><AlertCircle className="h-2.5 w-2.5" />Failed</span>
     case 'cancelled':
       return <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-tertiary"><Ban className="h-2.5 w-2.5" />Cancelled</span>
+    case 'interrupted':
+      return <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"><PauseCircle className="h-2.5 w-2.5" />Interrupted</span>
+    case 'elsewhere':
+      return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><MonitorUp className="h-2.5 w-2.5" />Elsewhere</span>
   }
+}
+
+// ─── Asset name ───────────────────────────────────────────────────────────────
+
+/**
+ * The asset name, editable in place.
+ *
+ * The name is decided in the dialog before a byte moves, which is the one
+ * moment the file is not yet on screen next to it -- and a file dropped
+ * straight onto a folder skips that dialog entirely, so the name is whatever
+ * the camera or the NLE called the file. This is where it can be corrected:
+ * `asset_id` is known as soon as `/upload/initiate` answers, long before the
+ * transfer ends, and `/upload/complete` does not write the name again, so a
+ * rename at 40% survives the upload it is riding on.
+ */
+function UploadName({
+  upload,
+  onError,
+}: {
+  upload: UploadFile
+  /** Reported upwards rather than shown here: the name sits in a flex row
+   *  beside the status badge, and the row already has a line for errors. */
+  onError: (message: string | null) => void
+}) {
+  const renameUpload = useUploadStore((s) => s.renameUpload)
+  // Offered before the asset exists too: the row is what `/upload/initiate`
+  // reads for the name, so an edit made while it still says "Queued" is
+  // carried into the asset it creates rather than being dropped.
+  const canRename = !upload.fromHistory
+
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState(upload.assetName)
+  // Guards the cancel path only. Whether removing a focused element raises a
+  // blur on the way out is browser-dependent, and one arriving after Escape
+  // would save the draft Escape just refused. The save path needs no guard:
+  // the store's own "nothing changed" check makes a second commit of the same
+  // draft a no-op, because the first one already wrote it.
+  const settled = React.useRef(false)
+
+  const open = () => {
+    setDraft(upload.assetName)
+    onError(null)
+    settled.current = false
+    setEditing(true)
+  }
+
+  const commit = async () => {
+    if (settled.current) return
+    settled.current = true
+    setEditing(false)
+    onError(await renameUpload(upload.id, draft))
+  }
+
+  const cancel = () => {
+    settled.current = true
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        className="flex-1 min-w-0 bg-transparent border-b border-accent outline-none text-sm font-medium text-text-primary px-0.5"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void commit()
+          if (e.key === 'Escape') cancel()
+        }}
+        aria-label="Asset name"
+        autoFocus
+      />
+    )
+  }
+
+  if (!canRename) {
+    return (
+      <p className="text-sm font-medium text-text-primary truncate flex-1">
+        {upload.assetName}
+      </p>
+    )
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={open}
+        title="Rename"
+        className="text-sm font-medium text-text-primary truncate flex-1 text-left hover:underline decoration-dotted underline-offset-2"
+      >
+        {upload.assetName}
+      </button>
+      {/* The name is clickable on its own, but nothing about a line of text
+          says so. The pencil is the part that can be seen. */}
+      <button
+        type="button"
+        onClick={open}
+        title="Rename"
+        aria-label={`Rename ${upload.assetName}`}
+        className="shrink-0 h-5 w-5 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+      >
+        <Pencil className="h-3 w-3" />
+      </button>
+    </>
+  )
 }
 
 // ─── Upload Item ──────────────────────────────────────────────────────────────
 
 function UploadItem({ upload }: { upload: UploadFile }) {
-  const { cancelUpload, removeFile } = useUploadStore()
+  const { cancelUpload, removeFile, resumeUpload, discardUpload } = useUploadStore()
+  const [renameError, setRenameError] = React.useState<string | null>(null)
   const isUploading = upload.status === 'pending' || upload.status === 'uploading'
   const isProcessing = upload.status === 'processing'
+  const isInterrupted = upload.status === 'interrupted'
   const showProgress = isUploading || isProcessing
 
+  // Discard is the one control here whose effect cannot be taken back: the
+  // parts are deleted the moment it returns, and there is no version restore.
+  const [confirmingDiscard, setConfirmingDiscard] = React.useState(false)
+  const [discardError, setDiscardError] = React.useState<string | null>(null)
+
   const progressValue = isProcessing ? upload.processingProgress : upload.progress
+
+  // The browser will not reopen a local file on its own, so resuming needs the
+  // user to hand it back. Re-selection is inherent to every browser-based
+  // resumable uploader, not something this design chose.
+  const filePicker = React.useRef<HTMLInputElement>(null)
+  const onPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0]
+    // Cleared so picking the same file twice in a row still fires a change.
+    e.target.value = ''
+    if (picked) resumeUpload(upload.id, picked)
+  }
 
   return (
     <div className="group flex items-start gap-3 px-4 py-3 hover:bg-bg-hover/50 transition-colors">
@@ -103,10 +239,17 @@ function UploadItem({ upload }: { upload: UploadFile }) {
       {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-text-primary truncate flex-1">{upload.assetName}</p>
+          <UploadName upload={upload} onError={setRenameError} />
           <StatusBadge status={upload.status} />
         </div>
         <p className="text-xs text-text-tertiary truncate mt-0.5">
+          {/* The file, whenever it is not simply the asset's name. Uploading a
+              new version names the row after the asset, so the row read
+              "Fujitsu 1.1" while a completely different file was going up --
+              and the panel is the one place that should say which file. */}
+          {upload.fileName && upload.fileName !== upload.assetName && (
+            <>{upload.fileName} &middot; </>
+          )}
           {upload.projectName || upload.projectId.slice(0, 8)} &middot; {formatBytes(upload.fileSize)}
         </p>
 
@@ -143,11 +286,86 @@ function UploadItem({ upload }: { upload: UploadFile }) {
           {upload.status === 'failed' && upload.error && (
             <span className="text-[11px] text-status-error truncate">{upload.error}</span>
           )}
+          {upload.status === 'elsewhere' && (
+            // Offers nothing. Discard from here would delete the parts under a
+            // transfer that is still running, and a resume would send the same
+            // parts twice into one upload.
+            <span className="text-[11px] text-text-secondary truncate">
+              Still uploading in another tab or on another device
+            </span>
+          )}
+          {upload.status === 'interrupted' && (
+            // The reason gets the whole line, and red when there is one. A
+            // rejected file is the case that matters: it is the only outcome the
+            // user caused and can correct, and it read as a shrug when it shared
+            // the muted colour of "the network dropped" and had a hint appended
+            // after it that pushed it out of the truncation.
+            <span
+              className={cn(
+                'text-[11px] truncate',
+                upload.error ? 'text-status-error' : 'text-amber-400/90',
+              )}
+            >
+              {upload.error ?? 'Transfer stopped \u00b7 resume to send only what is missing'}
+            </span>
+          )}
+          {/* The name has already snapped back by the time this shows, which
+              says something went wrong but not what. `upload.renameError` is
+              the same thing for a correction the store sent on its own, during
+              the initiate round trip, where there was no click to report back
+              to. The local one wins: it belongs to the edit just made. */}
+          {(renameError ?? upload.renameError) && (
+            <span className="text-[11px] text-status-error truncate">
+              {renameError ?? upload.renameError}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Actions */}
       <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        {isInterrupted && (
+          <>
+            <input
+              ref={filePicker}
+              type="file"
+              accept={upload.fileType || undefined}
+              className="hidden"
+              onChange={onPicked}
+            />
+            <button
+              onClick={() => filePicker.current?.click()}
+              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
+              title={`Resume — pick ${upload.fileName} again`}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { setDiscardError(null); setConfirmingDiscard(true) }}
+              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-status-error hover:bg-bg-hover transition-colors"
+              title="Discard this upload and free the space it is holding"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
+        <ConfirmDialog
+          open={confirmingDiscard}
+          onOpenChange={setConfirmingDiscard}
+          title={`Discard ${upload.fileName}?`}
+          description="The parts already sent are deleted now and cannot be recovered. To finish this upload instead, resume it."
+          confirmLabel="Discard"
+          variant="danger"
+          error={discardError}
+          onConfirm={async () => {
+            const refused = await discardUpload(upload.id)
+            // The dialog stays open on a message, which is how it says why.
+            if (refused) {
+              setDiscardError(refused)
+              throw new Error(refused)
+            }
+          }}
+        />
         {isUploading && (
           <button
             onClick={() => cancelUpload(upload.id)}
@@ -182,7 +400,13 @@ function UploadItem({ upload }: { upload: UploadFile }) {
 
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
-export function UploadsPanel() {
+export function UploadsPanel({
+  railCollapsed = true,
+}: {
+  /** Whether the sidebar is the 52px rail or expanded to 220px. The panel
+   *  opens against its right edge, so it has to know which. */
+  railCollapsed?: boolean
+} = {}) {
   const { files, panelOpen, setPanelOpen, clearCompleted, fetchHistory, fetchMoreHistory, historyHasMore, historyLoading } = useUploadStore()
   const [filter, setFilter] = React.useState<FilterTab>('active')
   const scrollRef = React.useRef<HTMLDivElement>(null)
@@ -223,9 +447,9 @@ export function UploadsPanel() {
 
   const counts = {
     all: files.length,
-    active: files.filter((f) => f.status === 'pending' || f.status === 'uploading' || f.status === 'processing').length,
+    active: files.filter((f) => matchesFilter(f.status, 'active')).length,
     complete: files.filter((f) => f.status === 'complete').length,
-    failed: files.filter((f) => f.status === 'failed' || f.status === 'cancelled').length,
+    failed: files.filter((f) => matchesFilter(f.status, 'failed')).length,
   }
 
   const tabs: { id: FilterTab; label: string; count: number }[] = [
@@ -253,7 +477,25 @@ export function UploadsPanel() {
       />
 
       {/* Panel */}
-      <div className="fixed left-safe [--ff-left:52px] top-0 z-50 h-dvh w-[380px] border-r border-border bg-bg-secondary shadow-2xl flex flex-col pb-safe animate-in slide-in-from-left-4 duration-150">
+      <div
+        // Anchored to the sidebar's right edge, which moves. A fixed 52px was
+        // the collapsed rail's width, so with the sidebar expanded the panel
+        // opened on top of it and cut every label back to its first letter --
+        // the very labels expanding the sidebar is for. Both widths are spelled
+        // out because Tailwind only generates classes it can find whole.
+        //
+        // The offset is gated at `md` because the panel is a hard 380px: on a
+        // phone, 220 + 380 is wider than the screen, and nothing can scroll to
+        // what falls off, so the close button and the tab bar would simply be
+        // unreachable. The rail only expands by hand and does not persist, so
+        // below `md` the panel stays where a collapsed rail puts it.
+        className={cn(
+          'fixed left-safe top-0 z-50 h-dvh w-[380px]',
+          '[--ff-left:52px]',
+          !railCollapsed && 'md:[--ff-left:220px]',
+          'border-r border-border bg-bg-secondary shadow-2xl flex flex-col pb-safe animate-in slide-in-from-left-4 duration-150',
+        )}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
           <h2 className="text-sm font-semibold text-text-primary">

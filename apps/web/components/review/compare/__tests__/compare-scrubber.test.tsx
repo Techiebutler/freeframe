@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { CompareScrubber } from '../compare-scrubber'
 
@@ -12,18 +12,111 @@ const base = {
 }
 
 describe('CompareScrubber', () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: 630, bottom: 8, width: 630, height: 8, x: 0, y: 0, toJSON() {},
+    })
+    // jsdom doesn't implement this at all (it's undefined, which is why the
+    // component calls it with `?.`) — stub it so a dropped call is visible
+    // rather than silently passing.
+    Element.prototype.setPointerCapture = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('shows SMPTE timecode for the transport time', () => {
     render(<CompareScrubber {...base} />)
     expect(screen.getByText('00:00:10:00')).toBeInTheDocument()
   })
 
-  it('click on the track seeks by ratio', () => {
+  it('seeks on pointerdown, tracks the drag on pointermove, and finalizes on pointerup', () => {
+    const onSeek = vi.fn()
+    render(<CompareScrubber {...base} onSeek={onSeek} />)
+    const track = screen.getByTestId('compare-track')
+
+    fireEvent.pointerDown(track, { pointerId: 1, clientX: 63, isPrimary: true, button: 0 })
+    expect(onSeek).toHaveBeenLastCalledWith((63 / 630) * 63)
+
+    fireEvent.pointerMove(track, { pointerId: 1, clientX: 315 })
+    expect(onSeek).toHaveBeenLastCalledWith((315 / 630) * 63)
+
+    fireEvent.pointerUp(track, { pointerId: 1, clientX: 630 })
+    expect(onSeek).toHaveBeenLastCalledWith(63)
+    expect(onSeek).toHaveBeenCalledTimes(3)
+  })
+
+  it('ignores a second pointer while dragging, so a two-finger grip cannot hijack the seek', () => {
+    const onSeek = vi.fn()
+    render(<CompareScrubber {...base} onSeek={onSeek} />)
+    const track = screen.getByTestId('compare-track')
+
+    fireEvent.pointerDown(track, { pointerId: 1, clientX: 63, isPrimary: true, button: 0 })
+    onSeek.mockClear()
+
+    fireEvent.pointerMove(track, { pointerId: 2, clientX: 600 })
+    expect(onSeek).not.toHaveBeenCalled()
+
+    fireEvent.pointerMove(track, { pointerId: 1, clientX: 315 })
+    expect(onSeek).toHaveBeenLastCalledWith((315 / 630) * 63)
+  })
+
+  it('ends the drag on pointercancel, so a later move on the page does not keep seeking', () => {
+    const onSeek = vi.fn()
+    render(<CompareScrubber {...base} onSeek={onSeek} />)
+    const track = screen.getByTestId('compare-track')
+
+    fireEvent.pointerDown(track, { pointerId: 1, clientX: 63, isPrimary: true, button: 0 })
+    fireEvent.pointerCancel(track, { pointerId: 1 })
+    onSeek.mockClear()
+
+    fireEvent.pointerMove(track, { pointerId: 1, clientX: 500 })
+    expect(onSeek).not.toHaveBeenCalled()
+
+    fireEvent.pointerDown(track, { pointerId: 3, clientX: 315, isPrimary: true, button: 0 })
+    expect(onSeek).toHaveBeenLastCalledWith((315 / 630) * 63)
+  })
+
+  it('ignores a non-primary pointer or a non-primary-button press on pointerdown', () => {
+    const onSeek = vi.fn()
+    render(<CompareScrubber {...base} onSeek={onSeek} />)
+    const track = screen.getByTestId('compare-track')
+
+    fireEvent.pointerDown(track, { pointerId: 1, clientX: 63, isPrimary: false, button: 0 })
+    expect(onSeek).not.toHaveBeenCalled()
+
+    fireEvent.pointerDown(track, { pointerId: 1, clientX: 63, isPrimary: true, button: 2 })
+    expect(onSeek).not.toHaveBeenCalled()
+  })
+
+  it('ends the drag on onLostPointerCapture, so the bar is never permanently latched', () => {
+    const onSeek = vi.fn()
+    render(<CompareScrubber {...base} onSeek={onSeek} />)
+    const track = screen.getByTestId('compare-track')
+
+    fireEvent.pointerDown(track, { pointerId: 1, clientX: 63, isPrimary: true, button: 0 })
+    fireEvent(track, new Event('lostpointercapture', { bubbles: true }))
+    onSeek.mockClear()
+
+    fireEvent.pointerDown(track, { pointerId: 2, clientX: 315, isPrimary: true, button: 0 })
+    expect(onSeek).toHaveBeenLastCalledWith((315 / 630) * 63)
+  })
+
+  it('captures the pointer on pointerdown, so the drag survives the finger leaving the track', () => {
     render(<CompareScrubber {...base} />)
     const track = screen.getByTestId('compare-track')
-    track.getBoundingClientRect = () =>
-      ({ left: 0, width: 630, top: 0, height: 8, right: 630, bottom: 8, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
-    fireEvent.click(track, { clientX: 63 })
-    expect(base.onSeek).toHaveBeenCalledWith((63 / 630) * 63)
+
+    fireEvent.pointerDown(track, { pointerId: 1, clientX: 63, isPrimary: true, button: 0 })
+
+    expect(track.setPointerCapture).toHaveBeenCalledWith(1)
+  })
+
+  it('marks the track touch-none, so a drag is not fought by the browser\'s own scroll gesture', () => {
+    render(<CompareScrubber {...base} />)
+    const track = screen.getByTestId('compare-track')
+
+    expect(track.className).toContain('touch-none')
   })
 
   it('positions markers at (tc + offset) / total and reports clicks per side', () => {

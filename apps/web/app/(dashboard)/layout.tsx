@@ -80,17 +80,22 @@ export default function DashboardLayout({
           compete with the org name for the 48px logo header. Renders nothing
           when an admin turns "Powered by FreeFrame" off.
 
-          Not on the asset viewer. That route carries its own credit centred in
-          the top bar it renders in place of the header, so the floating one was
-          a second copy -- and at 173px wide it covered the 28px send button in
+          Not on the asset viewer. That route carries its own credit in the top
+          bar it renders in place of the header, so the floating one was a
+          second copy -- and at 173px wide it covered the 28px send button in
           the corner of the comment composer completely, so every click on Send
           opened the repository in a new tab instead of posting the comment.
-          Enter still posted, which is why it went unseen. */}
+          Enter still posted, which is why it went unseen.
+
+          The viewer's own copy is hidden below `lg`, where it would push the
+          bar's controls off the screen. Nothing takes its place there: bringing
+          this one back would restore the send-button collision on exactly the
+          widths where the composer is hardest to hit. */}
       {!isAssetViewer && (
         <PoweredByBadge className="fixed bottom-safe right-safe [--ff-bottom:1rem] [--ff-right:1rem] z-20 rounded-full border border-border bg-bg-elevated/90 px-3 py-1.5 shadow-lg backdrop-blur-sm" />
       )}
 
-      <UploadsPanel />
+      <UploadsPanel railCollapsed={sidebarCollapsed} />
       <UploadSSEBridge />
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
     </div>

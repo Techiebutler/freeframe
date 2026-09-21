@@ -1,10 +1,11 @@
 import logging
+import math
 import os
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
@@ -24,7 +25,8 @@ from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
     PresignPartRequest, PresignPartResponse,
     CompleteUploadRequest, CompleteUploadResponse, AbortUploadRequest,
-    ALLOWED_MIME_TYPES, mime_to_asset_type,
+    ResumeUploadResponse,
+    ALLOWED_MIME_TYPES, CHUNK_SIZE_BYTES, mime_to_asset_type,
 )
 from ..services.storage import upload_guard_error
 from ..services.versions import next_version_number
@@ -107,6 +109,11 @@ def initiate_upload(
     # bucket and presign-part has nothing to validate against.
     version.upload_id = upload_id
     version.last_activity_at = datetime.now(timezone.utc)
+    # Pin the part size to the upload rather than leaving it to whatever constant
+    # the browser's build carries. A resume has to cut the file on the same
+    # boundaries the parts already in the bucket were cut on, and R2 rejects a
+    # non-final part that is not the same size as its siblings.
+    version.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     # Create MediaFile record
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
@@ -126,6 +133,7 @@ def initiate_upload(
         s3_key=s3_key,
         asset_id=asset.id,
         version_id=version.id,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 
 
@@ -209,6 +217,197 @@ def _already_assembled(s3_key: str, expected_bytes: int, version_id) -> bool | N
         logger.warning("could not check whether upload %s already completed", version_id,
                        exc_info=True)
         return None
+
+
+def _pinned_chunk_size(version, stored: list[dict]) -> int:
+    """The part size this upload is cut on.
+
+    The recorded value wins. It is NULL only for versions created before it was
+    recorded, and for those the parts already in the bucket are better evidence
+    than today's constant: a part that is not the object's last one is a full
+    chunk by definition, and a part whose number is below some other held part's
+    number cannot be the last one. That needs two parts to work, which is why the
+    constant remains the final fallback -- with nothing uploaded there is nothing
+    to be inconsistent with.
+    """
+    if version.chunk_size_bytes:
+        return version.chunk_size_bytes
+    if len(stored) >= 2:
+        highest = max(p["PartNumber"] for p in stored)
+        full = [p["Size"] for p in stored if p["PartNumber"] < highest and p.get("Size")]
+        if full:
+            # max rather than any: a short part would be a broken upload, and
+            # under-reporting the chunk size is the failure that corrupts.
+            return max(full)
+    return CHUNK_SIZE_BYTES
+
+
+def _held_part_numbers(stored: list[dict], chunk_size: int, total_bytes: int) -> list[int]:
+    """Which parts the backend already holds, at the size this upload cuts them at.
+
+    Size, not ETag. ETag-as-MD5 holds on S3, MinIO and Garage, but it is a
+    convention rather than a guarantee: bucket-level default encryption changes
+    it invisibly -- create_multipart_upload passes only Bucket, Key and
+    ContentType, so an operator's SSE-KMS default is not something this code can
+    see -- and rclone ships `use_multipart_etag: false` for R2 and SeaweedFS,
+    which is the reference client saying the vendor docs are wrong. Size is
+    reported by every backend and means the same thing on all of them.
+
+    A part that does not match is simply left out and sent again. That is free:
+    re-PUTting a part number into an open multipart upload replaces it.
+
+    A part number listed more than once is left out too. SeaweedFS keeps both
+    writes of a retried part, and telling them apart needs exactly the ETag
+    comparison this function refuses to rely on. Completion rejects such an
+    upload either way; re-sending is at least the branch that does not assemble
+    bytes we did not choose.
+    """
+    total_parts = math.ceil(total_bytes / chunk_size) if chunk_size > 0 else 0
+    counts: dict[int, int] = {}
+    for part in stored:
+        counts[part["PartNumber"]] = counts.get(part["PartNumber"], 0) + 1
+
+    held = []
+    for part in stored:
+        number = part["PartNumber"]
+        if number < 1 or number > total_parts or counts[number] > 1:
+            continue
+        expected = (
+            total_bytes - (total_parts - 1) * chunk_size
+            if number == total_parts
+            else chunk_size
+        )
+        if part.get("Size") == expected:
+            held.append(number)
+    return sorted(held)
+
+
+# At least as long as the web client's `LIVE_WINDOW_MS`: every request the
+# client refuses on activity has to be one that did not record any.
+RESUME_TOUCH_INTERVAL = timedelta(minutes=5)
+
+
+@router.get("/{version_id}/parts", response_model=ResumeUploadResponse)
+def list_held_parts(
+    version_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """What an interrupted upload still needs, so the client can send only that.
+
+    Keyed on the version rather than on a client-supplied key and upload id. The
+    upload id is recorded server-side, so the caller does not have to have
+    survived the interruption holding it -- which is the common case, since a
+    closed tab takes it with it. It also means no form of bucket scan is
+    involved: ListMultipartUploads treats its Prefix as an exact key on MinIO
+    (minio/minio#20989) and is served there from a node-local cache that is empty
+    after a restart, so a scan is not a mechanism this can be built on.
+
+    Like the rest of `/upload/*`, this is exempt from the global rate limiter and
+    makes one ListParts call per request.
+    """
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if version.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized for this upload")
+    if version.processing_status != ProcessingStatus.uploading:
+        # Nothing to resume: the version has either finished, been resolved as
+        # failed, or been completed by another tab. The client shows the real
+        # status instead of an offer it cannot honour.
+        raise HTTPException(
+            status_code=409, detail=f"This upload is already {version.processing_status.value}."
+        )
+
+    media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+    if not media_file or not media_file.s3_key_raw:
+        raise HTTPException(status_code=404, detail="Upload not found for this version")
+    if not version.upload_id:
+        # A row from before upload ids were recorded. There is no way to name the
+        # multipart upload it belongs to, so its parts cannot be reached.
+        raise HTTPException(
+            status_code=409,
+            detail="This upload cannot be resumed. Please upload the file again.",
+        )
+
+    s3_key = media_file.s3_key_raw
+    # Captured before anything below records this request as activity. Both
+    # initiate paths set it, so it is only missing on a row older than the column.
+    previous_activity = version.last_activity_at
+    try:
+        stored = list_upload_parts(s3_key, version.upload_id)
+    except MultipartUploadGone:
+        # Either the reaper took it, or CompleteMultipartUpload already ran and
+        # only the status write is missing. HeadObject is what tells those apart,
+        # and getting it wrong in the second direction tells a user whose file is
+        # sitting in the bucket to send all of it again.
+        assembled = _already_assembled(s3_key, media_file.file_size_bytes, version.id)
+        if assembled is None:
+            raise _storage_unreachable()
+        if not assembled:
+            raise HTTPException(
+                status_code=409,
+                detail="This upload is no longer available. Please upload the file again.",
+            )
+        return ResumeUploadResponse(
+            state="assembled",
+            upload_id=version.upload_id,
+            s3_key=s3_key,
+            asset_id=version.asset_id,
+            version_id=version.id,
+            chunk_size_bytes=_pinned_chunk_size(version, []),
+            file_size_bytes=media_file.file_size_bytes,
+            original_filename=media_file.original_filename,
+            mime_type=media_file.mime_type,
+            held_part_numbers=[],
+            last_activity_at=previous_activity,
+        )
+    except MultipartListingUnsupported:
+        # No listing, so nothing is known to be held and every part is sent
+        # again. The upload still resumes in the sense that matters -- it goes
+        # into the same multipart upload and completes -- it just saves nothing.
+        logger.info(
+            "storage backend does not support ListParts; upload %s restarts from part 1",
+            version.id,
+        )
+        stored = []
+    except (ClientError, BotoCoreError) as e:
+        logger.warning("listing parts for upload %s failed: %s", version.id, e)
+        raise _storage_unreachable() from e
+
+    chunk_size = _pinned_chunk_size(version, stored)
+    held = _held_part_numbers(stored, chunk_size, media_file.file_size_bytes)
+
+    # Same proof of life presign-part records. Asking to resume is activity, and
+    # without this a resume started just inside the reaper's window races it.
+    #
+    # Only when nothing has happened for a while, though. The client reads
+    # `last_activity_at` to refuse touching an upload that moved within the last
+    # few minutes, and a refused request that recorded itself as activity would
+    # refuse the next attempt too, and the one after -- an upload that could
+    # never be resumed for as long as someone kept trying. The reaper's window
+    # is hours, so an upload that moved minutes ago needs no help from here.
+    now = datetime.now(timezone.utc)
+    if previous_activity is None or now - previous_activity >= RESUME_TOUCH_INTERVAL:
+        version.last_activity_at = now
+        db.commit()
+
+    return ResumeUploadResponse(
+        state="resumable",
+        upload_id=version.upload_id,
+        s3_key=s3_key,
+        asset_id=version.asset_id,
+        version_id=version.id,
+        chunk_size_bytes=chunk_size,
+        file_size_bytes=media_file.file_size_bytes,
+        original_filename=media_file.original_filename,
+        mime_type=media_file.mime_type,
+        held_part_numbers=held,
+        last_activity_at=previous_activity,
+    )
 
 
 def _parts_from_listing(stored: list[dict], expected_total_bytes: int) -> list[dict]:
@@ -573,6 +772,18 @@ def _trigger_processing(asset_id: uuid.UUID, version_id: uuid.UUID):
     send_task_safe(process_asset, str(asset_id), str(version_id))
 
 
+def _may_remove_asset(db: Session, asset_id: uuid.UUID, user: User) -> bool:
+    """Whether `user` holds the role that deleting this asset requires."""
+    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    if asset is None:
+        return False
+    try:
+        require_project_role(db, asset.project_id, user, ProjectRole.editor)
+    except HTTPException:
+        return False
+    return True
+
+
 @router.post("/abort", status_code=status.HTTP_204_NO_CONTENT)
 def abort_upload(
     body: AbortUploadRequest,
@@ -617,6 +828,60 @@ def abort_upload(
             detail="Could not reach storage to abort this upload. Please retry.",
             headers={"Retry-After": "5"},
         ) from e
+
+    # A discard is not a failure, and it is answered before anything is inspected.
+    # The user asked for this upload to be gone, so whether the object happens to
+    # be assembled makes no difference to what should happen to it -- and taking
+    # the assembled branch below would publish the upload the button exists to
+    # throw away. Only an upload still in progress can be discarded: the flag must
+    # not become a way to delete a version that already landed.
+    if body.discard:
+        # Re-read before trusting that status. `version` was loaded before the
+        # abort above, which is a blocking round trip to storage, and a
+        # `/upload/complete` committing `processing` in that window is invisible
+        # to this transaction under READ COMMITTED. Deciding on the stale value
+        # would delete the assembled master of a version whose transcode has just
+        # been dispatched. The lock holds a concurrent complete off until this
+        # commits; `populate_existing` is what makes the re-read land on the
+        # object rather than only in the SELECT. Same shape as
+        # `_lock_if_still_purgeable` in the cleanup tasks.
+        version = (
+            db.query(AssetVersion)
+            .filter(AssetVersion.id == body.version_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+        if version is None:
+            raise HTTPException(status_code=404, detail="Version not found")
+
+    if (
+        body.discard
+        and version.deleted_at is None
+        and version.processing_status == ProcessingStatus.uploading
+    ):
+        from ..tasks.cleanup_tasks import (
+            _dispose_version_files, _strip_asset_with_no_versions,
+        )
+        asset_id = version.asset_id
+        _dispose_version_files(db, version)
+        db.flush()
+        # Removing the asset is authorized the way deleting an asset is
+        # everywhere else, by a live role on the project. `created_by` only says
+        # who started the upload, and survives that person being taken off the
+        # project. Without the role the version still goes, since it is theirs,
+        # and an asset left with no versions is the reaper's to collect.
+        stripped = (
+            _may_remove_asset(db, asset_id, current_user)
+            and _strip_asset_with_no_versions(db, asset_id)
+        )
+        db.commit()
+        logger.info(
+            "upload %s discarded by user %s; asset %s %s",
+            version.id, current_user.id, asset_id,
+            "removed with it" if stripped else "kept",
+        )
+        return
 
     # Only an upload still in progress is resolved here. The client fires this from
     # the catch of every completion failure, so a version that already reached

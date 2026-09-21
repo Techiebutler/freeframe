@@ -9,10 +9,12 @@
  * new tab and the comment was never posted. Enter still posted it, which is
  * why this shipped in #264 and went unnoticed until #356.
  *
- * The viewer renders its own credit centred in its top bar, so gating here
- * removes a duplicate rather than dropping the attribution -- and both copies
- * read the same branding flag, so an admin who turns the credit off still
- * loses it everywhere.
+ * The viewer renders its own credit in its top bar, so gating here removes a
+ * duplicate rather than dropping the attribution -- and both copies read the
+ * same branding flag, so an admin who turns the credit off still loses it
+ * everywhere. (Below `lg` the viewer hides its copy, because in flow it costs
+ * the bar's controls; this one stays gated there rather than filling the gap,
+ * since it would land back on the send button.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'

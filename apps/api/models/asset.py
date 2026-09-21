@@ -67,6 +67,13 @@ class AssetVersion(Base):
     # this rather than by created_at, so a transfer slower than the window is not
     # aborted while it is still making progress.
     last_activity_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The part size this upload was started with, pinned so a resume cannot use a
+    # different one. R2 requires every non-final part to be exactly the same size,
+    # and a release that changed the client's constant would otherwise leave an
+    # in-flight upload with part numbers that no longer map to the same byte
+    # ranges. NULL means the row predates this being recorded; callers derive the
+    # size from the parts already held rather than assuming today's constant.
+    chunk_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

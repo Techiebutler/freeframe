@@ -3,6 +3,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import text, func
+from sqlalchemy.orm import Session
 
 from .celery_app import celery_app
 from ..database import SessionLocal
@@ -17,6 +18,8 @@ from ..models.project import Project, ProjectMember
 from ..models.folder import Folder
 from ..models.metadata import MetadataField, AssetMetadata, Collection, CollectionShare
 from ..models.branding import ProjectBranding, WatermarkSettings
+from ..models.instance_branding import InstanceBranding
+from ..models.user import User
 from ..models.activity import Mention, ActivityLog, Notification
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
@@ -38,12 +41,20 @@ def _retention_days() -> int:
     return days
 
 
-def _safe(fn, *args):
-    """Run a best-effort S3 op; log and swallow any error so the sweep never aborts."""
+def _safe(fn, *args) -> bool:
+    """Run a best-effort S3 op; log and swallow any error so the sweep never aborts.
+
+    Returns whether it actually ran. Swallowing is still the right behaviour -- one
+    unreachable key must not abort a sweep -- but a caller that reports how much it
+    reclaimed has to be able to tell a success from a logged failure, or it reports
+    storage as freed that is still being paid for.
+    """
     try:
         fn(*args)
+        return True
     except Exception as exc:  # noqa: BLE001 - best-effort cleanup
         log.warning("reaper: %s%r failed: %s", fn.__name__, args, exc)
+        return False
 
 
 @dataclass
@@ -225,6 +236,61 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+def _strip_asset_with_no_versions(db: Session, asset_id) -> bool:
+    """Soft-delete an asset whose last live version has just gone.
+
+    Left alone it reappears in the project grid, because `list_assets`
+    deliberately shows assets with no versions yet (a just-created one) and a
+    stripped asset is indistinguishable from that -- so a discarded or reclaimed
+    upload comes back as a card that cannot be opened, streamed or re-versioned.
+    Mutates `db` without committing. Returns whether the asset was removed.
+    """
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id, Asset.deleted_at.is_(None)
+    ).first()
+    if asset is None:
+        return False
+    still_live = db.query(AssetVersion).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if still_live is not None:
+        return False
+    asset.deleted_at = datetime.now(timezone.utc)
+    return True
+
+
+def _dispose_version_files(db: Session, v: AssetVersion) -> None:
+    """Throw one upload's bytes away and soft-delete the version row.
+
+    Shared with `POST /upload/abort` when a user discards an upload: the two
+    have to agree, or discarding by hand and being reclaimed a day later leave
+    the asset in different states. Mutates `db` without committing.
+    """
+    # Abort this version's own multipart upload, if it has one still open.
+    #
+    # Driven off our own row rather than off a bucket listing. A listing pass
+    # was wrong twice over: it aborted uploads that were still transferring,
+    # because it aged them by when the multipart was initiated rather than by
+    # whether anything was still happening; and on MinIO, the default backend,
+    # it found nothing at all after a restart, because ListMultipartUploads
+    # there is served from a node-local in-memory cache -- measured 3 open
+    # uploads before a restart and 0 after, with the parts still present.
+    # AbortMultipartUpload on a known (key, upload id) works on every backend
+    # regardless of what its listing does.
+    for mf in db.query(MediaFile).filter(MediaFile.version_id == v.id).all():
+        if v.upload_id:
+            _safe(abort_multipart_upload, mf.s3_key_raw, v.upload_id)
+        _safe(delete_object, mf.s3_key_raw)
+        if mf.s3_key_processed:
+            _safe(delete_prefix, mf.s3_key_processed)
+        if mf.s3_key_download:
+            _safe(delete_object, mf.s3_key_download)
+        if mf.s3_key_thumbnail:
+            _safe(delete_object, mf.s3_key_thumbnail)
+    v.deleted_at = datetime.now(timezone.utc)
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
@@ -248,32 +314,7 @@ def _reap_stale_uploads(db) -> int:
         func.coalesce(AssetVersion.last_activity_at, AssetVersion.created_at) < cutoff,
     ).all()
     for v in versions:
-        # Abort this version's own multipart upload, if it has one still open.
-        #
-        # This used to be a separate pass that listed every in-progress upload in
-        # the bucket and aborted anything older than the cutoff, with no reference
-        # to the database at all. That was wrong twice over. It aborted uploads
-        # that were still actively transferring, because it aged them by when the
-        # multipart was *initiated* rather than by whether anything was still
-        # happening. And on MinIO, the default backend, it found nothing at all
-        # after a restart, because ListMultipartUploads there is served from a
-        # node-local in-memory cache: measured 3 open uploads before a restart and
-        # 0 after, with the parts themselves still present.
-        #
-        # Driving off our own rows fixes both. It inherits the activity-based
-        # cutoff above, and AbortMultipartUpload on a known (key, upload id) works
-        # on every backend regardless of what their listing does.
-        for mf in db.query(MediaFile).filter(MediaFile.version_id == v.id).all():
-            if v.upload_id:
-                _safe(abort_multipart_upload, mf.s3_key_raw, v.upload_id)
-            _safe(delete_object, mf.s3_key_raw)
-            if mf.s3_key_processed:
-                _safe(delete_prefix, mf.s3_key_processed)
-            if mf.s3_key_download:
-                _safe(delete_object, mf.s3_key_download)
-            if mf.s3_key_thumbnail:
-                _safe(delete_object, mf.s3_key_thumbnail)
-        v.deleted_at = datetime.now(timezone.utc)
+        _dispose_version_files(db, v)
     db.flush()
 
     # An asset whose last live version has just been reclaimed is not a usable
@@ -281,20 +322,10 @@ def _reap_stale_uploads(db) -> int:
     # deliberately shows assets with no versions yet (a just-created one), and a
     # stripped asset is indistinguishable from that -- so a failed upload comes
     # back a day later as a card that cannot be opened, streamed or re-versioned.
-    stripped = 0
-    for asset_id in {v.asset_id for v in versions}:
-        asset = db.query(Asset).filter(
-            Asset.id == asset_id, Asset.deleted_at.is_(None)
-        ).first()
-        if asset is None:
-            continue
-        still_live = db.query(AssetVersion).filter(
-            AssetVersion.asset_id == asset_id,
-            AssetVersion.deleted_at.is_(None),
-        ).first()
-        if still_live is None:
-            asset.deleted_at = datetime.now(timezone.utc)
-            stripped += 1
+    stripped = sum(
+        1 for asset_id in {v.asset_id for v in versions}
+        if _strip_asset_with_no_versions(db, asset_id)
+    )
 
     # 3. Best-effort second pass for multipart uploads that no row owns at all.
     #
@@ -503,7 +534,18 @@ def cleanup_soft_deleted():
         db.close()
 
 
-_ORPHAN_SWEEP_PREFIXES = ("raw/", "processed/")
+_ORPHAN_SWEEP_PREFIXES = (
+    "raw/", "processed/", "posters/", "avatars/", "comment-attachments/",
+    "branding/", "watermarked/",
+)
+
+# `branding/{project_id}/watermark/` is written by an upload endpoint that returns
+# the key and stores it nowhere: `WatermarkSettings` has no column for it and
+# `WatermarkContent` has no image variant, so the feature is half-built and no row
+# can vouch for these objects. Sweeping the prefix would delete them along with
+# anything an instance uploaded by driving the API directly, and the sweep cannot
+# tell those apart, so it is excluded until the feature is finished or removed.
+_ORPHAN_SWEEP_EXCLUDED = ("branding/", "/watermark/")
 
 
 @dataclass
@@ -514,6 +556,7 @@ class OrphanSweepCounts:
     orphans: int = 0
     orphan_bytes: int = 0
     deleted: int = 0
+    deleted_bytes: int = 0
 
 
 def _sweep_orphan_s3(db) -> OrphanSweepCounts:
@@ -549,6 +592,36 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
         if download:
             exact_live.add(download)
 
+    # The prefixes outside raw/ and processed/ each have exactly one owning column,
+    # and every one of them is queried UNFILTERED for the same reason MediaFile is:
+    # a soft-deleted-but-not-yet-purged row still owns its object, and reclaiming it
+    # belongs to the retention GC rather than here.
+    #
+    # `watermarked/` deliberately contributes nothing. `apply_watermark` writes
+    # `watermarked/{asset_id}/output.*` and nothing in the codebase ever reads it
+    # back, so every object under it is dead weight rather than something with a
+    # missing owner (#247).
+    for (poster,) in db.query(Project.poster_s3_key).filter(Project.poster_s3_key.isnot(None)):
+        exact_live.add(poster)
+    # Named `avatar_url`, holds an S3 key: `users.py` passes it straight to
+    # `delete_object`. Trusting the name here would have swept every avatar.
+    for (avatar,) in db.query(User.avatar_url).filter(User.avatar_url.isnot(None)):
+        exact_live.add(avatar)
+    for (att,) in db.query(CommentAttachment.s3_key).filter(CommentAttachment.s3_key.isnot(None)):
+        exact_live.add(att)
+    for (logo,) in db.query(ProjectBranding.logo_s3_key).filter(ProjectBranding.logo_s3_key.isnot(None)):
+        exact_live.add(logo)
+    for row in db.query(
+        InstanceBranding.logo_light_key, InstanceBranding.logo_dark_key,
+        InstanceBranding.favicon_key, InstanceBranding.apple_icon_key,
+        InstanceBranding.login_logo_key,
+    ).all():
+        exact_live.update(k for k in row if k)
+
+    def _excluded(key):
+        head, tail = _ORPHAN_SWEEP_EXCLUDED
+        return key.startswith(head) and tail in key
+
     def _is_live(key):
         return key in exact_live or any(key.startswith(root) for root in processed_roots)
 
@@ -556,6 +629,8 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
     for prefix in _ORPHAN_SWEEP_PREFIXES:
         for key, last_modified, size in list_keys(prefix):
             counts.scanned += 1
+            if _excluded(key):
+                continue  # see _ORPHAN_SWEEP_EXCLUDED
             if last_modified >= cutoff:
                 continue  # too recent — may be an in-flight / just-committed upload
             if _is_live(key):
@@ -565,17 +640,36 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
     counts.orphans = len(orphans)
     counts.orphan_bytes = sum(s for _, s in orphans)
 
-    # Safety floor: a degenerate (empty) live-set — e.g. DATABASE_URL pointed at the wrong/empty DB —
-    # must never be allowed to mass-delete every scanned key as "orphaned". Report-only in that case.
+    # Safety floor. The failure this guards against is a database that does not describe the bucket
+    # it is pointed at -- wrong DATABASE_URL, an empty instance, a half-run migration -- because then
+    # every key is unowned and the sweep reclassifies the whole bucket as garbage. That shape is a
+    # HIGH ORPHAN RATIO, and an empty live-set is only its most extreme form: one surviving MediaFile
+    # row against a full bucket is the same accident and passes an is-it-empty check.
     live_set_empty = not exact_live and not processed_roots
-    if counts.delete_enabled and live_set_empty and orphans:
-        log.error("orphan-sweep: SAFETY ABORT — live-set is EMPTY (0 MediaFile rows) but %d key(s) scanned; "
-                  "refusing to delete (likely a wrong/empty DATABASE_URL). Reporting only.", counts.orphans)
-    if counts.delete_enabled and not (live_set_empty and orphans):
-        for key, _ in orphans:
-            _safe(delete_object, key)
-            counts.deleted += 1
-        log.info("orphan-sweep: deleted %d/%d orphan key(s), %d bytes", counts.deleted, counts.orphans, counts.orphan_bytes)
+    ratio = (counts.orphans / counts.scanned) if counts.scanned else 0.0
+    ceiling = settings.orphan_sweep_max_orphan_ratio
+    over_ceiling = bool(orphans) and ratio > ceiling
+    refuse = bool(orphans) and (live_set_empty or over_ceiling)
+
+    if counts.delete_enabled and refuse:
+        if live_set_empty:
+            log.error("orphan-sweep: SAFETY ABORT — live-set is EMPTY (0 MediaFile rows) but %d key(s) scanned; "
+                      "refusing to delete (likely a wrong/empty DATABASE_URL). Reporting only.", counts.orphans)
+        else:
+            log.error("orphan-sweep: SAFETY ABORT — %d of %d scanned key(s) look orphaned (%.0f%%), over the %.0f%% "
+                      "ceiling; refusing to delete. Either the database does not describe this bucket, or the bucket "
+                      "really is this dirty — read the sample below and raise ORPHAN_SWEEP_MAX_ORPHAN_RATIO if so.",
+                      counts.orphans, counts.scanned, ratio * 100, ceiling * 100)
+    if counts.delete_enabled and not refuse:
+        for key, size in orphans:
+            if _safe(delete_object, key):
+                counts.deleted += 1
+                # Bytes follow the deletes, not the findings. Printing the full
+                # orphan total here would report storage as freed that is still
+                # being paid for, which is the same defect as counting attempts.
+                counts.deleted_bytes += size
+        log.info("orphan-sweep: deleted %d/%d orphan key(s), %d of %d bytes",
+                 counts.deleted, counts.orphans, counts.deleted_bytes, counts.orphan_bytes)
     else:
         log.info("orphan-sweep: REPORT-ONLY — %d orphan key(s) under %s, %d bytes "
                  "(set ORPHAN_SWEEP_DELETE=true to reclaim). sample=%s",

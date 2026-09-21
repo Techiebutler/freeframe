@@ -3,12 +3,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
-from ..models.asset import Asset
+from ..models.asset import Asset, AssetVersion, ProcessingStatus
 from ..models.folder import Folder
 from ..models.project import Project, ProjectRole
 from ..models.user import User
@@ -403,6 +403,39 @@ def bulk_move(
 # ─── Trash & Restore ─────────────────────────────────────────────────────────
 
 
+def _was_ever_usable():
+    """Whether an asset ever had a version that got as far as `processing`.
+
+    A deleted asset that never did is not deleted work. It is an upload that was
+    discarded or reclaimed before it landed, soft-deleted by
+    `_strip_asset_with_no_versions` so it stops showing in the grid. Listed in
+    the trash it sits among the things people actually deleted, and restoring it
+    brings back the card that helper exists to remove: one that cannot be
+    opened, streamed or given a version.
+
+    `failed` counts. The question is how far the version ever got, not where it
+    stopped, and a failed transcode got as far as being dispatched: the bytes
+    landed, the asset carries a red Failed badge in the grid, and deleting it is
+    someone deleting their own work. Leaving it out took a restorable asset out
+    of the trash entirely and made restore answer 404. `uploading` is the one
+    status this excludes, and it is the one the helper was written for.
+
+    A version keeps its status when it is soft-deleted, so this still holds for
+    an asset whose versions went into the trash with it.
+    """
+    return (
+        select(AssetVersion.id)
+        .where(
+            AssetVersion.asset_id == Asset.id,
+            AssetVersion.processing_status.in_(
+                [ProcessingStatus.processing, ProcessingStatus.ready,
+                 ProcessingStatus.failed]
+            ),
+        )
+        .exists()
+    )
+
+
 @router.get("/projects/{project_id}/trash", response_model=dict)
 def list_trash(
     project_id: uuid.UUID,
@@ -424,7 +457,11 @@ def list_trash(
 
     deleted_assets = (
         db.query(Asset)
-        .filter(Asset.project_id == project_id, Asset.deleted_at.isnot(None))
+        .filter(
+            Asset.project_id == project_id,
+            Asset.deleted_at.isnot(None),
+            _was_ever_usable(),
+        )
         .order_by(Asset.deleted_at.desc())
         .offset(skip)
         .limit(limit)
@@ -461,7 +498,9 @@ def restore_asset(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.isnot(None)).first()
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id, Asset.deleted_at.isnot(None), _was_ever_usable(),
+    ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Deleted asset not found")
 
