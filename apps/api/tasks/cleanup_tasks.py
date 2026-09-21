@@ -543,6 +543,7 @@ class OrphanSweepCounts:
     orphans: int = 0
     orphan_bytes: int = 0
     deleted: int = 0
+    deleted_bytes: int = 0
 
 
 def _sweep_orphan_s3(db) -> OrphanSweepCounts:
@@ -615,10 +616,15 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
                       "really is this dirty — read the sample below and raise ORPHAN_SWEEP_MAX_ORPHAN_RATIO if so.",
                       counts.orphans, counts.scanned, ratio * 100, ceiling * 100)
     if counts.delete_enabled and not refuse:
-        for key, _ in orphans:
+        for key, size in orphans:
             if _safe(delete_object, key):
                 counts.deleted += 1
-        log.info("orphan-sweep: deleted %d/%d orphan key(s), %d bytes", counts.deleted, counts.orphans, counts.orphan_bytes)
+                # Bytes follow the deletes, not the findings. Printing the full
+                # orphan total here would report storage as freed that is still
+                # being paid for, which is the same defect as counting attempts.
+                counts.deleted_bytes += size
+        log.info("orphan-sweep: deleted %d/%d orphan key(s), %d of %d bytes",
+                 counts.deleted, counts.orphans, counts.deleted_bytes, counts.orphan_bytes)
     else:
         log.info("orphan-sweep: REPORT-ONLY — %d orphan key(s) under %s, %d bytes "
                  "(set ORPHAN_SWEEP_DELETE=true to reclaim). sample=%s",

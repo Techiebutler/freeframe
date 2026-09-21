@@ -127,6 +127,11 @@ def test_a_delete_that_fails_is_not_counted_as_reclaimed(real_db, monkeypatch):
 
     assert counts.orphans == 2      # both were identified
     assert counts.deleted == 1      # only one actually went
+    # and the byte figure follows the deletes, not the findings: reporting the
+    # full orphan total on the success line is reporting storage as freed that
+    # is still being paid for, which is the same defect as counting attempts.
+    assert counts.orphan_bytes == 1000   # what was found
+    assert counts.deleted_bytes == 500   # what was actually reclaimed
 
 
 def test_a_live_set_too_small_for_the_bucket_refuses_to_delete(real_db, monkeypatch, caplog):
