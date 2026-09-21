@@ -29,6 +29,8 @@ def _transcode(
     keyframes: list[float] | None = None,
     open_gop: bool = False,
     idrs: int | None = None,
+    tail_open_gop: bool = False,
+    trace_silent: bool = False,
     remux_fails: bool = False,
     hls_commands: int = 1,
 ):
@@ -68,15 +70,41 @@ def _transcode(
             elif selected == "a":
                 mock.stdout = json.dumps({"streams": audio_streams or []})
         elif "trace_headers" in cmd:
-            # What ffmpeg -v trace prints per NAL unit. An open-GOP master has
-            # one real IDR and marks its later entry points with a recovery
-            # point instead.
-            lines = ["nal_unit_type: 7(SPS), nal_ref_idc: 3"]
+            # What ffmpeg -v trace really prints per NAL unit. An open-GOP
+            # master has one real IDR and marks its later entry points with a
+            # recovery point instead.
+            #
+            # The prefixes are the point, not decoration. `avformat_find_stream_info`
+            # decodes enough to identify the stream and logs its own IDR line
+            # from an `[h264 @ ...]` context before trace_headers runs, so real
+            # output always carries exactly one more IDR line than there are
+            # sync samples. Emitting bare lines hid that, which is why the test
+            # below for a sync sample that is not an IDR could not fail (#377).
+            # Measured against ffmpeg 7.1.5: 15 sync samples give 15
+            # `[trace_headers @ ...]` IDR lines and 1 `[h264 @ ...]` one.
+            if trace_silent:
+                # ffmpeg exits 0 and prints nothing trace_headers shaped, which
+                # is what a future change in its log spelling would look like.
+                mock.stderr = "some other ffmpeg chatter\n"
+                return mock
+            th = "[trace_headers @ 0x7f8e0] "
+            # `_copy_probe_windows` also samples the tail of a long master, and
+            # `tail_open_gop` is how a joined source is modelled: the head looks
+            # copyable and the part after the join does not (#379). The tail pass
+            # is the one that seeks, so `-ss` identifies it.
+            if tail_open_gop and "-ss" in cmd:
+                mock.stderr = "\n".join(
+                    ["[h264 @ 0x7f8e1] nal_unit_type: 5(IDR), nal_ref_idc: 3",
+                     th + "nal_unit_type: 5(IDR), nal_ref_idc: 3"]
+                    + [th + "recovery_frame_cnt        00000 = 0"] * (len(times) - 1))
+                return mock
+            lines = ["[h264 @ 0x7f8e1] nal_unit_type: 5(IDR), nal_ref_idc: 3",
+                     th + "nal_unit_type: 7(SPS), nal_ref_idc: 3"]
             idr_units = len(times) if idrs is None else idrs
             if open_gop:
                 idr_units = 1 if idrs is None else idrs
-                lines += ["recovery_frame_cnt        00000 = 0"] * (len(times) - 1)
-            lines += ["nal_unit_type: 5(IDR), nal_ref_idc: 3"] * idr_units
+                lines += [th + "recovery_frame_cnt        00000 = 0"] * (len(times) - 1)
+            lines += [th + "nal_unit_type: 5(IDR), nal_ref_idc: 3"] * idr_units
             mock.stderr = "\n".join(lines)
         elif remux_fails and "-f" in cmd and cmd[cmd.index("-f") + 1] == "hls" \
                 and "copy" in cmd:
@@ -291,6 +319,76 @@ def test_a_sync_sample_that_is_not_an_idr_is_encoded_without_a_recovery_point():
     cmd, _, _ = _transcode(["1080p"], keyframes=[0.0, 2.0, 4.0], idrs=1)
 
     assert not _copies(cmd)
+
+
+def test_exactly_one_sync_sample_that_is_not_an_idr_is_still_encoded(  # noqa: E501
+):
+    # The off-by-one (#377). Real `ffmpeg -v trace` prints one
+    # `nal_unit_type: 5(IDR)` line from its own `[h264 @ ...]` decode context
+    # before trace_headers runs, so counting every occurrence came out exactly
+    # one high and the backstop tolerated exactly one bad sync sample. The
+    # sibling test above uses a margin of two, where an off-by-one cannot show.
+    cmd, _, _ = _transcode(["1080p"], keyframes=[0.0, 2.0, 4.0], idrs=2)
+
+    assert not _copies(cmd)
+
+
+def test_keyframes_that_stop_after_the_start_are_encoded():
+    # The gap running off the end of the window (#378). Taking only the pairwise
+    # gaps measures the distance between sync samples and never the distance
+    # after the last one, so a slate spliced onto a long-GOP body reported half
+    # a second and copied into one segment as long as the file. Measured on a
+    # real 41s file built that way: the copy produced a single `#EXTINF:41`.
+    cmd, _, _ = _transcode(
+        ["1080p"], keyframes=[0.0, 0.5, 1.0],
+        video_stream={**_H264_8BIT, "duration": 41.0},
+    )
+
+    assert not _copies(cmd)
+
+
+def test_a_master_that_changes_after_the_first_window_is_encoded():
+    # The bound on the probe (#379). One window says what the first 30s look
+    # like, not what the file is, and a lossless join of clips from different
+    # encoders breaks that premise: reproduced on a real joined file whose head
+    # is closed-GOP and whose tail is not, where segments 18 onward each decode
+    # to `non-existing PPS 0 referenced` while ffmpeg exits 0.
+    # Keyframes run the length of the head window on purpose: without them the
+    # tail-gap rule above refuses first and this passes for the wrong reason.
+    cmd, _, _ = _transcode(
+        ["1080p"], tail_open_gop=True,
+        keyframes=[float(t) for t in range(0, 32, 2)],
+        video_stream={**_H264_8BIT, "duration": 55.0},
+    )
+
+    assert not _copies(cmd)
+
+
+def test_a_trace_that_says_nothing_is_encoded_and_says_why(capsys):
+    # The gate rests on parsing ffmpeg's log, which is not an interface ffmpeg
+    # promises to keep. If trace_headers says nothing at all the parse did not
+    # happen, whatever the exit code claims (#381).
+    #
+    # The refusal itself is not what this pins: with no trace output every count
+    # is zero, so the IDR backstop below already refuses. What the guard adds is
+    # the REASON, and the reason is the operator's only signal for why a copy
+    # they enabled is encoding instead. Asserting the message rather than the
+    # verdict is what makes this a test rather than a restatement of the
+    # backstop.
+    capsys.readouterr()
+    cmd, _, _ = _transcode(["1080p"], trace_silent=True)
+
+    assert not _copies(cmd)
+    assert "produced no trace output" in capsys.readouterr().out
+
+
+def test_a_short_master_is_not_refused_for_silence_past_its_end():
+    # The guard on the tail-gap fix: the window is 30s and this file is 6s, so
+    # 24s of it are past the end of the media. Clamping to the real duration is
+    # what stops that being read as a 24s stretch with no sync sample.
+    cmd, _, _ = _transcode(["1080p"], keyframes=[0.0, 2.0, 4.0])
+
+    assert _copies(cmd)
 
 
 def test_a_source_whose_keyframes_are_too_far_apart_is_encoded():

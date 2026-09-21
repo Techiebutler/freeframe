@@ -840,7 +840,29 @@ class FFmpegTranscoder(BaseTranscoder):
             )
         return result.stdout
 
-    def _copy_keyframe_refusal(self, input_url: str) -> str | None:
+    def _copy_probe_windows(self, duration_seconds: float | None) -> list[tuple[float, float]]:
+        """Which stretches of the master to inspect, as `(start, length)`.
+
+        The head, always. Plus the tail when the file is longer than one window,
+        because the thing the head cannot see is a master built out of parts: a
+        slate spliced onto the front, or a lossless join of clips from different
+        encoders. Both leave the first window describing something the rest of
+        the file is not (#379).
+
+        Two windows is a sample, not a proof. A three-part join whose middle
+        piece is the odd one still passes, and a full-file read is the only
+        thing that would not. That trade is the whole reason this is bounded:
+        the alternative is a second complete pass over a master that can be
+        tens of gigabytes, which is the cost this setting exists to avoid.
+        """
+        head = (0.0, _COPY_PROBE_SECONDS)
+        if not duration_seconds or duration_seconds <= _COPY_PROBE_SECONDS:
+            return [head]
+        return [head, (max(0.0, duration_seconds - _COPY_PROBE_SECONDS), _COPY_PROBE_SECONDS)]
+
+    def _copy_keyframe_refusal(
+        self, input_url: str, duration_seconds: float | None = None
+    ) -> str | None:
         """Why this source's sync samples make it unsafe to copy, or None.
 
         A stream copy hands the segmenter whatever random-access points the
@@ -859,21 +881,30 @@ class FFmpegTranscoder(BaseTranscoder):
         * **They are too far apart.** `-hls_time` is a floor here, so the
           master's own spacing decides how long a segment is.
 
-        Bounded to the first `_COPY_PROBE_SECONDS`: one range read rather than a
-        second pass over a 4 GB master, on the reasoning that an encoder does
-        not change its GOP structure halfway through a file. A master whose
-        first window holds fewer than two sync samples is refused rather than
-        guessed at, which is the same answer the segment-length bound gives.
-
-        Anything that goes wrong in here refuses the copy. A refusal costs
-        encode time, which is the thing this setting exists to save; the other
-        direction costs an asset nobody can seek in, which is worse.
+        Each window from `_copy_probe_windows` is judged on its own and the
+        first complaint wins. Anything that goes wrong in here refuses the copy.
+        A refusal costs encode time, which is the thing this setting exists to
+        save; the other direction costs an asset nobody can seek in, which is
+        worse.
         """
+        for start, length in self._copy_probe_windows(duration_seconds):
+            refusal = self._copy_window_refusal(input_url, start, length, duration_seconds)
+            if refusal:
+                return refusal
+        return None
+
+    def _copy_window_refusal(
+        self, input_url: str, start: float, length: float,
+        duration_seconds: float | None,
+    ) -> str | None:
+        """`_copy_keyframe_refusal` for one window, or None if it looks copyable."""
+        where = "" if start <= 0 else f" at {start:g}s"
+        interval = f"{start:g}%+{length:g}" if start > 0 else f"%+{length:g}"
         try:
             probed = self._run(
                 [
                     "ffprobe", "-v", "error", "-select_streams", "v:0",
-                    "-read_intervals", f"%+{_COPY_PROBE_SECONDS:g}",
+                    "-read_intervals", interval,
                     "-show_entries", "packet=pts_time,flags",
                     "-print_format", "json", input_url,
                 ],
@@ -895,13 +926,27 @@ class FFmpegTranscoder(BaseTranscoder):
 
         if len(keyframe_times) < 2:
             return (
-                f"only {len(keyframe_times)} sync sample(s) in the first "
-                f"{_COPY_PROBE_SECONDS:g}s, so segments would be at least that long"
+                f"only {len(keyframe_times)} sync sample(s) in {length:g}s{where}, "
+                "so segments would be at least that long"
             )
-        widest_gap = max(b - a for a, b in zip(keyframe_times, keyframe_times[1:]))
+
+        # The gap running off the end of the window counts too. Taking only the
+        # pairwise gaps measures the distance between sync samples and never the
+        # distance after the last one, so a master whose keyframes are dense at
+        # the head and absent afterwards -- a slate spliced onto a long-GOP body
+        # -- reported a fraction of a second and copied into one segment as long
+        # as the file (#378). Clamped to the real end so a short source, whose
+        # window is mostly past the end of the media, is not refused for silence
+        # that is not there.
+        window_end = start + length
+        if duration_seconds:
+            window_end = min(window_end, duration_seconds)
+        gaps = [b - a for a, b in zip(keyframe_times, keyframe_times[1:])]
+        gaps.append(max(0.0, window_end - keyframe_times[-1]))
+        widest_gap = max(gaps)
         if widest_gap > _MAX_COPY_SEGMENT_SECONDS:
             return (
-                f"sync samples up to {widest_gap:.1f}s apart, past the "
+                f"sync samples up to {widest_gap:.1f}s apart{where}, past the "
                 f"{_MAX_COPY_SEGMENT_SECONDS:g}s a copied segment may span"
             )
 
@@ -909,10 +954,11 @@ class FFmpegTranscoder(BaseTranscoder):
         # unit it parses, which is the only place the distinction is visible:
         # ffprobe reports an open-GOP recovery point as `key_frame=1` and
         # `pict_type=I`, exactly as it reports a real IDR.
+        seek = ["-ss", f"{start:g}"] if start > 0 else []
         try:
             traced = subprocess.run(
                 [
-                    "ffmpeg", "-v", "trace", "-t", f"{_COPY_PROBE_SECONDS:g}",
+                    "ffmpeg", "-v", "trace", *seek, "-t", f"{length:g}",
                     "-i", input_url, "-map", "0:v:0", "-c", "copy",
                     "-bsf:v", "trace_headers", "-f", "null", "-",
                 ],
@@ -923,22 +969,38 @@ class FFmpegTranscoder(BaseTranscoder):
         if traced.returncode != 0:
             return f"the keyframe probe failed (ffmpeg exited {traced.returncode})"
 
-        idr_units = recovery_points = 0
+        # Only the lines trace_headers itself emitted. `avformat_find_stream_info`
+        # decodes a little to identify the stream and logs its own
+        # `nal_unit_type: 5(IDR)` from an `[h264 @ ...]` context before
+        # trace_headers runs, so counting every occurrence came out exactly one
+        # high and the backstop below tolerated one sync sample that was not an
+        # IDR (#377). Measured: a closed-GOP file with 15 sync samples prints 15
+        # trace_headers lines and 1 h264 line.
+        idr_units = recovery_points = traced_lines = 0
         for line in traced.stderr.splitlines():
+            if "[trace_headers @" not in line:
+                continue
+            traced_lines += 1
             if "nal_unit_type: 5(IDR)" in line:
                 idr_units += 1
             elif "recovery_frame_cnt" in line:
                 recovery_points += 1
 
+        # If trace_headers said nothing at all, the parse this gate rests on did
+        # not happen, whatever the exit code says. Refusing is the safe
+        # direction and turns any future change in ffmpeg's log spelling into an
+        # encode rather than into an unseekable asset (#381).
+        if not traced_lines:
+            return f"the keyframe probe produced no trace output{where}"
+
         if recovery_points:
             return (
-                f"{recovery_points} recovery point(s) in the first "
-                f"{_COPY_PROBE_SECONDS:g}s: this is an open-GOP master, and a segment "
-                "starting at one is not seekable"
+                f"{recovery_points} recovery point(s) in {length:g}s{where}: this is an "
+                "open-GOP master, and a segment starting at one is not seekable"
             )
         if idr_units < len(keyframe_times):
             return (
-                f"{idr_units} IDR(s) against {len(keyframe_times)} sync samples: not "
+                f"{idr_units} IDR(s) against {len(keyframe_times)} sync samples{where}: not "
                 "every random-access point is one a player can start at"
             )
         return None
@@ -1226,7 +1288,10 @@ class FFmpegTranscoder(BaseTranscoder):
             )
 
             if copy_source:
-                refusal = self._copy_keyframe_refusal(input_url)
+                refusal = self._copy_keyframe_refusal(
+                    input_url,
+                    duration_seconds=(meta.duration_seconds if meta else None),
+                )
                 if refusal:
                     copy_source = False
                     print(
