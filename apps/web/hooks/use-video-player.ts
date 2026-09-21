@@ -207,6 +207,9 @@ export function useVideoPlayer(
     const isHlsSource = src.includes('.m3u8')
 
     if (isHlsSource && Hls.isSupported()) {
+      // hls.js requires this for the ManagedMediaSource path (iOS): without it,
+      // Safari switches to remote playback and the MMS session stays empty.
+      video.disableRemotePlayback = true
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
@@ -280,7 +283,13 @@ export function useVideoPlayer(
     const video = videoRef.current
     if (!video) return
     if (video.paused) {
-      video.play().catch(() => {})
+      video.play().catch(() => {
+        // iOS/ManagedMediaSource: the first gesture often only starts buffering,
+        // play() rejects without buffered data. Retry once as soon as
+        // data is available, otherwise mobile always needs a second tap.
+        video.addEventListener('canplay', () => { video.play().catch(() => {}) }, { once: true })
+        hlsRef.current?.startLoad()
+      })
     } else {
       video.pause()
     }
