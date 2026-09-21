@@ -85,3 +85,77 @@ def test_orphan_sweep_safety_abort_on_empty_live_set(mock_db, monkeypatch):
     assert deleted == []
     assert counts.deleted == 0
     assert counts.orphans == 2  # still correctly reports what was scanned
+
+
+# ─────────────────────────── hardening the floor before widening the sweep (#115)
+
+def test_safe_says_whether_the_op_actually_happened():
+    """`_safe` swallows failures by design, so its caller cannot otherwise tell.
+
+    The orphan sweep counts what it reclaimed, and that number is what an operator
+    reads to decide the bucket is clean. Counting attempts rather than successes
+    reports storage as freed that is still being paid for.
+    """
+    def ok(_key): return None
+
+    def boom(_key): raise RuntimeError("S3 said no")
+
+    assert ct._safe(ok, "k") is True
+    assert ct._safe(boom, "k") is False
+
+
+def test_a_delete_that_fails_is_not_counted_as_reclaimed(real_db, monkeypatch):
+    pid, aid, vid, raw = _seed_media(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    all_keys = [
+        (raw, old, 100),
+        (f"processed/{pid}/{aid}/{vid}/720p/seg001.ts", old, 200),
+        ("raw/dead/dead/dead/a.mp4", old, 500),
+        ("raw/dead/dead/dead/b.mp4", old, 500),
+    ]
+    monkeypatch.setattr(settings, "orphan_sweep_grace_hours", 24)
+    monkeypatch.setattr(settings, "orphan_sweep_delete", True)
+    monkeypatch.setattr(ct, "list_keys",
+                        lambda prefix: [k for k in all_keys if k[0].startswith(prefix)])
+
+    def half_broken(key):
+        if key.endswith("b.mp4"):
+            raise RuntimeError("AccessDenied")
+
+    monkeypatch.setattr(ct, "delete_object", half_broken)
+    counts = ct._sweep_orphan_s3(real_db)
+
+    assert counts.orphans == 2      # both were identified
+    assert counts.deleted == 1      # only one actually went
+
+
+def test_a_live_set_too_small_for_the_bucket_refuses_to_delete(real_db, monkeypatch, caplog):
+    """The gap the empty-live-set guard leaves open.
+
+    One surviving MediaFile row against a bucket full of keys is the signature of a
+    wrong or half-migrated database, and it is not an empty live-set, so the existing
+    guard waves it through and every other key is deleted as an orphan.
+    """
+    pid, aid, vid, raw = _seed_media(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    all_keys = [(raw, old, 100)] + [
+        (f"raw/other-{i}/other/other/original.mp4", old, 100) for i in range(9)
+    ]
+    counts, deleted = _run(real_db, monkeypatch, all_keys, grace=24, delete=True)
+
+    assert counts.orphans == 9                 # still reported honestly
+    assert deleted == [] and counts.deleted == 0
+    assert "SAFETY ABORT" in caplog.text
+
+
+def test_an_ordinary_sweep_is_not_blocked_by_the_floor(real_db, monkeypatch):
+    """The floor has to leave normal operation alone, or it will simply be turned off."""
+    pid, aid, vid, raw = _seed_media(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    all_keys = [(raw, old, 100)] + [
+        (f"processed/{pid}/{aid}/{vid}/720p/seg{i:03d}.ts", old, 10) for i in range(9)
+    ] + [("raw/dead/dead/dead/original.mp4", old, 500)]
+    counts, deleted = _run(real_db, monkeypatch, all_keys, grace=24, delete=True)
+
+    assert counts.orphans == 1 and counts.deleted == 1
+    assert deleted == ["raw/dead/dead/dead/original.mp4"]

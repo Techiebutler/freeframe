@@ -39,12 +39,20 @@ def _retention_days() -> int:
     return days
 
 
-def _safe(fn, *args):
-    """Run a best-effort S3 op; log and swallow any error so the sweep never aborts."""
+def _safe(fn, *args) -> bool:
+    """Run a best-effort S3 op; log and swallow any error so the sweep never aborts.
+
+    Returns whether it actually ran. Swallowing is still the right behaviour -- one
+    unreachable key must not abort a sweep -- but a caller that reports how much it
+    reclaimed has to be able to tell a success from a logged failure, or it reports
+    storage as freed that is still being paid for.
+    """
     try:
         fn(*args)
+        return True
     except Exception as exc:  # noqa: BLE001 - best-effort cleanup
         log.warning("reaper: %s%r failed: %s", fn.__name__, args, exc)
+        return False
 
 
 @dataclass
@@ -586,16 +594,30 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
     counts.orphans = len(orphans)
     counts.orphan_bytes = sum(s for _, s in orphans)
 
-    # Safety floor: a degenerate (empty) live-set — e.g. DATABASE_URL pointed at the wrong/empty DB —
-    # must never be allowed to mass-delete every scanned key as "orphaned". Report-only in that case.
+    # Safety floor. The failure this guards against is a database that does not describe the bucket
+    # it is pointed at -- wrong DATABASE_URL, an empty instance, a half-run migration -- because then
+    # every key is unowned and the sweep reclassifies the whole bucket as garbage. That shape is a
+    # HIGH ORPHAN RATIO, and an empty live-set is only its most extreme form: one surviving MediaFile
+    # row against a full bucket is the same accident and passes an is-it-empty check.
     live_set_empty = not exact_live and not processed_roots
-    if counts.delete_enabled and live_set_empty and orphans:
-        log.error("orphan-sweep: SAFETY ABORT — live-set is EMPTY (0 MediaFile rows) but %d key(s) scanned; "
-                  "refusing to delete (likely a wrong/empty DATABASE_URL). Reporting only.", counts.orphans)
-    if counts.delete_enabled and not (live_set_empty and orphans):
+    ratio = (counts.orphans / counts.scanned) if counts.scanned else 0.0
+    ceiling = settings.orphan_sweep_max_orphan_ratio
+    over_ceiling = bool(orphans) and ratio > ceiling
+    refuse = bool(orphans) and (live_set_empty or over_ceiling)
+
+    if counts.delete_enabled and refuse:
+        if live_set_empty:
+            log.error("orphan-sweep: SAFETY ABORT — live-set is EMPTY (0 MediaFile rows) but %d key(s) scanned; "
+                      "refusing to delete (likely a wrong/empty DATABASE_URL). Reporting only.", counts.orphans)
+        else:
+            log.error("orphan-sweep: SAFETY ABORT — %d of %d scanned key(s) look orphaned (%.0f%%), over the %.0f%% "
+                      "ceiling; refusing to delete. Either the database does not describe this bucket, or the bucket "
+                      "really is this dirty — read the sample below and raise ORPHAN_SWEEP_MAX_ORPHAN_RATIO if so.",
+                      counts.orphans, counts.scanned, ratio * 100, ceiling * 100)
+    if counts.delete_enabled and not refuse:
         for key, _ in orphans:
-            _safe(delete_object, key)
-            counts.deleted += 1
+            if _safe(delete_object, key):
+                counts.deleted += 1
         log.info("orphan-sweep: deleted %d/%d orphan key(s), %d bytes", counts.deleted, counts.orphans, counts.orphan_bytes)
     else:
         log.info("orphan-sweep: REPORT-ONLY — %d orphan key(s) under %s, %d bytes "

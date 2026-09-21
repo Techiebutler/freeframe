@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     orphan_sweep_grace_hours: int = 0
     # Report-only by default: when False the sweeper only LOGS what it would delete; set True to delete.
     orphan_sweep_delete: bool = False
+    # Refuse to delete when more than this share of the keys scanned look orphaned. A database that
+    # is empty, wrong or half-migrated makes the whole bucket look unowned, and that shape is a high
+    # orphan ratio rather than a zero-length live-set, so the empty-set check alone does not catch it.
+    # Raise it deliberately (1.0 disables the floor) for a first clean-up of a genuinely dirty bucket,
+    # after reading the report-only output.
+    orphan_sweep_max_orphan_ratio: float = 0.5
 
     # Worker concurrency settings
     transcoding_concurrency: int = 2  # Number of concurrent video transcoding jobs
