@@ -423,7 +423,7 @@ export default function ProjectDetailPage() {
       const url = folderId
         ? `/projects/${projectId}?folder=${folderId}`
         : `/projects/${projectId}`;
-      window.history.replaceState(null, "", url);
+      window.history.replaceState(null, "", withBasePath(url));
     },
     [projectId],
   );

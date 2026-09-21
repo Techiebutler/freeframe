@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -51,7 +52,7 @@ function ProjectListRow({
             : "Member";
 
   return (
-    <a
+    <Link
       href={`/projects/${project.id}`}
       className="flex items-center gap-4 px-4 py-3 hover:bg-bg-hover transition-colors border-b border-border last:border-b-0"
     >
@@ -95,7 +96,7 @@ function ProjectListRow({
           {roleName}
         </span>
       )}
-    </a>
+    </Link>
   );
 }
 

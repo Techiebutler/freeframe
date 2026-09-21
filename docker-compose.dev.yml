@@ -225,7 +225,12 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      # See docker-compose.prod.yml: `/` is a 404 when a base path is set.
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider \"http://localhost:3000${NEXT_PUBLIC_BASE_PATH:-}/login\"",
+        ]
       interval: 30s
       timeout: 10s
       retries: 10

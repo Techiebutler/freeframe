@@ -63,7 +63,9 @@ if "*" in _cors_extra:
 else:
     _cors_origin_kwargs = {
         "allow_origins": [
-            settings.frontend_url,
+            # A sub-path deployment puts a path in FRONTEND_URL; an Origin
+            # header never has one, so match against the bare origin.
+            settings.frontend_origin,
             "http://localhost:3000",
             "http://localhost:3001",
             *_cors_extra,

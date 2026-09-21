@@ -142,17 +142,21 @@ NEXT_PUBLIC_BASE_PATH=/freeframe
 FRONTEND_URL=https://example.com/freeframe
 ```
 
-`NEXT_PUBLIC_BASE_PATH` is a **build-time** variable (Compose passes it as a build arg), so changing it needs `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build web`, not a restart. Everything the web app serves moves under the prefix: pages, links, static assets, icons and raw navigations. The API stays at the origin root (`/api`), so API requests, CORS and emails are unaffected.
+`NEXT_PUBLIC_BASE_PATH` is a **build-time** variable for the Docker image (Compose passes it as a build arg), so changing it needs `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build web`, not a restart. (`next dev` in the dev stack reads it when the server starts.) Everything the web app serves moves under the prefix: pages, links, static assets, icons and raw navigations. The API stays at the origin root (`/api`), and links built from `FRONTEND_URL` carry the path, so invite and share emails keep pointing inside the mounted app. CORS matches the bare origin, since a browser's `Origin` header never carries a path.
 
-If something sits in front of FreeFrame (a landing page, another app), forward the sub-path to FreeFrame **unchanged** — Next expects the prefix. With nginx that is a `proxy_pass` without a URI part:
+If something sits in front of FreeFrame (a landing page, another app), forward the sub-path to FreeFrame **unchanged** — Next expects the prefix — and forward the API at the origin root as well, because that is where the browser still calls it. With nginx that is two `proxy_pass` locations, both without a URI part:
 
 ```nginx
 location /freeframe/ {
     proxy_pass http://127.0.0.1:80;
 }
+
+location /api/ {
+    proxy_pass http://127.0.0.1:80;
+}
 ```
 
-Traefik in the bundled Compose already routes `PathPrefix('/')` to the web app, so requests for the sub-path work without extra rules. Leave `NEXT_PUBLIC_BASE_PATH` empty for a root deployment (the default).
+Traefik in the bundled Compose already routes the sub-path to the web app and `/api` to the API, so forwarding both to FreeFrame's port 80 is enough; only a proxy that terminates the sub-path itself has to name the API separately. Leave `NEXT_PUBLIC_BASE_PATH` empty for a root deployment (the default).
 
 ---
 

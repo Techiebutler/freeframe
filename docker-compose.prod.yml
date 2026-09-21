@@ -237,7 +237,14 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
+      # Probe a public page under the prefix: with NEXT_PUBLIC_BASE_PATH set,
+      # the app root `/` answers 404 and the container would never go healthy.
+      # Compose interpolates the same value the build arg gets.
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider \"http://127.0.0.1:3000${NEXT_PUBLIC_BASE_PATH:-}/login\"",
+        ]
       interval: 30s
       timeout: 5s
       start_period: 15s
