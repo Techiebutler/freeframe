@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-09-21
+
 ### Upgrade notes
 
 - **Two migrations.** `asset_versions.chunk_size_bytes` records the part size an upload was started with, so a resume places its parts on the boundaries the parts already in the bucket were cut on. Nullable, no backfill: rows created before it derive the size from the parts storage is holding. The second, `media_files.s3_key_download` (revision `e3a7c9d4b210`), records the single-file MP4 a download falls back to. Both are nullable `ADD COLUMN` with no backfill and no table rewrite; versions transcoded before them fall back to the behaviour they had.
@@ -63,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A discard can no longer delete an upload that finished while it was being discarded** — the discard decided on the version's status as it was read before the storage round trip, so a completion committed during that round trip went unnoticed and its assembled file was deleted with the transcode already dispatched. The status is re-read under a row lock. And the asset is only removed with its last version when the person discarding still holds the editor role on the project, as every other asset delete requires. (#312 by @Lennart-Pingpong)
 - **The trash no longer fills with uploads that never landed** — an asset whose only upload was discarded or reclaimed is soft-deleted so it does not show in the grid as a card that cannot be opened. The trash listed it anyway, beside real deleted work, and restoring it brought that card back. The trash and restore now only take an asset that had a version reach processing. (#312 by @Lennart-Pingpong)
 - **An upload row no longer takes another version's status for its own** — the fallback poll read `GET /assets/{id}`, which answers with the display version, and wrote whatever that said onto the row without checking it was the row's version. Uploading a second version to an asset whose first version is ready therefore rewrote that row to complete: the upload was reported as landed while it was not, and for an interrupted one the Resume and Discard controls disappeared with the parts still sitting in the bucket. Two rows on one asset also read the same answer, since the lookup was keyed on the asset rather than the row. This is the second half of #273. (#273) (#312 by @Lennart-Pingpong)
+
+### Contributors
+
+Thank you to @Lennart-Pingpong and @CamReport for the pull requests in this release, and to @loscarinos and @Paracid, whose issues drove fixes they did not write: #350 is why a download now hands you a proxy rather than the camera master, and #331 is why the review screen works in portrait on an iPhone.
 
 ## [1.13.0] - 2026-09-09
 
