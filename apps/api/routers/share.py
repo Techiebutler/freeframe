@@ -69,14 +69,16 @@ def _generate_unique_short_code(db: Session) -> str:
 def _short_share_url(link: ShareLink) -> str:
     """Preferred public URL for a share link: the short code when available.
 
-    Short codes resolve at the origin root (see /resolve/{short_code}), which
-    requires the deployment's proxy to route root-level codes to this API —
-    see docs/deployment.md. Falls back to the full token URL otherwise.
+    Short codes resolve at the root of the frontend deployment — the web app
+    serves `{FRONTEND_URL}/{code}` and looks the code up via
+    `/resolve/{short_code}` — so sub-path deployments get
+    `https://host/freeframe/AbC1` and need no proxy rule of their own.
+    Falls back to the full token URL otherwise.
     """
-    root = settings.frontend_origin.rstrip("/")
+    frontend = settings.frontend_url.rstrip("/")
     if link.short_code:
-        return f"{root}/{link.short_code}"
-    return f"{settings.frontend_url}/share/{link.token}"
+        return f"{frontend}/{link.short_code}"
+    return f"{frontend}/share/{link.token}"
 
 
 def _link_by_token(db: Session, token: str) -> Optional[ShareLink]:
@@ -462,11 +464,12 @@ def resolve_short_code(
     short_code: str,
     db: Session = Depends(get_db),
 ):
-    """Resolve a root-level short code to its share page.
+    """Resolve a short code to its share page.
 
-    Deployments that want short URLs must route root-level codes here (e.g.
-    an nginx catch-all proxying `/{code}` to `/resolve/{code}`) — see
-    docs/deployment.md. Codes that do not exist land on the app root.
+    Called by the web app's root-level `[code]` route as the API-side lookup
+    (a reverse-proxy rule can call it too). Deployments need no proxy
+    configuration of their own — see docs/deployment.md. Codes that do not
+    exist land on the app root.
     """
     link = db.query(ShareLink).filter(
         ShareLink.short_code == short_code,

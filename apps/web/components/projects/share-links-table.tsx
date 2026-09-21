@@ -5,6 +5,7 @@ import * as Switch from '@radix-ui/react-switch'
 import { Search, Folder, File, Copy, Check, Eye } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/lib/utils'
+import { deploymentRoot } from '@/lib/base-path'
 import type { ShareLinkListItem } from '@/types'
 
 interface ShareLinksTableProps {
@@ -25,13 +26,7 @@ export function ShareLinksTable({
   const [search, setSearch] = React.useState('')
   const [copiedToken, setCopiedToken] = React.useState<string | null>(null)
 
-  const originUrl = React.useMemo(() => {
-    try {
-      return new URL(frontendUrl).origin
-    } catch {
-      return frontendUrl
-    }
-  }, [frontendUrl])
+  const shareBase = React.useMemo(() => deploymentRoot(frontendUrl), [frontendUrl])
 
   const filtered = React.useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -43,13 +38,13 @@ export function ShareLinksTable({
     async (link: ShareLinkListItem, e: React.MouseEvent) => {
       e.stopPropagation()
       const url = link.short_code
-        ? `${originUrl}/${link.short_code}`
-        : `${frontendUrl}/share/${link.token}`
+        ? `${shareBase}/${link.short_code}`
+        : `${shareBase}/share/${link.token}`
       await navigator.clipboard.writeText(url)
       setCopiedToken(link.token)
       setTimeout(() => setCopiedToken(null), 2000)
     },
-    [frontendUrl, originUrl],
+    [shareBase],
   )
 
   return (
@@ -106,8 +101,8 @@ export function ShareLinksTable({
             <tbody>
               {filtered.map((link, i) => {
                 const shareUrl = link.short_code
-                  ? `${originUrl}/${link.short_code}`
-                  : `${frontendUrl}/share/${link.token}`
+                  ? `${shareBase}/${link.short_code}`
+                  : `${shareBase}/share/${link.token}`
                 const isCopied = copiedToken === link.token
                 const isLast = i === filtered.length - 1
 

@@ -25,17 +25,10 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { deploymentRoot, withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
-
-function originUrl(frontendUrl: string): string {
-  try {
-    return new URL(frontendUrl).origin
-  } catch {
-    return frontendUrl
-  }
-}
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
 
@@ -648,8 +641,8 @@ export function ShareLinkContent({
   }, [shareLink, projectId]);
 
   const shareUrl = shareLink?.short_code
-    ? `${originUrl(frontendUrl)}/${shareLink.short_code}`
-    : `${frontendUrl}/share/${token}`;
+    ? `${deploymentRoot(frontendUrl)}/${shareLink.short_code}`
+    : `${deploymentRoot(frontendUrl)}/share/${token}`;
 
   if (!shareLink) {
     return (
@@ -841,11 +834,11 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
   const shareUrl =
     typeof window !== "undefined"
       ? shareLink?.short_code
-        ? `${window.location.origin}/${shareLink.short_code}`
-        : `${window.location.origin}/share/${token}`
+        ? `${deploymentRoot(window.location.origin)}/${shareLink.short_code}`
+        : `${deploymentRoot(window.location.origin)}/share/${token}`
       : shareLink?.short_code
-        ? `/${shareLink.short_code}`
-        : `/share/${token}`;
+        ? withBasePath(`/${shareLink.short_code}`)
+        : withBasePath(`/share/${token}`);
 
   if (!shareLink) {
     return (

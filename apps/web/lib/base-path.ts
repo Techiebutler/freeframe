@@ -13,3 +13,16 @@ export function withBasePath(path: string): string {
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
   return `${basePath}${path}`
 }
+
+/**
+ * Absolute URL of the app's deployment root, given a browser origin.
+ *
+ * Short share links resolve at the root of the *app*, not the origin:
+ * a sub-path deployment (NEXT_PUBLIC_BASE_PATH=/freeframe) serves them at
+ * https://host/freeframe/6RBr. Root deployments have an empty basePath and
+ * are unaffected.
+ */
+export function deploymentRoot(origin: string): string {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+  return `${origin.replace(/\/+$/, '')}${basePath}`
+}

@@ -133,12 +133,14 @@ If FreeFrame sits behind another proxy that already handles SSL:
 4. For **Cloudflare**: set SSL mode to "Full"
 5. Set `FRONTEND_URL` in `.env.prod` to your `https://` URL
 
-### Short share URLs (optional)
+### Short share URLs
 
-Share links are also issued a 4-character short code (e.g. `https://your-domain.example/6RBr` instead of `https://your-domain.example/share/<46-char-token>`). For the short form to resolve, your reverse proxy must route root-level codes to the API's resolve endpoint:
+Share links are also issued a 4-character short code (e.g. `https://your-domain.example/6RBr` instead of `https://your-domain.example/share/<46-char-token>`). No reverse-proxy configuration is needed: the web app serves `/{code}`, looks the code up against the API server-side, and redirects to the share page. That works for every deployment shape, including sub-path ones:
 
-- **nginx:** `location / { proxy_pass http://<api-host>:8000/resolve/; }` as a catch-all *after* the rules for the app itself (the code path must not shadow `/share/`, `/api/`, or the frontend routes)
-- **Cloudflare:** a Worker/redirect rule matching `/{4}` → `https://<api>/resolve/{code}`
+- Root deployment: `https://your-domain.example/6RBr`
+- Sub-path deployment (`NEXT_PUBLIC_BASE_PATH=/freeframe`): `https://your-domain.example/freeframe/6RBr`
+
+The lookup reaches the API through `API_INTERNAL_URL` when set, or through `NEXT_PUBLIC_API_URL` resolved against the request origin otherwise. Docker Compose sets `API_INTERNAL_URL=http://api:8000` for you; set it yourself if the app server cannot reach its own public origin (split DNS, self-signed certificates).
 
 Unknown codes redirect to the app root; valid codes 302 to the share page. Links created before this feature shipped have no code — run `python scripts/backfill_short_codes.py` once (server-side) to assign codes to them. Short URLs appear in the dashboard and in share emails whenever a code exists, with the full token URL as the fallback.
 

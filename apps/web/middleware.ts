@@ -4,12 +4,16 @@ import { withBasePath } from './lib/base-path'
 
 const PUBLIC_ROUTES = ['/login', '/setup']
 const PUBLIC_PREFIXES = ['/invite/', '/share/']
+// Root-level short share links resolve in app/[code]/page.tsx, which redirects
+// to a public share page — visitors following one are anonymous by design.
+const SHORT_CODE_PATTERN = /^\/[A-Za-z0-9]{4}\/?$/
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 function isPublicRoute(pathname: string): boolean {
   if (PUBLIC_ROUTES.includes(pathname)) return true
   if (PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true
+  if (SHORT_CODE_PATTERN.test(pathname)) return true
   return false
 }
 

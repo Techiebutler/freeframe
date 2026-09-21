@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import * as Switch from '@radix-ui/react-switch'
 import { cn, copyToClipboard, endOfDayISO } from '@/lib/utils'
+import { deploymentRoot, withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import type { AssetResponse, Folder, ShareLink, ShareLinkAppearance } from '@/types'
@@ -612,11 +613,11 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   const shareUrl =
     typeof window !== 'undefined'
       ? result.short_code
-        ? `${window.location.origin}/${result.short_code}`
-        : `${window.location.origin}/share/${result.token}`
+        ? `${deploymentRoot(window.location.origin)}/${result.short_code}`
+        : `${deploymentRoot(window.location.origin)}/share/${result.token}`
       : result.short_code
-        ? `/${result.short_code}`
-        : `/share/${result.token}`
+        ? withBasePath(`/${result.short_code}`)
+        : withBasePath(`/share/${result.token}`)
 
   async function handleSaveTitle() {
     if (!title.trim() || title === result.title) {

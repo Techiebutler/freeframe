@@ -1,15 +1,18 @@
 """Tests for short share codes.
 
 Share links get a 4-character base62 code (`short_code`) at creation. Deployments
-can route root-level codes to `GET /resolve/{short_code}`, which 302s to the share
-page. Unknown codes land on the app root. Email links and dashboard URL display
-prefer the short URL when a code exists and fall back to the full token URL.
+resolve root-level codes through the web app, which calls `GET /resolve/{short_code}`
+and 302s to the share page. Unknown codes land on the app root. Email links and
+dashboard URL display prefer the short URL when a code exists and fall back to the
+full token URL. Codes never take a name the web app serves at its root.
 """
+import re
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from apps.api.routers.share import _generate_unique_short_code, _short_share_url
-from apps.api.utils.short_code import generate_short_code
+from apps.api.utils.short_code import CODE_LENGTH, RESERVED_CODES, generate_short_code
 
 
 def _link(short_code=None, token=None):
@@ -26,6 +29,42 @@ def test_generate_short_code_length_and_alphabet():
         code = generate_short_code()
         assert len(code) == 4
         assert all(c.isascii() and (c.isalnum()) for c in code)
+
+
+def test_generate_short_code_skips_reserved_codes(monkeypatch):
+    """A candidate that names a web root route is redrawn, not returned."""
+    import secrets
+
+    reserved = next(
+        w for w in sorted(RESERVED_CODES)
+        if len(w) == CODE_LENGTH and w != w[::-1]
+    )
+    draws = iter(list(reserved) + list("AbC1"))
+    monkeypatch.setattr(secrets, "choice", lambda alphabet: next(draws))
+    assert generate_short_code() == "AbC1"
+
+
+def test_every_web_root_route_is_reserved():
+    """A 4-char root route in the web app would shadow any share link issued
+    that code, so each one must be in RESERVED_CODES. Adding a route without
+    reserving its name fails here instead of at click time."""
+    app_dir = Path(__file__).resolve().parents[3] / "apps" / "web" / "app"
+    assert app_dir.is_dir(), f"web app directory not found at {app_dir}"
+    pattern = re.compile(rf"^[A-Za-z0-9]{{{CODE_LENGTH}}}$")
+    # Route groups `(auth)`, private folders `_x` and dynamic `[code]` are not
+    # literal URL segments.
+    offenders = sorted(
+        entry.name
+        for entry in app_dir.iterdir()
+        if entry.is_dir()
+        and not entry.name.startswith(("(", "_", "@", "["))
+        and pattern.match(entry.name)
+        and entry.name not in RESERVED_CODES
+    )
+    assert not offenders, (
+        f"root route(s) {offenders} can collide with a generated short code; "
+        "add them to RESERVED_CODES in apps/api/utils/short_code.py"
+    )
 
 
 def test_generate_unique_short_code_returns_when_absent(mock_db):
@@ -61,13 +100,13 @@ def test_short_share_url_prefers_short_code(monkeypatch):
     assert _short_share_url(link) == "https://example.com/AbC1"
 
 
-def test_short_share_url_uses_origin_for_subpath_deployments(monkeypatch):
+def test_short_share_url_uses_deployment_root_for_subpath(monkeypatch):
     """FRONTEND_URL may carry a path (sub-path deployments); short codes
-    resolve at the origin root, so the path must be stripped."""
+    resolve at the root of the deployment, inside that path."""
     from apps.api.config import settings
     monkeypatch.setattr(settings, "frontend_url", "https://example.com/freeframe")
     link = _link(short_code="AbC1")
-    assert _short_share_url(link) == "https://example.com/AbC1"
+    assert _short_share_url(link) == "https://example.com/freeframe/AbC1"
 
 
 def test_short_share_url_falls_back_to_token(monkeypatch):
