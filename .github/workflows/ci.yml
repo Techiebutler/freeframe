@@ -249,6 +249,19 @@ jobs:
       - name: Build API image (prod)
         run: docker build -t freeframe-api:prod -f apps/api/Dockerfile.prod .
 
+      - name: Test tooling is in the dev image and not the prod one
+        run: |
+          # The dev image is what every documented way of running the suite goes
+          # through, and the prod image is where pytest must never ship. Both
+          # directions are asserted, because a change that fixes one by breaking
+          # the other looks green otherwise.
+          docker run --rm freeframe-api:test python -m pytest --version
+          if docker run --rm freeframe-api:prod python -m pytest --version 2>/dev/null; then
+            echo "::error::pytest is installed in the production image"
+            exit 1
+          fi
+          echo "dev has pytest, prod does not"
+
       - name: Build Web image (dev)
         run: docker build -t freeframe-web:test -f apps/web/Dockerfile apps/web/
 
