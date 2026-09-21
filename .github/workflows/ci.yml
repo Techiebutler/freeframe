@@ -175,7 +175,6 @@ jobs:
 
       - name: Type check
         run: pnpm exec tsc --noEmit
-        continue-on-error: true
 
       - name: Run tests
         run: pnpm test
@@ -235,7 +234,6 @@ jobs:
       - name: Lint frontend
         run: pnpm lint
         working-directory: apps/web
-        continue-on-error: true
 
   # ─── Docker Build ─────────────────────────────────────────────────────────────
   docker-build:

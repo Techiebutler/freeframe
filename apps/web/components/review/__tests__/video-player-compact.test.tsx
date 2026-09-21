@@ -77,3 +77,12 @@ describe('the transport row below sm', () => {
     expect(screen.getByLabelText('Play').className).toContain('h-7')
   })
 })
+
+describe('the stage on a touch screen', () => {
+  it('sets touch-action: manipulation, so a tap on the picture is a tap and not the start of a double-tap zoom', () => {
+    const { container } = render(<VideoPlayer {...props} />)
+    // The stage is the click target around the <video>: a tap on it toggles play.
+    const stage = container.querySelector('video')?.parentElement
+    expect(stage?.className.split(/\s+/)).toContain('touch-manipulation')
+  })
+})
