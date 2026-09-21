@@ -413,6 +413,13 @@ def _was_ever_usable():
     brings back the card that helper exists to remove: one that cannot be
     opened, streamed or given a version.
 
+    `failed` counts. The question is how far the version ever got, not where it
+    stopped, and a failed transcode got as far as being dispatched: the bytes
+    landed, the asset carries a red Failed badge in the grid, and deleting it is
+    someone deleting their own work. Leaving it out took a restorable asset out
+    of the trash entirely and made restore answer 404. `uploading` is the one
+    status this excludes, and it is the one the helper was written for.
+
     A version keeps its status when it is soft-deleted, so this still holds for
     an asset whose versions went into the trash with it.
     """
@@ -421,7 +428,8 @@ def _was_ever_usable():
         .where(
             AssetVersion.asset_id == Asset.id,
             AssetVersion.processing_status.in_(
-                [ProcessingStatus.processing, ProcessingStatus.ready]
+                [ProcessingStatus.processing, ProcessingStatus.ready,
+                 ProcessingStatus.failed]
             ),
         )
         .exists()

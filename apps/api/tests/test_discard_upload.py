@@ -287,3 +287,48 @@ def test_a_discarded_first_upload_is_not_offered_in_the_trash(db, storage):
     with pytest.raises(HTTPException) as refused:
         folders_module.restore_asset(discarded.id, db=db, current_user=owner)
     assert refused.value.status_code == 404
+
+
+def test_a_deleted_asset_whose_transcode_failed_is_still_in_the_trash(db, storage):
+    """A failed transcode landed. It is deleted work and has to be restorable.
+
+    `_was_ever_usable` is named and documented for "ever got as far as
+    `processing`", and it exists to hide an upload that was discarded or
+    reclaimed before it landed. A version that finished uploading, dispatched a
+    transcode and then failed is not that: it is a real asset carrying a red
+    Failed badge, and someone who deletes it from the grid is deleting something
+    they made. Filtering on the CURRENT status rather than on how far it ever
+    got took it out of the trash and made restore answer 404.
+    """
+    from datetime import datetime, timezone
+
+    owner, project, asset, _ = _seed(db, statuses=(ProcessingStatus.failed,))
+    asset.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    listed = folders_module.list_trash(project.id, skip=0, limit=50, db=db, current_user=owner)
+
+    assert str(asset.id) in {a["id"] for a in listed["assets"]}
+
+    # and it can actually be brought back, which is the point of being listed
+    folders_module.restore_asset(asset.id, db=db, current_user=owner)
+    db.refresh(asset)
+    assert asset.deleted_at is None
+
+
+def test_an_upload_that_never_landed_is_still_kept_out_of_the_trash(db, storage):
+    """The guard the other way: widening the predicate must not undo #312.
+
+    `uploading` is the status the helper actually exists to exclude, and it stays
+    excluded. Without this, adding `failed` could be 'fixed' by dropping the
+    filter entirely and nothing would notice.
+    """
+    from datetime import datetime, timezone
+
+    owner, project, asset, _ = _seed(db, statuses=(ProcessingStatus.uploading,))
+    asset.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    listed = folders_module.list_trash(project.id, skip=0, limit=50, db=db, current_user=owner)
+
+    assert str(asset.id) not in {a["id"] for a in listed["assets"]}
