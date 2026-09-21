@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **First tap on iOS only buffered, a second tap was needed to start playback** — `video.play()` can reject while the element is not ready yet (ManagedMediaSource), and the rejection was silently swallowed. `play()` is now retried once on the next `canplay` event, and `touch-action: manipulation` on the player removes the 300ms double-tap delay. The retry is disarmed on a source or version change, on unmount and on the player's own deliberate pauses (the play toggle, a comment timecode, the comment box), so it no longer starts playback nobody asked for on those paths. (#404 by @jeremy-pixelated)
+
 ## [1.14.1] - 2026-09-21
 
 ### Fixed
@@ -70,7 +74,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A discard can no longer delete an upload that finished while it was being discarded** — the discard decided on the version's status as it was read before the storage round trip, so a completion committed during that round trip went unnoticed and its assembled file was deleted with the transcode already dispatched. The status is re-read under a row lock. And the asset is only removed with its last version when the person discarding still holds the editor role on the project, as every other asset delete requires. (#312 by @Lennart-Pingpong)
 - **The trash no longer fills with uploads that never landed** — an asset whose only upload was discarded or reclaimed is soft-deleted so it does not show in the grid as a card that cannot be opened. The trash listed it anyway, beside real deleted work, and restoring it brought that card back. The trash and restore now only take an asset that had a version reach processing. (#312 by @Lennart-Pingpong)
 - **An upload row no longer takes another version's status for its own** — the fallback poll read `GET /assets/{id}`, which answers with the display version, and wrote whatever that said onto the row without checking it was the row's version. Uploading a second version to an asset whose first version is ready therefore rewrote that row to complete: the upload was reported as landed while it was not, and for an interrupted one the Resume and Discard controls disappeared with the parts still sitting in the bucket. Two rows on one asset also read the same answer, since the lookup was keyed on the asset rather than the row. This is the second half of #273. (#273) (#312 by @Lennart-Pingpong)
-- **First tap on iOS only buffered, a second tap was needed to start playback** — `video.play()` can reject while the element is not ready yet (ManagedMediaSource), and the rejection was silently swallowed. `play()` is now retried once on the next `canplay` event, the player sets `disableRemotePlayback` so the tap is not hijacked by the remote-playback affordance, and `touch-action: manipulation` on the player removes the 300ms double-tap delay.
 
 ### Contributors
 

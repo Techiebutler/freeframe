@@ -380,7 +380,7 @@ export function VideoPlayer({
         // own ratio instead. Everywhere else it fills the column exactly as
         // before, so desktop is untouched.
         className={cn(
-          "relative min-h-0 bg-black overflow-hidden cursor-pointer [touch-action:manipulation]",
+          "relative min-h-0 bg-black overflow-hidden cursor-pointer touch-manipulation",
           // w-full is load-bearing. With only `aspect-ratio` + `max-height`, the
           // clamped height makes the width definite via the ratio, so
           // `align-items: stretch` no longer applies and the stage ends up

@@ -60,6 +60,16 @@ export function useVideoPlayer(
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // The armed `canplay` retry of a rejected play() (see togglePlay), together
+  // with the element it was armed on. The <video> is reused across source and
+  // version changes and an already-paused element fires no `pause` event, so
+  // nothing but an explicit disarm stops a stale retry from starting playback
+  // the user did not ask for.
+  const playRetryRef = useRef<{ video: HTMLVideoElement; onCanPlay: () => void } | null>(null)
+  // Bumped whenever the intent to play ends. A play() that is still pending
+  // when the user pauses rejects (AbortError) only AFTER that pause, and must
+  // not arm a retry from its own rejection.
+  const playIntentRef = useRef(0)
 
   const { setPlayheadTime, seekTarget, setActiveAnnotation } = useReviewStore()
 
@@ -75,6 +85,18 @@ export function useVideoPlayer(
   const [isLoading, setIsLoading] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Ends the current intent to play: disarms an armed retry and invalidates a
+  // play() that has not settled yet. Removes the listener from the element the
+  // retry was armed on and never reads videoRef.current, which React has
+  // already nulled by the time a passive effect cleanup runs on unmount.
+  const cancelPlayRetry = useCallback(() => {
+    playIntentRef.current += 1
+    const armed = playRetryRef.current
+    if (!armed) return
+    playRetryRef.current = null
+    armed.video.removeEventListener('canplay', armed.onCanPlay)
+  }, [])
 
   // Sync playhead to store at ~4fps to avoid excessive re-renders
   useEffect(() => {
@@ -103,6 +125,7 @@ export function useVideoPlayer(
       video.currentTime = clamped
       setCurrentTime(clamped)
       if (seekTarget.pause) {
+        cancelPlayRetry()
         video.pause()
         setIsPlaying(false)
       }
@@ -115,6 +138,7 @@ export function useVideoPlayer(
           video.currentTime = clamped
           setCurrentTime(clamped)
           if (seekTarget.pause) {
+            cancelPlayRetry()
             video.pause()
             setIsPlaying(false)
           }
@@ -124,7 +148,7 @@ export function useVideoPlayer(
       video.addEventListener('loadedmetadata', onLoaded)
       return () => video.removeEventListener('loadedmetadata', onLoaded)
     }
-  }, [seekTarget, detached])
+  }, [seekTarget, detached, cancelPlayRetry])
 
   // Fullscreen change listener.
   //
@@ -207,9 +231,6 @@ export function useVideoPlayer(
     const isHlsSource = src.includes('.m3u8')
 
     if (isHlsSource && Hls.isSupported()) {
-      // hls.js requires this for the ManagedMediaSource path (iOS): without it,
-      // Safari switches to remote playback and the MMS session stays empty.
-      video.disableRemotePlayback = true
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
@@ -249,6 +270,8 @@ export function useVideoPlayer(
     }
 
     return () => {
+      // The element outlives this source, so a retry armed for it must not.
+      cancelPlayRetry()
       video.removeEventListener('loadedmetadata', onLoadedMetadata)
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('play', onPlay)
@@ -265,7 +288,7 @@ export function useVideoPlayer(
         hlsRef.current = null
       }
     }
-  }, [src, setPlayheadTime])
+  }, [src, setPlayheadTime, cancelPlayRetry])
 
   // ─── Controls ───────────────────────────────────────────────────────────────
 
@@ -276,24 +299,37 @@ export function useVideoPlayer(
   }, [])
 
   const pause = useCallback(() => {
+    cancelPlayRetry()
     videoRef.current?.pause()
-  }, [])
+  }, [cancelPlayRetry])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
     if (!video) return
+    // Every toggle supersedes the previous one: never two listeners, and a
+    // toggle to pause takes the retry with it.
+    cancelPlayRetry()
     if (video.paused) {
+      const intent = playIntentRef.current
       video.play().catch(() => {
+        // Paused, re-toggled, or moved to another source while play() was
+        // still pending: this rejection is not a first tap that needs a retry.
+        if (intent !== playIntentRef.current) return
         // iOS/ManagedMediaSource: the first gesture often only starts buffering,
         // play() rejects without buffered data. Retry once as soon as
         // data is available, otherwise mobile always needs a second tap.
-        video.addEventListener('canplay', () => { video.play().catch(() => {}) }, { once: true })
+        const onCanPlay = () => {
+          playRetryRef.current = null
+          video.play().catch(() => {})
+        }
+        playRetryRef.current = { video, onCanPlay }
+        video.addEventListener('canplay', onCanPlay, { once: true })
         hlsRef.current?.startLoad()
       })
     } else {
       video.pause()
     }
-  }, [])
+  }, [cancelPlayRetry])
 
   const seek = useCallback((time: number) => {
     const video = videoRef.current
