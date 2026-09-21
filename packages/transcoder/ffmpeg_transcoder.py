@@ -1387,6 +1387,21 @@ class FFmpegTranscoder(BaseTranscoder):
                 # Per-backend encoder selection driven by TRANSCODER_OUTPUT.
                 family = out_mode["family"]      # "hevc" or "h264"
                 ten_bit = out_mode["ten_bit"]    # True=10-bit, False=8-bit
+                # Every output option emitted in here has to carry `:v:{i}`.
+                # Without a stream specifier ffmpeg applies the LAST copy to
+                # every video stream, so an option computed per rung silently
+                # collapses to the smallest rung's value: the ladder runs
+                # largest first, and `-crf` 24/26/30 made all three renditions
+                # CRF 30. Measured on a 6s 1080p source, the top rung came out
+                # at 1776 KB against 4264 KB qualified, and the bottom rung was
+                # byte-identical because it is the one that won (#393).
+                #
+                # ffmpeg warns for `-pix_fmt` and `-force_key_frames` and says
+                # nothing for `-crf`, `-qp` or `-global_quality`, so a clean log
+                # is not evidence. `-preset`, `-rc`, `-look_ahead` and
+                # `-profile:v` keep no stream index deliberately: they carry the
+                # same value on every rung, so the collapse is a no-op. Give any
+                # of them a per-rung value and it needs the index too.
                 for i, quality in enumerate(qualities):
                     _, crf = QUALITY_MAP[quality]
                     ffmpeg_cmd += ["-map", f"[{quality}]"]
@@ -1395,11 +1410,13 @@ class FFmpegTranscoder(BaseTranscoder):
                     if backend == "cpu" or dv_software:
                         enc = "libx265" if family == "hevc" else "libx264"
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
-                                       "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                                       f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
                         if ten_bit:
-                            ffmpeg_cmd += ["-pix_fmt", "yuv420p10le", "-crf", str(crf - 4)]
+                            ffmpeg_cmd += [f"-pix_fmt:v:{i}", "yuv420p10le",
+                                           f"-crf:v:{i}", str(crf - 4)]
                         else:
-                            ffmpeg_cmd += ["-pix_fmt", "yuv420p", "-crf", str(crf + 4)]
+                            ffmpeg_cmd += [f"-pix_fmt:v:{i}", "yuv420p",
+                                           f"-crf:v:{i}", str(crf + 4)]
                         if cpu_plan is not None:
                             # Software encoders only. The hardware ones do their
                             # work on the device and take their thread counts
@@ -1417,23 +1434,24 @@ class FFmpegTranscoder(BaseTranscoder):
                         enc = "hevc_nvenc" if family == "hevc" else "h264_nvenc"
                         cq = _NVENC_CQ.get(get_output_mode(), 26)
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "p6", "-rc", "constqp",
-                                       "-qp", str(cq), "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                                       f"-qp:v:{i}", str(cq),
+                                       f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
                         if family == "hevc":
                             ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]
                         else:
                             ffmpeg_cmd += ["-profile:v", "high"]
                     elif backend == "qsv":
                         enc = "hevc_qsv" if family == "hevc" else "h264_qsv"
-                        ffmpeg_cmd += [f"-c:v:{i}", enc, "-global_quality", str(crf),
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, f"-global_quality:v:{i}", str(crf),
                                        "-look_ahead", "1",
-                                       "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                                       f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
                     elif backend == "vaapi":
                         enc = "hevc_vaapi" if family == "hevc" else "h264_vaapi"
-                        ffmpeg_cmd += [f"-c:v:{i}", enc, "-global_quality", str(crf),
-                                       "-force_key_frames", "expr:gte(t,n_forced*2)"]
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, f"-global_quality:v:{i}", str(crf),
+                                       f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
                         if family == "hevc":
                             ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]
-                        ffmpeg_cmd += ["-pix_fmt", "p010" if ten_bit else "nv12"]
+                        ffmpeg_cmd += [f"-pix_fmt:v:{i}", "p010" if ten_bit else "nv12"]
 
                 # Colour tags: tone-mapped SDR -> Rec.709; preserved HDR -> pass
                 # through the source's HDR tags; plain SDR -> no override.
