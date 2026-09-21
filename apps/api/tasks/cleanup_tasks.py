@@ -18,6 +18,8 @@ from ..models.project import Project, ProjectMember
 from ..models.folder import Folder
 from ..models.metadata import MetadataField, AssetMetadata, Collection, CollectionShare
 from ..models.branding import ProjectBranding, WatermarkSettings
+from ..models.instance_branding import InstanceBranding
+from ..models.user import User
 from ..models.activity import Mention, ActivityLog, Notification
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
@@ -532,7 +534,18 @@ def cleanup_soft_deleted():
         db.close()
 
 
-_ORPHAN_SWEEP_PREFIXES = ("raw/", "processed/")
+_ORPHAN_SWEEP_PREFIXES = (
+    "raw/", "processed/", "posters/", "avatars/", "comment-attachments/",
+    "branding/", "watermarked/",
+)
+
+# `branding/{project_id}/watermark/` is written by an upload endpoint that returns
+# the key and stores it nowhere: `WatermarkSettings` has no column for it and
+# `WatermarkContent` has no image variant, so the feature is half-built and no row
+# can vouch for these objects. Sweeping the prefix would delete them along with
+# anything an instance uploaded by driving the API directly, and the sweep cannot
+# tell those apart, so it is excluded until the feature is finished or removed.
+_ORPHAN_SWEEP_EXCLUDED = ("branding/", "/watermark/")
 
 
 @dataclass
@@ -579,6 +592,36 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
         if download:
             exact_live.add(download)
 
+    # The prefixes outside raw/ and processed/ each have exactly one owning column,
+    # and every one of them is queried UNFILTERED for the same reason MediaFile is:
+    # a soft-deleted-but-not-yet-purged row still owns its object, and reclaiming it
+    # belongs to the retention GC rather than here.
+    #
+    # `watermarked/` deliberately contributes nothing. `apply_watermark` writes
+    # `watermarked/{asset_id}/output.*` and nothing in the codebase ever reads it
+    # back, so every object under it is dead weight rather than something with a
+    # missing owner (#247).
+    for (poster,) in db.query(Project.poster_s3_key).filter(Project.poster_s3_key.isnot(None)):
+        exact_live.add(poster)
+    # Named `avatar_url`, holds an S3 key: `users.py` passes it straight to
+    # `delete_object`. Trusting the name here would have swept every avatar.
+    for (avatar,) in db.query(User.avatar_url).filter(User.avatar_url.isnot(None)):
+        exact_live.add(avatar)
+    for (att,) in db.query(CommentAttachment.s3_key).filter(CommentAttachment.s3_key.isnot(None)):
+        exact_live.add(att)
+    for (logo,) in db.query(ProjectBranding.logo_s3_key).filter(ProjectBranding.logo_s3_key.isnot(None)):
+        exact_live.add(logo)
+    for row in db.query(
+        InstanceBranding.logo_light_key, InstanceBranding.logo_dark_key,
+        InstanceBranding.favicon_key, InstanceBranding.apple_icon_key,
+        InstanceBranding.login_logo_key,
+    ).all():
+        exact_live.update(k for k in row if k)
+
+    def _excluded(key):
+        head, tail = _ORPHAN_SWEEP_EXCLUDED
+        return key.startswith(head) and tail in key
+
     def _is_live(key):
         return key in exact_live or any(key.startswith(root) for root in processed_roots)
 
@@ -586,6 +629,8 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
     for prefix in _ORPHAN_SWEEP_PREFIXES:
         for key, last_modified, size in list_keys(prefix):
             counts.scanned += 1
+            if _excluded(key):
+                continue  # see _ORPHAN_SWEEP_EXCLUDED
             if last_modified >= cutoff:
                 continue  # too recent — may be an in-flight / just-committed upload
             if _is_live(key):

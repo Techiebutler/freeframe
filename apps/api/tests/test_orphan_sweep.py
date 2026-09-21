@@ -164,3 +164,118 @@ def test_an_ordinary_sweep_is_not_blocked_by_the_floor(real_db, monkeypatch):
 
     assert counts.orphans == 1 and counts.deleted == 1
     assert deleted == ["raw/dead/dead/dead/original.mp4"]
+
+
+# ──────────────────── the prefixes the sweep did not cover (#115 item 1, #247)
+
+def _seed_owners(db):
+    """One live object under each newly swept prefix, and the rows that own them."""
+    import uuid as _uuid
+    from apps.api.models.branding import ProjectBranding
+    from apps.api.models.instance_branding import InstanceBranding
+    from apps.api.models.comment import Comment, CommentAttachment
+
+    u = User(email=f"own-{_uuid.uuid4()}@t.local", name="t", avatar_url="avatars/u1/live.png")
+    db.add(u); db.flush()
+    p = Project(name="t", project_type=ProjectType.personal, created_by=u.id,
+                poster_s3_key=f"posters/{_uuid.uuid4()}/poster.jpg")
+    db.add(p); db.flush()
+    db.add(ProjectBranding(project_id=p.id, logo_s3_key=f"branding/{p.id}/logo/live.webp"))
+    db.add(InstanceBranding(logo_light_key="branding/light/live", favicon_key="branding/favicon/live"))
+    a = Asset(project_id=p.id, name="t", asset_type=AssetType.video, created_by=u.id)
+    db.add(a); db.flush()
+    v = AssetVersion(asset_id=a.id, version_number=1,
+                     processing_status=ProcessingStatus.ready, created_by=u.id)
+    db.add(v); db.flush()
+    c = Comment(asset_id=a.id, version_id=v.id, author_id=u.id, body="t", visibility="public")
+    db.add(c); db.flush()
+    db.add(CommentAttachment(comment_id=c.id, file_type="image/png", original_filename="f.png",
+                             file_size_bytes=1, s3_key=f"comment-attachments/{c.id}/x/f.png"))
+    db.flush()
+    return u, p
+
+
+def test_a_key_owned_by_a_row_outside_media_files_is_not_an_orphan(real_db, monkeypatch):
+    """The gap this closes: four prefixes were written and never swept, so an
+    object whose owning row was deleted was paid for forever. Widening the sweep
+    means every one of them needs a liveness rule, and getting one wrong deletes
+    live objects rather than leaking them, which is why the ratio floor from the
+    previous change went in first."""
+    u, p = _seed_owners(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    live = [
+        "avatars/u1/live.png",
+        p.poster_s3_key,
+        f"branding/{p.id}/logo/live.webp",
+        "branding/light/live",
+        "branding/favicon/live",
+    ]
+    attachment = real_db.query(ct.CommentAttachment).first().s3_key
+    all_keys = [(k, old, 10) for k in live + [attachment]]
+
+    counts, deleted = _run(real_db, monkeypatch, all_keys, grace=24, delete=True)
+
+    assert counts.scanned == len(all_keys)   # they are being looked at now
+    assert counts.orphans == 0               # and every one is recognised
+    assert deleted == []
+
+
+def test_an_unowned_key_under_a_newly_swept_prefix_is_an_orphan(real_db, monkeypatch):
+    u, p = _seed_owners(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    attachment = real_db.query(ct.CommentAttachment).first().s3_key
+    ghosts = [
+        "avatars/ghost/gone.png",
+        "posters/ghost/poster.jpg",
+        "comment-attachments/ghost/x/f.png",
+        "branding/ghost/logo/gone.webp",
+    ]
+    # Six live against four orphans keeps the ratio under the 0.5 ceiling, so the
+    # delete pass runs and `deleted` says exactly which keys went.
+    live = ["avatars/u1/live.png", p.poster_s3_key, f"branding/{p.id}/logo/live.webp",
+            "branding/light/live", "branding/favicon/live", attachment]
+    all_keys = [(k, old, 10) for k in live] + [(k, old, 500) for k in ghosts]
+
+    counts, deleted = _run(real_db, monkeypatch, all_keys, grace=24, delete=True)
+
+    assert counts.orphans == 4
+    assert sorted(deleted) == sorted(ghosts)   # and nothing live went with them
+
+
+def test_watermark_images_are_never_swept(real_db, monkeypatch):
+    """`branding/{project}/watermark/` has no owning column anywhere: the upload
+    endpoint returns a key nothing stores, and `WatermarkContent` has no image
+    variant, so the feature is half-built. Sweeping it would delete objects the
+    sweeper cannot tell apart from ones an instance is using via the API
+    directly, so the sub-path is excluded until that is settled."""
+    _seed_owners(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    all_keys = [
+        ("avatars/u1/live.png", old, 10),
+        ("branding/some-project/watermark/mark.png", old, 500),
+    ]
+    counts, deleted = _run(real_db, monkeypatch, all_keys, grace=24, delete=True)
+
+    assert counts.orphans == 0
+    assert deleted == []
+
+
+def test_watermark_output_is_all_orphan(real_db, monkeypatch):
+    """#247. `apply_watermark` writes `watermarked/{asset}/output.*` and nothing
+    in the codebase ever reads it back, so every object under that prefix is
+    dead weight rather than something with a missing owner."""
+    u, p = _seed_owners(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    attachment = real_db.query(ct.CommentAttachment).first().s3_key
+    # Enough live keys to stay under the orphan-ratio ceiling, so the delete pass
+    # runs at all: three orphans against one live key is 75% and the floor from
+    # the previous change correctly refuses that.
+    live = ["avatars/u1/live.png", p.poster_s3_key, f"branding/{p.id}/logo/live.webp",
+            "branding/light/live", "branding/favicon/live", attachment]
+    all_keys = [(k, old, 10) for k in live] + [
+        (f"watermarked/asset-{i}/output.mp4", old, 100) for i in range(3)
+    ]
+    counts, deleted = _run(real_db, monkeypatch, all_keys, grace=24, delete=True)
+
+    assert counts.orphans == 3
+    assert sorted(deleted) == sorted(f"watermarked/asset-{i}/output.mp4" for i in range(3))

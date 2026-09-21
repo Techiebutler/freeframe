@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The S3 orphan sweeper now covers the five prefixes it was never told about** — it swept `raw/` and `processed/` only, while the app also writes project posters, user avatars, comment attachments, branding logos and watermark output. An object under any of those whose owning row was deleted was paid for forever, with nothing that would ever reclaim it. Each new prefix gets the liveness rule its own owning column gives it, and every one of those queries is unfiltered on purpose, because a soft-deleted row still owns its object until the retention GC comes for it. One of them was a trap worth naming: `User.avatar_url` is called a URL and holds an S3 key, so trusting the name would have swept every avatar on the instance. `watermarked/` is included as pure garbage, which is what it is: `apply_watermark` writes there and nothing in the codebase ever reads it back (#247). `branding/<project>/watermark/` is deliberately excluded and stays unswept, because the endpoint that uploads those images returns a key nothing stores and `WatermarkContent` has no image variant, so no row can vouch for them and the sweeper cannot tell an abandoned one from one an instance is using through the API directly. This is the widening the previous release's ratio floor was put in first to make safe: a liveness rule that is wrong or missing now shows up as a refused sweep and a loud log rather than as deleted data. The sweeper is still off unless `ORPHAN_SWEEP_GRACE_HOURS` is set, and report-only unless `ORPHAN_SWEEP_DELETE` is too. (#115, #247)
+
 ## [1.14.1] - 2026-09-21
 
 ### Fixed
