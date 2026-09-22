@@ -31,3 +31,58 @@ def test_trailing_slash_is_stripped(monkeypatch):
 def test_unparseable_value_falls_back_to_raw(monkeypatch):
     monkeypatch.setattr(settings, "frontend_url", "localhost:3000")
     assert settings.frontend_origin == "localhost:3000"
+
+
+_PREFLIGHT_SCRIPT = """
+import json
+
+from fastapi.testclient import TestClient
+
+from apps.api.main import app
+
+response = TestClient(app).options(
+    "/health",
+    headers={
+        "Origin": "https://example.com",
+        "Access-Control-Request-Method": "GET",
+    },
+)
+print(json.dumps({
+    "status": response.status_code,
+    "allow_origin": response.headers.get("access-control-allow-origin"),
+}))
+"""
+
+
+def test_cors_preflight_allows_bare_origin():
+    """The allow-list is built from `frontend_origin`, not the raw FRONTEND_URL.
+
+    Guards the wiring in `main.py`, not just the property: a preflight from the
+    pathless origin a browser sends must be allowed even though FRONTEND_URL
+    carries the sub-path. Rebuilding the app with the raw URL makes this 400.
+
+    Runs in a subprocess because `main.py` builds the middleware at import
+    time — an in-process reload would leave every module that captured `app`
+    holding a different object than the `client` fixture uses.
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    env = {**os.environ, "FRONTEND_URL": "https://example.com/freeframe"}
+    result = subprocess.run(
+        [sys.executable, "-c", _PREFLIGHT_SCRIPT],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    outcome = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert outcome["status"] == 200
+    assert outcome["allow_origin"] == "https://example.com"

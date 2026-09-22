@@ -144,14 +144,22 @@ FRONTEND_URL=https://example.com/freeframe
 
 `NEXT_PUBLIC_BASE_PATH` is a **build-time** variable for the Docker image (Compose passes it as a build arg), so changing it needs `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build web`, not a restart. (`next dev` in the dev stack reads it when the server starts.) Everything the web app serves moves under the prefix: pages, links, static assets, icons and raw navigations. The API stays at the origin root (`/api`), and links built from `FRONTEND_URL` carry the path, so invite and share emails keep pointing inside the mounted app. CORS matches the bare origin, since a browser's `Origin` header never carries a path.
 
-If something sits in front of FreeFrame (a landing page, another app), forward the sub-path to FreeFrame **unchanged** — Next expects the prefix — and forward the API at the origin root as well, because that is where the browser still calls it. With nginx that is two `proxy_pass` locations, both without a URI part:
+If something sits in front of FreeFrame (a landing page, another app), forward the sub-path to FreeFrame **unchanged** — Next expects the prefix — and forward the API at the origin root as well, because that is where the browser still calls it, including the request bodies it sends. With nginx that is two `proxy_pass` locations, both without a URI part:
 
 ```nginx
-location /freeframe/ {
+# No trailing slash: with trailingSlash unset, Next answers /freeframe/ with
+# a 308 to /freeframe, and a location prefix ending in "/" answers with nginx's
+# own 301 back — the two would bounce forever. Without it, every form of the
+# URL lands inside the app.
+location /freeframe {
     proxy_pass http://127.0.0.1:80;
 }
 
 location /api/ {
+    # The only browser-to-API bodies that cross the proxy are project posters.
+    # The API accepts 10 MB; nginx's 1 MB default would reject them with an
+    # HTML 413 the frontend cannot parse.
+    client_max_body_size 10m;
     proxy_pass http://127.0.0.1:80;
 }
 ```
