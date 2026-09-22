@@ -43,6 +43,13 @@ class VideoMetadata:
     width: int
     height: int
     fps: float
+    # How long the *video* track runs, which is not the same question as how
+    # long the file runs: a container's duration is its longest stream, so a
+    # rough cut whose audio outlives its picture reports the audio. Anything
+    # comparing against the video timeline -- an HLS ladder's own EXTINF sum,
+    # for one -- has to ask this instead. None when it cannot be established,
+    # which is a real outcome and not an error: see parse_probe_metadata.
+    video_duration_seconds: Optional[float] = None
 
 class BaseTranscoder(ABC):
     @abstractmethod
