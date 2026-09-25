@@ -72,7 +72,15 @@ def test_cors_preflight_allows_bare_origin():
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[3]
-    env = {**os.environ, "FRONTEND_URL": "https://example.com/freeframe"}
+    # CORS_ALLOW_ORIGINS is pinned empty. A "*" inherited from the environment
+    # or the repo-root .env switches main.py to allow_origin_regex=".*", and
+    # the preflight would then pass against the raw FRONTEND_URL as well. An
+    # environment variable wins over .env, so this covers both.
+    env = {
+        **os.environ,
+        "FRONTEND_URL": "https://example.com/freeframe",
+        "CORS_ALLOW_ORIGINS": "",
+    }
     result = subprocess.run(
         [sys.executable, "-c", _PREFLIGHT_SCRIPT],
         cwd=repo_root,
@@ -80,8 +88,8 @@ def test_cors_preflight_allows_bare_origin():
         capture_output=True,
         text=True,
         timeout=120,
-        check=True,
     )
+    assert result.returncode == 0, result.stderr
     outcome = json.loads(result.stdout.strip().splitlines()[-1])
 
     assert outcome["status"] == 200

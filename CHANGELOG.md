@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **`TRANSCODER_SOURCE_COPY` no longer copies a master it has not really looked at** — the gate that decides whether an upload can be packaged without re-encoding judged the first 30 seconds and generalised, counted one keyframe more than the file has, and never measured the stretch after the last keyframe it found. Each of the three let through a master that copies "successfully" and produces an asset a reviewer cannot seek in, which is the one thing the gate exists to prevent. Reproduced with real files: a slate spliced onto a long-GOP body copied into a single 41-second segment, and a lossless join of two clips copied into 27 segments of which the last nine decode to `non-existing PPS 0 referenced` while ffmpeg exits 0 and the job reports success. The gate now samples the tail of a long master as well as its head, counts only the keyframe lines ffmpeg's bitstream tracer actually emitted rather than including the one its own decoder logs first, measures the gap running off the end of a window, and refuses outright if the trace it depends on parsing says nothing at all. Two windows is a sample and not a proof, and the docstring says so: a three-part join whose middle piece is the odd one still gets through, and only a full pass over the master would catch it. The setting stays off by default. (#377, #378, #379, #381)
+
 ## [1.14.0] - 2026-09-21
 
 ### Upgrade notes
