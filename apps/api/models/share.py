@@ -26,6 +26,7 @@ class ShareLink(Base):
     folder_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id"), nullable=True, index=True)
     project_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True, index=True)
     token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    short_code: Mapped[Optional[str]] = mapped_column(String(16), unique=True, index=True, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False, server_default="")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

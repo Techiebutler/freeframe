@@ -71,6 +71,7 @@ interface CreatedShareResult {
   assetId?: string | null
   folderId?: string | null
   projectId?: string | null
+  short_code?: string | null
 }
 
 // ─── Asset type icon helper ──────────────────────────────────────────────────
@@ -91,10 +92,9 @@ function AssetTypeIcon({ type, className }: { type: string; className?: string }
 
 // ─── Share URL helper ────────────────────────────────────────────────────────
 
-function buildShareUrl(token: string): string {
-  return typeof window !== 'undefined'
-    ? `${window.location.origin}${withBasePath(`/share/${token}`)}`
-    : withBasePath(`/share/${token}`)
+function buildShareUrl(token: string, shortCode?: string | null): string {
+  const path = withBasePath(shortCode ? `/s/${shortCode}` : `/share/${token}`)
+  return typeof window !== 'undefined' ? `${window.location.origin}${path}` : path
 }
 
 // ─── Copy button ─────────────────────────────────────────────────────────────
@@ -759,7 +759,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
     return () => { cancelled = true }
   }, [result.token])
 
-  const shareUrl = buildShareUrl(result.token)
+  const shareUrl = buildShareUrl(result.token, result.short_code)
 
   async function handleSaveTitle() {
     if (!title.trim() || title === result.title) {
@@ -1280,7 +1280,7 @@ export function ShareCreateDialog({
 
       onShareCreated()
       // Stay open so the person can copy the new link; Create becomes Close.
-      setCreatedUrl(buildShareUrl(shareLink.token))
+      setCreatedUrl(buildShareUrl(shareLink.token, shareLink.short_code))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create share link')
     } finally {
