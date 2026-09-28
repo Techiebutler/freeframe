@@ -76,6 +76,7 @@ services:
   #        S3_ENDPOINT=http://minio:9000
   #        S3_PUBLIC_ENDPOINT=https://storage.${DOMAIN}   # MUST be browser-reachable
   #        S3_ACCESS_KEY / S3_SECRET_KEY = strong values
+  #        S3_BUCKET = lowercase letters, digits and hyphens only (no underscores)
   # Presigned URLs are handed to the browser, so MinIO must be reachable from
   # OUTSIDE the compose network — that is what the Traefik router below provides
   # (point a `storage.<your-domain>` DNS record at this host). The app sets a
@@ -108,14 +109,15 @@ services:
   #
   # minio-init:                     # one-shot: create the bucket (idempotent)
   #   image: minio/mc:latest
+  #   env_file:
+  #     - .env.prod                    # the S3_* vars below are read inside the container
   #   depends_on:
   #     minio:
   #       condition: service_healthy
   #   entrypoint: >
   #     /bin/sh -c "
-  #     mc alias set local http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY};
-  #     mc mb --ignore-existing local/$${S3_BUCKET};
-  #     exit 0;
+  #     mc alias set local http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY} &&
+  #     mc mb --ignore-existing local/$${S3_BUCKET}
   #     "
 
   api:

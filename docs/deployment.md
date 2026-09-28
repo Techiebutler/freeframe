@@ -209,7 +209,7 @@ Works with: **AWS ElastiCache, Upstash, Redis Cloud, DigitalOcean Managed Redis,
 
 Works with: **AWS S3, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, MinIO, or any S3-compatible service.**
 
-There's no S3 service in the production compose — you always provide your own. Configure in `.env.prod`:
+The production compose runs no S3 service by default — you provide your own. (`docker-compose.prod.yml` ships a commented-out MinIO block if you want to keep media on the same host; see the notes above it.) Configure in `.env.prod`:
 
 ```
 S3_STORAGE=s3
@@ -218,6 +218,8 @@ S3_ACCESS_KEY=YOUR_ACCESS_KEY
 S3_SECRET_KEY=YOUR_SECRET_KEY
 S3_REGION=us-east-1
 ```
+
+`S3_BUCKET` must be a valid S3 bucket name: 3-63 characters, lowercase letters, digits, hyphens and dots only. Underscores and capitals are rejected.
 
 For **non-AWS S3-compatible providers** (R2, B2, Spaces, MinIO, Hetzner, …), set `S3_STORAGE` to a non-`s3` value (e.g. `minio`) so `S3_ENDPOINT` is used — with `S3_STORAGE=s3` the client talks to native AWS and the endpoint is **ignored** (FreeFrame refuses to start if `s3` is combined with a non-AWS endpoint). Then set the endpoint:
 
