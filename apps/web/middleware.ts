@@ -3,7 +3,9 @@ import type { NextRequest } from 'next/server'
 import { withBasePath } from './lib/base-path'
 
 const PUBLIC_ROUTES = ['/login', '/setup']
-const PUBLIC_PREFIXES = ['/invite/', '/share/']
+// `/s/` holds short share links (app/s/[code]), which redirect to a public
+// share page — visitors following one are anonymous by design.
+const PUBLIC_PREFIXES = ['/invite/', '/share/', '/s/']
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 

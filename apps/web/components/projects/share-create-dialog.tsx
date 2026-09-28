@@ -59,6 +59,7 @@ interface CreatedShareResult {
   assetId?: string | null
   folderId?: string | null
   projectId?: string | null
+  short_code?: string | null
 }
 
 // ─── Asset type icon helper ──────────────────────────────────────────────────
@@ -615,8 +616,10 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
 
   const shareUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}${withBasePath(`/share/${result.token}`)}`
-      : withBasePath(`/share/${result.token}`)
+      ? `${window.location.origin}${withBasePath(
+          result.short_code ? `/s/${result.short_code}` : `/share/${result.token}`,
+        )}`
+      : withBasePath(result.short_code ? `/s/${result.short_code}` : `/share/${result.token}`)
 
   async function handleSaveTitle() {
     if (!title.trim() || title === result.title) {
@@ -1131,8 +1134,18 @@ export function ShareCreateDialog({
         await api.patch(`/share/${shareLink.token}`, patches)
       }
 
+      setCreatedResult({
+        token: shareLink.token,
+        title: shareLink.title || config.title,
+        itemType,
+        thumbnailUrl: thumbUrl,
+        assetId: shareLink.asset_id ?? null,
+        folderId: shareLink.folder_id ?? null,
+        projectId: shareLink.project_id ?? null,
+        short_code: shareLink.short_code ?? null,
+      })
+      setPhase('result')
       onShareCreated()
-      onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create share link')
     } finally {
