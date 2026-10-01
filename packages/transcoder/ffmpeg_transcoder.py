@@ -49,7 +49,9 @@ _MOV_FAMILY_FORMATS = frozenset({"mov", "mp4", "m4a", "3gp", "3g2", "mj2"})
 # Matroska and WebM publish no per-stream `duration` for an ordinary track, and
 # are handled through the `DURATION` tag below instead. Not "never": an
 # attachment-shaped cover image does carry one, and it holds the file's length
-# rather than the picture's -- which is what `_is_attached_pic` is for.
+# rather than the picture's. The probes ask for `_PRIMARY_VIDEO_STREAM`, which
+# never returns such a stream; `_is_attached_pic` is the fallback for a probe
+# that does.
 _MATROSKA_FORMATS = frozenset({"matroska", "webm"})
 
 
@@ -82,13 +84,16 @@ def _format_end_seconds(data: dict) -> Optional[float]:
 def _is_attached_pic(stream: dict) -> bool:
     """Whether this "video" stream is a still cover image rather than a track.
 
-    An audio file with artwork carries the picture as `v:0`, which is what an
-    `ffprobe -select_streams v:0` returns for it -- and the demuxer gives that
-    one frame the whole file's duration. mutagen writes the `udta` atom ahead of
-    `trak`, so the same thing happens to a real video whose artwork was embedded
-    afterwards by anything built on it (yt-dlp's embed-thumbnail, beets, Picard).
-    A cover has no timeline, so there is nothing here to compare a ladder
-    against.
+    An audio file with artwork carries the picture as a video stream, and the
+    demuxer gives that one frame the whole file's duration. When mutagen adds a
+    cover to an MP4 that has no `udta` yet, it inserts one ahead of `trak`, so a
+    real video whose artwork was embedded that way has its cover at `v:0`. A
+    cover has no timeline, so there is nothing here to compare a ladder against.
+
+    The transcoder's probes ask for `_PRIMARY_VIDEO_STREAM` (`V:0`), which skips
+    a stream flagged as an attached picture (#430), so in `transcode()` this is a
+    fallback rather than the main defence. It still holds for a probe made any
+    other way, and it costs nothing.
 
     ffprobe writes the flag as an integer, and `"0"` is read as the zero it
     means rather than as a non-empty string: taking every disposition value as

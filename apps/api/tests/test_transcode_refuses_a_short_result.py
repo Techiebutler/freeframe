@@ -80,7 +80,9 @@ def _variant(tmp_path, name: str, segment_seconds: list[float]):
 #     frame count that includes zero-size drop chunks and is a placeholder on a
 #     piped file, MPEG-PS reports a PTS span that a clock jump inflates;
 #   * a duration belonging to a stream the ladder does not encode, which is what
-#     cover art is: `v:0`, one frame, handed the whole file's length.
+#     cover art is when a probe returns it: one frame, handed the whole file's
+#     length. The transcoder probes `V:0`, which skips it (#430); the check
+#     declines on it as well, as a fallback.
 #
 # So the answer is narrow on purpose. `stream.duration` counts only from the
 # mov/mp4 family, Matroska is read from its exact `DURATION` tag, and everything
@@ -142,11 +144,10 @@ def test_a_wmv_whose_audio_outlives_its_picture_is_not_judged():
 
 @pytest.mark.parametrize("format_name", [_MOV, _MKV])
 def test_cover_art_has_no_timeline(format_name):
-    # An audio file with artwork carries the picture as `v:0`, and the demuxer
-    # gives that one frame the whole file's duration -- so a ladder of one frame
-    # would be held against the album's length. mutagen writes `udta` ahead of
-    # `trak`, so anything built on it (yt-dlp's embed-thumbnail, beets, Picard)
-    # puts a real video in the same position.
+    # An audio file with artwork carries the picture as a video stream, and the
+    # demuxer gives that one frame the whole file's duration -- so a ladder of
+    # one frame would be held against the album's length. The transcoder's `V:0`
+    # probe skips such a stream (#430); this holds for a probe that does not.
     meta = parse_probe_metadata({
         "streams": [{"duration": "600.000000", "width": 600, "height": 600,
                      "r_frame_rate": "90000/1", "codec_name": "mjpeg",
@@ -171,7 +172,7 @@ def test_an_ordinary_video_stream_is_not_mistaken_for_cover_art():
 
 def test_matroska_reports_the_video_track_separately_from_the_file():
     # Measured on a real file built for this: a 20s picture with a 35s sine
-    # muxed beside it. `ffprobe -select_streams v:0` on it gives exactly this --
+    # muxed beside it. Probing its video stream gives exactly this --
     # no stream duration, DURATION as a tag, and the container reporting the
     # audio. An NLE rough cut and a MediaRecorder capture both produce it.
     meta = parse_probe_metadata({

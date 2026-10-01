@@ -50,7 +50,7 @@ MEASURED = [
     ('avi-aus-pipe.avi', 30.0, False, {'streams': [{'duration': '18985.720000', 'start_time': '0.000000'}], 'format': {'duration': '18985.720000', 'format_name': 'avi'}}),
   # MPEG-PS reports the PTS span, and a 29.5s clock jump between two spliced recordings inflates it
     ('mpg-uhrensprung.mpg', 40.0, False, {'streams': [{'duration': '69.460000', 'start_time': '0.540000'}], 'format': {'duration': '69.470911', 'format_name': 'mpeg'}}),
-  # audio with cover art: the picture is v:0 and gets the file's duration
+  # audio with cover art, probed as `v:0` (the transcoder's `V:0` would skip it): the picture gets the file's duration
     ('mp4-nur-ton-mit-titelbild.mp4', 0.0, False, {'streams': [{'duration': '30.000000', 'start_time': '0.000000', 'disposition': {'attached_pic': 1}}], 'format': {'duration': '30.000000', 'format_name': 'mov,mp4,m4a,3gp,3g2,mj2'}}),
   # the same command in Matroska, where the cover does not survive as attached_pic but as a one-frame track
     ('mkv-nur-ton-mit-titelbild.mkv', 0.0, False, {'streams': [{'start_time': '0.000000', 'tags': {'DURATION': '00:00:00.040000000'}}], 'format': {'duration': '30.008000', 'format_name': 'matroska,webm'}}),
@@ -63,7 +63,7 @@ MEASURED = [
   # (`nb_frames` added afterwards from the same `-itsoffset 3` construction measured on ffmpeg 7.1.1,
   #  which reports start 3.000000, duration 30.000000, format 33.000000 and 750 frames, as here)
     ('mp4-bild-startet-spaet.mp4', 30.0, False, {'streams': [{'duration': '30.000000', 'start_time': '3.000000', 'nb_frames': '750', 'tags': {'language': 'und'}}], 'format': {'duration': '33.000000', 'format_name': 'mov,mp4,m4a,3gp,3g2,mj2'}}),
-  # two video tracks of different lengths; the ladder encodes v:0 only
+  # two video tracks of different lengths; the ladder encodes the first one only
     ('mkv-zwei-bildspuren.mkv', 20.0, False, {'streams': [{'start_time': '0.000000', 'tags': {'DURATION': '00:00:20.000000000'}}], 'format': {'duration': '40.000000', 'format_name': 'matroska,webm'}}),
     ('heil.mp4', 60.0, False, {'streams': [{'duration': '60.000000', 'start_time': '0.000000', 'tags': {'language': 'und'}}], 'format': {'duration': '60.000000', 'format_name': 'mov,mp4,m4a,3gp,3g2,mj2'}}),
     ('heil.mov', 60.0, False, {'streams': [{'duration': '60.000000', 'start_time': '0.000000'}], 'format': {'duration': '60.000000', 'format_name': 'mov,mp4,m4a,3gp,3g2,mj2'}}),

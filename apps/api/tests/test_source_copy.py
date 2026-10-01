@@ -13,6 +13,8 @@ import json
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from packages.transcoder.base import TranscodeJob
 from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder
 
@@ -263,8 +265,35 @@ def test_an_hdr_source_is_encoded():
     )
 
     assert not _copies(cmd)
+
+
+# Each HDR shape opens the filter graph with its own input label, and each one
+# has to name the primary video stream (`V:0`, which skips attached pictures).
+# A label left on `v:0` reads a cover image when an MP4's artwork comes ahead
+# of its video, and the whole ladder becomes one frame of the cover (#430).
+_PQ_8BIT = {**_H264_8BIT, "color_transfer": "smpte2084"}
+_DOLBY_VISION_5 = {
+    "codec_name": "hevc", "pix_fmt": "yuv420p10le",
+    "side_data_list": [
+        {"side_data_type": "DOVI configuration record", "dv_profile": 5},
+    ],
+}
+
+
+@pytest.mark.parametrize("backend, video_stream, opening", [
+    ("cpu", _PQ_8BIT, "[0:V:0]format=p010"),
+    ("nvenc", _PQ_8BIT, "[0:V:0]hwdownload,format=p010"),
+    ("cpu", _DOLBY_VISION_5, "[0:V:0]libplacebo="),
+], ids=["hdr-cpu", "hdr-hardware", "dolby-vision-5"])
+def test_every_hdr_graph_reads_the_primary_video_stream(
+    backend, video_stream, opening,
+):
+    with patch("packages.transcoder.ffmpeg_transcoder.get_backend",
+               return_value=backend):
+        cmd, _, _ = _transcode(["1080p"], video_stream=video_stream)
+
     filter_complex = cmd[cmd.index("-filter_complex") + 1]
-    assert filter_complex.startswith("[0:V:0]"), filter_complex
+    assert filter_complex.startswith(opening), filter_complex
 
 
 def test_a_rotated_source_is_encoded():
