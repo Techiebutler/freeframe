@@ -436,8 +436,8 @@ def _was_ever_usable():
     )
 
 
-def _can_restore_asset():
-    """Whether a deleted asset is usable work or still has a live upload."""
+def _can_restore_folder_asset():
+    """Whether a folder cascade may restore usable work or a live upload."""
     has_live_version = (
         select(AssetVersion.id)
         .where(
@@ -473,7 +473,7 @@ def list_trash(
         .filter(
             Asset.project_id == project_id,
             Asset.deleted_at.isnot(None),
-            _can_restore_asset(),
+            _was_ever_usable(),
         )
         .order_by(Asset.deleted_at.desc())
         .offset(skip)
@@ -512,7 +512,7 @@ def restore_asset(
     current_user: User = Depends(get_current_user),
 ):
     asset = db.query(Asset).filter(
-        Asset.id == asset_id, Asset.deleted_at.isnot(None), _can_restore_asset(),
+        Asset.id == asset_id, Asset.deleted_at.isnot(None), _was_ever_usable(),
     ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Deleted asset not found")
@@ -579,7 +579,7 @@ def restore_folder(
     db.query(Asset).filter(
         Asset.folder_id.in_(all_ids),
         Asset.deleted_at == restore_timestamp,
-        _can_restore_asset(),
+        _can_restore_folder_asset(),
     ).update({"deleted_at": None}, synchronize_session="fetch")
 
     db.commit()

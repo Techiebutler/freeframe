@@ -89,7 +89,7 @@ def test_restore_folder_only_restores_its_live_cascade(mock_db, test_user, monke
 
 
 def test_live_upload_version_is_a_valid_restore_reason():
-    predicate = folders_module._can_restore_asset()
+    predicate = folders_module._can_restore_folder_asset()
     sql = str(predicate.compile(dialect=postgresql.dialect()))
 
     assert " OR " in sql
