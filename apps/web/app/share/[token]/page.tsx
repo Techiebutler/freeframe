@@ -1,16 +1,12 @@
 'use client'
 
 import * as React from 'react'
-import {
-  Lock,
-  AlertTriangle,
-  Clock,
-  Loader2,
-} from 'lucide-react'
+import { Lock, Loader2 } from 'lucide-react'
 import { withBasePath } from '@/lib/base-path'
 import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { Button } from '@/components/ui/button'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
+import { ShareErrorState } from '@/components/share/share-error-state'
 import { ShareReviewScreen } from '@/components/share/share-review-screen'
 import { useBranding, useEnsureBranding } from '@/components/shared/branding-provider'
 import { useShareAppearance } from '@/hooks/use-share-appearance'
@@ -178,40 +174,6 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
           </Button>
         </form>
         <PoweredByBadge className="mt-6 text-center justify-center" />
-      </div>
-    </div>
-  )
-}
-
-// ─── Error state ──────────────────────────────────────────────────────────────
-
-interface ErrorStateProps {
-  expired?: boolean
-}
-
-function ErrorState({ expired }: ErrorStateProps) {
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
-      <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 text-center shadow-xl">
-        <div className="mb-4 flex justify-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-error/10">
-            {expired ? (
-              <Clock className="h-6 w-6 text-status-error" />
-            ) : (
-              <AlertTriangle className="h-6 w-6 text-status-error" />
-            )}
-          </div>
-        </div>
-        <h1 className="text-sm font-semibold text-text-primary">
-          {expired ? 'Link expired' : 'Link not found'}
-        </h1>
-        <p className="mt-1 text-xs text-text-tertiary">
-          {expired
-            ? 'This share link has expired and is no longer accessible.'
-            : 'This share link is invalid or has been removed.'}
-        </p>
-        <PoweredByBadge className="mt-6" showOrgName />
       </div>
     </div>
   )
@@ -390,11 +352,11 @@ export default function SharePage({
   }
 
   if (state.stage === 'expired') {
-    return <ErrorState expired />
+    return <ShareErrorState expired />
   }
 
   if (state.stage === 'invalid') {
-    return <ErrorState />
+    return <ShareErrorState />
   }
 
   if (state.stage === 'auth_required') {

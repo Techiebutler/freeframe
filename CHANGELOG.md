@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Sub-path deployments.** `NEXT_PUBLIC_BASE_PATH` is now wired into `next.config.js`, so an instance can be mounted under a path (e.g. `https://example.com/freeframe/`) instead of the domain root. Pages, links, static assets, icons and copy-to-clipboard URLs all live under the prefix; the API stays at the origin root, and CORS matches the bare origin so a path-bearing `FRONTEND_URL` still works. Empty by default, so root deployments are unchanged. Build-time variable: rebuild the web image after changing it. (#281)
+- **Short share URLs** — every share link is now issued an 8-character base62 code alongside its token, so links look like `https://your-domain.example/s/6RBr2cQd` instead of `https://your-domain.example/share/<46-char-token>`. Codes resolve in the web app itself: the `/s/[code]` route looks the code up through `GET /resolve/{short_code}` (rate-limited) and redirects to the share page, so no reverse-proxy configuration is needed on any deployment, including sub-path installs (`https://host/freeframe/s/6RBr2cQd`). Unknown or deleted codes show the share page's "Link not found" state. Short URLs are shown in the dashboard, the link-created screen and share emails whenever present, with the full token URL as the fallback. Existing links have no code until `python -m apps.api.scripts.backfill_short_codes` is run once. (#178)
 
 ### Changed
 - **The API test tooling moves to pytest 9, and out of the runtime image** — pytest 8.4.2 was pinned in

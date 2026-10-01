@@ -640,7 +640,9 @@ export function ShareLinkContent({
     }
   }, [shareLink, projectId]);
 
-  const shareUrl = `${frontendUrl}${withBasePath(`/share/${token}`)}`;
+  const shareUrl = `${frontendUrl}${withBasePath(
+    shareLink?.short_code ? `/s/${shareLink.short_code}` : `/share/${token}`,
+  )}`;
 
   if (!shareLink) {
     return (
@@ -831,8 +833,10 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
 
   const shareUrl =
     typeof window !== "undefined"
-      ? `${window.location.origin}${withBasePath(`/share/${token}`)}`
-      : withBasePath(`/share/${token}`);
+      ? `${window.location.origin}${withBasePath(
+          shareLink?.short_code ? `/s/${shareLink.short_code}` : `/share/${token}`,
+        )}`
+      : withBasePath(shareLink?.short_code ? `/s/${shareLink.short_code}` : `/share/${token}`);
 
   if (!shareLink) {
     return (

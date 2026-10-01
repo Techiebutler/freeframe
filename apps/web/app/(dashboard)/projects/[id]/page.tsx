@@ -597,7 +597,9 @@ export default function ProjectDetailPage() {
                           className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
                           onSelect={() =>
                             window.open(
-                              `${window.location.origin}${withBasePath(`/share/${link.token}`)}`,
+                              `${window.location.origin}${withBasePath(
+                                link.short_code ? `/s/${link.short_code}` : `/share/${link.token}`,
+                              )}`,
                               "_blank",
                             )
                           }
@@ -609,7 +611,9 @@ export default function ProjectDetailPage() {
                           className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
                           onSelect={() =>
                             navigator.clipboard.writeText(
-                              `${window.location.origin}${withBasePath(`/share/${link.token}`)}`,
+                              `${window.location.origin}${withBasePath(
+                                link.short_code ? `/s/${link.short_code}` : `/share/${link.token}`,
+                              )}`,
                             )
                           }
                         >

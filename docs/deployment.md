@@ -173,6 +173,35 @@ location /api/ {
 
 Traefik in the bundled Compose already routes the sub-path to the web app and `/api` to the API, so forwarding both to FreeFrame's port 80 is enough; only a proxy that terminates the sub-path itself has to name the API separately. Leave `NEXT_PUBLIC_BASE_PATH` empty for a root deployment (the default).
 
+### Short share URLs
+
+Share links are also issued an 8-character short code, so a link reads
+`https://your-domain.example/s/6RBr2cQd` instead of
+`https://your-domain.example/share/<46-char-token>`. No reverse-proxy
+configuration is needed: the web app serves `/s/<code>`, looks the code up
+against the API server-side through `GET /resolve/<code>`, and redirects (307)
+to the share page. That works for every deployment shape, including sub-path
+ones:
+
+- Root deployment: `https://your-domain.example/s/6RBr2cQd`
+- Sub-path deployment (`NEXT_PUBLIC_BASE_PATH=/freeframe`): `https://your-domain.example/freeframe/s/6RBr2cQd`
+
+The lookup reaches the API through `API_INTERNAL_URL` when set, or through
+`NEXT_PUBLIC_API_URL` otherwise. Docker Compose sets
+`API_INTERNAL_URL=http://api:8000` for you; set it yourself if the app server
+cannot reach its own public origin (split DNS, self-signed certificates).
+
+An unknown or deleted code shows the share page's "Link not found" screen. Links
+created before this feature shipped have no code — run the backfill once to
+assign codes to them:
+
+```bash
+docker compose -f docker-compose.prod.yml exec api python -m apps.api.scripts.backfill_short_codes
+```
+
+Short URLs appear in the dashboard and in share emails whenever a code exists,
+with the full token URL as the fallback.
+
 ---
 
 ## Bring Your Own Infrastructure
