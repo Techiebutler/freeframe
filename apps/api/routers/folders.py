@@ -302,12 +302,12 @@ def delete_folder(
     # Cascade soft-delete: folder + all descendants + their assets
     all_folder_ids = [folder_id] + _get_descendant_ids(db, folder_id)
 
-    db.query(Folder).filter(Folder.id.in_(all_folder_ids)).update(
-        {"deleted_at": now}, synchronize_session="fetch"
-    )
-    db.query(Asset).filter(Asset.folder_id.in_(all_folder_ids)).update(
-        {"deleted_at": now}, synchronize_session="fetch"
-    )
+    db.query(Folder).filter(
+        Folder.id.in_(all_folder_ids), Folder.deleted_at.is_(None)
+    ).update({"deleted_at": now}, synchronize_session="fetch")
+    db.query(Asset).filter(
+        Asset.folder_id.in_(all_folder_ids), Asset.deleted_at.is_(None)
+    ).update({"deleted_at": now}, synchronize_session="fetch")
 
     db.commit()
 
