@@ -14,7 +14,7 @@ import boto3
 from botocore.config import Config
 from .base import BaseTranscoder, TranscodeJob, TranscodeResult, VideoMetadata
 
-# FFmpeg's uppercase `V` excludes attached pictures, thumbnails, and cover art.
+# FFmpeg's uppercase `V` excludes streams flagged with the attached_pic disposition.
 _PRIMARY_VIDEO_STREAM = "V:0"
 
 

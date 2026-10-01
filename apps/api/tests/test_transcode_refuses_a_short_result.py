@@ -38,6 +38,7 @@ import os
 import pytest
 
 from packages.transcoder.ffmpeg_transcoder import (
+    _PRIMARY_VIDEO_STREAM,
     TranscodeTruncated,
     hls_output_seconds,
     parse_probe_metadata,
@@ -835,7 +836,7 @@ def _drive_a_transcode(
         if cmd[0] == "ffprobe":
             selected = (cmd[cmd.index("-select_streams") + 1]
                         if "-select_streams" in cmd else "")
-            if selected != "v:0":
+            if selected != _PRIMARY_VIDEO_STREAM:
                 return 0, json.dumps({"streams": audio}), ""
             if "packet=pts_time,flags" in cmd:
                 # The copy path's keyframe probe: a closed GOP every two

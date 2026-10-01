@@ -251,7 +251,10 @@ def backfill_media_metadata(self):
     duration/width/height/fps on already-processed media. Idempotent —
     only touches rows where duration_seconds IS NULL."""
     import subprocess
-    from packages.transcoder.ffmpeg_transcoder import parse_probe_metadata
+    from packages.transcoder.ffmpeg_transcoder import (
+        _PRIMARY_VIDEO_STREAM,
+        parse_probe_metadata,
+    )
 
     db = SessionLocal()
     updated = skipped = 0
@@ -268,7 +271,7 @@ def backfill_media_metadata(self):
                 )
                 cmd = ["ffprobe", "-v", "error", "-print_format", "json", "-show_format"]
                 if asset_type == AssetType.video:
-                    cmd += ["-show_streams", "-select_streams", "v:0"]
+                    cmd += ["-show_streams", "-select_streams", _PRIMARY_VIDEO_STREAM]
                 probe = subprocess.run(cmd + [url], capture_output=True, text=True, timeout=300)
                 if probe.returncode != 0:
                     skipped += 1

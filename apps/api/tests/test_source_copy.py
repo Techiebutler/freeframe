@@ -263,6 +263,8 @@ def test_an_hdr_source_is_encoded():
     )
 
     assert not _copies(cmd)
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert filter_complex.startswith("[0:V:0]"), filter_complex
 
 
 def test_a_rotated_source_is_encoded():
