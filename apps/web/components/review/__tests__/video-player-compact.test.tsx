@@ -9,6 +9,7 @@ const quality = vi.hoisted(() => ({
   current: -1,
   set: vi.fn(),
 }))
+const player = vi.hoisted(() => ({ togglePlay: vi.fn() }))
 
 vi.mock('@/hooks/use-video-player', () => ({
   useVideoPlayer: () => ({
@@ -16,7 +17,7 @@ vi.mock('@/hooks/use-video-player', () => ({
     isPlaying: false, currentTime: 0, duration: 100, buffered: 0,
     volume: 1, isMuted: false, playbackRate: 1,
     qualityLevels: quality.levels, currentQuality: quality.current, isLoading: false, isFullscreen: false, error: null,
-    pause: () => {}, togglePlay: () => {}, seek: () => {}, setPlaybackRate: () => {},
+    pause: () => {}, togglePlay: player.togglePlay, seek: () => {}, setPlaybackRate: () => {},
     setQuality: quality.set, setVolume: () => {}, toggleMute: () => {}, toggleFullscreen: () => {},
   }),
 }))
@@ -188,5 +189,47 @@ describe('the stage on a touch screen', () => {
     // The stage is the click target around the <video>: a tap on it toggles play.
     const stage = container.querySelector('video')?.parentElement
     expect(stage?.className.split(/\s+/)).toContain('touch-manipulation')
+  })
+})
+
+describe('dismissing player menus on the stage', () => {
+  it('does not toggle playback when a stage press closes the compact overflow menu', () => {
+    stubWidth(390)
+    const { container } = render(<VideoPlayer {...props} />)
+
+    fireEvent.click(screen.getByLabelText('More controls'))
+    expect(screen.getByRole('button', { name: 'Loop' })).toBeTruthy()
+
+    const stage = container.querySelector('video')?.parentElement
+    expect(stage).toBeTruthy()
+    fireEvent.pointerDown(stage!)
+    fireEvent.click(stage!)
+
+    expect(screen.queryByRole('button', { name: 'Loop' })).toBeNull()
+    expect(player.togglePlay).not.toHaveBeenCalled()
+
+    fireEvent.click(stage!)
+    expect(player.togglePlay).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not toggle playback when a stage press closes the time-format dropdown', () => {
+    stubWidth(1024)
+    const { container } = render(<VideoPlayer {...props} />)
+
+    const timeFormatTrigger = container.querySelector('.font-mono')?.closest('button')
+    expect(timeFormatTrigger).toBeTruthy()
+    fireEvent.click(timeFormatTrigger!)
+    expect(screen.getByText('Time Format')).toBeTruthy()
+
+    const stage = container.querySelector('video')?.parentElement
+    expect(stage).toBeTruthy()
+    fireEvent.mouseDown(stage!)
+    fireEvent.click(stage!)
+
+    expect(screen.queryByText('Time Format')).toBeNull()
+    expect(player.togglePlay).not.toHaveBeenCalled()
+
+    fireEvent.click(stage!)
+    expect(player.togglePlay).toHaveBeenCalledTimes(1)
   })
 })

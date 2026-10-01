@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Dismissing an open video-player menu by pressing the picture now only closes the menu; the click no longer also toggles playback. (#424)
+
 ## [1.15.0] - 2026-10-01
 
 ### Upgrade notes
