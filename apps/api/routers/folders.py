@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -436,6 +436,19 @@ def _was_ever_usable():
     )
 
 
+def _can_restore_asset():
+    """Whether a deleted asset is usable work or still has a live upload."""
+    has_live_version = (
+        select(AssetVersion.id)
+        .where(
+            AssetVersion.asset_id == Asset.id,
+            AssetVersion.deleted_at.is_(None),
+        )
+        .exists()
+    )
+    return or_(_was_ever_usable(), has_live_version)
+
+
 @router.get("/projects/{project_id}/trash", response_model=dict)
 def list_trash(
     project_id: uuid.UUID,
@@ -460,7 +473,7 @@ def list_trash(
         .filter(
             Asset.project_id == project_id,
             Asset.deleted_at.isnot(None),
-            _was_ever_usable(),
+            _can_restore_asset(),
         )
         .order_by(Asset.deleted_at.desc())
         .offset(skip)
@@ -499,7 +512,7 @@ def restore_asset(
     current_user: User = Depends(get_current_user),
 ):
     asset = db.query(Asset).filter(
-        Asset.id == asset_id, Asset.deleted_at.isnot(None), _was_ever_usable(),
+        Asset.id == asset_id, Asset.deleted_at.isnot(None), _can_restore_asset(),
     ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Deleted asset not found")
@@ -553,17 +566,21 @@ def restore_folder(
         if not parent:
             folder.parent_id = None
 
-    # Restore folder and all its descendants + their assets
+    # Keep the cascade timestamp as the marker for which descendants this restore owns.
+    # Rows already in the trash have an earlier timestamp and must remain there.
+    restore_timestamp = folder.deleted_at
     folder.deleted_at = None
     descendant_ids = _get_descendant_ids_including_deleted(db, folder_id)
     all_ids = [folder_id] + descendant_ids
 
-    db.query(Folder).filter(Folder.id.in_(all_ids)).update(
-        {"deleted_at": None}, synchronize_session="fetch"
-    )
-    db.query(Asset).filter(Asset.folder_id.in_(all_ids), Asset.deleted_at.isnot(None)).update(
-        {"deleted_at": None}, synchronize_session="fetch"
-    )
+    db.query(Folder).filter(
+        Folder.id.in_(all_ids), Folder.deleted_at == restore_timestamp
+    ).update({"deleted_at": None}, synchronize_session="fetch")
+    db.query(Asset).filter(
+        Asset.folder_id.in_(all_ids),
+        Asset.deleted_at == restore_timestamp,
+        _can_restore_asset(),
+    ).update({"deleted_at": None}, synchronize_session="fetch")
 
     db.commit()
     return {"ok": True}

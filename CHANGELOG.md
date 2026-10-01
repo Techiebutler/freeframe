@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Deleting a folder no longer resets the retention period for assets or child folders already in the trash. (#418)
+- Folder trash now preserves independently deleted items and restores only eligible descendants deleted by that folder operation. (#394, #418)
 
 ## [1.15.0] - 2026-10-01
 
