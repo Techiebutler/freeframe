@@ -30,7 +30,7 @@ def _mock_probe_side_effect(width: int, height: int):
     (given width/height) and no audio stream, then a generic success
     result for the main ffmpeg transcode call."""
     def mock_run_side_effect(cmd, **_kwargs):
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock = MagicMock()
             mock.returncode = 0
             mock.stderr = ""
@@ -94,7 +94,7 @@ def test_transcode_with_audio_includes_audio_map():
     """When ffprobe detects audio streams, ffmpeg cmd must include -map a:0."""
     def mock_run_side_effect(cmd, **_kwargs):
         # First call: video probe → return metadata
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock = MagicMock()
             mock.returncode = 0
             mock.stderr = ""
@@ -156,7 +156,7 @@ def test_transcode_without_audio_excludes_audio_map():
     """When ffprobe detects no audio streams, ffmpeg cmd must NOT include -map a:0."""
     def mock_run_side_effect(cmd, **_kwargs):
         # First call: video probe
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock = MagicMock()
             mock.returncode = 0
             mock.stderr = ""
@@ -228,6 +228,15 @@ def test_source_smaller_than_ladder_drops_upscaled_renditions():
         ffmpeg_cmd = _get_ffmpeg_cmd(mock_run)
 
         filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
+        assert "[0:V:0]split=1" in filter_complex
+        video_probes = [
+            c[0][0][c[0][0].index("-select_streams") + 1]
+            for c in mock_run.call_args_list
+            if "-select_streams" in c[0][0]
+            and c[0][0][0] == "ffprobe"
+            and c[0][0][c[0][0].index("-select_streams") + 1] != "a"
+        ]
+        assert video_probes and set(video_probes) == {"V:0"}
         assert "1920:1080" not in filter_complex, "1080p rendition should have been dropped"
         assert "1280:720" not in filter_complex, "720p rendition should have been dropped"
         assert "640:360" in filter_complex, "360p rendition should still be present"
@@ -315,6 +324,33 @@ def test_run_returns_stdout():
         assert result == "output data"
 
 
+def test_video_metadata_probe_skips_attached_pictures():
+    transcoder = FFmpegTranscoder(MagicMock(), "bucket")
+    probe = json.dumps({"streams": [{"width": 640, "height": 360}]})
+
+    with patch.object(transcoder, "_get_presigned_url", return_value="http://in"), \
+         patch.object(transcoder, "_run", return_value=probe) as run:
+        metadata = asyncio.run(transcoder.get_video_metadata("video.mp4"))
+
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("-select_streams") + 1] == "V:0"
+    assert (metadata.width, metadata.height) == (640, 360)
+
+
+def test_thumbnail_command_maps_the_primary_video_stream():
+    transcoder = FFmpegTranscoder(MagicMock(), "bucket")
+    with patch.object(transcoder, "_get_presigned_url", return_value="http://in"), \
+         patch("packages.transcoder.ffmpeg_transcoder.tempfile.mkdtemp", return_value="/tmp/thumbs"), \
+         patch.object(transcoder, "_run") as run, \
+         patch("pathlib.Path.glob", return_value=[]), \
+         patch("shutil.rmtree"):
+        thumbnails = asyncio.run(transcoder.generate_thumbnails("video.mp4", 3))
+
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("-map") + 1] == "0:V:0"
+    assert thumbnails == []
+
+
 def test_transcode_returns_probe_metadata():
     t = FFmpegTranscoder(MagicMock(), "bucket")
     video_probe = json.dumps({
@@ -325,7 +361,9 @@ def test_transcode_returns_probe_metadata():
 
     def fake_run(cmd, timeout=None, label="ffmpeg"):
         if label == "ffprobe":
-            return video_probe if "v:0" in cmd else audio_probe
+            return video_probe if "-select_streams" in cmd and cmd[
+                cmd.index("-select_streams") + 1
+            ] == "V:0" else audio_probe
         return ""
 
     with patch.object(FFmpegTranscoder, "_run", side_effect=fake_run), \
@@ -360,7 +398,7 @@ def test_nvenc_oom_falls_back_to_software_encoder():
     calls = []
 
     def side_effect(cmd, **_kwargs):
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             m = MagicMock(returncode=0, stderr="")
             m.stdout = json.dumps({"streams": [
                 {"r_frame_rate": "30/1", "duration": 6.0, "width": 3840, "height": 2160}]})
@@ -408,7 +446,7 @@ def test_non_hardware_error_does_not_retry():
     calls = []
 
     def side_effect(cmd, **_kwargs):
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             m = MagicMock(returncode=0, stderr="")
             m.stdout = json.dumps({"streams": [
                 {"r_frame_rate": "30/1", "duration": 6.0, "width": 1920, "height": 1080}]})
@@ -440,7 +478,7 @@ def test_non_hardware_error_does_not_retry():
 # ── audio-only file in a video container (#82) ────────────────────────────────
 
 def _audio_only_probe(cmd, **_kwargs):
-    """ffprobe -select_streams v:0 on an audio-only container returns no streams.
+    """ffprobe -select_streams V:0 on an audio-only container returns no streams.
 
     That is the whole of the bug: the container's mime is video/*, so the file
     is routed to the video pipeline, but there is no video track to encode.
@@ -457,7 +495,7 @@ def test_transcode_reports_a_missing_video_stream_instead_of_an_ffmpeg_error():
 
     Before this, every ladder rung was filtered out by the source-height check,
     the "never emit an empty ladder" fallback put one back, and ffmpeg died on
-    `[v:0] matches no streams` -- an error that says nothing about the cause.
+    `[0:V:0] matches no streams` -- an error that says nothing about the cause.
     """
     t = FFmpegTranscoder.__new__(FFmpegTranscoder)
     t.s3 = MagicMock()

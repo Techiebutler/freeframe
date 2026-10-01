@@ -38,7 +38,7 @@ def _run_transcode(qualities: list[str], source=(1920, 1080), remux_fails=False)
         mock = MagicMock()
         mock.returncode = 0
         mock.stderr = ""
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock.stdout = json.dumps({"streams": [
                 {"r_frame_rate": "25/1", "duration": 6.0, "width": width, "height": height},
             ]})

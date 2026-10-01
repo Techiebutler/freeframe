@@ -65,7 +65,7 @@ def _transcode(
                     *({"pts_time": f"{t:.6f}", "flags": "K_"} for t in times),
                     {"pts_time": "0.040000", "flags": "__"},
                 ]})
-            elif selected == "v:0":
+            elif selected == "V:0":
                 mock.stdout = json.dumps({"streams": [stream]})
             elif selected == "a":
                 mock.stdout = json.dumps({"streams": audio_streams or []})
@@ -148,10 +148,24 @@ def _copies(cmd: list[str]) -> bool:
 # ─────────────────────────────────── what may be copied
 
 def test_a_browser_safe_source_at_the_ladder_s_size_is_remuxed():
-    cmd, result, _ = _transcode(["1080p"], source=(1920, 1080))
+    cmd, result, commands = _transcode(["1080p"], source=(1920, 1080))
 
     assert _copies(cmd)
     assert "-filter_complex" not in cmd, "a copy has nothing to filter"
+    maps = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-map"]
+    assert "0:V:0" in maps, f"the copy must map the primary video, got {maps}"
+    video_probes = [
+        c[c.index("-select_streams") + 1]
+        for c in commands
+        if c[0] == "ffprobe" and "-select_streams" in c
+        and c[c.index("-select_streams") + 1] != "a"
+    ]
+    assert video_probes and set(video_probes) == {"V:0"}
+    trace_commands = [c for c in commands if "trace_headers" in c]
+    assert trace_commands
+    trace_cmd = trace_commands[0]
+    trace_maps = [trace_cmd[i + 1] for i, arg in enumerate(trace_cmd) if arg == "-map"]
+    assert "0:V:0" in trace_maps
     assert cmd[cmd.index("-var_stream_map") + 1] == "v:0"
     assert result.success and result.hls_prefix == "hls/media-1/v1"
     assert (result.width, result.height) == (1920, 1080)

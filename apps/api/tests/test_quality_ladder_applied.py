@@ -78,7 +78,7 @@ def _ffmpeg_cmd_for(qualities: list[str], source: tuple[int, int]) -> list[str]:
         mock = MagicMock()
         mock.returncode = 0
         mock.stderr = ""
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock.stdout = json.dumps({"streams": [
                 {"r_frame_rate": "25/1", "duration": 6.0, "width": width, "height": height},
             ]})

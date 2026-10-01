@@ -14,6 +14,9 @@ import boto3
 from botocore.config import Config
 from .base import BaseTranscoder, TranscodeJob, TranscodeResult, VideoMetadata
 
+# FFmpeg's uppercase `V` excludes attached pictures, thumbnails, and cover art.
+_PRIMARY_VIDEO_STREAM = "V:0"
+
 
 def _stream_start_seconds(stream: dict) -> float:
     """Where a stream's first packet sits on the timeline, or 0.0."""
@@ -1273,7 +1276,7 @@ class FFmpegTranscoder(BaseTranscoder):
         try:
             probed = self._run(
                 [
-                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "ffprobe", "-v", "error", "-select_streams", _PRIMARY_VIDEO_STREAM,
                     "-read_intervals", interval,
                     "-show_entries", "packet=pts_time,flags",
                     "-print_format", "json", input_url,
@@ -1329,7 +1332,7 @@ class FFmpegTranscoder(BaseTranscoder):
             traced = subprocess.run(
                 [
                     "ffmpeg", "-v", "trace", *seek, "-t", f"{length:g}",
-                    "-i", input_url, "-map", "0:v:0", "-c", "copy",
+                    "-i", input_url, "-map", f"0:{_PRIMARY_VIDEO_STREAM}", "-c", "copy",
                     "-bsf:v", "trace_headers", "-f", "null", "-",
                 ],
                 capture_output=True, text=True, errors="replace", timeout=600,
@@ -1491,7 +1494,8 @@ class FFmpegTranscoder(BaseTranscoder):
         input_url = self._get_presigned_url(s3_key)
         cmd = [
             "ffprobe", "-v", "error", "-print_format", "json",
-            "-show_streams", "-select_streams", "v:0", "-show_format", input_url,
+            "-show_streams", "-select_streams", _PRIMARY_VIDEO_STREAM,
+            "-show_format", input_url,
         ]
         stdout = self._run(cmd, timeout=120, label="ffprobe")
         meta = parse_probe_metadata(json.loads(stdout))
@@ -1505,7 +1509,7 @@ class FFmpegTranscoder(BaseTranscoder):
         thumb_dir = tempfile.mkdtemp()
         try:
             cmd = [
-                "ffmpeg", "-i", input_url,
+                "ffmpeg", "-i", input_url, "-map", f"0:{_PRIMARY_VIDEO_STREAM}",
                 "-vf", "fps=0.1,format=yuvj420p",
                 "-q:v", "2",
                 f"{thumb_dir}/thumb_%04d.jpg",
@@ -1538,7 +1542,8 @@ class FFmpegTranscoder(BaseTranscoder):
             # _run() already fail-fasts on non-zero exit.
             cmd = [
                 "ffprobe", "-v", "error", "-print_format", "json",
-                "-show_streams", "-select_streams", "v:0", "-show_format", input_url,
+                "-show_streams", "-select_streams", _PRIMARY_VIDEO_STREAM,
+                "-show_format", input_url,
             ]
             vid_info = self._run(cmd, timeout=120, label="ffprobe")
             vid_data = json.loads(vid_info)
@@ -1546,7 +1551,7 @@ class FFmpegTranscoder(BaseTranscoder):
             if meta is None:
                 # No video stream. Every rung of the ladder would be filtered
                 # out, the "never emit an empty ladder" fallback would re-add
-                # one anyway, and ffmpeg would die on `[v:0] matches no
+                # one anyway, and ffmpeg would die on `[0:V:0] matches no
                 # streams` -- an error that says nothing about the real cause.
                 # Report it as its own outcome so the caller can decide; an
                 # audio-only file in a video container is a normal upload, not
@@ -1706,7 +1711,10 @@ class FFmpegTranscoder(BaseTranscoder):
                 that, and the alternative would be re-encoding, which is the
                 thing being avoided.
                 """
-                cmd = ["ffmpeg", "-y", "-i", input_url, "-map", "0:v:0"]
+                cmd = [
+                    "ffmpeg", "-y", "-i", input_url,
+                    "-map", f"0:{_PRIMARY_VIDEO_STREAM}",
+                ]
                 if has_audio:
                     cmd += ["-map", "0:a:0"]
                 cmd += ["-c:v", "copy"]
@@ -1765,7 +1773,7 @@ class FFmpegTranscoder(BaseTranscoder):
                     # the source's bt2020 primaries in frame metadata.  Normalize
                     # all three Rec.709 tags before the software encoder.
                     _lp += ",setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"
-                    hdr_prefix = f"[v:0]{_lp}[tcpu];"
+                    hdr_prefix = f"[0:{_PRIMARY_VIDEO_STREAM}]{_lp}[tcpu];"
                     src = "[tcpu]"
                 elif is_hdr:
                     # Normalize HDR to 10-bit p010, tone-map to Rec.709 SDR (or keep
@@ -1777,7 +1785,7 @@ class FFmpegTranscoder(BaseTranscoder):
                     # (no hwdownload/hwupload) -- this is what lets HDR decode work
                     # on CPU-only and ARM self-hosts with no GPU.
                     if backend == "cpu":
-                        hdr_prefix = "[v:0]format=p010"
+                        hdr_prefix = f"[0:{_PRIMARY_VIDEO_STREAM}]format=p010"
                         if tone_map:
                             hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
                                            f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
@@ -1785,7 +1793,7 @@ class FFmpegTranscoder(BaseTranscoder):
                         hdr_prefix += "[tcpu];"
                         src = "[tcpu]"
                     else:
-                        hdr_prefix = "[v:0]hwdownload,format=p010"
+                        hdr_prefix = f"[0:{_PRIMARY_VIDEO_STREAM}]hwdownload,format=p010"
                         if tone_map:
                             hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
                                            f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
@@ -1794,7 +1802,7 @@ class FFmpegTranscoder(BaseTranscoder):
                         src = "[t]"
                 else:
                     hdr_prefix = ""
-                    src = "[v:0]"
+                    src = f"[0:{_PRIMARY_VIDEO_STREAM}]"
                 # Scale-filter suffix: append 10-bit surface forcing when requested.
                 scale_extra = _BACKEND_SCALE_OPTS.get(backend, "")
                 _sf = _BACKEND_SCALE_FORMAT.get(backend, {}).get(
