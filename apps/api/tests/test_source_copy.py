@@ -35,6 +35,7 @@ def _transcode(
     trace_silent: bool = False,
     remux_fails: bool = False,
     hls_commands: int = 1,
+    first_packet: dict | None = None,
 ):
     """Run a transcode with everything mocked; return (hls command, result).
 
@@ -63,10 +64,13 @@ def _transcode(
             if entries.startswith("packet="):
                 # Sync samples, plus one ordinary frame so the "K" filter is
                 # doing something rather than counting every packet.
-                mock.stdout = json.dumps({"packets": [
-                    *({"pts_time": f"{t:.6f}", "flags": "K_"} for t in times),
-                    {"pts_time": "0.040000", "flags": "__"},
-                ]})
+                mock.stdout = json.dumps({
+                    "packets": (
+                        ([first_packet] if first_packet is not None else [])
+                        + [{"pts_time": f"{t:.6f}", "flags": "K_"} for t in times]
+                        + [{"pts_time": "0.040000", "flags": "__"}]
+                    ),
+                })
             elif selected == "V:0":
                 mock.stdout = json.dumps({"streams": [stream]})
             elif selected == "a":
@@ -236,6 +240,20 @@ def test_a_rung_below_the_source_is_encoded():
 
     assert not _copies(cmd)
     assert "scale=1280:720" in cmd[cmd.index("-filter_complex") + 1]
+
+
+@pytest.mark.parametrize(
+    "first_packet",
+    [
+        pytest.param({"pts_time": "-7.320000", "flags": "_D_"}, id="discard-flag"),
+        pytest.param({"pts_time": "-7.320000", "flags": "__"}, id="negative-pts"),
+    ],
+)
+def test_a_trimmed_source_is_encoded_instead_of_remuxed(first_packet):
+    cmd, _, _ = _transcode(["1080p"], first_packet=first_packet)
+
+    assert not _copies(cmd)
+    assert "-filter_complex" in cmd
 
 
 def test_ten_bit_h264_is_encoded():

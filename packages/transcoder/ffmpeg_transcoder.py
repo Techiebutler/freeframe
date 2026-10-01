@@ -1292,6 +1292,23 @@ class FFmpegTranscoder(BaseTranscoder):
         except (RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             return f"the keyframe probe failed ({exc})"
 
+        if any("D" in (packet.get("flags") or "") for packet in packets):
+            return (
+                f"the source has packets marked for discard{where}; an HLS MPEG-TS "
+                "remux cannot preserve the source trim"
+            )
+
+        if start <= 0 and packets:
+            try:
+                first_pts = float(packets[0].get("pts_time"))
+            except (TypeError, ValueError):
+                first_pts = None
+            if first_pts is not None and first_pts < 0:
+                return (
+                    f"the first packet has a negative PTS ({first_pts:g}s){where}; "
+                    "stream-copy would include trimmed pre-roll"
+                )
+
         keyframe_times: list[float] = []
         for packet in packets:
             if "K" not in (packet.get("flags") or ""):
