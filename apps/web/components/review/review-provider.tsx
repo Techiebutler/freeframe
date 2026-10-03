@@ -331,7 +331,17 @@ export function ReviewProvider({
           headers,
           body: JSON.stringify({ ...payload, ...guestFields, asset_id: assetId }),
         });
-        if (!res.ok) throw new Error("Failed to post comment");
+        if (!res.ok) {
+          // Surface the server's reason (e.g. "Parent comment not found on this
+          // asset") so a failed reply can say why. A 422's `detail` is a list,
+          // and a proxy error may have no JSON body: both fall back.
+          let detail = "";
+          try {
+            const data = await res.json();
+            if (typeof data?.detail === "string") detail = data.detail;
+          } catch {}
+          throw new Error(detail || "Failed to post comment");
+        }
         comment = await res.json();
       } else {
         comment = await api.post<Comment>(

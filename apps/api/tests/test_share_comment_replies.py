@@ -149,3 +149,21 @@ def test_a_top_level_guest_comment_is_unchanged(real_db, monkeypatch):
     saved = real_db.query(Comment).filter(Comment.id == result.id).first()
     assert saved.parent_id is None
     assert saved.version_id == v2.id
+
+
+def test_a_reply_with_another_assets_version_is_refused(real_db, monkeypatch):
+    """The parent's version wins for a reply, but a supplied `version_id` is still
+    checked first (#444). A reply to a comment on the shared asset that names a
+    version of a different asset is a 400, and nothing is stored."""
+    from fastapi import HTTPException
+    from apps.api.models.comment import Comment
+
+    owner, link, [(asset, [v1, _]), (_, [other_v1])] = _seed(real_db, monkeypatch)
+    parent = _comment(real_db, asset, v1, owner)
+    before = real_db.query(Comment).count()
+
+    with pytest.raises(HTTPException) as exc:
+        _guest_reply(link, parent.id, version_id=other_v1.id)(real_db)
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "version_id does not belong to this asset"
+    assert real_db.query(Comment).count() == before
