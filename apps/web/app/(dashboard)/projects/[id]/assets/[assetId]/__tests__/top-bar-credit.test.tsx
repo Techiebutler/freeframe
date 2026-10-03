@@ -40,7 +40,11 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('swr', () => ({
   default: (key: string) => ({
-    data: typeof key === 'string' && key.endsWith('/assets') ? allAssets : undefined,
+    data: typeof key !== 'string' ? undefined
+      : key.endsWith('/assets') ? allAssets
+      // An editor, so the page renders its composer.
+      : key.endsWith('/members') ? [{ user_id: 'u1', role: 'editor' }]
+      : undefined,
   }),
 }))
 vi.mock('@/components/review/review-provider', () => ({
@@ -105,8 +109,15 @@ vi.mock('@/components/review/annotation-canvas', () => ({ AnnotationCanvas: () =
 vi.mock('@/components/review/annotation-overlay', () => ({ AnnotationOverlay: () => null }))
 vi.mock('@/components/review/comment-panel', () => ({ CommentPanel: () => null }))
 vi.mock('@/components/review/comment-input', () => ({ CommentInput: () => null }))
+/** useMediaQuery is false here, so the page hands its composer to the sheet. */
+const { sheetComposers } = vi.hoisted(() => ({
+  sheetComposers: [] as Array<{ props: Record<string, unknown> } | undefined>,
+}))
 vi.mock('@/components/review/mobile-comment-sheet', () => ({
-  MobileCommentSheet: () => null,
+  MobileCommentSheet: ({ composer }: { composer?: { props: Record<string, unknown> } }) => {
+    sheetComposers.push(composer)
+    return null
+  },
   PEEK_PX: 56,
 }))
 vi.mock('@/components/review/version-switcher', () => ({ VersionSwitcher: () => null }))
@@ -179,5 +190,22 @@ describe('the credit and the asset navigator in the top bar', () => {
     // this test still green.
     expect(credit.className.split(/\s+/)).toContain('hidden')
     expect(credit.className.split(/\s+/)).toContain('lg:inline-flex')
+  })
+})
+
+// Rides on this file's page harness. Share pages hide the Public / Internal
+// toggle because a share link never shows an internal comment back; the
+// project review page is where the team files them, so it must keep it.
+describe('the review page composer', () => {
+  beforeEach(() => {
+    sheetComposers.length = 0
+  })
+
+  it('keeps the Public / Internal toggle', () => {
+    renderPage()
+
+    const composer = sheetComposers.at(-1)
+    expect(composer).toBeDefined()
+    expect(composer!.props.allowInternal).not.toBe(false)
   })
 })

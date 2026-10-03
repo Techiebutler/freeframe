@@ -224,6 +224,7 @@ function ShareReviewInner({
       assetId={asset.id}
       projectId=""
       assetType={asset.asset_type}
+      allowInternal={false}
       onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
         const hasAuth = !!localStorage.getItem('ff_access_token')
         const hasGuest = !!localStorage.getItem('ff_guest_identity')

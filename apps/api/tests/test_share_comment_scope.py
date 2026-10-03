@@ -203,3 +203,98 @@ def test_export_leaves_out_a_row_filed_under_another_asset(real_db, seed):
     csv = resp.body.decode("utf-8")
     assert "genuine b comment" in csv
     assert "filed under a" not in csv
+
+
+# ── visibility ────────────────────────────────────────────────────────────────
+#
+# `GuestCommentCreate` had no visibility field, so an "internal" comment posted
+# through a share link was stored as public and the share listing then returned
+# it to every link holder. Internal now needs a caller who can open the asset,
+# and is refused rather than downgraded otherwise.
+
+def _post_as(real_db, link, user, **body):
+    from apps.api.schemas.comment import GuestCommentCreate
+    import apps.api.routers.comments as comments_module
+    body.setdefault("body", "a signed-in note")
+    return comments_module.guest_comment(
+        link.token, GuestCommentCreate(**body),
+        share_session=None, db=real_db, current_user=user,
+    )
+
+
+def _listed_to_a_signed_out_caller(real_db, link):
+    import apps.api.routers.comments as comments_module
+    listed = comments_module.list_share_comments(
+        link.token, asset_id=None, version_id=None, latest_only=False,
+        share_session=None, db=real_db, current_user=None,
+    )
+    return [c.body for c in listed]
+
+
+def _member(real_db, project):
+    from apps.api.models.project import ProjectMember, ProjectRole
+    member = _user(real_db, "member")
+    real_db.add(ProjectMember(project_id=project.id, user_id=member.id,
+                              role=ProjectRole.reviewer))
+    real_db.flush()
+    return member
+
+
+def test_an_internal_comment_from_a_project_member_stays_internal(real_db, seed):
+    member = _member(real_db, seed["project_a"])
+
+    _post_as(real_db, seed["link"], member, body="team only", visibility="internal")
+
+    [saved] = _comments_with_body(real_db, "team only")
+    assert saved.visibility == "internal"
+    assert saved.author_id == member.id
+    assert "team only" not in _listed_to_a_signed_out_caller(real_db, seed["link"])
+
+
+def test_an_internal_comment_from_an_anonymous_guest_is_refused(real_db, seed):
+    from fastapi import HTTPException
+    from apps.api.models.user import GuestUser
+
+    with pytest.raises(HTTPException) as exc:
+        _post(real_db, seed["link"], body="guest internal", visibility="internal")
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Internal comments require access to the asset"
+    assert _comments_with_body(real_db, "guest internal") == []
+    # Refused before the guest identity is written, too.
+    assert real_db.query(GuestUser).filter(GuestUser.email == "guest@t.local").count() == 0
+
+
+def test_an_internal_comment_from_a_signed_in_user_without_access_is_refused(real_db, seed):
+    """Holding the link and an account is not access to the asset."""
+    from fastapi import HTTPException
+
+    outsider = _user(real_db, "outsider")
+
+    with pytest.raises(HTTPException) as exc:
+        _post_as(real_db, seed["link"], outsider, body="outsider internal", visibility="internal")
+
+    assert exc.value.status_code == 403
+    assert _comments_with_body(real_db, "outsider internal") == []
+
+
+def test_a_comment_with_no_visibility_is_still_public(real_db, seed):
+    member = _member(real_db, seed["project_a"])
+
+    _post_as(real_db, seed["link"], member, body="member default")
+    _post(real_db, seed["link"], body="guest default")
+    _post(real_db, seed["link"], body="guest explicit", visibility="public")
+
+    for text in ("member default", "guest default", "guest explicit"):
+        [saved] = _comments_with_body(real_db, text)
+        assert saved.visibility == "public"
+    listed = _listed_to_a_signed_out_caller(real_db, seed["link"])
+    assert {"member default", "guest default", "guest explicit"} <= set(listed)
+
+
+def test_an_unknown_visibility_is_rejected_by_the_schema():
+    from pydantic import ValidationError
+    from apps.api.schemas.comment import GuestCommentCreate
+
+    with pytest.raises(ValidationError):
+        GuestCommentCreate(body="x", visibility="secret")

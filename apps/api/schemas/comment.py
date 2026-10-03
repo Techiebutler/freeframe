@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, field_validator
 import uuid
 from datetime import datetime
 from typing import Optional
+from ..models.comment import CommentVisibility
 
 class AnnotationData(BaseModel):
     drawing_data: dict  # Fabric.js canvas JSON
@@ -25,6 +26,8 @@ class GuestCommentCreate(BaseModel):
     timecode_start: Optional[float] = None
     timecode_end: Optional[float] = None
     body: str
+    # "internal" is accepted only from a signed-in caller who can open the asset.
+    visibility: CommentVisibility = CommentVisibility.public
     annotation: Optional[AnnotationData] = None
     guest_email: Optional[str] = None  # Not needed if user is logged in
     guest_name: Optional[str] = None

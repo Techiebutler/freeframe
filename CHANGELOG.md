@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A share-link comment now stays on the asset the link points at.** `POST /share/{token}/comment` accepted any `version_id` without checking that it belonged to the shared asset, so a comment could be filed against a version of a different asset and show up in that asset's comment export. A supplied `version_id` must now be a live version of the shared asset, or the request gets a 400, the same rule `POST /assets/{id}/comments` already applied. The export also filters on the asset, so a row written before this fix is no longer included.
 - **An `@mention` in a share-link comment now only notifies people who can see the asset.** The 1.7.4 access check on mentions covered signed-in comments but not the share-link path, which created a mention and an in-app notification for any registered email. Share-link mentions now apply the same check. They still send no email.
+- **An internal comment posted from a share link now stays internal.** `POST /share/{token}/comment` had no `visibility` field, so a signed-in team member who chose Internal on a share page got a 201 and a comment stored as public, which the share link then showed to everyone holding it. The endpoint now takes `visibility`, stores it, and refuses `internal` with a 403 unless the caller is signed in and can access the asset. Share pages no longer offer the Public / Internal toggle, since the share link never shows an internal comment back.
 
 ## [1.15.1] - 2026-10-03
 

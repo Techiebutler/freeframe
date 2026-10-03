@@ -16,7 +16,7 @@ from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
-from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction
+from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction, CommentVisibility
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
 from ..models.user import User, GuestUser
 from ..models.share import ShareLink, ShareLinkActivity, ShareActivityAction, SharePermission
@@ -1023,6 +1023,15 @@ def guest_comment(
         else:
             raise HTTPException(status_code=400, detail="No ready version found for this asset")
 
+    # An internal comment is team-only and the share listing never returns one,
+    # so only a caller with real access to the asset may file it here. The field
+    # used to be dropped, which stored a signed-in member's internal note as
+    # public and showed it to every link holder. Refuse rather than downgrade.
+    if body.visibility == CommentVisibility.internal and not (
+        current_user is not None and can_access_asset(db, asset, current_user)
+    ):
+        raise HTTPException(status_code=403, detail="Internal comments require access to the asset")
+
     # Determine author: logged-in user or guest
     author_id = None
     guest_author_id = None
@@ -1048,6 +1057,7 @@ def guest_comment(
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
         body=body.body,
+        visibility=body.visibility.value,
     )
     db.add(comment)
     db.flush()
