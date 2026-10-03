@@ -1301,6 +1301,12 @@ def get_folder_share_assets(
             f = db.query(Folder).filter(Folder.id == folder_id, Folder.deleted_at.is_(None)).first()
             if not f or f.project_id != link.project_id:
                 raise HTTPException(status_code=403, detail="Folder is not within the shared project")
+            # Multi-share: only the shared folders and their descendants, the same rule
+            # validate_asset_in_share applies to assets
+            if is_multi_share:
+                multi_folder_ids = [item.folder_id for item in multi_share_items if item.folder_id]
+                if not any(folder_id == fid or _is_descendant_of(db, folder_id, fid) for fid in multi_folder_ids):
+                    raise HTTPException(status_code=403, detail="Folder is not in the shared items")
         elif folder_id != link.folder_id and not _is_descendant_of(db, folder_id, link.folder_id):
             raise HTTPException(status_code=403, detail="Folder is not within the shared folder")
         target_folder_id = folder_id
