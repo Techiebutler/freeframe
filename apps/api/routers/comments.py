@@ -16,7 +16,7 @@ from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
-from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction
+from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction, CommentVisibility
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
 from ..models.user import User, GuestUser
 from ..models.share import ShareLink, ShareLinkActivity, ShareActivityAction, SharePermission
@@ -842,7 +842,11 @@ def export_comments(
             if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
                 raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
 
+    # The asset filter is not redundant: a row filed under another asset with this
+    # version's id (written before guest comments validated version_id) must not
+    # be exported as one of this version's comments.
     comments = db.query(Comment).filter(
+        Comment.asset_id == asset.id,
         Comment.version_id == version.id,
         Comment.deleted_at.is_(None),
     ).order_by(Comment.created_at.asc()).all()
@@ -1013,10 +1017,23 @@ def guest_comment(
         if not parent:
             raise HTTPException(status_code=400, detail="Parent comment not found on this asset")
 
+    version_id = body.version_id
+    # A supplied version has to belong to the asset the link resolved, not merely
+    # exist. Without the check the id was written straight through, and the export
+    # selects a version's comments by version_id, so a comment filed here could
+    # surface in another asset's export.
+    if version_id:
+        owned = db.query(AssetVersion).filter(
+            AssetVersion.id == version_id, AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+        ).first()
+        if not owned:
+            raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
+
     # Resolve version_id: the parent's for a reply, else provided, else the latest ready version
-    version_id = parent.version_id if parent else body.version_id
-    if not version_id:
-        from ..models.asset import AssetVersion, ProcessingStatus
+    if parent:
+        version_id = parent.version_id
+    elif not version_id:
         latest = db.query(AssetVersion).filter(
             AssetVersion.asset_id == asset.id,
             AssetVersion.deleted_at.is_(None),
@@ -1026,6 +1043,15 @@ def guest_comment(
             version_id = latest.id
         else:
             raise HTTPException(status_code=400, detail="No ready version found for this asset")
+
+    # An internal comment is team-only and the share listing never returns one,
+    # so only a caller with real access to the asset may file it here. The field
+    # used to be dropped, which stored a signed-in member's internal note as
+    # public and showed it to every link holder. Refuse rather than downgrade.
+    if body.visibility == CommentVisibility.internal and not (
+        current_user is not None and can_access_asset(db, asset, current_user)
+    ):
+        raise HTTPException(status_code=403, detail="Internal comments require access to the asset")
 
     # Determine author: logged-in user or guest
     author_id = None
@@ -1052,6 +1078,7 @@ def guest_comment(
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
         body=body.body,
+        visibility=body.visibility.value,
     )
     db.add(comment)
     db.flush()
@@ -1061,7 +1088,8 @@ def guest_comment(
     for email in set(emails):
         from ..services.auth_service import get_user_by_email
         user = get_user_by_email(db, email)
-        if user:
+        # Same rule as _create_mentions: only someone who can see the asset is told about it.
+        if user and can_access_asset(db, asset, user):
             mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
             db.add(mention)
             notif = Notification(

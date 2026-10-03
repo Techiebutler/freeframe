@@ -261,6 +261,7 @@ function ShareReviewInner({
       assetId={asset.id}
       projectId=""
       assetType={asset.asset_type}
+      allowInternal={false}
       onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
         if (!hasIdentity()) {
           pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData }

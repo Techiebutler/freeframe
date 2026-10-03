@@ -45,4 +45,24 @@ describe('folder share — opening an asset mounts the review UI (#192)', () => 
     await waitFor(() => expect(screen.getByText('Fields')).toBeInTheDocument(), { timeout: 3000 })
     expect(screen.getByText('Comments')).toBeInTheDocument()
   })
+
+  // An internal comment is team-only: the share listing never returns one and
+  // the API refuses one from a caller without access to the asset. So the share
+  // composer offers no Public / Internal choice, guest or signed in.
+  it('gives the share composer no visibility toggle', async () => {
+    render(
+      <FolderShareViewer
+        token="t" folderName="F" title="T" description={null}
+        permission="comment" allowDownload={false} showVersions={false}
+        appearance={{ open_in_viewer: true } as never} branding={null}
+      />,
+    )
+
+    await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
+    fireEvent.doubleClick(screen.getByText('Clip.mp4'))
+
+    await waitFor(() => expect(screen.getAllByPlaceholderText('Leave your comment...').length).toBeGreaterThan(0), { timeout: 3000 })
+    expect(screen.queryByRole('button', { name: 'Public' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Internal' })).toBeNull()
+  })
 })
