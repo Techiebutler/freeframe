@@ -7,12 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-10-03
+
+### Upgrade notes
+
+- **No migrations, and no new settings.** If you run v1.15.0, upgrade: its stylesheet leaves every hover-revealed control invisible (see the first fix below). v1.14.1 is not affected.
+
 ### Fixed
 
-- **Hover-revealed controls appear again, including a comment's resolve check** — the dependency bump in #414 pinned `postcss-selector-parser@6.1.2` to 6.1.3, a broken release that its maintainers replaced with 6.1.4 a few hours later. With 6.1.3 installed, Tailwind emitted no `group-*` or `peer-*` rule at all: the production stylesheet had zero `group-hover` selectors, against 17 with the fix. Every control that is `opacity-0` until its group is hovered stayed invisible. That covers a comment's resolve check and its "⋯" menu, the grid cards' menus and the scrubber thumb. Nothing failed while it was broken: the build, the type check and every component test passed. The override now points at 6.1.4, and a new test compiles `group-hover`, a named group, `group-hover` under an arbitrary media variant and `peer-hover` through the app's own Tailwind config, so a dependency that drops them again fails CI instead.
-- **Head-trimmed MP4/MOV uploads no longer restore cut footage in stream-copy HLS
-  renditions.** Sources with discard-flagged packets or a negative first-packet
-  PTS now use the encode path (#431).
+- **Hover-revealed controls appear again, including a comment's resolve check.** The dependency bump in #414 pinned `postcss-selector-parser@6.1.2` to 6.1.3, a broken release that its maintainers replaced with 6.1.4 a few hours later. With 6.1.3 installed, Tailwind emitted no `group-*` or `peer-*` rule at all: the production stylesheet had zero `group-hover` selectors, against 17 with the fix. Every control that is `opacity-0` until its group is hovered stayed invisible. That covers a comment's resolve check and its "⋯" menu, the grid cards' menus and the scrubber thumb. Nothing failed while it was broken: the build, the type check and every component test passed. The override now points at 6.1.4, and a new test compiles `group-hover`, a named group, `group-hover` under an arbitrary media variant and `peer-hover` through the app's own Tailwind config, so a dependency that drops them again fails CI instead. (#435 by @CamReport)
+- **Head-trimmed MP4/MOV uploads no longer restore cut footage in stream-copy HLS renditions.** This was the known issue listed for the opt-in `TRANSCODER_SOURCE_COPY` in 1.15.0. Sources with discard-flagged packets or a negative first-packet PTS now use the encode path. A trim at the end of a file, or an edit list in the middle of one, can still fall outside the stretches the copy gate samples and be copied as before. (#431, #436 by @sb123sb123)
+
+### Contributors
+
+Thank you to @CamReport and @sb123sb123 for the pull requests in this release.
 
 ## [1.15.0] - 2026-10-01
 
