@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- EDL exports use the source video's embedded start timecode by default, while preserving explicit `start_tc` overrides and falling back to 01:00:00:00 when no valid source timecode is available.
+
 ## [1.15.0] - 2026-10-01
 
 ### Upgrade notes
