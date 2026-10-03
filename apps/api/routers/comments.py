@@ -16,7 +16,14 @@ from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
-from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction, CommentVisibility
+from ..models.comment import (
+    Annotation,
+    Comment,
+    CommentAttachment,
+    CommentReaction,
+    CommentVisibility,
+    COMMENT_TREE_MAX_DEPTH,
+)
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
 from ..models.user import User, GuestUser
 from ..models.share import ShareLink, ShareLinkActivity, ShareActivityAction, SharePermission
@@ -111,7 +118,7 @@ def _build_comment_response(
     comment: Comment,
     db: Session,
     current_user_id: uuid.UUID | None = None,
-    depth: int = 5,
+    depth: int = COMMENT_TREE_MAX_DEPTH,
 ) -> CommentResponse:
     annotation = db.query(Annotation).filter(Annotation.comment_id == comment.id).first()
     replies_raw = []
@@ -179,7 +186,7 @@ def _build_comment_responses_batched(
     top_level: list[Comment],
     db: Session,
     current_user_id: uuid.UUID | None = None,
-    max_depth: int = 5,
+    max_depth: int = COMMENT_TREE_MAX_DEPTH,
     exclude_internal: bool = False,
 ) -> list[CommentResponse]:
     """Build the comment tree for `top_level` with a FIXED number of queries

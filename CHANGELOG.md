@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Share-grid comment counts now match what a share visitor can read.** Internal comments and replies beneath hidden comments no longer inflate the count. (#446)
 - **Replies posted on a share link are saved.** The share review screen handed the comment panel a no-op reply handler, so a reply cleared its box and sent nothing. Folder and project links have had this since v1.0.0, and single-asset links since v1.13.0, when they moved onto the same review screen. Replies now go through the same path as top-level comments, with `parent_id` set, and appear once the thread refetches. A guest without a name yet is asked first, and the typed reply waits in its box instead of being lost. A failed reply keeps its text and says why. On a view-only link, Reply is no longer offered. (#439, #443 by @oliverstreetcreative)
 - **The project page's comment sidebar had the same dead reply box.** It now posts through `useComments().createComment` with the parent. (#439, #443 by @oliverstreetcreative)
 - **`POST /share/{token}/comment` checks a reply's parent.** The parent must be a live, non-internal comment on the asset the link resolves to. Before, an unknown `parent_id` answered 500, and a parent on another asset, a deleted parent, or an internal one was accepted. A share-link reply also now takes its parent's version, as `POST /assets/{id}/comments/{id}/replies` does. (#439, #443 by @oliverstreetcreative)
