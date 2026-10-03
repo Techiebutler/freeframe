@@ -8,5 +8,5 @@
 #   alongside; the suite drives asyncio via asyncio.run() in sync tests rather
 #   than the plugin's markers, so the 0.x -> 1.x jump is dependencies-only here.
 -r requirements.txt
-pytest==9.0.3
+pytest==9.1.1
 pytest-asyncio==1.4.0
