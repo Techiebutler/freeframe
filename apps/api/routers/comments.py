@@ -842,7 +842,11 @@ def export_comments(
             if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
                 raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
 
+    # The asset filter is not redundant: a row filed under another asset with this
+    # version's id (written before guest comments validated version_id) must not
+    # be exported as one of this version's comments.
     comments = db.query(Comment).filter(
+        Comment.asset_id == asset.id,
         Comment.version_id == version.id,
         Comment.deleted_at.is_(None),
     ).order_by(Comment.created_at.asc()).all()
@@ -997,8 +1001,18 @@ def guest_comment(
 
     # Resolve version_id: use provided or get latest ready version
     version_id = body.version_id
-    if not version_id:
-        from ..models.asset import AssetVersion, ProcessingStatus
+    # A supplied version has to belong to the asset the link resolved, not merely
+    # exist. Without the check the id was written straight through, and the export
+    # selects a version's comments by version_id, so a comment filed here could
+    # surface in another asset's export.
+    if version_id:
+        owned = db.query(AssetVersion).filter(
+            AssetVersion.id == version_id, AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+        ).first()
+        if not owned:
+            raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
+    else:
         latest = db.query(AssetVersion).filter(
             AssetVersion.asset_id == asset.id,
             AssetVersion.deleted_at.is_(None),
@@ -1043,7 +1057,8 @@ def guest_comment(
     for email in set(emails):
         from ..services.auth_service import get_user_by_email
         user = get_user_by_email(db, email)
-        if user:
+        # Same rule as _create_mentions: only someone who can see the asset is told about it.
+        if user and can_access_asset(db, asset, user):
             mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
             db.add(mention)
             notif = Notification(
