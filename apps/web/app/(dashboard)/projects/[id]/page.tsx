@@ -157,6 +157,7 @@ export default function ProjectDetailPage() {
     deleteComment,
     addReaction,
     removeReaction,
+    createComment,
   } = useComments(selectedAsset?.id || null, selectedVersionId);
 
   const { data: project, isLoading: loadingProject } = useSWR<Project>(
@@ -1067,7 +1068,10 @@ export default function ProjectDetailPage() {
                         onAddReaction={addReaction}
                         onRemoveReaction={removeReaction}
                         onReply={() => {}}
-                        onSubmitReply={async () => {}}
+                        // Was a no-op: the reply box cleared and saved nothing.
+                        onSubmitReply={async (parentId: string, body: string) => {
+                          await createComment(body, undefined, undefined, undefined, parentId);
+                        }}
                       />
                     ) : (
                       <div className="flex-1 flex items-center justify-center p-6 text-center">

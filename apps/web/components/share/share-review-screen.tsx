@@ -21,6 +21,15 @@ import { formatTimecode } from '@/lib/utils'
 import type { SharePermission } from '@/types'
 import { handleDownload } from './share-download'
 
+/** Signed in, or a guest who has already given a name and email. */
+function hasIdentity(): boolean {
+  try {
+    return !!localStorage.getItem('ff_access_token') || !!localStorage.getItem('ff_guest_identity')
+  } catch {
+    return false
+  }
+}
+
 export function ShareReviewScreen({
   token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack,
 }: {
@@ -152,7 +161,14 @@ function ShareReviewInner({
   // Guest identity flow for non-authenticated users
   const [guestIdentity, setGuestIdentity] = React.useState<{ name: string; email: string } | null>(null)
   const [showGuestPrompt, setShowGuestPrompt] = React.useState(false)
-  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown> } | null>(null)
+  // What was typed before the guest had a name. A reply also carries its parent
+  // and the promise its InlineReplyInput is waiting on, so the typed text stays
+  // in the box until it is really sent (or the prompt is dismissed).
+  const pendingCommentRef = React.useRef<{
+    body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown>
+    parentId?: string
+    settle?: { resolve: () => void; reject: (e: Error) => void }
+  } | null>(null)
   React.useEffect(() => {
     try {
       const stored = localStorage.getItem('ff_guest_identity')
@@ -161,15 +177,31 @@ function ShareReviewInner({
   }, [])
   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
-  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
+  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
     const payload: CreateCommentPayload = { body }
     if (currentVersion?.id) payload.version_id = currentVersion.id
+    if (parentId) payload.parent_id = parentId
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
     if (annotationData) payload.annotation = { drawing_data: annotationData }
     await addComment(payload)
-    refetchComments().catch(() => {})
+    // The optimistic append only ever shows top-level rows (CommentPanel renders
+    // replies from their parent), so a reply is not on screen until the refetch.
+    if (parentId) await refetchComments().catch(() => {})
+    else refetchComments().catch(() => {})
   }, [addComment, currentVersion, refetchComments])
+
+  const submitReply = React.useCallback(async (parentId: string, body: string) => {
+    if (!hasIdentity()) {
+      // Resolved once the guest names themselves and the reply is sent; until
+      // then the reply box keeps what was typed.
+      return new Promise<void>((resolve, reject) => {
+        pendingCommentRef.current = { body, parentId, settle: { resolve, reject } }
+        setShowGuestPrompt(true)
+      })
+    }
+    await submitComment(body, undefined, undefined, undefined, parentId)
+  }, [submitComment])
 
   const handleGuestIdentitySave = React.useCallback(async (name: string, email: string) => {
     const identity = { name, email }
@@ -179,9 +211,13 @@ function ShareReviewInner({
 
     // Auto-submit the pending comment
     if (pendingCommentRef.current) {
-      const { body, timecodeStart, timecodeEnd, annotationData } = pendingCommentRef.current
+      const { body, timecodeStart, timecodeEnd, annotationData, parentId, settle } = pendingCommentRef.current
       pendingCommentRef.current = null
-      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData), 50)
+      setTimeout(() => {
+        submitComment(body, timecodeStart, timecodeEnd, annotationData, parentId)
+          .then(() => settle?.resolve())
+          .catch((e) => settle?.reject(e instanceof Error ? e : new Error('Failed to post comment')))
+      }, 50)
     }
   }, [submitComment])
 
@@ -215,7 +251,8 @@ function ShareReviewInner({
       onAddReaction={() => {}}
       onRemoveReaction={() => {}}
       onReply={() => {}}
-      onSubmitReply={async () => {}}
+      // Undefined on a view-only link, which also hides Reply (#439).
+      onSubmitReply={canComment ? submitReply : undefined}
     />
   ) : null
 
@@ -225,9 +262,7 @@ function ShareReviewInner({
       projectId=""
       assetType={asset.asset_type}
       onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
-        const hasAuth = !!localStorage.getItem('ff_access_token')
-        const hasGuest = !!localStorage.getItem('ff_guest_identity')
-        if (!hasAuth && !hasGuest) {
+        if (!hasIdentity()) {
           pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData }
           setShowGuestPrompt(true)
           return
@@ -352,7 +387,12 @@ function ShareReviewInner({
       {showGuestPrompt && (
         <GuestIdentityPrompt
           onSave={handleGuestIdentitySave}
-          onCancel={() => { setShowGuestPrompt(false); pendingCommentRef.current = null }}
+          onCancel={() => {
+            setShowGuestPrompt(false)
+            // A quiet abort: the reply box keeps its text and shows no error.
+            pendingCommentRef.current?.settle?.reject(new Error(''))
+            pendingCommentRef.current = null
+          }}
         />
       )}
     </div>

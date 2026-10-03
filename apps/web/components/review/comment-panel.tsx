@@ -268,6 +268,7 @@ function InlineReplyInput({
 }) {
   const [body, setBody] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const emojiRef = React.useRef<HTMLDivElement>(null);
@@ -292,12 +293,17 @@ function InlineReplyInput({
     const trimmed = body.trim();
     if (!trimmed || submitting) return;
     setSubmitting(true);
+    setError(null);
     try {
       await onSubmit(parentId, trimmed);
       setBody("");
       onCancel();
-    } catch {
-      // error handled upstream
+    } catch (e) {
+      // Keep the typed reply and say why. Nothing upstream reported a failed
+      // reply, so it looked sent. An Error with an empty message is a
+      // deliberate quiet abort (e.g. the guest dismissed the name prompt).
+      const message = e instanceof Error ? e.message : "Couldn't send the reply";
+      setError(message || null);
     } finally {
       setSubmitting(false);
     }
@@ -320,6 +326,11 @@ function InlineReplyInput({
           if (e.key === "Escape") onCancel();
         }}
       />
+      {error && (
+        <p role="alert" className="mt-1.5 text-[12px] text-status-error">
+          {error}
+        </p>
+      )}
       <div className="flex items-center justify-between mt-2">
         <div className="flex items-center gap-1">
           <button className="h-7 w-7 flex items-center justify-center rounded-md text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary transition-colors">
@@ -642,7 +653,9 @@ function CommentItem({
 
           {/* Action row: Reply text + hover icons */}
           <div className="mt-1.5 flex items-center gap-2">
-            {depth === 0 && (
+            {/* No submit handler means nowhere to send a reply (a view-only
+                share link), so don't offer one. */}
+            {depth === 0 && onSubmitReply && (
               <button
                 className="text-[13px] font-medium text-text-tertiary hover:text-text-secondary transition-colors"
                 onClick={() => onReply(comment.id)}
