@@ -1,7 +1,10 @@
+import json
 import logging
 import re
+import subprocess
 import uuid
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
@@ -56,6 +59,88 @@ _START_TC_RE = re.compile(r"^\d{2}[:;]\d{2}[:;]\d{2}[:;]\d{2}$")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+_DEFAULT_EDL_START_TC = "01:00:00:00"
+
+
+def _start_timecode_is_valid(start_tc: str, spec) -> bool:
+    if not _START_TC_RE.fullmatch(start_tc):
+        return False
+    hh, mm, ss, ff = (int(part) for part in re.split(r"[:;]", start_tc))
+    return hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase
+
+
+def _probe_source_timecode(media_file: Optional[MediaFile], spec) -> Optional[str]:
+    raw_key = getattr(media_file, "s3_key_raw", None)
+    if not isinstance(raw_key, str) or not raw_key:
+        return None
+
+    try:
+        source_url = s3_service.generate_internal_presigned_get_url(raw_key, expires_in=300)
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type:stream_tags=timecode:format_tags=timecode",
+                "-of",
+                "json",
+                source_url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as exc:
+        log.warning(
+            "Could not probe embedded timecode for media file %s (%s)",
+            getattr(media_file, "id", None),
+            type(exc).__name__,
+        )
+        return None
+
+    if result.returncode != 0:
+        log.warning(
+            "ffprobe exited with status %s for media file %s",
+            result.returncode,
+            getattr(media_file, "id", None),
+        )
+        return None
+
+    try:
+        probe_data = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        log.warning(
+            "ffprobe returned invalid JSON for media file %s",
+            getattr(media_file, "id", None),
+        )
+        return None
+
+    if not isinstance(probe_data, dict):
+        return None
+
+    candidates = []
+    streams = probe_data.get("streams")
+    if isinstance(streams, list):
+        for stream in streams:
+            if not isinstance(stream, dict) or stream.get("codec_type") != "video":
+                continue
+            tags = stream.get("tags")
+            if isinstance(tags, dict) and isinstance(tags.get("timecode"), str):
+                candidates.append(tags["timecode"])
+
+    format_data = probe_data.get("format")
+    if isinstance(format_data, dict):
+        tags = format_data.get("tags")
+        if isinstance(tags, dict) and isinstance(tags.get("timecode"), str):
+            candidates.append(tags["timecode"])
+
+    return next(
+        (candidate for candidate in candidates if _start_timecode_is_valid(candidate, spec)),
+        None,
+    )
+
 
 def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
@@ -777,7 +862,7 @@ def export_comments(
     format: str = Query(...),
     version_id: Optional[uuid.UUID] = Query(default=None),
     fps: Optional[float] = Query(default=None, gt=0),
-    start_tc: str = Query(default="01:00:00:00"),
+    start_tc: Optional[str] = Query(default=None),
     include_resolved: bool = Query(default=True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -836,11 +921,14 @@ def export_comments(
                        + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
             )
         if format == "edl":
-            if not _START_TC_RE.match(start_tc):
+            if start_tc is None:
+                start_tc = _probe_source_timecode(media_file, spec) or _DEFAULT_EDL_START_TC
+            if not _START_TC_RE.fullmatch(start_tc):
                 raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
             hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
             if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
                 raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
+            edl_spec = replace(spec, drop_frame=spec.drop_frame and start_tc[-3] == ";")
 
     comments = db.query(Comment).filter(
         Comment.version_id == version.id,
@@ -896,7 +984,7 @@ def export_comments(
                     len(markers) - comment_export.EDL_MAX_EVENTS,
                 )
             content = comment_export.to_edl(
-                markers, spec, comment_export.tc_to_frames(start_tc, spec), asset.name)
+                markers, edl_spec, comment_export.tc_to_frames(start_tc, edl_spec), asset.name)
         elif format == "fcpxml":
             content = comment_export.to_fcpxml(markers, spec, asset.name, duration_frames)
         else:
