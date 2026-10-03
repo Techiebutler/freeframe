@@ -4,6 +4,7 @@ import re
 import subprocess
 import uuid
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
@@ -75,7 +76,7 @@ def _probe_source_timecode(media_file: Optional[MediaFile], spec) -> Optional[st
         return None
 
     try:
-        source_url = s3_service.generate_presigned_get_url(raw_key, expires_in=300)
+        source_url = s3_service.generate_internal_presigned_get_url(raw_key, expires_in=300)
         result = subprocess.run(
             [
                 "ffprobe",
@@ -927,6 +928,7 @@ def export_comments(
             hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
             if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
                 raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
+            edl_spec = replace(spec, drop_frame=spec.drop_frame and start_tc[-3] == ";")
 
     comments = db.query(Comment).filter(
         Comment.version_id == version.id,
@@ -982,7 +984,7 @@ def export_comments(
                     len(markers) - comment_export.EDL_MAX_EVENTS,
                 )
             content = comment_export.to_edl(
-                markers, spec, comment_export.tc_to_frames(start_tc, spec), asset.name)
+                markers, edl_spec, comment_export.tc_to_frames(start_tc, edl_spec), asset.name)
         elif format == "fcpxml":
             content = comment_export.to_fcpxml(markers, spec, asset.name, duration_frames)
         else:

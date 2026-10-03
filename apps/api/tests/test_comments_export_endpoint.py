@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from apps.api.models.asset import AssetType, ProcessingStatus
 
 
@@ -166,7 +168,7 @@ def test_edl_export_uses_source_embedded_start_timecode(client, mock_db, auth_he
     with (
         patch("apps.api.routers.comments.require_asset_access"),
         patch(
-            "apps.api.routers.comments.s3_service.generate_presigned_get_url",
+            "apps.api.routers.comments.s3_service.generate_internal_presigned_get_url",
             return_value="https://storage.example/original.mov",
         ) as presign,
         patch("subprocess.run", return_value=probe_result) as ffprobe,
@@ -202,7 +204,7 @@ def test_probe_uses_format_tag_after_invalid_video_tag():
     )
     with (
         patch(
-            "apps.api.routers.comments.s3_service.generate_presigned_get_url",
+            "apps.api.routers.comments.s3_service.generate_internal_presigned_get_url",
             return_value="https://storage.example/original.mov",
         ),
         patch("subprocess.run", return_value=probe_result),
@@ -210,6 +212,53 @@ def test_probe_uses_format_tag_after_invalid_video_tag():
         timecode = _probe_source_timecode(media, MagicMock(timebase=25))
 
     assert timecode == "00:40:00:00"
+
+
+@pytest.mark.parametrize(
+    ("source_tc", "expected_mode", "expected_record"),
+    [
+        ("00:59:55:00", "NON-DROP FRAME", "00:59:57:16"),
+        ("00:59:55;00", "DROP FRAME", "00:59:57;16"),
+    ],
+)
+def test_edl_export_preserves_source_drop_frame_mode(
+    client, mock_db, auth_headers, source_tc, expected_mode, expected_record
+):
+    asset, version = _asset(), _version()
+    media = _media(fps=29.97)
+    media.s3_key_raw = "original/demo.mov"
+    mock_db.first.side_effect = [asset, version, media]
+    mock_db.order_by.return_value = mock_db
+    mock_db.all.side_effect = [[_comment()]]
+
+    probe_result = subprocess.CompletedProcess(
+        ["ffprobe"],
+        0,
+        json.dumps({
+            "streams": [{
+                "codec_type": "video",
+                "tags": {"timecode": source_tc},
+            }],
+            "format": {"tags": {}},
+        }),
+        "",
+    )
+    with (
+        patch("apps.api.routers.comments.require_asset_access"),
+        patch(
+            "apps.api.routers.comments.s3_service.generate_internal_presigned_get_url",
+            return_value="http://minio:9000/original/demo.mov",
+        ),
+        patch("subprocess.run", return_value=probe_result),
+    ):
+        response = client.get(
+            f"/assets/{asset.id}/comments/export?format=edl&version_id={version.id}",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    assert f"FCM: {expected_mode}" in response.text
+    assert expected_record in response.text
 
 
 def test_edl_export_explicit_start_timecode_skips_source_probe(client, mock_db, auth_headers):
@@ -222,7 +271,7 @@ def test_edl_export_explicit_start_timecode_skips_source_probe(client, mock_db, 
 
     with (
         patch("apps.api.routers.comments.require_asset_access"),
-        patch("apps.api.routers.comments.s3_service.generate_presigned_get_url") as presign,
+        patch("apps.api.routers.comments.s3_service.generate_internal_presigned_get_url") as presign,
         patch("subprocess.run") as ffprobe,
     ):
         response = client.get(
@@ -257,7 +306,7 @@ def test_edl_export_falls_back_when_source_has_no_timecode(client, mock_db, auth
     with (
         patch("apps.api.routers.comments.require_asset_access"),
         patch(
-            "apps.api.routers.comments.s3_service.generate_presigned_get_url",
+            "apps.api.routers.comments.s3_service.generate_internal_presigned_get_url",
             return_value="https://storage.example/original.mov",
         ),
         patch("subprocess.run", return_value=probe_result),
