@@ -1100,6 +1100,17 @@ def guest_comment(
             )
             db.add(notif)
 
+    # Match the authenticated reply path: tell the parent author about a reply,
+    # unless they wrote the reply themselves. Guest-authored parents have no
+    # user to notify.
+    if parent and parent.author_id and parent.author_id != author_id:
+        db.add(Notification(
+            user_id=parent.author_id,
+            type=NotificationType.comment,
+            asset_id=asset.id,
+            comment_id=comment.id,
+        ))
+
     if body.annotation:
         annotation = Annotation(
             comment_id=comment.id,
