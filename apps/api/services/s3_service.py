@@ -536,6 +536,20 @@ def generate_presigned_get_url(s3_key: str, expires_in: int = 3600, download_fil
         ExpiresIn=expires_in,
     )
 
+def generate_internal_presigned_get_url(s3_key: str, expires_in: int = 3600) -> str:
+    """Generate a presigned GET URL using the API's configured S3 endpoint.
+
+    Unlike browser-facing URLs, this uses the server-side endpoint so consumers
+    running inside the API environment can reach the object store.
+    """
+    s3 = _get_probe_client()
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.s3_bucket, "Key": s3_key},
+        ExpiresIn=expires_in,
+    )
+
+
 def put_object(s3_key: str, body: bytes, content_type: str | None = None, cache_control: str | None = None) -> None:
     """Upload a small object directly (for processed files like thumbnails)."""
     s3 = get_s3_client()
