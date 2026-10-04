@@ -156,3 +156,31 @@ def test_junk_reaching_the_transcoder_still_produces_a_ladder():
 
     assert "split=3" in graph
     assert "split=0" not in graph
+
+
+# ─────────────────────────────────── 2160p, alone, means "source size"
+
+def test_2160p_alone_builds_one_rendition_at_the_source_s_size():
+    # The table #451 asked for. Every source up to 4K keeps its own size, and
+    # nothing is upscaled to 3840x2160 on the way.
+    for width, height in ((1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)):
+        graph = _filter_complex(_ffmpeg_cmd_for(["2160p"], source=(width, height)))
+        assert "split=1" in graph
+        assert f"scale={width}:{height}:" in graph, f"{width}x{height}"
+
+
+def test_a_source_larger_than_4k_is_fitted_into_2160p():
+    graph = _filter_complex(_ffmpeg_cmd_for(["2160p"], source=(7680, 4320)))
+
+    assert "split=1" in graph
+    assert "scale=3840:2160:" in graph
+
+
+def test_2160p_on_top_of_the_default_ladder_builds_four():
+    cmd = _ffmpeg_cmd_for(["2160p", "1080p", "720p", "360p"], source=(3840, 2160))
+    graph = _filter_complex(cmd)
+
+    assert "split=4" in graph
+    for spec in ("scale=3840:2160", "scale=1920:1080", "scale=1280:720", "scale=640:360"):
+        assert spec in graph
+    assert cmd[cmd.index("-var_stream_map") + 1].split() == ["v:0", "v:1", "v:2", "v:3"]

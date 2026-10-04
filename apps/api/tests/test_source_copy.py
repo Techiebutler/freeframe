@@ -185,6 +185,20 @@ def test_a_rung_above_the_source_copies_too():
     assert _copies(cmd)
 
 
+def test_2160p_alone_copies_a_browser_safe_source_at_any_size_up_to_4k():
+    # `TRANSCODER_QUALITIES=2160p` is the "source size" setting (#451), so a
+    # 4K master and a smaller one clamped under the rung both resolve to their
+    # own size, and both are what the copy is for.
+    for source in ((3840, 2160), (2560, 1440), (1280, 720)):
+        cmd, result, _ = _transcode(["2160p"], source=source)
+        assert _copies(cmd), f"{source[0]}x{source[1]}"
+        assert (result.width, result.height) == source
+
+    # Above 4K the rung really is a smaller rendition, so it encodes.
+    cmd, _, _ = _transcode(["2160p"], source=(7680, 4320))
+    assert not _copies(cmd)
+
+
 def test_a_source_that_is_not_16_9_copies_at_its_own_size():
     # The rung is applied with force_original_aspect_ratio=decrease, so a
     # 1440x1080 master under `1920:1080` is scaled by exactly 1 and written out

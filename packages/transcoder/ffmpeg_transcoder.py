@@ -453,7 +453,15 @@ _NVENC_CQ = {
 # Module level rather than local to transcode(), because the names are now
 # configuration and something outside this file has to be able to tell a valid
 # one from a typo before a job is built.
+#
+# 2160p is opt-in: it is not in DEFAULT_QUALITIES, so an instance that says
+# nothing keeps the ladder it had. Configured alone it is the "source size"
+# setting for anything up to 4K, since a rung above the source is clamped to the
+# source rather than dropped (see the ladder in transcode()). Its CRF matches
+# 1080p's for that reason: a 1080p or 1440p master clamped under it should come
+# out exactly as it did under `TRANSCODER_QUALITIES=1080p`, not larger.
 QUALITY_MAP = {
+    "2160p": ("3840:2160", 20),
     "1080p": ("1920:1080", 20),
     "720p": ("1280:720", 22),
     "360p": ("640:360", 26),

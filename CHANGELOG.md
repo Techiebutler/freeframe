@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A 2160p rung for the quality ladder.** `TRANSCODER_QUALITIES` now accepts `2160p` (3840x2160). It is opt-in, so the default ladder is unchanged. Set on its own, it gives one rendition at the source's own size for anything up to 4K, because a rung above the source is built at the source's size instead of being dropped: a 720p master comes out at 720p, a 1440p one at 1440p, and a 6K one is fitted into 3840x2160. With `TRANSCODER_SOURCE_COPY=true`, an H.264 8-bit master at any of those sizes is packaged without re-encoding. A 4K encode costs about four times the CPU of a 1080p one, so on an instance that receives HEVC, 10-bit or ProRes 4K masters a GPU backend is recommended. (#451)
+
 ### Fixed
 
 - **Replies posted on a share link are saved.** The share review screen handed the comment panel a no-op reply handler, so a reply cleared its box and sent nothing. Folder and project links have had this since v1.0.0, and single-asset links since v1.13.0, when they moved onto the same review screen. Replies now go through the same path as top-level comments, with `parent_id` set, and appear once the thread refetches. A guest without a name yet is asked first, and the typed reply waits in its box instead of being lost. A failed reply keeps its text and says why. On a view-only link, Reply is no longer offered. (#439, #443 by @oliverstreetcreative)

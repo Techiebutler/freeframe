@@ -57,7 +57,8 @@ class Settings(BaseSettings):
     transcoder_engine: str = "ffmpeg"
     # Which rungs of the quality ladder to build, comma-separated. Valid names
     # are the keys of packages.transcoder.ffmpeg_transcoder.QUALITY_MAP; the
-    # default is every rung, which is the behaviour this setting replaces.
+    # default is the ladder that was hardcoded before this setting existed.
+    # 2160p is opt-in and not part of it.
     #
     # An instance whose reviewers all watch at full size pays for the smaller
     # rungs in encode time and in storage without anyone playing them. Rungs

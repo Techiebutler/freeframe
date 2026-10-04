@@ -80,3 +80,17 @@ def test_the_transcoder_never_receives_an_empty_ladder():
     assert "or list(DEFAULT_QUALITIES)" in src, (
         "the fallback at the filtering site is what stops split=0"
     )
+
+
+# ------------------------------------------------------------------ the 2160p rung
+
+def test_2160p_is_a_rung_but_not_part_of_the_default():
+    # Opt-in: an instance that says nothing must not start encoding 4K, which
+    # costs about four times the CPU of the 1080p rung.
+    assert parse_qualities("2160p") == ["2160p"]
+    assert "2160p" not in DEFAULT_QUALITIES
+    assert parse_qualities("") == ["1080p", "720p", "360p"]
+
+
+def test_2160p_sorts_to_the_top_of_the_ladder():
+    assert parse_qualities("360p,2160p,1080p") == ["2160p", "1080p", "360p"]

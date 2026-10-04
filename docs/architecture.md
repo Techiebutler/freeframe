@@ -118,7 +118,8 @@ Reviewer approves / rejects ──▶ SSE: approval_updated
 2. Celery worker reads directly from S3 presigned URL (no full download)
 3. `ffprobe` extracts metadata (duration, resolution, FPS)
 4. FFmpeg generates multi-bitrate HLS:
-   - 1080p (CRF 20), 720p (CRF 22), 360p (CRF 26)
+   - 1080p (CRF 20), 720p (CRF 22), 360p (CRF 26) by default; 2160p (CRF 20) is available
+     through `TRANSCODER_QUALITIES` but not built unless configured
    - 2-second segments with forced keyframes
    - The ladder is trimmed against the source resolution, so a small source never gets
      upscaled renditions. If every rung is above the source, the smallest is kept.
