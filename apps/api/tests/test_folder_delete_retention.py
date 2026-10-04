@@ -132,7 +132,7 @@ def test_delete_folder_preserves_an_assets_exact_prior_trash_timestamp(db):
 
 
 def test_restore_folder_keeps_an_earlier_trashed_child_and_asset_in_trash(db):
-    owner, project, parent, _, _, _ = _seed()
+    owner, project, parent, _, _, _ = _seed(db)
     child = Folder(
         project_id=project.id,
         name=f"child-{uuid.uuid4()}",
