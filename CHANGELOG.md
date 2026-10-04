@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Comment replies only notify the parent author while they still have access to the asset.** Both signed-in and share-link reply paths apply the same access check, preventing stale threads from exposing asset names and reply previews after access is revoked. (#454)
+- **Comment replies only notify the parent author while they still have access to the asset.** Both signed-in and share-link reply paths apply the same access check, preventing stale threads from exposing asset names and reply previews after access is revoked. (#454, #456 by @sb123sb123)
 - **Replies posted through a share link now notify the author of the comment they answer.** A member replying to their own comment and replies to guest-authored comments still create no in-app notification. (#447, #450 by @sb123sb123)
 - **Share-grid comment counts now match what a share visitor can read.** Internal comments and replies beneath hidden comments no longer inflate the count. (#446, #449 by @sb123sb123)
 - EDL exports use the source video's embedded start timecode by default, while preserving explicit `start_tc` overrides and falling back to 01:00:00:00 when no valid source timecode is available.
