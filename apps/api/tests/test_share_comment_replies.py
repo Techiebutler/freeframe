@@ -222,3 +222,80 @@ def test_replying_to_a_guest_comment_does_not_create_a_notification(real_db, mon
     assert real_db.query(Notification).filter(
         Notification.comment_id == result.id,
     ).count() == 0
+
+
+def _project_member(real_db, project_id):
+    from apps.api.models.project import ProjectMember, ProjectRole
+    from apps.api.models.user import User
+
+    member = User(email="access-" + str(uuid.uuid4()) + "@t.local", name="Former member")
+    real_db.add(member)
+    real_db.flush()
+    membership = ProjectMember(project_id=project_id, user_id=member.id, role=ProjectRole.editor)
+    real_db.add(membership)
+    real_db.flush()
+    return member, membership
+
+
+def test_a_member_reply_does_not_notify_a_parent_author_without_asset_access(real_db, monkeypatch):
+    from apps.api.models.activity import Notification
+    from apps.api.schemas.comment import CommentCreate
+    from apps.api.services.permissions import can_access_asset
+    import apps.api.routers.comments as comments_module
+
+    owner, _, assets = _seed(real_db, monkeypatch)
+    asset, versions = assets[0]
+    former_member, membership = _project_member(real_db, asset.project_id)
+    parent = _comment(real_db, asset, versions[0], owner, author_id=former_member.id)
+    assert can_access_asset(real_db, asset, former_member)
+    membership.deleted_at = datetime.now(timezone.utc)
+    real_db.flush()
+    assert not can_access_asset(real_db, asset, former_member)
+
+    reply = comments_module.reply_to_comment(
+        asset.id, parent.id,
+        CommentCreate(version_id=versions[0].id, body="private reply"),
+        db=real_db, current_user=owner,
+    )
+
+    assert real_db.query(Notification).filter(Notification.comment_id == reply.id).count() == 0
+
+
+def test_a_guest_reply_does_not_notify_a_parent_author_without_asset_access(real_db, monkeypatch):
+    from apps.api.models.activity import Notification
+    from apps.api.services.permissions import can_access_asset
+
+    owner, link, assets = _seed(real_db, monkeypatch)
+    asset, versions = assets[0]
+    former_member, membership = _project_member(real_db, asset.project_id)
+    parent = _comment(real_db, asset, versions[0], owner, author_id=former_member.id)
+    assert can_access_asset(real_db, asset, former_member)
+    membership.deleted_at = datetime.now(timezone.utc)
+    real_db.flush()
+    assert not can_access_asset(real_db, asset, former_member)
+
+    reply = _guest_reply(link, parent.id)(real_db)
+
+    assert real_db.query(Notification).filter(Notification.comment_id == reply.id).count() == 0
+
+
+def test_a_member_reply_still_notifies_a_parent_author_with_asset_access(real_db, monkeypatch):
+    from apps.api.models.activity import Notification
+    from apps.api.schemas.comment import CommentCreate
+    from apps.api.services.permissions import can_access_asset
+    import apps.api.routers.comments as comments_module
+
+    owner, _, assets = _seed(real_db, monkeypatch)
+    asset, versions = assets[0]
+    member, _ = _project_member(real_db, asset.project_id)
+    parent = _comment(real_db, asset, versions[0], owner)
+    assert can_access_asset(real_db, asset, owner)
+
+    reply = comments_module.reply_to_comment(
+        asset.id, parent.id,
+        CommentCreate(version_id=versions[0].id, body="visible reply"),
+        db=real_db, current_user=member,
+    )
+
+    notification = real_db.query(Notification).filter(Notification.comment_id == reply.id).one()
+    assert notification.user_id == owner.id
