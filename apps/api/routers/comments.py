@@ -1,8 +1,12 @@
+import json
 import logging
 import re
+import subprocess
 import uuid
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Optional
 from urllib.parse import quote
 
@@ -16,7 +20,14 @@ from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
-from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction, CommentVisibility
+from ..models.comment import (
+    Annotation,
+    Comment,
+    CommentAttachment,
+    CommentReaction,
+    CommentVisibility,
+    COMMENT_TREE_MAX_DEPTH,
+)
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
 from ..models.user import User, GuestUser
 from ..models.share import ShareLink, ShareLinkActivity, ShareActivityAction, SharePermission
@@ -56,6 +67,88 @@ _START_TC_RE = re.compile(r"^\d{2}[:;]\d{2}[:;]\d{2}[:;]\d{2}$")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+_DEFAULT_EDL_START_TC = "01:00:00:00"
+
+
+def _start_timecode_is_valid(start_tc: str, spec) -> bool:
+    if not _START_TC_RE.fullmatch(start_tc):
+        return False
+    hh, mm, ss, ff = (int(part) for part in re.split(r"[:;]", start_tc))
+    return hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase
+
+
+def _probe_source_timecode(media_file: Optional[MediaFile], spec) -> Optional[str]:
+    raw_key = getattr(media_file, "s3_key_raw", None)
+    if not isinstance(raw_key, str) or not raw_key:
+        return None
+
+    try:
+        source_url = s3_service.generate_internal_presigned_get_url(raw_key, expires_in=300)
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type:stream_tags=timecode:format_tags=timecode",
+                "-of",
+                "json",
+                source_url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as exc:
+        log.warning(
+            "Could not probe embedded timecode for media file %s (%s)",
+            getattr(media_file, "id", None),
+            type(exc).__name__,
+        )
+        return None
+
+    if result.returncode != 0:
+        log.warning(
+            "ffprobe exited with status %s for media file %s",
+            result.returncode,
+            getattr(media_file, "id", None),
+        )
+        return None
+
+    try:
+        probe_data = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        log.warning(
+            "ffprobe returned invalid JSON for media file %s",
+            getattr(media_file, "id", None),
+        )
+        return None
+
+    if not isinstance(probe_data, dict):
+        return None
+
+    candidates = []
+    streams = probe_data.get("streams")
+    if isinstance(streams, list):
+        for stream in streams:
+            if not isinstance(stream, dict) or stream.get("codec_type") != "video":
+                continue
+            tags = stream.get("tags")
+            if isinstance(tags, dict) and isinstance(tags.get("timecode"), str):
+                candidates.append(tags["timecode"])
+
+    format_data = probe_data.get("format")
+    if isinstance(format_data, dict):
+        tags = format_data.get("tags")
+        if isinstance(tags, dict) and isinstance(tags.get("timecode"), str):
+            candidates.append(tags["timecode"])
+
+    return next(
+        (candidate for candidate in candidates if _start_timecode_is_valid(candidate, spec)),
+        None,
+    )
+
 
 def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
@@ -111,7 +204,7 @@ def _build_comment_response(
     comment: Comment,
     db: Session,
     current_user_id: uuid.UUID | None = None,
-    depth: int = 5,
+    depth: int = COMMENT_TREE_MAX_DEPTH,
 ) -> CommentResponse:
     annotation = db.query(Annotation).filter(Annotation.comment_id == comment.id).first()
     replies_raw = []
@@ -179,7 +272,7 @@ def _build_comment_responses_batched(
     top_level: list[Comment],
     db: Session,
     current_user_id: uuid.UUID | None = None,
-    max_depth: int = 5,
+    max_depth: int = COMMENT_TREE_MAX_DEPTH,
     exclude_internal: bool = False,
 ) -> list[CommentResponse]:
     """Build the comment tree for `top_level` with a FIXED number of queries
@@ -777,7 +870,7 @@ def export_comments(
     format: str = Query(...),
     version_id: Optional[uuid.UUID] = Query(default=None),
     fps: Optional[float] = Query(default=None, gt=0),
-    start_tc: str = Query(default="01:00:00:00"),
+    start_tc: Optional[str] = Query(default=None),
     include_resolved: bool = Query(default=True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -836,11 +929,34 @@ def export_comments(
                        + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
             )
         if format == "edl":
-            if not _START_TC_RE.match(start_tc):
-                raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
+            probed_start_tc = None
+            if start_tc is None:
+                probe_source = None
+                if media_file is not None:
+                    raw_key = media_file.s3_key_raw
+                    if isinstance(raw_key, str) and raw_key:
+                        probe_source = SimpleNamespace(
+                            id=media_file.id, s3_key_raw=raw_key
+                        )
+                        # Release the read transaction before the network request.
+                        db.commit()
+                probed_start_tc = _probe_source_timecode(probe_source, spec)
+                start_tc = probed_start_tc or _DEFAULT_EDL_START_TC
+            if not _START_TC_RE.fullmatch(start_tc):
+                raise HTTPException(
+                    status_code=422, detail="start_tc must be HH:MM:SS:FF"
+                )
             hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
             if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
-                raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
+                raise HTTPException(
+                    status_code=422, detail="start_tc out of range for the frame rate"
+                )
+            edl_spec = spec
+            if probed_start_tc is not None:
+                edl_spec = replace(
+                    spec,
+                    drop_frame=spec.drop_frame and probed_start_tc[-3] == ";",
+                )
 
     # The asset filter is not redundant: a row filed under another asset with this
     # version's id (written before guest comments validated version_id) must not
@@ -900,7 +1016,7 @@ def export_comments(
                     len(markers) - comment_export.EDL_MAX_EVENTS,
                 )
             content = comment_export.to_edl(
-                markers, spec, comment_export.tc_to_frames(start_tc, spec), asset.name)
+                markers, edl_spec, comment_export.tc_to_frames(start_tc, edl_spec), asset.name)
         elif format == "fcpxml":
             content = comment_export.to_fcpxml(markers, spec, asset.name, duration_frames)
         else:

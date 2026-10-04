@@ -298,3 +298,59 @@ def test_an_unknown_visibility_is_rejected_by_the_schema():
 
     with pytest.raises(ValidationError):
         GuestCommentCreate(body="x", visibility="secret")
+
+
+def test_share_grid_comment_count_matches_visible_latest_version_tree(real_db, seed):
+    from apps.api.models.comment import COMMENT_TREE_MAX_DEPTH, Comment
+    import apps.api.routers.comments as comments_module
+    from apps.api.routers.share import _latest_version_comment_count
+
+    asset = seed["asset_a"]
+    owner = seed["owner"]
+    old_version, latest_version = seed["versions_a"]
+
+    def add_comment(body, version_id, parent_id=None, visibility="public"):
+        comment = Comment(
+            asset_id=asset.id,
+            version_id=version_id,
+            parent_id=parent_id,
+            author_id=owner.id,
+            body=body,
+            visibility=visibility,
+        )
+        real_db.add(comment)
+        real_db.flush()
+        return comment
+
+    public_root = add_comment("public root", latest_version.id)
+    add_comment("public reply", latest_version.id, parent_id=public_root.id)
+    internal_reply = add_comment(
+        "internal reply", latest_version.id, parent_id=public_root.id, visibility="internal"
+    )
+    add_comment("reply below internal reply", latest_version.id, parent_id=internal_reply.id)
+
+    internal_root = add_comment("internal root", latest_version.id, visibility="internal")
+    add_comment("reply below internal root", latest_version.id, parent_id=internal_root.id)
+    add_comment("older-version root", old_version.id)
+
+    deep_root = add_comment("deep root", latest_version.id)
+    parent = deep_root
+    for depth in range(COMMENT_TREE_MAX_DEPTH + 1):
+        parent = add_comment(f"deep reply {depth}", latest_version.id, parent_id=parent.id)
+
+    listed = comments_module.list_share_comments(
+        seed["link"].token,
+        asset_id=None,
+        version_id=None,
+        latest_only=True,
+        share_session=None,
+        db=real_db,
+        current_user=None,
+    )
+
+    def tree_size(comments):
+        return sum(1 + tree_size(comment.replies) for comment in comments)
+
+    listed_count = tree_size(listed)
+    assert listed_count == COMMENT_TREE_MAX_DEPTH + 3
+    assert _latest_version_comment_count(real_db, asset.id) == listed_count

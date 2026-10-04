@@ -154,6 +154,8 @@ export function VideoPlayer({
   const [qualityListOpen, setQualityListOpen] = useState(false);
   const overflowRef = useRef<HTMLDivElement>(null);
   const timeFormatRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const swallowStageClickRef = useRef(false);
 
   // Close the overflow menu on an outside press. `pointerdown`, not
   // `mousedown`: the scrubber calls preventDefault on its own pointer events,
@@ -162,7 +164,12 @@ export function VideoPlayer({
   useEffect(() => {
     if (!overflowOpen) return;
     const onDown = (e: PointerEvent) => {
-      if (!overflowRef.current?.contains(e.target as Node)) setOverflowOpen(false);
+      if (!overflowRef.current?.contains(e.target as Node)) {
+        setOverflowOpen(false);
+        if (stageRef.current?.contains(e.target as Node)) {
+          swallowStageClickRef.current = true;
+        }
+      }
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
@@ -179,8 +186,12 @@ export function VideoPlayer({
       if (
         timeFormatRef.current &&
         !timeFormatRef.current.contains(e.target as Node)
-      )
+      ) {
         setTimeFormatOpen(false);
+        if (stageRef.current?.contains(e.target as Node)) {
+          swallowStageClickRef.current = true;
+        }
+      }
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -341,6 +352,10 @@ export function VideoPlayer({
   }, [togglePlay, seek, currentTime, isDrawingMode]);
 
   const handleContainerClick = useCallback(() => {
+    if (swallowStageClickRef.current) {
+      swallowStageClickRef.current = false;
+      return;
+    }
     if (!isDrawingMode) {
       togglePlay();
     }
@@ -380,6 +395,10 @@ export function VideoPlayer({
     >
       {/* Video area — fills available space, object-contain preserves aspect ratio with letterbox */}
       <div
+        ref={stageRef}
+        onPointerDownCapture={() => {
+          swallowStageClickRef.current = false;
+        }}
         // On a portrait phone the stage used to be `flex-1` with no relationship
         // to the media, so it took every pixel the column had left and
         // `object-contain` letterboxed a 16:9 video inside a box twice its
