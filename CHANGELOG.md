@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The project page's comment sidebar had the same dead reply box.** It now posts through `useComments().createComment` with the parent. (#439, #443 by @oliverstreetcreative)
 - **`POST /share/{token}/comment` checks a reply's parent.** The parent must be a live, non-internal comment on the asset the link resolves to. Before, an unknown `parent_id` answered 500, and a parent on another asset, a deleted parent, or an internal one was accepted. A share-link reply also now takes its parent's version, as `POST /assets/{id}/comments/{id}/replies` does. (#439, #443 by @oliverstreetcreative)
 
+- Dismissing an open video-player menu by pressing the picture now only closes the menu; the click no longer also toggles playback. (#424)
+
 ## [1.15.2] - 2026-10-04
 
 Security release for the public share-link endpoints: [GHSA-wgpf-5p75-cxrm](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-wgpf-5p75-cxrm) and [GHSA-5cmh-v8wr-w32g](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-5cmh-v8wr-w32g). Upgrade if you use share links.
