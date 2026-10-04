@@ -54,18 +54,25 @@ def _seed(real_db, monkeypatch, permission="comment"):
 def _comment(real_db, asset, version, owner, **kw):
     from apps.api.models.comment import Comment
     kw.setdefault("visibility", "public")
-    c = Comment(asset_id=asset.id, version_id=version.id, author_id=owner.id, body="parent", **kw)
+    author_id = kw.pop("author_id", owner.id)
+    c = Comment(
+        asset_id=asset.id,
+        version_id=version.id,
+        author_id=author_id,
+        body="parent",
+        **kw,
+    )
     real_db.add(c); real_db.flush()
     return c
 
 
-def _guest_reply(link, parent_id, **kw):
+def _guest_reply(link, parent_id, current_user=None, **kw):
     import apps.api.routers.comments as comments_module
     from apps.api.schemas.comment import GuestCommentCreate
     body = GuestCommentCreate(body="a guest reply", parent_id=parent_id,
                               guest_name="Guest", guest_email=f"g-{uuid.uuid4()}@t.local", **kw)
     return lambda db: comments_module.guest_comment(link.token, body, share_session=None,
-                                                    db=db, current_user=None)
+                                                    db=db, current_user=current_user)
 
 
 def test_a_guest_reply_threads_under_its_parent_on_the_parents_version(real_db, monkeypatch):
@@ -167,3 +174,51 @@ def test_a_reply_with_another_assets_version_is_refused(real_db, monkeypatch):
     assert exc.value.status_code == 400
     assert exc.value.detail == "version_id does not belong to this asset"
     assert real_db.query(Comment).count() == before
+
+
+def test_a_guest_reply_notifies_the_parent_author(real_db, monkeypatch):
+    from apps.api.models.activity import Notification, NotificationType
+
+    owner, link, [(asset, [v1, _]), _] = _seed(real_db, monkeypatch)
+    parent = _comment(real_db, asset, v1, owner)
+
+    result = _guest_reply(link, parent.id)(real_db)
+
+    notification = real_db.query(Notification).filter(
+        Notification.comment_id == result.id,
+    ).one()
+    assert notification.user_id == owner.id
+    assert notification.type == NotificationType.comment
+    assert notification.asset_id == asset.id
+
+
+def test_a_member_replying_to_their_own_parent_does_not_notify_them(real_db, monkeypatch):
+    from apps.api.models.activity import Notification
+
+    owner, link, [(asset, [v1, _]), _] = _seed(real_db, monkeypatch)
+    parent = _comment(real_db, asset, v1, owner)
+
+    result = _guest_reply(link, parent.id, current_user=owner)(real_db)
+
+    assert real_db.query(Notification).filter(
+        Notification.comment_id == result.id,
+    ).count() == 0
+
+
+def test_replying_to_a_guest_comment_does_not_create_a_notification(real_db, monkeypatch):
+    from apps.api.models.activity import Notification
+    from apps.api.models.user import GuestUser
+
+    owner, link, [(asset, [v1, _]), _] = _seed(real_db, monkeypatch)
+    guest = GuestUser(email=f"parent-{uuid.uuid4()}@t.local", name="Guest")
+    real_db.add(guest)
+    real_db.flush()
+    parent = _comment(
+        real_db, asset, v1, owner, author_id=None, guest_author_id=guest.id,
+    )
+
+    result = _guest_reply(link, parent.id)(real_db)
+
+    assert real_db.query(Notification).filter(
+        Notification.comment_id == result.id,
+    ).count() == 0

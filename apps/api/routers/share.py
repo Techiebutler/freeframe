@@ -19,7 +19,7 @@ from ..models.share import AssetShare, ShareLink, ShareLinkItem, SharePermission
 from ..models.activity import ActivityLog, ActivityAction
 from ..models.branding import ProjectBranding
 from ..models.asset import AssetVersion, AssetType, MediaFile, ProcessingStatus
-from ..models.comment import Comment
+from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.share import (
     DirectShareCreate,
     DirectShareResponse,
@@ -131,8 +131,7 @@ def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFi
 
 
 def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
-    """Count comments on an asset's latest ready version — matches the version-scoped
-    folder/grid preview, which has no version picker."""
+    """Count public comments rendered in the asset's share-grid preview."""
     version = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset_id,
         AssetVersion.deleted_at.is_(None),
@@ -140,12 +139,36 @@ def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
     ).order_by(AssetVersion.version_number.desc()).first()
     if not version:
         return 0
-    return db.query(sa_func.count(Comment.id)).filter(
+
+    # Match list_share_comments: a visible parent is required to reach a reply,
+    # and the response builder stops at COMMENT_TREE_MAX_DEPTH.
+    comment_tree = sqlalchemy.select(
+        Comment.id.label("id"),
+        Comment.parent_id.label("parent_id"),
+        sqlalchemy.literal(0).label("depth"),
+    ).where(
+        Comment.asset_id == asset_id,
+        Comment.version_id == version.id,
+        Comment.parent_id.is_(None),
+        Comment.deleted_at.is_(None),
+        Comment.visibility != "internal",
+    ).cte(name="visible_share_comments", recursive=True)
+    visible_replies = sqlalchemy.select(
+        Comment.id.label("id"),
+        Comment.parent_id.label("parent_id"),
+        (comment_tree.c.depth + 1).label("depth"),
+    ).join(
+        comment_tree,
+        Comment.parent_id == comment_tree.c.id,
+    ).where(
         Comment.asset_id == asset_id,
         Comment.version_id == version.id,
         Comment.deleted_at.is_(None),
-    ).scalar() or 0
-
+        Comment.visibility != "internal",
+        comment_tree.c.depth < COMMENT_TREE_MAX_DEPTH,
+    )
+    comment_tree = comment_tree.union_all(visible_replies)
+    return db.query(sa_func.count(comment_tree.c.id)).select_from(comment_tree).scalar() or 0
 
 def _ready_version_count(db: Session, asset_id: uuid.UUID) -> int:
     """Number of ready versions available for an asset (shown on the share preview card)."""
