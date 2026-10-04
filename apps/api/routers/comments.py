@@ -370,6 +370,29 @@ def _parse_mentions(body: str) -> list[str]:
     return re.findall(r"@([\w.+-]+@[\w.-]+\.\w+)", body)
 
 
+def _notify_parent_author_about_reply(
+    db: Session,
+    parent: Optional[Comment],
+    reply: Comment,
+    asset: Asset,
+    replier_id: Optional[uuid.UUID],
+) -> None:
+    """Notify a parent author only while they can still access the asset."""
+    if not parent or not parent.author_id or parent.author_id == replier_id:
+        return
+
+    parent_author = db.query(User).filter(User.id == parent.author_id).first()
+    if not parent_author or not can_access_asset(db, asset, parent_author):
+        return
+
+    db.add(Notification(
+        user_id=parent.author_id,
+        type=NotificationType.comment,
+        asset_id=asset.id,
+        comment_id=reply.id,
+    ))
+
+
 def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, author_name: str, mention_user_ids: list | None = None) -> None:
     """Create Mention + Notification records and send emails.
     Uses explicit mention_user_ids if provided, else falls back to parsing @email from body."""
@@ -574,14 +597,7 @@ def reply_to_comment(
 
     _create_mentions(db, reply, asset, body.body, current_user.name, body.mention_user_ids)
 
-    # Notify parent comment author about the reply (unless they're the replier)
-    if parent.author_id and parent.author_id != current_user.id:
-        db.add(Notification(
-            user_id=parent.author_id,
-            type=NotificationType.comment,
-            asset_id=asset_id,
-            comment_id=reply.id,
-        ))
+    _notify_parent_author_about_reply(db, parent, reply, asset, current_user.id)
 
     db.commit()
     db.refresh(reply)
@@ -1216,16 +1232,7 @@ def guest_comment(
             )
             db.add(notif)
 
-    # Match the authenticated reply path: tell the parent author about a reply,
-    # unless they wrote the reply themselves. Guest-authored parents have no
-    # user to notify.
-    if parent and parent.author_id and parent.author_id != author_id:
-        db.add(Notification(
-            user_id=parent.author_id,
-            type=NotificationType.comment,
-            asset_id=asset.id,
-            comment_id=comment.id,
-        ))
+    _notify_parent_author_about_reply(db, parent, comment, asset, author_id)
 
     if body.annotation:
         annotation = Annotation(
