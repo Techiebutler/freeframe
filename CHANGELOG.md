@@ -7,21 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-10-05
+
+### Upgrade notes
+
+- **No migrations, and no new settings you must set.** The default quality ladder is unchanged; 2160p is opt-in.
+- **EDL exports of footage with embedded timecode now start at that timecode,** not at `01:00:00:00`. Pass `?start_tc=01:00:00:00` to get the old start. The export probes the uploaded master with ffprobe, which is already in the API image.
+- **Restoring a folder no longer restores items that were trashed before the folder was.** They stay in the trash with their own retention clock.
+- **Replies through a share link now create in-app notifications** for the parent comment's author, and no reply notification is sent to someone who has lost access to the asset.
+- **Known issue:** portrait video is fitted into a landscape frame by every rung, so it comes out below its source resolution, including under `2160p` (#452).
+
 ### Added
 
-- **A 2160p rung for the quality ladder.** `TRANSCODER_QUALITIES` now accepts `2160p` (3840x2160). It is opt-in, so the default ladder is unchanged. Set on its own, it gives one rendition at the source's own size for anything up to 4K, because a rung above the source is built at the source's size instead of being dropped: a 720p master comes out at 720p, a 1440p one at 1440p, and a 6K one is fitted into 3840x2160. With `TRANSCODER_SOURCE_COPY=true`, an H.264 8-bit master at any of those sizes is packaged without re-encoding. A 4K encode costs about four times the CPU of a 1080p one, so on an instance that receives HEVC, 10-bit or ProRes 4K masters a GPU backend is recommended. (#451)
+- **A 2160p rung for the quality ladder.** `TRANSCODER_QUALITIES` now accepts `2160p` (3840x2160). It is opt-in, so the default ladder is unchanged. Set on its own, it gives one rendition at the source's own size for anything up to 4K, because a rung above the source is built at the source's size instead of being dropped: a 720p master comes out at 720p, a 1440p one at 1440p, and a 6K one is fitted into 3840x2160. With `TRANSCODER_SOURCE_COPY=true`, an H.264 8-bit master at any of those sizes is packaged without re-encoding. A 4K encode costs about four times the CPU of a 1080p one, so on an instance that receives HEVC, 10-bit or ProRes 4K masters a GPU backend is recommended. (#451, #453)
 
 ### Fixed
 
-- **Comment replies only notify the parent author while they still have access to the asset.** Both signed-in and share-link reply paths apply the same access check, preventing stale threads from exposing asset names and reply previews after access is revoked. (#454, #456 by @sb123sb123)
-- **Replies posted through a share link now notify the author of the comment they answer.** A member replying to their own comment and replies to guest-authored comments still create no in-app notification. (#447, #450 by @sb123sb123)
-- **Share-grid comment counts now match what a share visitor can read.** Internal comments and replies beneath hidden comments no longer inflate the count. (#446, #449 by @sb123sb123)
-- EDL exports use the source video's embedded start timecode by default, while preserving explicit `start_tc` overrides and falling back to 01:00:00:00 when no valid source timecode is available.
 - **Replies posted on a share link are saved.** The share review screen handed the comment panel a no-op reply handler, so a reply cleared its box and sent nothing. Folder and project links have had this since v1.0.0, and single-asset links since v1.13.0, when they moved onto the same review screen. Replies now go through the same path as top-level comments, with `parent_id` set, and appear once the thread refetches. A guest without a name yet is asked first, and the typed reply waits in its box instead of being lost. A failed reply keeps its text and says why. On a view-only link, Reply is no longer offered. (#439, #443 by @oliverstreetcreative)
 - **The project page's comment sidebar had the same dead reply box.** It now posts through `useComments().createComment` with the parent. (#439, #443 by @oliverstreetcreative)
 - **`POST /share/{token}/comment` checks a reply's parent.** The parent must be a live, non-internal comment on the asset the link resolves to. Before, an unknown `parent_id` answered 500, and a parent on another asset, a deleted parent, or an internal one was accepted. A share-link reply also now takes its parent's version, as `POST /assets/{id}/comments/{id}/replies` does. (#439, #443 by @oliverstreetcreative)
-- **Pressing the picture to close a video-player menu no longer toggles playback.** Dismissing the compact overflow menu or the time-format dropdown from the picture now only closes the menu, and a right-click or a drag off the picture no longer swallows the next click. (#424, #437 by @sb123sb123)
+- **Replies posted through a share link now notify the author of the comment they answer.** A member replying to their own comment and replies to guest-authored comments still create no in-app notification. (#447, #450 by @sb123sb123)
+- **Comment replies only notify the parent author while they still have access to the asset.** Both signed-in and share-link reply paths apply the same access check, preventing stale threads from exposing asset names and reply previews after access is revoked. (#454, #456 by @sb123sb123)
+- **Share-grid comment counts now match what a share visitor can read.** Internal comments and replies beneath hidden comments no longer inflate the count. (#446, #449 by @sb123sb123)
+- **EDL exports start at the source's own timecode.** With no `start_tc` given, the EDL export now reads the timecode embedded in the uploaded master (the video stream's, then the container's) instead of always starting at `01:00:00:00`, so record timecodes line up with the source in an NLE. At 29.97 and 59.94 fps a probed timecode's separator picks drop or non-drop frame (`;` or `:`). With no usable embedded timecode the export falls back to `01:00:00:00`, and an explicit `start_tc` is used as given, both in the rate's default mode as before. FCPXML, Premiere XML and CSV exports are unchanged. (#440, #441 by @sb123sb123)
 - **Deleting a folder keeps the trash state of what was already in it.** Items trashed before the folder keep their own deletion time and retention clock, and restoring the folder brings back only what that delete trashed, including uploads that were still in flight. (#394, #418, #438 by @sb123sb123)
+- **Pressing the picture to close a video-player menu no longer toggles playback.** Dismissing the compact overflow menu or the time-format dropdown from the picture now only closes the menu, and a right-click or a drag off the picture no longer swallows the next click. (#424, #437 by @sb123sb123)
+
+### Contributors
+
+Thank you to @sb123sb123 and @oliverstreetcreative for the pull requests in this release, to @oliverstreetcreative for reporting #439 and #440, to @Lennart-Pingpong for reporting #394, and to @ArnaudGct for the 4K request in discussion #451.
 
 ## [1.15.2] - 2026-10-04
 
