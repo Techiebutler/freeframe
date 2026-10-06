@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The quality picker stays on Auto when HLS changes rendition automatically, and shows the active rung next to Auto.
+
 ## [1.16.0] - 2026-10-05
 
 ### Upgrade notes
