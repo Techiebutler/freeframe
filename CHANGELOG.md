@@ -13,8 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Delete users from Admin → Users.** Once a user is deactivated, a Delete button appears next to Reactivate and asks for confirmation. Deletion is a soft delete: the user leaves the list and can't sign in, and their comments and activity stay.
-- **Default sign-in method under Admin → Branding.** Choose whether the sign-in page opens on magic code or on email & password. People can still switch to the other method from the sign-in page.
+- **Delete users from Admin → Users.** Once a user is deactivated, a Delete button appears next to Reactivate and asks for confirmation. Deletion is a soft delete: the user leaves the list and can't sign in, and their comments and activity stay. The API only deletes users that are already deactivated, and a deleted user's email can't be invited again.
+- **Default sign-in method under Admin → Instance Settings.** Choose whether the sign-in page opens on magic code or on email & password. People can still switch to the other method from the sign-in page.
+
+### Fixed
+
+- Inviting an email that belonged to a deleted user now explains why it can't be invited, instead of failing with a server error.
+- **Reset all branding** no longer shows on instances that have no branding configured. An unset accent color counted as custom, so the section appeared even if no custsom branding was set.
 
 ## [1.16.0] - 2026-10-05
 

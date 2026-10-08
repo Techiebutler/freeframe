@@ -332,6 +332,74 @@ def test_delete_user_rejects_self(client, auth_headers, test_user):
     assert resp.status_code == 400
 
 
+def test_delete_user_rejects_active_user(client, auth_headers, mock_db, test_user):
+    """DELETE /users/{id} — only a deactivated user can be deleted. The admin UI only
+    offers Delete after deactivation; the API enforces the same order."""
+    test_user.is_superadmin = True
+    target = _mock_user("active@example.com")
+    mock_db.first.return_value = target
+
+    resp = client.delete(f"/users/{target.id}", headers=auth_headers)
+
+    assert resp.status_code == 409
+    assert target.deleted_at is None
+    mock_db.commit.assert_not_called()
+
+
+def test_delete_user_soft_deletes_deactivated_user(client, auth_headers, mock_db, test_user):
+    """DELETE /users/{id} — a deactivated user is soft-deleted, not removed."""
+    test_user.is_superadmin = True
+    target = _mock_user("gone@example.com")
+    target.status = UserStatus.deactivated
+    mock_db.first.return_value = target
+
+    resp = client.delete(f"/users/{target.id}", headers=auth_headers)
+
+    assert resp.status_code == 204
+    assert target.deleted_at is not None
+    mock_db.delete.assert_not_called()
+
+
+def test_invite_rejects_deleted_users_email(client, auth_headers, mock_db, test_user):
+    """POST /users/invite — an email that belonged to a deleted user gets a clear 400.
+
+    Deletion only sets deleted_at, and the unique constraint on users.email still
+    covers that row. The old existence check skipped soft-deleted rows, so the
+    INSERT hit the constraint and the admin saw a 500.
+    """
+    test_user.is_superadmin = True
+    deleted = _mock_user("former@example.com")
+    deleted.deleted_at = datetime.now(timezone.utc)
+    mock_db.first.return_value = deleted
+
+    resp = client.post(
+        "/users/invite",
+        json={"email": "former@example.com", "name": "former"},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "This email belonged to a deleted user and can't be invited again"
+    mock_db.add.assert_not_called()
+
+
+def test_invite_rejects_existing_active_email(client, auth_headers, mock_db, test_user):
+    """POST /users/invite — a live account keeps the "already registered" message,
+    which the Bulk Invite dialog relies on to count the address as skipped."""
+    test_user.is_superadmin = True
+    mock_db.first.return_value = _mock_user("taken@example.com")
+
+    resp = client.post(
+        "/users/invite",
+        json={"email": "taken@example.com", "name": "taken"},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Email already registered"
+    mock_db.add.assert_not_called()
+
+
 def _pending_invitee(token: str = "invite-token-1") -> MagicMock:
     """A user mid-invite: name derived from the email, no password yet."""
     u = _mock_user("patrick.rosen@example.com")

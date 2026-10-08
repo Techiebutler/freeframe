@@ -37,6 +37,7 @@ function BulkInviteDialog() {
     setSuccess("");
     let sent = 0;
     const skipped: string[] = [];
+    const deleted: string[] = [];
     const failed: string[] = [];
     try {
       for (const email of emailList) {
@@ -48,6 +49,8 @@ function BulkInviteDialog() {
           const msg = err instanceof Error ? err.message : "";
           if (msg.toLowerCase().includes("already registered")) {
             skipped.push(email);
+          } else if (msg.toLowerCase().includes("deleted user")) {
+            deleted.push(email);
           } else {
             failed.push(email);
           }
@@ -57,17 +60,23 @@ function BulkInviteDialog() {
       if (sent > 0) parts.push(`${sent} invite(s) sent`);
       if (skipped.length > 0)
         parts.push(`${skipped.length} already registered`);
+      if (deleted.length > 0)
+        parts.push(`${deleted.length} belonged to a deleted user`);
       if (failed.length > 0) parts.push(`${failed.length} failed`);
       if (sent > 0 || skipped.length > 0) {
         setSuccess(parts.join(", "));
-        if (failed.length === 0) {
+        if (failed.length === 0 && deleted.length === 0) {
           setEmails("");
           setTimeout(() => setOpen(false), 1500);
         }
       }
-      if (failed.length > 0) {
-        setError(`Failed to invite: ${failed.join(", ")}`);
-      }
+      const errors: string[] = [];
+      if (deleted.length > 0)
+        errors.push(
+          `Can't invite ${deleted.join(", ")}: the email belonged to a deleted user`,
+        );
+      if (failed.length > 0) errors.push(`Failed to invite: ${failed.join(", ")}`);
+      if (errors.length > 0) setError(errors.join(". "));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to send invites");
     } finally {
@@ -477,7 +486,7 @@ export default function AdminPage() {
           if (!open) setDeleteTarget(null);
         }}
         title={`Delete ${deleteTarget?.name ?? "user"}?`}
-        description="They'll be removed from the user list and can't sign in. Their comments and activity stay. This email can't be invited again."
+        description="They'll be removed from the user list and can't sign in. Their comments and activity stay. Give any projects they solely own a new owner first, or nobody will be able to manage them. This email can't be invited again."
         confirmLabel="Delete"
         variant="danger"
         error={deleteError}

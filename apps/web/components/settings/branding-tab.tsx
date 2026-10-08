@@ -1,9 +1,9 @@
 'use client'
 
 import * as React from 'react'
-import { Upload, RotateCcw, Check, ChevronDown } from 'lucide-react'
+import { Upload, RotateCcw, Check } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
-import { HARDCODED_DEFAULTS, useBrandingStore, type LoginMode } from '@/stores/branding-store'
+import { HARDCODED_DEFAULTS, useBrandingStore } from '@/stores/branding-store'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,11 +11,6 @@ import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { BrandingLogoUpload } from '@/components/settings/branding-logo-upload'
 import { BrandingPreview } from '@/components/settings/branding-preview'
-
-const LOGIN_MODE_LABELS: Record<LoginMode, string> = {
-  magic_code: 'Magic code',
-  password: 'Email & password',
-}
 
 type BrandingSlot = 'logo-light' | 'logo-dark' | 'favicon' | 'apple-icon' | 'login-logo'
 
@@ -128,7 +123,6 @@ export function BrandingTab() {
     loginLogoUrl,
     poweredByFreeframe,
     primaryColor,
-    defaultLoginMode,
     setOrgName,
     setOrgLogoDark,
     setOrgLogoLight,
@@ -137,7 +131,6 @@ export function BrandingTab() {
     setLoginLogoUrl,
     setPoweredByFreeframe,
     setPrimaryColor,
-    setDefaultLoginMode,
     fetchBranding,
     loaded,
   } = useBrandingStore()
@@ -150,7 +143,6 @@ export function BrandingTab() {
   const [savingPowered, setSavingPowered] = React.useState(false)
   const [savingName, setSavingName] = React.useState(false)
   const [savingColor, setSavingColor] = React.useState(false)
-  const [savingLoginMode, setSavingLoginMode] = React.useState(false)
   const [colorValue, setColorValue] = React.useState(primaryColor || '')
 
   const isAdmin = user?.is_superadmin
@@ -193,18 +185,6 @@ export function BrandingTab() {
     }
   }
 
-  async function handleSaveLoginMode(value: LoginMode) {
-    setSavingLoginMode(true)
-    try {
-      await api.put('/instance/branding', { default_login_mode: value })
-      setDefaultLoginMode(value)
-    } catch {
-      // the select stays bound to the store, so it falls back to the saved value
-    } finally {
-      setSavingLoginMode(false)
-    }
-  }
-
   async function handleSaveColor() {
     const trimmed = colorValue.trim()
     if (!trimmed || trimmed === primaryColor) return
@@ -238,7 +218,6 @@ export function BrandingTab() {
         // toward hasCustomBranding, so leaving it out left the Reset section
         // on screen after a reset that had already finished.
         powered_by_freeframe: HARDCODED_DEFAULTS.poweredByFreeframe,
-        default_login_mode: HARDCODED_DEFAULTS.defaultLoginMode,
       })
       const { syncBranding } = useBrandingStore.getState()
       syncBranding(data as never)
@@ -261,9 +240,10 @@ export function BrandingTab() {
     faviconUrl !== null ||
     appleIconUrl !== null ||
     loginLogoUrl !== null ||
-    primaryColor !== HARDCODED_DEFAULTS.primaryColor ||
-    poweredByFreeframe !== HARDCODED_DEFAULTS.poweredByFreeframe ||
-    defaultLoginMode !== HARDCODED_DEFAULTS.defaultLoginMode
+    // null, not the hardcoded colour, is "no accent configured": the store keeps
+    // the API's null as-is, so comparing to the default kept this always true.
+    primaryColor !== null ||
+    poweredByFreeframe !== HARDCODED_DEFAULTS.poweredByFreeframe
 
   const slotProps = {
     disabled: !isAdmin,
@@ -481,42 +461,6 @@ export function BrandingTab() {
         </div>
       </section>
 
-      {/* ── Sign-in: which form the login page opens on ── */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-text-primary">Sign-in</h2>
-        <div className="flex items-center justify-between gap-6 rounded-lg border border-border bg-bg-secondary p-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-text-primary">Default sign-in method</p>
-            <p className="mt-0.5 text-xs text-text-tertiary">
-              What the sign-in page shows first. People can still switch to the other
-              method.
-            </p>
-          </div>
-          {isAdmin ? (
-            <div className="relative shrink-0">
-              <select
-                aria-label="Default sign-in method"
-                value={defaultLoginMode}
-                onChange={(e) => handleSaveLoginMode(e.target.value as LoginMode)}
-                disabled={savingLoginMode}
-                className="appearance-none cursor-pointer rounded-md border border-border bg-bg-secondary py-1.5 pl-3 pr-8 text-sm text-text-primary transition-colors hover:border-border-focus focus:outline-none focus:border-border-focus focus:ring-1 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {(Object.keys(LOGIN_MODE_LABELS) as LoginMode[]).map((mode) => (
-                  <option key={mode} value={mode}>
-                    {LOGIN_MODE_LABELS[mode]}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
-            </div>
-          ) : (
-            <span className="shrink-0 text-sm text-text-secondary">
-              {LOGIN_MODE_LABELS[defaultLoginMode]}
-            </span>
-          )}
-        </div>
-      </section>
-
       {/* ── Section: Reset ── */}
       {isAdmin && hasCustomBranding && (
         <section className="pt-2 border-t border-border">
@@ -548,7 +492,7 @@ export function BrandingTab() {
         open={resetOpen}
         onOpenChange={setResetOpen}
         title="Reset all branding?"
-        description='This clears your custom name, logos and accent color, and turns the "Powered by FreeFrame" badge back on, and makes magic code the default sign-in method.'
+        description='This clears your custom name, logos and accent color, and turns the "Powered by FreeFrame" badge back on.'
         confirmLabel="Reset"
         variant="danger"
         loading={resetting}

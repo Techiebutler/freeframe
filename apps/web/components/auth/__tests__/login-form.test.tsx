@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const push = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, replace: vi.fn() }) }))
@@ -17,12 +17,14 @@ vi.mock('@/lib/api', () => ({
 }))
 vi.mock('@/lib/auth', () => ({ setTokens: vi.fn() }))
 
-const branding = vi.hoisted(() => ({ defaultLoginMode: 'magic_code' as 'magic_code' | 'password' }))
-vi.mock('@/components/shared/branding-provider', () => ({
-  useBranding: () => ({ defaultLoginMode: branding.defaultLoginMode }),
-}))
-
 import { LoginForm } from '../login-form'
+import { useBrandingStore, type LoginMode } from '@/stores/branding-store'
+
+// The form reads branding through the real useBranding, with no provider
+// mounted, so the store is what decides the sign-in method.
+function setBranding(state: { loaded: boolean; defaultLoginMode?: LoginMode }) {
+  act(() => useBrandingStore.setState({ defaultLoginMode: 'magic_code', ...state }))
+}
 
 /** Walk the email step and land on the code screen for `email`. */
 async function requestCodeFor(email: string) {
@@ -36,7 +38,7 @@ async function requestCodeFor(email: string) {
 describe('LoginForm magic-code step (#248)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    branding.defaultLoginMode = 'magic_code'
+    setBranding({ loaded: true })
     // The endpoint answers identically for known and unknown addresses, on
     // purpose — that is what stops it being used to enumerate accounts.
     sendMagicCode.mockResolvedValue({})
@@ -86,19 +88,61 @@ describe('LoginForm default sign-in method', () => {
   })
 
   it('opens on magic code by default', () => {
-    branding.defaultLoginMode = 'magic_code'
+    setBranding({ loaded: true, defaultLoginMode: 'magic_code' })
     render(<LoginForm />)
     expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /sign in with password instead/i })).toBeInTheDocument()
   })
 
   it('opens on email & password when the admin made that the default', () => {
-    branding.defaultLoginMode = 'password'
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
     render(<LoginForm />)
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /send magic code/i })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /sign in with magic code instead/i }))
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+  })
+})
+
+describe('LoginForm when branding loads after mount', () => {
+  // With no server-side branding (the SSR fetch failed), the form first renders
+  // on the built-in default and only learns the admin's choice once the
+  // client-side fetch lands in the store.
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setBranding({ loaded: false })
+  })
+
+  it('switches to email & password when that turns out to be the default', () => {
+    render(<LoginForm />)
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /send magic code/i })).not.toBeInTheDocument()
+  })
+
+  it('leaves the form alone once the user has started typing', () => {
+    render(<LoginForm />)
+    fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'me@example.com' } })
+
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/email/i)).toHaveValue('me@example.com')
+  })
+
+  it('keeps the method the user picked before branding arrived', () => {
+    render(<LoginForm />)
+    // Over to password and back: the fields are empty again, so only the
+    // explicit choice stops the late default from overriding it.
+    fireEvent.click(screen.getByRole('button', { name: /sign in with password instead/i }))
+    fireEvent.click(screen.getByRole('button', { name: /sign in with magic code instead/i }))
+
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+
     expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
   })
 })
