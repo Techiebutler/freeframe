@@ -18,9 +18,13 @@ export interface InstanceBranding {
   login_logo_url: string | null
   primary_color: string | null
   powered_by_freeframe: boolean
+  default_login_mode: LoginMode
   created_at: string
   updated_at: string
 }
+
+
+export type LoginMode = 'magic_code' | 'password'
 
 /** The branding fields that decide what gets painted, with no store plumbing. */
 export interface BrandingValues {
@@ -32,6 +36,7 @@ export interface BrandingValues {
   loginLogoUrl: string | null
   poweredByFreeframe: boolean
   primaryColor: string | null
+  defaultLoginMode: LoginMode
 }
 
 interface BrandingState extends BrandingValues {
@@ -48,6 +53,7 @@ interface BrandingState extends BrandingValues {
   setLoginLogoUrl: (url: string | null) => void
   setPoweredByFreeframe: (value: boolean) => void
   setPrimaryColor: (color: string | null) => void
+  setDefaultLoginMode: (mode: LoginMode) => void
   fetchBranding: () => Promise<void>
   syncBranding: (data: InstanceBranding) => void
 }
@@ -73,6 +79,7 @@ export function brandingValuesFromApi(data: InstanceBranding): BrandingValues {
     // tokens are handed back to the stylesheet rather than repainting every
     // un-branded instance in the default colour.
     primaryColor: data.primary_color ?? null,
+    defaultLoginMode: data.default_login_mode ?? 'magic_code',
   }
 }
 
@@ -85,6 +92,7 @@ export const HARDCODED_DEFAULTS = {
   loginLogoUrl: null,
   poweredByFreeframe: true,
   primaryColor: '#7c3aed',
+  defaultLoginMode: 'magic_code' as LoginMode,
 }
 
 // Logo URLs are presigned S3 links the API signs for an hour. They're persisted so a
@@ -108,6 +116,7 @@ export const useBrandingStore = create<BrandingState>()(
       setLoginLogoUrl: (url) => set({ loginLogoUrl: url }),
       setPoweredByFreeframe: (value) => set({ poweredByFreeframe: value }),
       setPrimaryColor: (color) => set({ primaryColor: color }),
+      setDefaultLoginMode: (mode) => set({ defaultLoginMode: mode }),
 
       syncBranding: (data: InstanceBranding) => {
         set({
@@ -132,7 +141,7 @@ export const useBrandingStore = create<BrandingState>()(
     }),
     {
       name: 'ff-branding',
-      version: 5,
+      version: 6,
       migrate: () => ({
         ...HARDCODED_DEFAULTS,
         brandingFetchedAt: null,
@@ -143,6 +152,7 @@ export const useBrandingStore = create<BrandingState>()(
         orgName: state.orgName,
         poweredByFreeframe: state.poweredByFreeframe,
         primaryColor: state.primaryColor,
+        defaultLoginMode: state.defaultLoginMode,
         orgLogoDark: state.orgLogoDark,
         orgLogoLight: state.orgLogoLight,
         faviconUrl: state.faviconUrl,

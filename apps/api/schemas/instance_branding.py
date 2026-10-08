@@ -1,11 +1,13 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 import re
 from pydantic import BaseModel, field_validator
 
 # \Z (not $) so a trailing newline can't sneak past and overflow the String(7) column.
 HEX_COLOR_RE = r'^#[0-9A-Fa-f]{6}\Z'
+
+LoginMode = Literal["magic_code", "password"]
 
 
 def _validate_hex_color(v: Optional[str]) -> Optional[str]:
@@ -42,11 +44,19 @@ class InstanceBrandingUpdate(BaseModel):
     login_logo_key: Optional[str] = None
     primary_color: Optional[str] = None
     powered_by_freeframe: Optional[bool] = None
+    default_login_mode: Optional[LoginMode] = None
 
     @field_validator("primary_color", mode="before")
     @classmethod
     def validate_primary_color(cls, v):
         return _validate_hex_color(v)
+
+    @field_validator("default_login_mode", mode="before")
+    @classmethod
+    def validate_default_login_mode(cls, v):
+        if v is None:
+            raise ValueError("default_login_mode cannot be null")
+        return v
 
 
 class InstanceBrandingResponse(BaseModel):
@@ -64,10 +74,16 @@ class InstanceBrandingResponse(BaseModel):
     login_logo_url: Optional[str] = None
     primary_color: Optional[str] = None
     powered_by_freeframe: bool
+    default_login_mode: LoginMode = "magic_code"
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("default_login_mode", mode="before")
+    @classmethod
+    def default_login_mode_or_default(cls, v):
+        return v or "magic_code"
 
 
 class InstanceBrandingLogoUploadResponse(BaseModel):

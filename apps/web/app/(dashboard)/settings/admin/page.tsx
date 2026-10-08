@@ -9,6 +9,7 @@ import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Avatar } from "@/components/shared/avatar";
 import { EmptyState } from "@/components/shared/empty-state";
 import { useAuthStore } from "@/stores/auth-store";
@@ -210,6 +211,25 @@ export default function AdminPage() {
       const message =
         err instanceof Error ? err.message : "Failed to reactivate user";
       alert(message);
+    }
+  };
+
+  const [deleteTarget, setDeleteTarget] = React.useState<User | null>(null);
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError(null);
+    try {
+      await api.delete(`/users/${deleteTarget.id}`);
+      mutate("/admin/users");
+    } catch (err: unknown) {
+      // Rethrow so ConfirmDialog stays open and shows the message instead of
+      // closing as if the delete had worked.
+      setDeleteError(
+        err instanceof Error ? err.message : "Failed to delete user",
+      );
+      throw err;
     }
   };
 
@@ -415,13 +435,26 @@ export default function AdminPage() {
                             Deactivate
                           </Button>
                         ) : u.id !== user?.id && u.status === "deactivated" ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleReactivate(u.id)}
-                          >
-                            Reactivate
-                          </Button>
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleReactivate(u.id)}
+                            >
+                              Reactivate
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setDeleteError(null);
+                                setDeleteTarget(u);
+                              }}
+                              className="text-status-error hover:text-status-error"
+                            >
+                              Delete
+                            </Button>
+                          </>
                         ) : u.id === user?.id ? (
                           <span className="text-xs text-text-tertiary italic">
                             You
@@ -437,6 +470,19 @@ export default function AdminPage() {
         )}
       </section>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete ${deleteTarget?.name ?? "user"}?`}
+        description="They'll be removed from the user list and can't sign in. Their comments and activity stay. This email can't be invited again."
+        confirmLabel="Delete"
+        variant="danger"
+        error={deleteError}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

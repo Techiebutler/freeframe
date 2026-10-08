@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **One migration** adds `instance_branding.default_login_mode`. Existing instances keep opening the sign-in page on magic code.
+
+### Added
+
+- **Delete users from Admin → Users.** Once a user is deactivated, a Delete button appears next to Reactivate and asks for confirmation. Deletion is a soft delete: the user leaves the list and can't sign in, and their comments and activity stay.
+- **Default sign-in method under Admin → Branding.** Choose whether the sign-in page opens on magic code or on email & password. People can still switch to the other method from the sign-in page.
+
 ## [1.16.0] - 2026-10-05
 
 ### Upgrade notes

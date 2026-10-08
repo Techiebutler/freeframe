@@ -17,6 +17,11 @@ vi.mock('@/lib/api', () => ({
 }))
 vi.mock('@/lib/auth', () => ({ setTokens: vi.fn() }))
 
+const branding = vi.hoisted(() => ({ defaultLoginMode: 'magic_code' as 'magic_code' | 'password' }))
+vi.mock('@/components/shared/branding-provider', () => ({
+  useBranding: () => ({ defaultLoginMode: branding.defaultLoginMode }),
+}))
+
 import { LoginForm } from '../login-form'
 
 /** Walk the email step and land on the code screen for `email`. */
@@ -31,6 +36,7 @@ async function requestCodeFor(email: string) {
 describe('LoginForm magic-code step (#248)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    branding.defaultLoginMode = 'magic_code'
     // The endpoint answers identically for known and unknown addresses, on
     // purpose — that is what stops it being used to enumerate accounts.
     sendMagicCode.mockResolvedValue({})
@@ -71,5 +77,28 @@ describe('LoginForm magic-code step (#248)', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument(),
     )
+  })
+})
+
+describe('LoginForm default sign-in method', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('opens on magic code by default', () => {
+    branding.defaultLoginMode = 'magic_code'
+    render(<LoginForm />)
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /sign in with password instead/i })).toBeInTheDocument()
+  })
+
+  it('opens on email & password when the admin made that the default', () => {
+    branding.defaultLoginMode = 'password'
+    render(<LoginForm />)
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /send magic code/i })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /sign in with magic code instead/i }))
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
   })
 })

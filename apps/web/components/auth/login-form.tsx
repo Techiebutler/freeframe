@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { api, ApiError } from '@/lib/api'
 import { setTokens } from '@/lib/auth'
 import { useAuthStore } from '@/stores/auth-store'
+import { useBranding } from '@/components/shared/branding-provider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -14,7 +15,10 @@ type Step = 'email' | 'code' | 'password' | 'classic'
 
 export function LoginForm() {
   const router = useRouter()
-  const [step, setStep] = useState<Step>('email')
+  const { defaultLoginMode } = useBranding()
+  const initialStep: Step = defaultLoginMode === 'password' ? 'classic' : 'email'
+  const [step, setStep] = useState<Step>(initialStep)
+  const choseStep = useRef(false)
   const [email, setEmail] = useState('')
   const [emailError, setEmailError] = useState('')
   const [code, setCode] = useState(['', '', '', '', '', ''])
@@ -31,6 +35,12 @@ export function LoginForm() {
   const [classicError, setClassicError] = useState('')
 
   const codeRefs = useRef<(HTMLInputElement | null)[]>([])
+
+  useEffect(() => {
+    if (choseStep.current || email || classicEmail || classicPassword) return
+    if (step === 'email' || step === 'classic') setStep(initialStep)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialStep])
 
   useEffect(() => {
     if (step === 'code') {
@@ -276,7 +286,7 @@ export function LoginForm() {
         <div className="mt-6 text-center">
           <button
             type="button"
-            onClick={() => { setStep('email'); setClassicError('') }}
+            onClick={() => { choseStep.current = true; setStep('email'); setClassicError('') }}
             className="text-base text-text-tertiary hover:text-text-secondary transition-colors"
           >
             Sign in with magic code instead
@@ -435,10 +445,10 @@ export function LoginForm() {
       <div className="mt-6 text-center">
         <button
           type="button"
-          onClick={() => { setStep('classic'); setGeneralError('') }}
+          onClick={() => { choseStep.current = true; setStep('classic'); setGeneralError('') }}
           className="text-base text-text-tertiary hover:text-text-secondary transition-colors"
         >
-          Back to password sign-in
+          Sign in with password instead
         </button>
       </div>
     </div>
