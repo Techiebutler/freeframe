@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`.env.example` points the database, Redis and S3 at their compose service names instead of `localhost`.** The production compose takes these values from `.env.prod` without overriding them, so a deployment that followed the template had the app containers dialing themselves and failing with `connection to server at "localhost" ... refused`. With `S3_STORAGE=s3` the old `S3_ENDPOINT=http://localhost:9000` also stopped the API at startup; the new value is the built-in default, which AWS mode accepts. (#460)
 - **The `MINIO_CORS_*` variables are gone from the compose files, `.env.example` and the README.** MinIO never read those names, so they changed nothing; the bucket's CORS comes from FRONTEND_URL and CORS_ALLOW_ORIGINS. (#461)
 
+### Security
+- **Web build and test dependencies moved past four advisories.** `brace-expansion` to 1.1.21, 2.1.7 and 5.0.12 ([GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr)), `source-map-js` to 1.2.2 ([GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)), `undici` to 7.30.0 ([GHSA-w293-vg96-wgc3](https://github.com/advisories/GHSA-w293-vg96-wgc3) and five lower-severity advisories) and `postcss-selector-parser` to 7.1.6 ([GHSA-rj75-hqrm-r3gf](https://github.com/advisories/GHSA-rj75-hqrm-r3gf)). All four reach the app only through eslint, Tailwind, PostCSS and jsdom, so nothing in the browser bundle changes. `postcss-selector-parser` has no fixed 6.x release, so Tailwind 3 is now handed 7.1.6: the production stylesheet is byte-for-byte the same as before, built both with pnpm and with the dev stack's npm, and the `group-hover` / `peer-hover` test from #435 passes. The pinned `brace-expansion@1` override was also what kept Dependabot from opening this fix itself. The `next` advisories need the move to Next 15 and are not covered here.
+
 ## [1.16.0] - 2026-10-05
 
 ### Upgrade notes
