@@ -76,7 +76,7 @@ cd freeframe
 cp .env.example .env.prod
 
 # 3. Edit .env.prod with your actual credentials
-#    At minimum: change passwords, configure S3, email, and JWT_SECRET
+#    At minimum: change passwords, set FRONTEND_URL to your https:// URL, configure S3, email, and JWT_SECRET
 nano .env.prod
 
 # 4. Build and start all services
@@ -207,9 +207,9 @@ Works with: **AWS ElastiCache, Upstash, Redis Cloud, DigitalOcean Managed Redis,
 
 ### External S3 Storage
 
-Works with: **AWS S3, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, MinIO, or any S3-compatible service.**
+Works with: **AWS S3, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Silo, Garage, MinIO, or any S3-compatible service.**
 
-The production compose runs no S3 service by default — you provide your own. (`docker-compose.prod.yml` ships a commented-out MinIO block if you want to keep media on the same host; see the notes above it.) Configure in `.env.prod`:
+The production compose runs no S3 service by default — you provide your own. (`docker-compose.prod.yml` ships a commented-out block running [Silo](https://github.com/pgsty/silo), a maintained fork of MinIO, if you want to keep media on the same host; see the notes above it. The `minio/minio` and `minio/mc` images it used before can no longer be pulled from Docker Hub. Silo reads the same `MINIO_*` variables and opens an existing MinIO data volume as is.) Configure in `.env.prod`:
 
 ```
 S3_STORAGE=s3
@@ -228,7 +228,7 @@ For **non-AWS S3-compatible providers** (R2, B2, Spaces, MinIO, Hetzner, …), s
 | Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` |
 | Backblaze B2 | `https://s3.<region>.backblazeb2.com` |
 | DigitalOcean Spaces | `https://<region>.digitaloceanspaces.com` |
-| MinIO (self-hosted) | `http://your-minio-host:9000` |
+| Silo or MinIO (self-hosted) | `http://your-silo-host:9000` |
 | Garage (self-hosted) | `http://your-garage-host:3900` (or your reverse-proxy URL) |
 
 In non-AWS mode FreeFrame always uses **path-style addressing** (`endpoint/bucket/key`) with **SigV4** signatures — the compatibility baseline every S3-compatible provider accepts. No wildcard bucket DNS is needed in front of a self-hosted store.
@@ -255,7 +255,7 @@ Uploads go **directly from the browser to your bucket** via presigned URLs, so t
 
 If you allow **more than one origin**, give each origin its own rule rather than listing them all in one. Some backends (Garage) answer a multi-origin rule by joining every entry into a single comma-separated `Access-Control-Allow-Origin` header, which browsers reject — every upload and HLS segment fetch then fails CORS. FreeFrame's automatic startup config already emits one rule per origin.
 
-FreeFrame applies this automatically to **non-AWS** buckets at startup when it has permission (and logs a warning if it can't). Set it yourself for **AWS S3**, or wherever FreeFrame lacks CORS permission. **Hetzner Object Storage** exposes CORS only via API/CLI (not the Console UI), so it's easy to miss — apply the JSON above with `aws s3api put-bucket-cors`.
+FreeFrame applies this automatically to **non-AWS** buckets at startup when it has permission (and logs a warning if it can't). The rules allow `FRONTEND_URL`, `http://localhost:3000` and every origin in `CORS_ALLOW_ORIGINS`, the same origins the API accepts; `CORS_ALLOW_ORIGINS=*` becomes a single rule allowing any origin. Older MinIO releases answered this call with `NotImplemented` and allowed every origin regardless, so a browser origin missing from that list only starts failing once you move to a store that enforces bucket CORS (Silo, Garage): add it to `CORS_ALLOW_ORIGINS`. Set it yourself for **AWS S3**, or wherever FreeFrame lacks CORS permission. **Hetzner Object Storage** exposes CORS only via API/CLI (not the Console UI), so it's easy to miss — apply the JSON above with `aws s3api put-bucket-cors`.
 
 ### External SMTP
 
@@ -299,9 +299,11 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | (required) |
 | `REDIS_URL` | Redis connection string | (required) |
-| `S3_STORAGE` | `s3` for any S3-compatible provider | `minio` |
+| `S3_STORAGE` | `s3` for native AWS S3; any other value (e.g. `minio`) for every other S3-compatible store | `minio` |
 | `S3_BUCKET` | S3 bucket name | (required) |
-| `S3_ENDPOINT` | Custom S3 endpoint (non-AWS) | (empty = AWS) |
+| `S3_ENDPOINT` | S3 endpoint the API and workers use (non-AWS); ignored when `S3_STORAGE=s3` | `http://minio:9000` |
+| `S3_PUBLIC_ENDPOINT` | Browser-reachable base URL for presigned URLs, when it differs from `S3_ENDPOINT` | (empty = `S3_ENDPOINT`) |
+| `CORS_ALLOW_ORIGINS` | Extra browser origins, comma-separated, allowed by the API and (non-AWS) the bucket | (empty) |
 | `JWT_SECRET` | Auth token signing key | (required, generate with `openssl rand -hex 64`) |
 | `FRONTEND_URL` | Your FreeFrame URL (with https://) | (required) |
 | `DOMAIN` | Your domain for auto SSL | (optional) |
@@ -483,7 +485,7 @@ Your media files are already in S3. For redundancy:
 
 - **AWS S3**: Enable [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) and [cross-region replication](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html)
 - **Cloudflare R2**: Use [Sippy](https://developers.cloudflare.com/r2/data-migration/sippy/) for incremental migration/backup
-- **Self-hosted MinIO**: Use [`mc mirror`](https://min.io/docs/minio/linux/reference/minio-mc/mc-mirror.html) to replicate to a second location
+- **Self-hosted Silo or MinIO**: Use [`mc mirror`](https://min.io/docs/minio/linux/reference/minio-mc/mc-mirror.html) to replicate to a second location
 
 ### What to Back Up
 
@@ -568,6 +570,15 @@ draining normally.
 
 If you're upgrading past the media-metadata fix ([#124](https://github.com/Techiebutler/freeframe/issues/124)), backfill missing `duration_seconds`/`width`/`height`/`fps` on already-processed files with: `docker exec freeframe-api-1 python -m apps.api.scripts.backfill_media_metadata`. The backfill runs as a Celery task on the `transcoding` queue, so it occupies one worker slot and can run long on large libraries (up to ~300s per file); new uploads keep transcoding normally on the remaining slots.
 
+### Upgrading past the storage image switch ([#461](https://github.com/Techiebutler/freeframe/issues/461))
+
+Only for deployments that run the optional self-hosted storage block in `docker-compose.prod.yml`. The `minio/minio` and `minio/mc` images can no longer be pulled from Docker Hub, so the block now runs Silo, a maintained fork of MinIO. A cached `minio/minio` image keeps working if you don't switch, but it can't be pulled again.
+
+1. In your compose file, replace `minio/minio:...` with `pgsty/silo:RELEASE.2026-09-16T00-00-00Z` and `minio/mc:latest` with `pgsty/mc:RELEASE.2026-09-16T00-00-00Z`, and delete the four `MINIO_CORS_*` lines (MinIO never read them).
+2. Keep the service name `minio` and the `miniodata` volume. Silo opens the existing data as is, and the old image can still read it if you roll back.
+3. Silo enforces the bucket CORS rules FreeFrame writes at startup, which MinIO ignored. Make sure `FRONTEND_URL` is the exact origin people browse to, and put any other browser origin in `CORS_ALLOW_ORIGINS`. If your `.env.prod` sets `MINIO_CORS_ALLOW_ORIGIN`, move that value to `CORS_ALLOW_ORIGINS`.
+4. `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d`
+
 ### Update Checklist
 
 1. **Read the changelog** — check for breaking changes or new env vars
@@ -616,6 +627,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm api sh -
 - Verify your credentials are correct in `.env.prod`
 - Ensure your bucket exists and has proper CORS configuration
 - For non-AWS providers, double-check the `S3_ENDPOINT` URL
+- **Uploads stuck at 0%, with a browser `NetworkError` / `Failed to fetch` on the part `PUT`:** on a self-hosted or S3-compatible store the bucket's CORS allows only `FRONTEND_URL`'s origin, `http://localhost:3000`/`3001` and `CORS_ALLOW_ORIGINS`. Check that `FRONTEND_URL` matches the address bar exactly (scheme, host and port), then recreate the API (`docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --force-recreate api`) so it rewrites the rules. Then check that `S3_PUBLIC_ENDPOINT` is reachable from the browser and is `https://` when FreeFrame is.
 
 ### Port 80/443 already in use
 

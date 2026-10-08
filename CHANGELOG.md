@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+- **The bundled S3 server is now Silo, a maintained fork of MinIO.** The `minio/minio` and `minio/mc` images can no longer be pulled from Docker Hub, so the dev stack failed on any machine that did not already have them cached, and so did the optional self-hosted storage block in `docker-compose.prod.yml`. Both now pin `pgsty/silo` and `pgsty/mc` (`RELEASE.2026-09-16T00-00-00Z`). Silo reads the same `MINIO_*` variables and opens an existing `miniodata` volume as is (checked against data written by the MinIO release we pinned before), and the service keeps the name `minio`, so `S3_ENDPOINT=http://minio:9000` does not change. If you run the prod block, copy the new `image:` lines into your compose file. One behaviour differs: Silo enforces the bucket CORS rules FreeFrame writes at startup, where MinIO ignored them and allowed every origin. A browser origin that is not `FRONTEND_URL` or `http://localhost:3000` now needs to be in `CORS_ALLOW_ORIGINS`, or its uploads and playback are refused. In production the API shares the web app's origin, so a `FRONTEND_URL` still left at the template's `http://localhost:3000` went unnoticed until now: with Silo it blocks every upload, so set it to the exact origin your browser uses. If your `.env` sets `MINIO_CORS_ALLOW_ORIGIN`, move that value to `CORS_ALLOW_ORIGINS`. Step-by-step in docs/deployment.md (Updating). (#461)
+
+### Fixed
+- **Origins in `CORS_ALLOW_ORIGINS` can now upload and play media on a non-AWS store, not only call the API.** The bucket CORS rules set at startup allowed only `FRONTEND_URL` and `http://localhost:3000`, so on a store that enforces them (Garage, Silo) an extra origin could sign in and then failed on every upload and every HLS segment. The API and the bucket now read one origin list, and `*` becomes one rule allowing any origin. An entry S3 can't take as an origin (a `?`, or more than one `*`) is left out of the bucket rules with a warning, since S3 rejects the whole configuration over it. (#461)
+- **`.env.example` points the database, Redis and S3 at their compose service names instead of `localhost`.** The production compose takes these values from `.env.prod` without overriding them, so a deployment that followed the template had the app containers dialing themselves and failing with `connection to server at "localhost" ... refused`. With `S3_STORAGE=s3` the old `S3_ENDPOINT=http://localhost:9000` also stopped the API at startup; the new value is the built-in default, which AWS mode accepts. (#460)
+- **The `MINIO_CORS_*` variables are gone from the compose files, `.env.example` and the README.** MinIO never read those names, so they changed nothing; the bucket's CORS comes from FRONTEND_URL and CORS_ALLOW_ORIGINS. (#461)
+
 ## [1.16.0] - 2026-10-05
 
 ### Upgrade notes

@@ -150,11 +150,23 @@ def ensure_bucket_exists():
 
     # Set CORS for browser-based uploads (presigned PUT)
     if not _is_aws_s3():
-        # Browser Origin headers never include a path, so use the stripped
-        # origin from FRONTEND_URL in AllowedOrigins (e.g.
-        # https://host/freeframe -> https://host). Mirrors the CORS origin
-        # used in main.py.
-        _allowed_origins = [o for o in [settings.frontend_origin, "http://localhost:3000"] if o]
+        # The same origins the API's CORS allows (settings.cors_origins):
+        # a store that enforces bucket CORS (Silo, Garage) refuses uploads and
+        # playback from every other origin. Older MinIO answered PutBucketCors
+        # with NotImplemented and allowed every origin, which hid any gap.
+        if settings.cors_allows_any_origin:
+            _allowed_origins = ["*"]
+        else:
+            _allowed_origins = []
+            for _origin in settings.cors_origins:
+                # S3 rejects the WHOLE configuration over one bad entry
+                # (MalformedXML), and that would take FRONTEND_URL's rule with it.
+                if "?" in _origin or _origin.count("*") > 1:
+                    logger.warning("Leaving %r out of the bucket CORS rules: S3 does not accept it as an origin.", _origin)
+                    continue
+                _allowed_origins.append(_origin)
+            # S3 allows at most 100 CORS rules per bucket.
+            _allowed_origins = _allowed_origins[:100]
         try:
             # One rule per origin: Garage joins a rule's AllowedOrigins into a single
             # comma-separated Access-Control-Allow-Origin response header, which
@@ -170,6 +182,8 @@ def ensure_bucket_exists():
                         {
                             # Tighten from ["*"] to only the headers the
                             # browser upload + multipart flows actually send.
+                            # Silo and Garage enforce this list: a new header
+                            # the browser sends to storage must be added here.
                             "AllowedHeaders": [
                                 "Content-Type",
                                 "Content-MD5",

@@ -160,4 +160,29 @@ class Settings(BaseSettings):
             return raw
         return f"{parsed.scheme}://{parsed.netloc}"
 
+    @property
+    def cors_allows_any_origin(self) -> bool:
+        """CORS_ALLOW_ORIGINS contains "*"."""
+        return "*" in [o.strip() for o in self.cors_allow_origins.split(",")]
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Every browser origin allowed by CORS when `cors_allows_any_origin` is off.
+
+        The single list behind both the API's CORS middleware (main.py) and the
+        bucket CORS rules set at startup (s3_service.ensure_bucket_exists), so an
+        origin allowed to call the API can also upload and play media. A store
+        that enforces bucket CORS (Silo, Garage) refuses every other origin.
+        """
+        extra = [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+        candidates = [
+            # A sub-path deployment puts a path in FRONTEND_URL; an Origin
+            # header never has one, so match against the bare origin.
+            self.frontend_origin,
+            "http://localhost:3000",
+            "http://localhost:3001",
+            *extra,
+        ]
+        return list(dict.fromkeys(o for o in candidates if o))
+
 settings = Settings()
