@@ -381,6 +381,9 @@ def test_invite_rejects_deleted_users_email(client, auth_headers, mock_db, test_
     assert resp.status_code == 400
     assert resp.json()["detail"] == "This email belonged to a deleted user and can't be invited again"
     mock_db.add.assert_not_called()
+    # The lookup must include soft-deleted rows, or the INSERT trips users_email_key.
+    criteria = " ".join(str(c) for c in mock_db.filter.call_args.args)
+    assert "deleted_at" not in criteria
 
 
 def test_invite_rejects_existing_active_email(client, auth_headers, mock_db, test_user):

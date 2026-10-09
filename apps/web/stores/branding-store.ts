@@ -91,7 +91,9 @@ export const HARDCODED_DEFAULTS = {
   appleIconUrl: null,
   loginLogoUrl: null,
   poweredByFreeframe: true,
-  primaryColor: '#7c3aed',
+  // null, like the API's unset accent: before branding loads, or if the fetch
+  // fails, an unbranded instance must not look as if it had an accent set.
+  primaryColor: null as string | null,
   defaultLoginMode: 'magic_code' as LoginMode,
 }
 

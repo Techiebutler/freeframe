@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 
-import { useBrandingStore, HARDCODED_DEFAULTS } from '../branding-store'
+import { useBrandingStore } from '../branding-store'
 import { makeInstanceBranding } from '@/test/branding-fixtures'
 
 describe('syncBranding with no accent configured', () => {
@@ -25,7 +25,6 @@ describe('syncBranding with no accent configured', () => {
 
     const got = useBrandingStore.getState().primaryColor
     expect(got).toBeNull()
-    expect(got).not.toBe(HARDCODED_DEFAULTS.primaryColor)
   })
 
   it('carries a configured colour through unchanged', () => {

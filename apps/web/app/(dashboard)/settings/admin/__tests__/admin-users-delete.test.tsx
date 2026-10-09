@@ -54,13 +54,20 @@ describe('Admin users: Delete', () => {
     useAuthStore.setState({ user: me, isSuperAdmin: true })
   })
 
-  it('offers Delete only on deactivated rows, never on your own', () => {
+  it('offers Delete only on deactivated rows', () => {
     render(<AdminPage />)
 
     expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(1)
     expect(within(rowFor('Gone Person')).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
     expect(within(rowFor('Active Person')).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+  })
+
+  it('never offers Delete on your own row, even when it is deactivated', () => {
+    h.users = [{ ...me, status: 'deactivated' }, active, gone]
+    render(<AdminPage />)
+
     expect(within(rowFor('Me Admin')).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+    expect(within(rowFor('Gone Person')).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
   })
 
   it('keeps the dialog open and shows the error when the delete fails', async () => {
