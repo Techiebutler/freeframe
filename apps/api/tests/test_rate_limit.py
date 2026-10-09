@@ -130,7 +130,7 @@ class TestGlobalRateLimitMiddleware:
 
         middleware = GlobalRateLimitMiddleware(app=MagicMock())
 
-        from jose import jwt
+        import jwt
         token = jwt.encode(
             {"sub": "user-123", "type": "access"},
             settings.jwt_secret,

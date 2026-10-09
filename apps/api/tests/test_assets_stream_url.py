@@ -3,7 +3,7 @@ through the /stream/hls proxy so S3 objects can stay private."""
 import uuid
 from unittest.mock import MagicMock, patch
 
-from jose import jwt
+import jwt
 
 from apps.api.config import settings
 

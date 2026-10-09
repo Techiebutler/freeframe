@@ -1,12 +1,17 @@
 import os
 from pathlib import Path
 from urllib.parse import urlparse
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default S3 endpoint (local MinIO). Shared between the field default and the
 # consistency validator so the two can't drift.
 DEFAULT_S3_ENDPOINT = "http://minio:9000"
+
+# Every token is signed and checked with JWT_SECRET as a shared HMAC key, so
+# only the HMAC algorithms work. PyJWT fails an RS/ES algorithm on the first
+# token rather than at startup.
+JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
 
 
 def _is_aws_endpoint(url: str) -> bool:
@@ -121,6 +126,32 @@ class Settings(BaseSettings):
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_use_tls: bool = True
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _check_jwt_secret(cls, value: str) -> str:
+        """Refuse to start with an empty JWT_SECRET.
+
+        PyJWT rejects an empty HMAC key on every encode and decode, which would
+        show up as a 500 on sign-in and on every request carrying a bearer
+        token. (python-jose accepted it, so anyone could sign a valid token.)
+        """
+        if not value.strip():
+            raise ValueError(
+                "JWT_SECRET is empty. Set it to a long random string, for "
+                "example the output of `openssl rand -hex 64`."
+            )
+        return value
+
+    @field_validator("jwt_algorithm")
+    @classmethod
+    def _check_jwt_algorithm(cls, value: str) -> str:
+        if value not in JWT_ALGORITHMS:
+            raise ValueError(
+                f"JWT_ALGORITHM must be one of {', '.join(JWT_ALGORITHMS)}, not {value!r}. "
+                f"Tokens are signed with JWT_SECRET as a shared key."
+            )
+        return value
 
     @model_validator(mode="after")
     def _check_s3_endpoint_consistency(self):

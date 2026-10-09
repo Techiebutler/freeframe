@@ -280,7 +280,7 @@ def test_refresh_token_rejected_after_password_change(client, mock_db):
 def test_refresh_token_legacy_token_accepted(client, mock_db):
     """Test that a token without a 'ver' claim is treated as version 1 and accepted."""
     from apps.api.config import settings
-    from jose import jwt
+    import jwt
     
     mock_user = _mock_user("legacy@example.com")
     mock_user.token_version = 1
