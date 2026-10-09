@@ -59,6 +59,7 @@ import { ShareCreateDialog } from "@/components/projects/share-create-dialog";
 import { ProjectMembersDialog } from "@/components/projects/project-members-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { usePageTitle } from "@/hooks/use-page-title";
+import { useRefetchOnUploadStatus } from "@/hooks/use-upload-refetch";
 import type {
   Project,
   AssetResponse,
@@ -124,7 +125,7 @@ export default function ProjectDetailPage() {
   const [assetToRename, setAssetToRename] = React.useState<AssetResponse | null>(null);
   const [assetToDelete, setAssetToDelete] = React.useState<AssetResponse | null>(null);
 
-  const { files: uploadFiles, startUpload } = useUploadStore();
+  const startUpload = useUploadStore((s) => s.startUpload);
   const { user } = useAuthStore();
 
   const {
@@ -342,15 +343,11 @@ export default function ProjectDetailPage() {
     setShareDialogOpen(true);
   }
 
-  React.useEffect(() => {
-    const anyComplete = uploadFiles.some(
-      (f) => f.projectId === projectId && f.status === "complete",
-    );
-    if (anyComplete) {
-      mutateAssets();
-      mutateSubfolders();
-    }
-  }, [uploadFiles, mutateAssets, mutateSubfolders, projectId]);
+  const refetchGrid = React.useCallback(() => {
+    mutateAssets();
+    mutateSubfolders();
+  }, [mutateAssets, mutateSubfolders]);
+  useRefetchOnUploadStatus(projectId, refetchGrid);
 
   const handleFilesSelected = (files: File[]) => {
     setPendingFiles(files);

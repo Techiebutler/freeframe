@@ -23,7 +23,12 @@ let pathname = '/projects/p1'
 
 vi.mock('next/navigation', () => ({ usePathname: () => pathname }))
 vi.mock('@/stores/auth-store', () => ({ useAuthStore: () => ({ fetchUser: vi.fn() }) }))
-vi.mock('@/stores/upload-store', () => ({ useUploadStore: () => ({ fetchHistory: vi.fn() }) }))
+vi.mock('@/stores/upload-store', () => ({
+  useUploadStore: (select?: (s: object) => unknown) => {
+    const state = { fetchHistory: vi.fn() }
+    return select ? select(state) : state
+  },
+}))
 vi.mock('@/components/layout/sidebar', () => ({ Sidebar: () => <div>rail</div> }))
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">header</div>,

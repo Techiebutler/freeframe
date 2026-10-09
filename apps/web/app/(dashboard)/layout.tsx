@@ -22,7 +22,7 @@ export default function DashboardLayout({
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(true);
   const [commandOpen, setCommandOpen] = React.useState(false);
   const { fetchUser } = useAuthStore();
-  const { fetchHistory } = useUploadStore();
+  const fetchHistory = useUploadStore((s) => s.fetchHistory);
 
   // The asset viewer renders its own top bar, carrying both the header's role
   // and the attribution credit, so the shell supplies neither here.

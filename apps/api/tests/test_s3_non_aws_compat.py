@@ -161,16 +161,17 @@ class _FakeS3:
 def test_startup_cors_emits_one_rule_per_origin(monkeypatch):
     monkeypatch.setattr(settings, "s3_storage", "minio")
     monkeypatch.setattr(settings, "frontend_url", "https://freeframe.example.com")
+    monkeypatch.setattr(settings, "cors_allow_origins", "")
     fake = _FakeS3()
     monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: fake)
 
     ensure_bucket_exists()
 
     rules = fake.cors_config["CORSRules"]
-    assert len(rules) == 2
     assert [r["AllowedOrigins"] for r in rules] == [
         ["https://freeframe.example.com"],
         ["http://localhost:3000"],
+        ["http://localhost:3001"],
     ]
     for rule in rules:
         assert "ETag" in rule["ExposeHeaders"]
@@ -179,11 +180,79 @@ def test_startup_cors_emits_one_rule_per_origin(monkeypatch):
 def test_startup_cors_dedupes_frontend_localhost(monkeypatch):
     monkeypatch.setattr(settings, "s3_storage", "minio")
     monkeypatch.setattr(settings, "frontend_url", "http://localhost:3000")
+    monkeypatch.setattr(settings, "cors_allow_origins", "")
     fake = _FakeS3()
     monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: fake)
 
     ensure_bucket_exists()
 
     rules = fake.cors_config["CORSRules"]
-    assert len(rules) == 1
-    assert rules[0]["AllowedOrigins"] == ["http://localhost:3000"]
+    assert [r["AllowedOrigins"] for r in rules] == [["http://localhost:3000"], ["http://localhost:3001"]]
+
+
+def test_startup_cors_includes_cors_allow_origins(monkeypatch):
+    # An extra origin the API accepts must also reach the bucket, or a store that
+    # enforces bucket CORS (Silo, Garage) refuses its uploads and playback.
+    monkeypatch.setattr(settings, "s3_storage", "minio")
+    monkeypatch.setattr(settings, "frontend_url", "https://freeframe.example.com")
+    monkeypatch.setattr(settings, "cors_allow_origins", " https://review.example.com, ,http://localhost:3000 ")
+    fake = _FakeS3()
+    monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: fake)
+
+    ensure_bucket_exists()
+
+    assert [r["AllowedOrigins"] for r in fake.cors_config["CORSRules"]] == [
+        ["https://freeframe.example.com"],
+        ["http://localhost:3000"],
+        ["http://localhost:3001"],
+        ["https://review.example.com"],
+    ]
+
+
+def test_startup_cors_matches_api_cors_origins(monkeypatch):
+    # One list feeds both, so an origin the API accepts can never be one the
+    # bucket refuses.
+    monkeypatch.setattr(settings, "s3_storage", "minio")
+    monkeypatch.setattr(settings, "frontend_url", "https://host.example.com/freeframe")
+    monkeypatch.setattr(settings, "cors_allow_origins", "https://a.example.com,https://b.example.com")
+    fake = _FakeS3()
+    monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: fake)
+
+    ensure_bucket_exists()
+
+    bucket = [o for r in fake.cors_config["CORSRules"] for o in r["AllowedOrigins"]]
+    assert bucket == settings.cors_origins
+    assert "https://host.example.com" in bucket
+
+
+def test_startup_cors_skips_origins_s3_rejects(monkeypatch):
+    # S3 refuses the whole configuration over one bad AllowedOrigin, which would
+    # take the FRONTEND_URL rule down with it.
+    monkeypatch.setattr(settings, "s3_storage", "minio")
+    monkeypatch.setattr(settings, "frontend_url", "https://freeframe.example.com")
+    monkeypatch.setattr(settings, "cors_allow_origins", "https://*.*.example.com,https://x.example.com?a=1,https://ok.example.com")
+    fake = _FakeS3()
+    monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: fake)
+
+    ensure_bucket_exists()
+
+    assert [r["AllowedOrigins"] for r in fake.cors_config["CORSRules"]] == [
+        ["https://freeframe.example.com"],
+        ["http://localhost:3000"],
+        ["http://localhost:3001"],
+        ["https://ok.example.com"],
+    ]
+
+
+def test_startup_cors_wildcard_allows_any_origin(monkeypatch):
+    monkeypatch.setattr(settings, "s3_storage", "minio")
+    monkeypatch.setattr(settings, "frontend_url", "https://freeframe.example.com")
+    monkeypatch.setattr(settings, "cors_allow_origins", "https://review.example.com,*")
+    fake = _FakeS3()
+    monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: fake)
+
+    ensure_bucket_exists()
+
+    rules = fake.cors_config["CORSRules"]
+    assert [r["AllowedOrigins"] for r in rules] == [["*"]]
+    assert "ETag" in rules[0]["ExposeHeaders"]

@@ -31,7 +31,7 @@ docker compose -f docker-compose.dev.yml up --build
 open http://localhost:3000
 ```
 
-All services start automatically: PostgreSQL, Redis, MinIO (S3), API, Celery workers, and the Next.js frontend.
+All services start automatically: PostgreSQL, Redis, Silo (S3, a MinIO fork), API, Celery workers, and the Next.js frontend.
 
 ### Dev Services
 
@@ -40,7 +40,7 @@ All services start automatically: PostgreSQL, Redis, MinIO (S3), API, Celery wor
 | Frontend       | http://localhost:3000       | Next.js (hot reload) |
 | API            | http://localhost:8000       | FastAPI              |
 | API Docs       | http://localhost:8000/docs  | Swagger UI           |
-| MinIO Console  | http://localhost:9001       | S3 storage UI        |
+| Silo console   | http://localhost:9001       | S3 storage UI (MinIO fork) |
 | PostgreSQL     | localhost:5433              | Database             |
 
 ---

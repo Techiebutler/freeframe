@@ -272,7 +272,7 @@ def _dispose_version_files(db: Session, v: AssetVersion) -> None:
     # Driven off our own row rather than off a bucket listing. A listing pass
     # was wrong twice over: it aborted uploads that were still transferring,
     # because it aged them by when the multipart was initiated rather than by
-    # whether anything was still happening; and on MinIO, the default backend,
+    # whether anything was still happening; and on MinIO, then the default backend,
     # it found nothing at all after a restart, because ListMultipartUploads
     # there is served from a node-local in-memory cache -- measured 3 open
     # uploads before a restart and 0 after, with the parts still present.

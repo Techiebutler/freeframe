@@ -45,7 +45,7 @@ maintenance_worker, beat, web.
 | Frontend (Next.js)  | http://localhost:3000        | hot reload                              |
 | API (FastAPI)       | http://localhost:8000        |                                         |
 | API docs (Swagger)  | http://localhost:8000/docs   | the fastest way to find an endpoint     |
-| MinIO console       | http://localhost:9001        | S3 API is on :9000                      |
+| Silo console        | http://localhost:9001        | S3 API is on :9000 (Silo, a MinIO fork) |
 | Postgres            | `localhost:5433` (dev only)  | host mapping `5433:5432`; in-container and prod it's `5432` |
 | Redis               | `localhost:6379`             |                                         |
 

@@ -63,11 +63,11 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ─── Optional: self-hosted object storage (MinIO) ────────────────────────────
+  # ─── Optional: self-hosted object storage (Silo, a MinIO fork) ──────────────
   # FreeFrame has NO local-filesystem storage backend — it speaks only the S3 API.
   # By default, point it at external S3-compatible storage (AWS S3, R2, B2, Spaces)
   # via the S3_* vars in .env.prod. To instead keep media on THIS host, run your
-  # own MinIO by uncommenting the two services below, then:
+  # own S3 server by uncommenting the two services below, then:
   #   1. add `miniodata:` under the top-level `volumes:` (see bottom of file);
   #   2. add `depends_on: { minio: { condition: service_healthy } }` to
   #      api / worker / email_worker / maintenance_worker / beat;
@@ -77,21 +77,20 @@ services:
   #        S3_PUBLIC_ENDPOINT=https://storage.${DOMAIN}   # MUST be browser-reachable
   #        S3_ACCESS_KEY / S3_SECRET_KEY = strong values
   #        S3_BUCKET = lowercase letters, digits and hyphens only (no underscores)
-  # Presigned URLs are handed to the browser, so MinIO must be reachable from
-  # OUTSIDE the compose network — that is what the Traefik router below provides
-  # (point a `storage.<your-domain>` DNS record at this host). The app sets a
-  # public-read policy on the `processed/*` prefix itself on startup.
+  # Presigned URLs are handed to the browser, so the storage server must be
+  # reachable from OUTSIDE the compose network — that is what the Traefik router
+  # below provides (point a `storage.<your-domain>` DNS record at this host).
+  # The bucket can stay private. On startup the app sets the bucket's CORS rules
+  # from FRONTEND_URL and CORS_ALLOW_ORIGINS, and Silo enforces them, so
+  # FRONTEND_URL must be the exact https:// origin people browse to.
+  # An existing miniodata volume from the old minio/minio image opens as is.
   #
   # minio:
-  #   image: minio/minio:RELEASE.2025-04-22T22-12-26Z   # 2025+ supports the boto3>=1.36 checksums
+  #   image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z   # maintained MinIO fork; minio/minio is no longer pullable (#461)
   #   command: server /data --console-address ":9001"
   #   environment:
   #     MINIO_ROOT_USER: ${S3_ACCESS_KEY}
   #     MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-  #     MINIO_CORS_ALLOW_ORIGIN: ${FRONTEND_URL}
-  #     MINIO_CORS_ALLOW_METHODS: GET,PUT,POST,DELETE,HEAD
-  #     MINIO_CORS_ALLOW_HEADERS: "*"
-  #     MINIO_CORS_EXPOSE_HEADERS: ETag,Content-Length,x-amz-request-id
   #   volumes:
   #     - miniodata:/data
   #   healthcheck:
@@ -108,7 +107,7 @@ services:
   #     - traefik.http.services.minio.loadbalancer.server.port=9000
   #
   # minio-init:                     # one-shot: create the bucket (idempotent)
-  #   image: minio/mc:latest
+  #   image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
   #   env_file:
   #     - .env.prod                    # the S3_* vars below are read inside the container
   #   depends_on:
