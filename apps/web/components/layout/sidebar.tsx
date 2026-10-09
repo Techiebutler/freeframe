@@ -46,7 +46,12 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname()
   const { user, logout, isSuperAdmin } = useAuthStore()
-  const { files: uploadFiles, togglePanel, panelOpen } = useUploadStore()
+  const togglePanel = useUploadStore((s) => s.togglePanel)
+  const panelOpen = useUploadStore((s) => s.panelOpen)
+  // A count, not the rows, so progress writes don't re-render the sidebar.
+  const activeUploads = useUploadStore(
+    (s) => s.files.filter((f) => f.status === 'uploading' || f.status === 'pending' || f.status === 'processing').length,
+  )
   const { unreadCount, fetchNotifications } = useNotificationStore()
   const { orgName, orgLogoDark, orgLogoLight } = useBranding()
   // Resolved, not the raw preference: 'system' is neither 'light' nor 'dark',
@@ -59,7 +64,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     lightUrl: orgLogoLight,
   })
   const [notifOpen, setNotifOpen] = React.useState(false)
-  const activeUploads = uploadFiles.filter((f) => f.status === 'uploading' || f.status === 'pending' || f.status === 'processing').length
   const { data: instance } = useSWR<InstanceSettings>(
     '/instance/settings',
     () => api.get<InstanceSettings>('/instance/settings'),

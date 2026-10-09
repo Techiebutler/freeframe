@@ -17,7 +17,10 @@ vi.mock('@/stores/auth-store', () => ({
   useAuthStore: () => ({ fetchUser: vi.fn() }),
 }))
 vi.mock('@/stores/upload-store', () => ({
-  useUploadStore: () => ({ fetchHistory: vi.fn() }),
+  useUploadStore: (select?: (s: object) => unknown) => {
+    const state = { fetchHistory: vi.fn() }
+    return select ? select(state) : state
+  },
 }))
 vi.mock('@/components/layout/sidebar', () => ({
   Sidebar: () => <div data-testid="rail">rail</div>,
