@@ -22,5 +22,6 @@ class InstanceBranding(Base):
     login_logo_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     primary_color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
     powered_by_freeframe: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    default_login_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="magic_code", server_default="magic_code")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

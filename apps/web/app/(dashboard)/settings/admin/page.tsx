@@ -9,6 +9,7 @@ import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Avatar } from "@/components/shared/avatar";
 import { EmptyState } from "@/components/shared/empty-state";
 import { useAuthStore } from "@/stores/auth-store";
@@ -36,6 +37,7 @@ function BulkInviteDialog() {
     setSuccess("");
     let sent = 0;
     const skipped: string[] = [];
+    const deleted: string[] = [];
     const failed: string[] = [];
     try {
       for (const email of emailList) {
@@ -47,6 +49,8 @@ function BulkInviteDialog() {
           const msg = err instanceof Error ? err.message : "";
           if (msg.toLowerCase().includes("already registered")) {
             skipped.push(email);
+          } else if (msg.toLowerCase().includes("deleted user")) {
+            deleted.push(email);
           } else {
             failed.push(email);
           }
@@ -56,17 +60,23 @@ function BulkInviteDialog() {
       if (sent > 0) parts.push(`${sent} invite(s) sent`);
       if (skipped.length > 0)
         parts.push(`${skipped.length} already registered`);
+      if (deleted.length > 0)
+        parts.push(`${deleted.length} belonged to a deleted user`);
       if (failed.length > 0) parts.push(`${failed.length} failed`);
       if (sent > 0 || skipped.length > 0) {
         setSuccess(parts.join(", "));
-        if (failed.length === 0) {
+        if (failed.length === 0 && deleted.length === 0) {
           setEmails("");
           setTimeout(() => setOpen(false), 1500);
         }
       }
-      if (failed.length > 0) {
-        setError(`Failed to invite: ${failed.join(", ")}`);
-      }
+      const errors: string[] = [];
+      if (deleted.length > 0)
+        errors.push(
+          `Can't invite ${deleted.join(", ")}: the email belonged to a deleted user`,
+        );
+      if (failed.length > 0) errors.push(`Failed to invite: ${failed.join(", ")}`);
+      if (errors.length > 0) setError(errors.join(". "));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to send invites");
     } finally {
@@ -210,6 +220,25 @@ export default function AdminPage() {
       const message =
         err instanceof Error ? err.message : "Failed to reactivate user";
       alert(message);
+    }
+  };
+
+  const [deleteTarget, setDeleteTarget] = React.useState<User | null>(null);
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError(null);
+    try {
+      await api.delete(`/users/${deleteTarget.id}`);
+      mutate("/admin/users");
+    } catch (err: unknown) {
+      // Rethrow so ConfirmDialog stays open and shows the message instead of
+      // closing as if the delete had worked.
+      setDeleteError(
+        err instanceof Error ? err.message : "Failed to delete user",
+      );
+      throw err;
     }
   };
 
@@ -415,13 +444,26 @@ export default function AdminPage() {
                             Deactivate
                           </Button>
                         ) : u.id !== user?.id && u.status === "deactivated" ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleReactivate(u.id)}
-                          >
-                            Reactivate
-                          </Button>
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleReactivate(u.id)}
+                            >
+                              Reactivate
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setDeleteError(null);
+                                setDeleteTarget(u);
+                              }}
+                              className="text-status-error hover:text-status-error"
+                            >
+                              Delete
+                            </Button>
+                          </>
                         ) : u.id === user?.id ? (
                           <span className="text-xs text-text-tertiary italic">
                             You
@@ -437,6 +479,19 @@ export default function AdminPage() {
         )}
       </section>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete ${deleteTarget?.name ?? "user"}?`}
+        description="They'll be removed from the user list and can't sign in. Their comments and activity stay. Give any projects they solely own a new owner first, or nobody will be able to manage them. This email can't be invited again."
+        confirmLabel="Delete"
+        variant="danger"
+        error={deleteError}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

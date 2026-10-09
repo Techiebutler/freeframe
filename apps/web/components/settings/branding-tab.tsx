@@ -240,7 +240,9 @@ export function BrandingTab() {
     faviconUrl !== null ||
     appleIconUrl !== null ||
     loginLogoUrl !== null ||
-    primaryColor !== HARDCODED_DEFAULTS.primaryColor ||
+    // null, not the hardcoded colour, is "no accent configured": the store keeps
+    // the API's null as-is, so comparing to the default kept this always true.
+    primaryColor !== null ||
     poweredByFreeframe !== HARDCODED_DEFAULTS.poweredByFreeframe
 
   const slotProps = {

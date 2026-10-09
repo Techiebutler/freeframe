@@ -37,6 +37,7 @@ def _default_instance_branding() -> InstanceBranding:
         id=_SINGLETON_ID,
         org_name="FreeFrame",
         powered_by_freeframe=True,
+        default_login_mode="magic_code",
         created_at=now,
         updated_at=now,
     )

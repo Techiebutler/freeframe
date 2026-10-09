@@ -21,6 +21,7 @@ def test_get_branding_returns_defaults(client, mock_db):
     body = r.json()
     assert "org_name" in body
     assert "powered_by_freeframe" in body
+    assert body["default_login_mode"] == "magic_code"
 
 
 # ── PUT /instance/branding ──────────────────────────────────────────────
@@ -48,6 +49,31 @@ def test_put_branding_updates_fields(client, auth_headers, mock_db, test_user):
     body = r.json()
     assert body["org_name"] == "Acme"
     assert body["powered_by_freeframe"] is False
+
+
+def test_put_branding_sets_default_login_mode(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = True
+    mock_db.first.return_value = None
+
+    r = client.put(
+        "/instance/branding",
+        headers=auth_headers,
+        json={"default_login_mode": "password"},
+    )
+    assert r.status_code == 200
+    assert r.json()["default_login_mode"] == "password"
+
+
+@pytest.mark.parametrize("value", ["sso", None])
+def test_put_branding_rejects_bad_default_login_mode(client, auth_headers, mock_db, test_user, value):
+    """Only the two forms the login page has are accepted, and null would hit a NOT NULL column."""
+    test_user.is_superadmin = True
+    r = client.put(
+        "/instance/branding",
+        headers=auth_headers,
+        json={"default_login_mode": value},
+    )
+    assert r.status_code == 422
 
 
 def test_put_branding_null_logo_key_deletes_old_object(client, auth_headers, mock_db, test_user, monkeypatch):

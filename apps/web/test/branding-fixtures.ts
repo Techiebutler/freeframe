@@ -19,6 +19,7 @@ export function makeInstanceBranding(
     login_logo_url: null,
     primary_color: null,
     powered_by_freeframe: true,
+    default_login_mode: 'magic_code',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     ...overrides,

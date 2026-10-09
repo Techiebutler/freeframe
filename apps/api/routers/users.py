@@ -7,7 +7,7 @@ from ..database import get_db
 from ..schemas.auth import UserResponse, AdminUserResponse, InviteRequest, UpdateProfileRequest
 from ..models.user import User, UserStatus
 from ..middleware.auth import get_current_user
-from ..services.auth_service import hash_password, get_user_by_email
+from ..services.auth_service import hash_password
 from ..tasks.email_tasks import send_invite_email
 from ..tasks.celery_app import send_task_safe
 from ..models.instance_branding import InstanceBranding
@@ -57,7 +57,15 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 @router.post("/invite", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
 def invite_user(body: InviteRequest, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    if get_user_by_email(db, body.email):
+    # No deleted_at filter: the unique constraint on users.email still covers
+    # soft-deleted rows, so skipping them here turns the INSERT into a 500.
+    existing = db.query(User).filter(User.email == body.email).first()
+    if existing and existing.deleted_at is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="This email belonged to a deleted user and can't be invited again",
+        )
+    if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # Generate invite token
@@ -156,5 +164,7 @@ def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db), current_user:
     user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.status != UserStatus.deactivated:
+        raise HTTPException(status_code=409, detail="Deactivate this user before deleting them")
     user.deleted_at = datetime.now(timezone.utc)
     db.commit()
