@@ -25,6 +25,7 @@ vi.mock('@/lib/api', () => ({
 import { api, ApiError } from '@/lib/api'
 import { useUploadStore, uploadAllParts } from '../upload-store'
 import type { UploadFile } from '../upload-store'
+import { installXhrFake, ok, fail, type PartHandler } from '@/test/xhr-fake'
 
 const MB = 1024 * 1024
 const CHUNK = 10 * MB
@@ -77,7 +78,7 @@ function rowOf(id: string) {
   return useUploadStore.getState().files.find((f) => f.id === id)!
 }
 
-/** The part number a presigned URL names, so a fetch mock can tell parts apart. */
+/** The part number a presigned URL names, so a PUT mock can tell parts apart. */
 function mockPresignPerPart() {
   return vi.mocked(api.post).mockImplementation((path: string, body?: unknown) => {
     if (path === '/upload/presign-part') {
@@ -89,8 +90,15 @@ function mockPresignPerPart() {
   })
 }
 
-function partsSentTo(fetchMock: ReturnType<typeof vi.fn>): number[] {
-  return fetchMock.mock.calls
+/** Plays the storage backend for every part PUT; each part succeeds by default. */
+let put = vi.fn<PartHandler>()
+function mockPut(handler: PartHandler = () => ok('"etag"')) {
+  put = vi.fn(handler)
+  installXhrFake(put)
+}
+
+function partsSentTo(putMock: typeof put): number[] {
+  return putMock.mock.calls
     .map(([url]) => Number(String(url).split('-').pop()))
     .sort((a, b) => a - b)
 }
@@ -106,9 +114,7 @@ describe('uploadAllParts with parts already held', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockPresignPerPart()
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true, headers: { get: () => '"etag"' },
-    }) as never
+    mockPut()
   })
 
   it('does not send a part the backend already holds', async () => {
@@ -117,7 +123,7 @@ describe('uploadAllParts with parts already held', () => {
       { chunkSize: CHUNK, alreadyHeld: [1, 2] },
     )
 
-    expect(partsSentTo(global.fetch as never)).toEqual([3])
+    expect(partsSentTo(put)).toEqual([3])
   })
 
   it('counts the held parts as progress instead of starting again at zero', async () => {
@@ -130,7 +136,21 @@ describe('uploadAllParts with parts already held', () => {
       { chunkSize: CHUNK, alreadyHeld: [1, 2] },
     )
 
-    expect(onProgress.mock.calls[0][0]).toBe(Math.round((2 / 3) * 95))
+    // 20 of 23 MB, in bytes rather than in parts.
+    expect(onProgress.mock.calls[0][0]).toBe(Math.round((20 / 23) * 95))
+  })
+
+  it('counts a held last part at its own length, not a full chunk', async () => {
+    // What is held is a set, so the short tail can be in it while earlier parts
+    // are not. Counting it as a whole chunk would start this resume at 41%.
+    const onProgress = vi.fn()
+
+    await uploadAllParts(
+      makeFile(), 'key', 'u1', new AbortController(), onProgress, 5,
+      { chunkSize: CHUNK, alreadyHeld: [3] },
+    )
+
+    expect(onProgress.mock.calls[0][0]).toBe(Math.round((3 / 23) * 95))
   })
 
   it('sends the parts that are missing from the middle, not just the tail', async () => {
@@ -141,7 +161,7 @@ describe('uploadAllParts with parts already held', () => {
       { chunkSize: CHUNK, alreadyHeld: [1, 3] },
     )
 
-    expect(partsSentTo(global.fetch as never)).toEqual([2])
+    expect(partsSentTo(put)).toEqual([2])
   })
 
   it('cuts the file on the chunk size it is given, not on its own constant', async () => {
@@ -153,7 +173,7 @@ describe('uploadAllParts with parts already held', () => {
     )
 
     // 23 MB at 5 MB per part is five parts, not three.
-    expect(partsSentTo(global.fetch as never)).toEqual([1, 2, 3, 4, 5])
+    expect(partsSentTo(put)).toEqual([1, 2, 3, 4, 5])
   })
 
   it('returns only the parts it actually sent', async () => {
@@ -175,9 +195,7 @@ describe('resumeUpload', () => {
     vi.clearAllMocks()
     seedInterrupted()
     mockPresignPerPart()
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true, headers: { get: () => '"etag"' },
-    }) as never
+    mockPut()
     vi.mocked(api.get).mockResolvedValue(resumeInfo({ held_part_numbers: [1, 2] }) as never)
   })
 
@@ -185,7 +203,7 @@ describe('resumeUpload', () => {
     useUploadStore.getState().resumeUpload('row-1', makeFile())
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('processing'))
 
-    expect(partsSentTo(global.fetch as never)).toEqual([3])
+    expect(partsSentTo(put)).toEqual([3])
     expect(completionBody().version_id).toBe(VERSION_ID)
   })
 
@@ -260,7 +278,7 @@ describe('resumeUpload', () => {
     useUploadStore.getState().resumeUpload('row-1', makeFile(TOTAL - 1))
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('interrupted'))
 
-    expect(global.fetch).not.toHaveBeenCalled()
+    expect(put).not.toHaveBeenCalled()
     // Short enough to survive the panel row's truncation, and it says what is
     // wrong rather than repeating the name of the file just picked.
     expect(rowOf('row-1').error).toBe('File does not match original')
@@ -270,7 +288,7 @@ describe('resumeUpload', () => {
     useUploadStore.getState().resumeUpload('row-1', makeFile(TOTAL, 'other.mp4'))
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('interrupted'))
 
-    expect(global.fetch).not.toHaveBeenCalled()
+    expect(put).not.toHaveBeenCalled()
     expect(rowOf('row-1').error).toBe('Please select clip.mp4')
   })
 
@@ -283,16 +301,14 @@ describe('resumeUpload', () => {
     useUploadStore.getState().resumeUpload('row-1', makeFile(1, 'renamed.mp4'))
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('processing'))
 
-    expect(global.fetch).not.toHaveBeenCalled()
+    expect(put).not.toHaveBeenCalled()
     expect(completionBody().parts).toEqual([])
   })
 
   it('stays resumable when the transfer breaks again', async () => {
     // A 403 rather than a dropped connection, so this does not spend the part
     // retry ladder's four minutes reaching the same place.
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false, status: 403, statusText: 'Forbidden', headers: { get: () => null },
-    }) as never
+    mockPut(() => fail(403, 'Forbidden'))
 
     useUploadStore.getState().resumeUpload('row-1', makeFile())
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('interrupted'))
@@ -472,9 +488,7 @@ describe('a fresh upload and the pinned chunk size', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useUploadStore.setState({ files: [] })
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true, headers: { get: () => '"etag"' },
-    }) as never
+    mockPut()
   })
 
   /** Initiate answers with `pinned`; everything after it succeeds. */
@@ -506,7 +520,7 @@ describe('a fresh upload and the pinned chunk size', () => {
 
     // 23 MB at 5 MB a part is five parts; at the client's own 10 MB it is three.
     await vi.waitFor(() =>
-      expect(partsSentTo(global.fetch as never)).toEqual([1, 2, 3, 4, 5]),
+      expect(partsSentTo(put)).toEqual([1, 2, 3, 4, 5]),
     )
   })
 
@@ -516,7 +530,7 @@ describe('a fresh upload and the pinned chunk size', () => {
     useUploadStore.getState().startVersionUpload(makeFile(), ASSET_ID, 'clip', 'project-1')
 
     await vi.waitFor(() =>
-      expect(partsSentTo(global.fetch as never)).toEqual([1, 2, 3, 4, 5]),
+      expect(partsSentTo(put)).toEqual([1, 2, 3, 4, 5]),
     )
   })
 })

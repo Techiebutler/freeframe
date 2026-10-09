@@ -18,6 +18,7 @@ vi.mock('swr', () => ({ mutate: vi.fn() }))
 
 import { api } from '@/lib/api'
 import { useUploadStore } from '../upload-store'
+import { installXhrFake, ok } from '@/test/xhr-fake'
 
 /** A promise the test decides when to resolve. */
 function gate<T>() {
@@ -49,10 +50,7 @@ function mockUpload(holdInitiate?: Promise<unknown>) {
     }
     return {} as never
   })
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({ ok: true, headers: { get: () => '"etag-1"' } }),
-  )
+  installXhrFake(() => ok('"etag-1"'))
   return sent
 }
 

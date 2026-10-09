@@ -10,7 +10,7 @@
  * every part the backend is holding, which is what made an interrupted upload
  * unrecoverable in the first place.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('@/lib/api', () => ({
   api: { post: vi.fn(), get: vi.fn() },
@@ -18,6 +18,7 @@ vi.mock('@/lib/api', () => ({
 
 import { api } from '@/lib/api'
 import { useUploadStore } from '../upload-store'
+import { installXhrFake, ok } from '@/test/xhr-fake'
 
 const ASSET_ID = 'asset-1'
 const VERSION_ID = 'version-2'
@@ -78,10 +79,7 @@ describe('an upload whose completion request threw', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useUploadStore.setState({ files: [] })
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: { get: () => '"etag-1"' },
-    }) as never
+    installXhrFake(() => ok('"etag-1"'))
   })
 
   it('is not reported as failed when the version already moved on', async () => {
@@ -185,10 +183,7 @@ describe('races during the recovery read', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useUploadStore.setState({ files: [] })
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: { get: () => '"etag-1"' },
-    }) as never
+    installXhrFake(() => ok('"etag-1"'))
   })
 
   it('does not overwrite a cancel the user made while it was asking', async () => {
@@ -280,6 +275,58 @@ describe('races during the recovery read', () => {
     await settled(id)
 
     expect(rowOf(id).status).toBe('interrupted')
+    expect(aborts).toEqual([])
+  })
+})
+
+describe('an abort the browser started itself', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useFakeTimers()
+    useUploadStore.setState({ files: [] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('is retried, and nothing is discarded', async () => {
+    // window.stop(), or Stop or Esc on a pending navigation, aborts the part
+    // in flight while the user cancelled nothing. Taken for a cancel, the row
+    // would go to `cancelled` and `/upload/abort` would delete every part the
+    // backend holds, where a retry succeeds.
+    const aborts: unknown[] = []
+    vi.mocked(api.post).mockImplementation((path: string, body?: unknown) => {
+      switch (path) {
+        case '/upload/initiate':
+          return Promise.resolve({
+            upload_id: 'u1',
+            s3_key: 'raw/p/a/v/original.mp4',
+            version_id: VERSION_ID,
+            asset_id: ASSET_ID,
+          }) as never
+        case '/upload/presign-part':
+          return Promise.resolve({ presigned_url: 'https://s3.example/part-1' }) as never
+        case '/upload/abort':
+          aborts.push(body)
+          return Promise.resolve({}) as never
+        default:
+          return Promise.resolve({}) as never
+      }
+    })
+    let attempt = 0
+    installXhrFake((_url, request) => {
+      attempt += 1
+      if (attempt > 1) return ok('"etag-1"')
+      request.abort()
+      return new Promise(() => {})
+    })
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(attempt).toBe(2)
+    expect(rowOf(id).status).toBe('processing')
     expect(aborts).toEqual([])
   })
 })

@@ -207,6 +207,7 @@ async function uploadPartOnce(
   partNumber: number,
   controller: AbortController,
   chunkSize: number,
+  onBytes: (sent: number) => void,
 ): Promise<string> {
   const start = (partNumber - 1) * chunkSize
   const chunk = file.slice(start, Math.min(start + chunkSize, file.size))
@@ -220,19 +221,104 @@ async function uploadPartOnce(
     part_number: partNumber,
   })
 
-  const putResponse = await fetch(presigned_url, {
-    method: 'PUT',
-    body: chunk,
-    signal: controller.signal,
-  })
+  return putPart(presigned_url, chunk, partNumber, controller.signal, onBytes)
+}
 
-  if (!putResponse.ok) {
-    const error: PartUploadError = new Error(`Part ${partNumber} failed: ${putResponse.statusText}`)
-    error.permanent = isPermanentStatus(putResponse.status)
-    throw error
+/**
+ * The ETag of a part PUT, or '' when the bucket's CORS rule does not expose it.
+ *
+ * Read from the full header list rather than with getResponseHeader('ETag'),
+ * which logs "Refused to get unsafe header" for every part when the header is
+ * not exposed. docs/deployment.md allows such a bucket, and fetch was silent.
+ */
+function etagOf(xhr: XMLHttpRequest): string {
+  for (const line of xhr.getAllResponseHeaders().split('\r\n')) {
+    const colon = line.indexOf(':')
+    if (colon > 0 && line.slice(0, colon).trim().toLowerCase() === 'etag') {
+      return line.slice(colon + 1).trim()
+    }
   }
+  return ''
+}
 
-  return putResponse.headers.get('ETag') ?? ''
+/**
+ * PUTs one part and resolves with its ETag.
+ *
+ * XMLHttpRequest rather than fetch because fetch has no upload progress, and a
+ * part is 10 MB: on a slow uplink that is minutes in which the bar could not
+ * move. Everything else is kept to the shape the fetch call had, because the
+ * callers depend on it:
+ *
+ * - a cancel rejects with an `AbortError` DOMException, which is how
+ *   `uploadPart` and `uploadAllParts` tell a cancel from a failure;
+ * - a network error, a timeout or an abort the browser started itself rejects
+ *   with a plain error, which is retried, as fetch's TypeError was;
+ * - a non-2xx rejects with `permanent` set for a 4xx, so a status of 0 never
+ *   counts as one;
+ * - no Content-Type is set. `chunk` is a slice taken without a type, so the
+ *   browser sends none, and the presigned URL signs none.
+ *
+ * The pool signal lives for the whole upload, so the abort listener is removed
+ * again whichever way the request settles.
+ */
+function putPart(
+  url: string,
+  chunk: Blob,
+  partNumber: number,
+  signal: AbortSignal,
+  onBytes: (sent: number) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException(`Part ${partNumber} cancelled`, 'AbortError'))
+      return
+    }
+
+    const xhr = new XMLHttpRequest()
+    const abort = () => xhr.abort()
+    const settle = () => signal.removeEventListener('abort', abort)
+
+    xhr.upload.onprogress = (event) => onBytes(event.loaded)
+    xhr.onload = () => {
+      settle()
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(etagOf(xhr))
+        return
+      }
+      const error: PartUploadError = new Error(`Part ${partNumber} failed: ${xhr.statusText}`)
+      error.permanent = isPermanentStatus(xhr.status)
+      reject(error)
+    }
+    xhr.onerror = () => {
+      settle()
+      reject(new TypeError(`Part ${partNumber} failed: network error`))
+    }
+    // No timeout is set, as fetch had none: a 10 MB part on a slow uplink can
+    // take minutes and must not be cut off. The handler stays so that one set
+    // later, here or by a browser, fails the part retryably instead of leaving
+    // the promise unsettled, since a timeout fires neither load nor error.
+    xhr.ontimeout = () => {
+      settle()
+      reject(new TypeError(`Part ${partNumber} failed: timed out`))
+    }
+    // Not every abort is a cancel. A browser aborts an in-flight XHR on its
+    // own, on window.stop() or when Stop or Esc cancels a pending navigation,
+    // where fetch rejected with a TypeError and the part was retried. Only an
+    // abort of the signal may come out as an AbortError: the caller takes that
+    // for a user cancel and discards every part the backend holds.
+    xhr.onabort = () => {
+      settle()
+      reject(
+        signal.aborted
+          ? new DOMException(`Part ${partNumber} cancelled`, 'AbortError')
+          : new TypeError(`Part ${partNumber} failed: aborted`),
+      )
+    }
+
+    xhr.open('PUT', url)
+    signal.addEventListener('abort', abort, { once: true })
+    xhr.send(chunk)
+  })
 }
 
 /**
@@ -257,13 +343,17 @@ async function uploadPart(
   partNumber: number,
   controller: AbortController,
   chunkSize: number,
+  onBytes: (sent: number) => void,
 ): Promise<string> {
   let lastError: unknown
 
   for (let attempt = 1; attempt <= PART_MAX_ATTEMPTS; attempt++) {
     try {
-      return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize)
+      return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize, onBytes)
     } catch (err) {
+      // The next attempt sends the part from its first byte again, so what
+      // this one got across no longer counts.
+      onBytes(0)
       if (controller.signal.aborted) throw err
       if (err instanceof DOMException && err.name === 'AbortError') throw err
       if ((err as PartUploadError)?.permanent) throw err
@@ -319,7 +409,7 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  *
  * Ordering is preserved by writing each result to its own index: parts finish
  * out of order, but `parts` is indexed by part number, and progress counts
- * completions rather than the highest number seen.
+ * bytes sent rather than the highest number seen.
  *
  * When a part finally fails the whole upload is lost, so the other workers are
  * stopped rather than left to run their own retry ladders out: every error after
@@ -332,6 +422,11 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * upload — a resume must place part N at exactly the byte range the parts
  * already in the bucket were cut on, and that is not necessarily the range
  * today's CHUNK_SIZE would give.
+ *
+ * `opts.onPartDone` runs once for every part that finishes. It is the
+ * heartbeat from #312, not a progress report: `onProgress` only fires when the
+ * percent moves, and on a large file that can be many minutes apart, longer
+ * than the window another tab gives a row before it offers Discard.
  */
 export async function uploadAllParts(
   file: File,
@@ -340,7 +435,7 @@ export async function uploadAllParts(
   controller: AbortController,
   onProgress: (percent: number) => void,
   concurrency: number = UPLOAD_CONCURRENCY,
-  opts?: { chunkSize?: number; alreadyHeld?: readonly number[] },
+  opts?: { chunkSize?: number; alreadyHeld?: readonly number[]; onPartDone?: () => void },
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
   const chunkSize = opts?.chunkSize ?? CHUNK_SIZE
   const held = new Set(opts?.alreadyHeld ?? [])
@@ -358,10 +453,41 @@ export async function uploadAllParts(
   let nextIndex = 0
   // Parts the backend already holds are done before this starts, and progress
   // has to say so: a resume that reports 0% and then jumps is indistinguishable
-  // from one that is re-sending everything.
-  let completed = held.size
+  // from one that is re-sending everything. They are a set, not a prefix, so
+  // the last part -- shorter than the rest -- can be among them, and each is
+  // counted at its own length.
+  const partLength = (partNumber: number) =>
+    Math.min(chunkSize, file.size - (partNumber - 1) * chunkSize)
+  let doneBytes = 0
+  held.forEach((partNumber) => {
+    doneBytes += partLength(partNumber)
+  })
   let firstError: unknown = null
-  if (completed > 0) onProgress(Math.round((completed / totalChunks) * 95))
+
+  // Progress is counted in bytes, so the bar moves while a part is in flight
+  // rather than once per finished part, which on a slow uplink is minutes.
+  // Every call writes the row through `persist` into localStorage and
+  // re-renders the panel, so it is only made when the whole percent changes:
+  // at most 96 times an upload, however many progress events there are. It
+  // never goes back down either. A part that fails gives up its bytes, and the
+  // bar waits at its mark until the retry has caught up, rather than jumping
+  // back. And it never passes 95, which the panel would print as it is.
+  const inFlightBytes = new Map<number, number>()
+  // Every caller sets the row to 0 before this starts, so 0 is never reported
+  // again: a part that fails before its first progress event would otherwise
+  // write a 0 into a row that has just stopped, and stamp its heartbeat.
+  let reported = 0
+  const report = () => {
+    let sent = doneBytes
+    inFlightBytes.forEach((bytes) => {
+      sent += bytes
+    })
+    const percent = Math.min(95, Math.round((sent / file.size) * 95))
+    if (percent <= reported) return
+    reported = percent
+    onProgress(percent)
+  }
+  if (doneBytes > 0) report()
 
   async function worker(): Promise<void> {
     while (true) {
@@ -376,10 +502,15 @@ export async function uploadAllParts(
       const partNumber = index + 1
       if (held.has(partNumber)) continue
       try {
-        const etag = await uploadPart(file, s3Key, uploadId, partNumber, pool, chunkSize)
+        const etag = await uploadPart(file, s3Key, uploadId, partNumber, pool, chunkSize, (sent) => {
+          inFlightBytes.set(partNumber, sent)
+          report()
+        })
         parts[index] = { PartNumber: partNumber, ETag: etag }
-        completed += 1
-        onProgress(Math.round((completed / totalChunks) * 95))
+        inFlightBytes.delete(partNumber)
+        doneBytes += partLength(partNumber)
+        opts?.onPartDone?.()
+        report()
       } catch (err) {
         // Not `??=`: an error is only ever recorded once, since every worker
         // returns immediately after, and assigning plainly means a falsy
@@ -614,10 +745,11 @@ function isSendingHere(fileId: string, except?: AbortController): boolean {
  *  called. Written through the store, so it reaches shared storage the same way
  *  progress does.
  *
- *  Every finished part stamps the row as well. A hidden tab's timers are held
- *  to about once a minute while its requests are not, so on the timer alone
- *  the stamp fell behind the transfer, and another tab took a live upload for
- *  a stopped one before the server did. */
+ *  Every finished part stamps the row as well, through `onPartDone` rather
+ *  than progress, which only reports when the percent moves. A hidden tab's
+ *  timers are held to about once a minute while its requests are not, so on
+ *  the timer alone the stamp fell behind the transfer, and another tab took a
+ *  live upload for a stopped one before the server did. */
 function beatFor(
   update: (patch: Partial<UploadFile>) => void,
 ): () => void {
@@ -933,7 +1065,10 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           file, s3_key, upload_id, controller,
           (percent) => updateFile(id, { progress: percent, heartbeatAt: Date.now() }),
           UPLOAD_CONCURRENCY,
-          { chunkSize: initRes.chunk_size_bytes },
+          {
+            chunkSize: initRes.chunk_size_bytes,
+            onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
+          },
         )
 
         completionAttempted = true
@@ -1071,7 +1206,10 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           file, s3_key, upload_id, controller,
           (percent) => updateFile(id, { progress: percent, heartbeatAt: Date.now() }),
           UPLOAD_CONCURRENCY,
-          { chunkSize: initRes.chunk_size_bytes },
+          {
+            chunkSize: initRes.chunk_size_bytes,
+            onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
+          },
         )
 
         completionAttempted = true
@@ -1212,7 +1350,11 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
             file, info.s3_key, info.upload_id, controller,
             (percent) => updateFile({ progress: percent, heartbeatAt: Date.now() }),
             UPLOAD_CONCURRENCY,
-            { chunkSize: info.chunk_size_bytes, alreadyHeld: held },
+            {
+              chunkSize: info.chunk_size_bytes,
+              alreadyHeld: held,
+              onPartDone: () => updateFile({ heartbeatAt: Date.now() }),
+            },
           )
         }
 
