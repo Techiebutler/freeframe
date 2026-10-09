@@ -55,22 +55,12 @@ if not _disable_docs:
             _fu,
         )
 
-_cors_extra = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
-if "*" in _cors_extra:
+if settings.cors_allows_any_origin:
     # Allow any origin. A literal "*" can't be combined with allow_credentials,
     # so echo the request origin via regex instead (keeps credentialed requests working).
     _cors_origin_kwargs = {"allow_origin_regex": ".*"}
 else:
-    _cors_origin_kwargs = {
-        "allow_origins": [
-            # A sub-path deployment puts a path in FRONTEND_URL; an Origin
-            # header never has one, so match against the bare origin.
-            settings.frontend_origin,
-            "http://localhost:3000",
-            "http://localhost:3001",
-            *_cors_extra,
-        ]
-    }
+    _cors_origin_kwargs = {"allow_origins": settings.cors_origins}
 
 app.add_middleware(
     CORSMiddleware,

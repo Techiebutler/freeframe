@@ -11,7 +11,14 @@ alembic==1.20.0
 psycopg2-binary==2.9.13
 pydantic==2.13.5
 pydantic-settings==2.15.0
-python-jose[cryptography]==3.5.0
+# Signs and checks every token (access, refresh, HLS). Already installed as a
+# dependency of redis; pinned here because the code now imports it directly.
+PyJWT==2.15.1
+# Used directly by services/crypto_service.py (Fernet, for share-link
+# passwords). It used to arrive only through python-jose[cryptography], so it
+# is declared here now that PyJWT, which needs it only for RSA/EC, replaced
+# python-jose. Pinned to the version a fresh build resolved before the swap.
+cryptography==50.0.2
 bcrypt==4.3.0
 python-multipart==0.0.32
 boto3==1.43.103

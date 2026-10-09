@@ -1,12 +1,17 @@
 import os
 from pathlib import Path
 from urllib.parse import urlparse
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default S3 endpoint (local MinIO). Shared between the field default and the
 # consistency validator so the two can't drift.
 DEFAULT_S3_ENDPOINT = "http://minio:9000"
+
+# Every token is signed and checked with JWT_SECRET as a shared HMAC key, so
+# only the HMAC algorithms work. PyJWT fails an RS/ES algorithm on the first
+# token rather than at startup.
+JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
 
 
 def _is_aws_endpoint(url: str) -> bool:
@@ -122,6 +127,32 @@ class Settings(BaseSettings):
     smtp_password: str | None = None
     smtp_use_tls: bool = True
 
+    @field_validator("jwt_secret")
+    @classmethod
+    def _check_jwt_secret(cls, value: str) -> str:
+        """Refuse to start with an empty JWT_SECRET.
+
+        PyJWT rejects an empty HMAC key on every encode and decode, which would
+        show up as a 500 on sign-in and on every request carrying a bearer
+        token. (python-jose accepted it, so anyone could sign a valid token.)
+        """
+        if not value.strip():
+            raise ValueError(
+                "JWT_SECRET is empty. Set it to a long random string, for "
+                "example the output of `openssl rand -hex 64`."
+            )
+        return value
+
+    @field_validator("jwt_algorithm")
+    @classmethod
+    def _check_jwt_algorithm(cls, value: str) -> str:
+        if value not in JWT_ALGORITHMS:
+            raise ValueError(
+                f"JWT_ALGORITHM must be one of {', '.join(JWT_ALGORITHMS)}, not {value!r}. "
+                f"Tokens are signed with JWT_SECRET as a shared key."
+            )
+        return value
+
     @model_validator(mode="after")
     def _check_s3_endpoint_consistency(self):
         """Fail loud on `S3_STORAGE=s3` + a real custom (non-AWS) `S3_ENDPOINT`.
@@ -159,5 +190,30 @@ class Settings(BaseSettings):
         if not parsed.scheme or not parsed.netloc:
             return raw
         return f"{parsed.scheme}://{parsed.netloc}"
+
+    @property
+    def cors_allows_any_origin(self) -> bool:
+        """CORS_ALLOW_ORIGINS contains "*"."""
+        return "*" in [o.strip() for o in self.cors_allow_origins.split(",")]
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Every browser origin allowed by CORS when `cors_allows_any_origin` is off.
+
+        The single list behind both the API's CORS middleware (main.py) and the
+        bucket CORS rules set at startup (s3_service.ensure_bucket_exists), so an
+        origin allowed to call the API can also upload and play media. A store
+        that enforces bucket CORS (Silo, Garage) refuses every other origin.
+        """
+        extra = [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+        candidates = [
+            # A sub-path deployment puts a path in FRONTEND_URL; an Origin
+            # header never has one, so match against the bare origin.
+            self.frontend_origin,
+            "http://localhost:3000",
+            "http://localhost:3001",
+            *extra,
+        ]
+        return list(dict.fromkeys(o for o in candidates if o))
 
 settings = Settings()

@@ -35,6 +35,7 @@ export interface VideoPlayerState {
   playbackRate: number
   qualityLevels: QualityLevel[]
   currentQuality: number
+  selectedQuality: number
   isLoading: boolean
   isFullscreen: boolean
   error: string | null
@@ -81,7 +82,8 @@ export function useVideoPlayer(
   const [isMuted, setIsMuted] = useState(false)
   const [playbackRate, setPlaybackRateState] = useState(1)
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([])
-  const [currentQuality, setCurrentQuality] = useState(-1) // -1 = auto
+  const [currentQuality, setCurrentQuality] = useState(-1) // -1 = no active rung reported
+  const [selectedQuality, setSelectedQuality] = useState(-1) // -1 = auto
   const [isLoading, setIsLoading] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -247,7 +249,8 @@ export function useVideoPlayer(
           label: level.height ? `${level.height}p` : `${Math.round(level.bitrate / 1000)}kbps`,
         }))
         setQualityLevels(levels)
-        setCurrentQuality(-1) // start on auto
+        setCurrentQuality(-1) // wait for the first active rung
+        setSelectedQuality(-1) // each new manifest starts in auto mode
         setIsLoading(false)
       })
 
@@ -351,7 +354,7 @@ export function useVideoPlayer(
     const hls = hlsRef.current
     if (!hls) return
     hls.currentLevel = levelIndex // -1 = auto
-    setCurrentQuality(levelIndex)
+    setSelectedQuality(levelIndex)
   }, [])
 
   const setVolume = useCallback((vol: number) => {
@@ -418,6 +421,7 @@ export function useVideoPlayer(
     playbackRate,
     qualityLevels,
     currentQuality,
+    selectedQuality,
     isLoading,
     isFullscreen,
     error,

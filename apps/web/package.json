@@ -61,20 +61,23 @@
   },
   "pnpm": {
     "overrides": {
-      "brace-expansion@1": "1.1.18",
+      "brace-expansion@1": "^1.1.21",
       "glob@10": "10.5.0",
       "js-yaml": "4.3.2",
       "nanoid@3": "3.3.18",
-      "postcss-selector-parser@6.1.2": "6.1.4",
+      "postcss-selector-parser@6": "^7.1.6",
       "postcss@8.4.31": "^8.5.28"
     }
   },
   "overrides": {
-    "brace-expansion@1": "1.1.18",
+    "brace-expansion@1": "^1.1.21",
     "glob@10": "10.5.0",
     "js-yaml": "4.3.2",
     "nanoid@3": "3.3.18",
-    "postcss-selector-parser@6.1.2": "6.1.4",
-    "postcss@8.4.31": "^8.5.28"
+    "postcss-selector-parser@6": "^7.1.6",
+    "postcss@8.4.31": "^8.5.28",
+    "postcss-nested": {
+      "postcss-selector-parser": "^7.1.6"
+    }
   }
 }

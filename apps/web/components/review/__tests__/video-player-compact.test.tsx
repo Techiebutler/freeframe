@@ -7,6 +7,7 @@ vi.mock('../review-provider', () => ({ useReview: () => ({ registerPauseHandler:
 const quality = vi.hoisted(() => ({
   levels: [] as { index: number; label: string; height: number; bitrate: number }[],
   current: -1,
+  selected: -1,
   set: vi.fn(),
 }))
 const player = vi.hoisted(() => ({ togglePlay: vi.fn() }))
@@ -16,7 +17,7 @@ vi.mock('@/hooks/use-video-player', () => ({
     videoRef: { current: null }, hlsRef: { current: null },
     isPlaying: false, currentTime: 0, duration: 100, buffered: 0,
     volume: 1, isMuted: false, playbackRate: 1,
-    qualityLevels: quality.levels, currentQuality: quality.current, isLoading: false, isFullscreen: false, error: null,
+    qualityLevels: quality.levels, currentQuality: quality.current, selectedQuality: quality.selected, isLoading: false, isFullscreen: false, error: null,
     pause: () => {}, togglePlay: player.togglePlay, seek: () => {}, setPlaybackRate: () => {},
     setQuality: quality.set, setVolume: () => {}, toggleMute: () => {}, toggleFullscreen: () => {},
   }),
@@ -51,6 +52,7 @@ afterEach(() => {
   vi.clearAllMocks()
   quality.levels = []
   quality.current = -1
+  quality.selected = -1
 })
 
 const props = { assetId: 'a1', versionId: 'v1', comments: [], initialStreamUrl: 'x.m3u8' } as unknown as React.ComponentProps<typeof VideoPlayer>
@@ -163,6 +165,38 @@ describe('the quality selector', () => {
     const menu = screen.getByLabelText('Quality Auto').parentElement as HTMLElement
     expect(Array.from(menu.querySelectorAll('button')).map((b) => b.getAttribute('aria-label')))
       .toEqual(['Quality Auto', 'Quality 1080p', 'Quality 720p'])
+  })
+
+  it('keeps Auto selected while adaptive playback uses a rung in the compact picker', () => {
+    quality.levels = ladder
+    quality.current = 0
+    quality.selected = -1
+    stubWidth(360)
+    render(<VideoPlayer {...props} />)
+
+    fireEvent.click(screen.getByLabelText('More controls'))
+    const qualitySummary = screen.getAllByRole('button').find(
+      (button) => button.textContent?.includes('Auto (1080p)'),
+    )
+    expect(qualitySummary).toBeTruthy()
+    fireEvent.click(qualitySummary!)
+
+    const auto = screen.getByLabelText('Quality Auto (1080p)')
+    const manual = screen.getByLabelText('Quality 1080p')
+    expect(auto.querySelector('svg')).not.toBeNull()
+    expect(manual.querySelector('svg')).toBeNull()
+  })
+
+  it('keeps Auto selected and shows the active rung in the desktop select', () => {
+    quality.levels = ladder
+    quality.current = 0
+    quality.selected = -1
+    stubWidth(1024)
+    render(<VideoPlayer {...props} />)
+
+    const select = screen.getByRole('combobox', { name: 'Quality' }) as HTMLSelectElement
+    expect(select.value).toBe('-1')
+    expect(select.selectedOptions[0].textContent).toBe('Auto (1080p)')
   })
 
   it('stays an inline select above sm, with no overflow menu', () => {

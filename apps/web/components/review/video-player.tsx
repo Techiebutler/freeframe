@@ -263,6 +263,7 @@ export function VideoPlayer({
     playbackRate,
     qualityLevels,
     currentQuality,
+    selectedQuality,
     isLoading,
     isFullscreen,
     error,
@@ -275,6 +276,12 @@ export function VideoPlayer({
     toggleMute,
     toggleFullscreen,
   } = player;
+
+  const currentQualityLabel = qualityLevels.find((level) => level.index === currentQuality)?.label;
+  const autoQualityLabel = currentQualityLabel ? "Auto (" + currentQualityLabel + ")" : "Auto";
+  const selectedQualityLabel = selectedQuality === -1
+    ? autoQualityLabel
+    : qualityLevels.find((level) => level.index === selectedQuality)?.label ?? "Auto";
 
   // A source can be vertical or 4:3, so the stage must not assume 16:9.
   // `resize` covers a version switch that changes the dimensions without
@@ -621,7 +628,7 @@ export function VideoPlayer({
                       is what fits there. Auto plus the ladder's at most three
                       rungs is exactly four. */}
                   {qualityListOpen ? (
-                    [{ index: -1, label: "Auto" }, ...qualityLevels].map((level) => (
+                    [{ index: -1, label: autoQualityLabel }, ...qualityLevels].map((level) => (
                       <button
                         key={level.index}
                         onClick={() => { setQuality(level.index); setOverflowOpen(false); }}
@@ -629,7 +636,7 @@ export function VideoPlayer({
                         aria-label={`Quality ${level.label}`}
                       >
                         {level.label}
-                        {currentQuality === level.index && <Check className="h-4 w-4 text-accent" />}
+                        {selectedQuality === level.index && <Check className="h-4 w-4 text-accent" />}
                       </button>
                     ))
                   ) : (
@@ -662,9 +669,7 @@ export function VideoPlayer({
                         >
                           Quality
                           <span className="flex items-center gap-1 text-text-tertiary">
-                            {currentQuality === -1
-                              ? "Auto"
-                              : qualityLevels.find((l) => l.index === currentQuality)?.label ?? "Auto"}
+                            {selectedQualityLabel}
                             <ChevronRight className="h-3 w-3" />
                           </span>
                         </button>
@@ -678,13 +683,13 @@ export function VideoPlayer({
           {/* Quality selector (in the overflow menu when compact) */}
           {!compact && qualityLevels.length > 0 && (
             <select
-              value={currentQuality}
+              value={selectedQuality}
               onChange={(e) => setQuality(parseInt(e.target.value, 10))}
               className="bg-transparent text-text-secondary text-xs border border-border rounded px-1.5 py-1 cursor-pointer shrink-0 hover:text-text-primary transition-colors"
               aria-label="Quality"
             >
               <option value={-1} className="bg-bg-secondary">
-                Auto
+                {autoQualityLabel}
               </option>
               {qualityLevels.map((level) => (
                 <option

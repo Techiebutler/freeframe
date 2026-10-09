@@ -1,7 +1,7 @@
 """Tests for HLS streaming proxy."""
 import pytest
 from unittest.mock import MagicMock, patch
-from jose import jwt
+import jwt
 
 
 class TestCreateHlsToken:

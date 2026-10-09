@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
-from jose import JWTError, jwt
+import jwt
 import bcrypt
 from sqlalchemy.orm import Session
 from ..config import settings
@@ -46,7 +46,7 @@ def create_refresh_token(user_id: str, token_version: int = 1) -> str:
 def decode_token(token: str) -> Optional[dict]:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    except JWTError:
+    except jwt.InvalidTokenError:
         return None
 
 def get_user_by_email(db: Session, email: str) -> Optional[User]:

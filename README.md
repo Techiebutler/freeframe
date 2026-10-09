@@ -94,7 +94,7 @@ Open [http://localhost:3000](http://localhost:3000) to access FreeFrame. The fir
 | Frontend    | http://localhost:3000         |
 | API         | http://localhost:8000         |
 | API Docs    | http://localhost:8000/docs    |
-| MinIO Console | http://localhost:9001       |
+| Storage console (Silo) | http://localhost:9001 |
 
 ### Access from other devices on your network (LAN)
 
@@ -105,9 +105,8 @@ In `.env` (replace `192.168.1.50` with your IP):
 ```env
 NEXT_PUBLIC_API_URL=http://192.168.1.50:8000   # web → API (baked into the browser bundle)
 FRONTEND_URL=http://192.168.1.50:3000           # links in invite/magic-code emails
-CORS_ALLOW_ORIGINS=*                            # API allows the LAN browser origin
+CORS_ALLOW_ORIGINS=*                            # API and storage allow the LAN browser origin
 S3_PUBLIC_ENDPOINT=http://192.168.1.50:9000     # presigned upload/download URLs
-MINIO_CORS_ALLOW_ORIGIN=*                       # MinIO allows the LAN browser origin
 ```
 
 ```bash
@@ -189,7 +188,7 @@ For the full guide including **SSL setup**, **bring-your-own infrastructure** (e
 | Database     | PostgreSQL 15                                     |
 | Queue        | Celery + Redis                                    |
 | Transcoding  | FFmpeg (multi-bitrate HLS)                        |
-| Storage      | Any S3-compatible (AWS, R2, B2, MinIO)           |
+| Storage      | Any S3-compatible (AWS, R2, B2, Garage, Silo)    |
 | Proxy        | Traefik (auto SSL via Let's Encrypt)              |
 | Auth         | JWT + magic code email login                      |
 
