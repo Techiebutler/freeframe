@@ -376,6 +376,45 @@ def test_transcode_returns_probe_metadata():
     assert result.duration_seconds == 8.0
 
 
+def test_transcode_thumbnail_fits_anamorphic_video_to_default_grid_frame():
+    """Thumbnails use display aspect ratio and a fixed 16:10 square-pixel canvas."""
+    t = FFmpegTranscoder(MagicMock(), "bucket")
+    video_probe = json.dumps({
+        "streams": [{
+            "r_frame_rate": "25/1",
+            "width": 720,
+            "height": 576,
+            "sample_aspect_ratio": "16:15",
+            "display_aspect_ratio": "4:3",
+            "duration": "8.0",
+        }],
+        "format": {"duration": "8.0"},
+    })
+    audio_probe = json.dumps({"streams": []})
+    commands = []
+
+    def fake_run(cmd, timeout=None, label="ffmpeg"):
+        commands.append(cmd)
+        if label == "ffprobe":
+            return video_probe if "-select_streams" in cmd and cmd[
+                cmd.index("-select_streams") + 1
+            ] == "V:0" else audio_probe
+        return ""
+
+    with patch.object(FFmpegTranscoder, "_run", side_effect=fake_run), \
+         patch.object(FFmpegTranscoder, "_get_presigned_url", return_value="http://in"):
+        asyncio.run(t.transcode(_make_job()))
+
+    thumbnail_cmd = next(
+        cmd for cmd in commands if cmd[0] == "ffmpeg" and "-frames:v" in cmd
+    )
+    thumbnail_filter = thumbnail_cmd[thumbnail_cmd.index("-vf") + 1]
+    assert "scale=w='trunc(min(400,250*dar)/2)*2'" in thumbnail_filter
+    assert "h='trunc(min(250,400/dar)/2)*2'" in thumbnail_filter
+    assert "setsar=1" in thumbnail_filter
+    assert "pad=400:250:(ow-iw)/2:(oh-ih)/2" in thumbnail_filter
+
+
 # ─── hardware → software runtime fallback ─────────────────────────────────────
 
 def test_hw_runtime_failure_detection():

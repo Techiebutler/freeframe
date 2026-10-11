@@ -2106,6 +2106,15 @@ class FFmpegTranscoder(BaseTranscoder):
                     "zscale=p=bt709,tonemap=tonemap=" + _HDR_TONEMAP_ALGO + ":desat=0,"
                     "zscale=t=bt709:m=bt709:r=tv"
                 )
+            # Video thumbnails use the same 16:10 frame as the default asset
+            # grid. Scale against the input display aspect ratio (which includes
+            # sample aspect ratio), reset to square pixels, then pad so anamorphic
+            # sources are desqueezed without changing the thumbnail's shape.
+            thumb_vf += (
+                ",scale=w='trunc(min(400,250*dar)/2)*2':"
+                "h='trunc(min(250,400/dar)/2)*2',setsar=1,"
+                "pad=400:250:(ow-iw)/2:(oh-ih)/2"
+            )
             thumb_vf += ",format=yuvj420p"
             thumb_cmd = [
                 "ffmpeg", "-y", "-i", input_url,
