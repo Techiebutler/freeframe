@@ -438,8 +438,9 @@ _HDR_TONEMAP_ALGO = "mobius"
 _HDR_UPLOAD = {"nvenc": "_cuda", "vaapi": "", "qsv": "_qsv"}
 
 # Sources the GPU decoders (NVDEC, Intel VAAPI) handle, by codec and pixel
-# format. For anything else -- ProRes, DNxHR, H.264 10-bit or 4:2:2, HEVC 4:2:2
-# before Blackwell -- `-hwaccel` quietly falls back to a software decode, the
+# format. For anything else -- ProRes, DNxHR, H.264 10-bit, and 4:2:2 H.264 or
+# HEVC, which ffmpeg 7.1's NVDEC never offers whatever the GPU generation --
+# `-hwaccel` quietly falls back to a software decode, the
 # frames never reach the device, and the GPU scaler fails filter setup with
 # "Function not implemented". Those sources are decoded on the CPU and uploaded
 # explicitly instead, so the scale and the encode still run on the GPU.
@@ -450,10 +451,12 @@ _HDR_UPLOAD = {"nvenc": "_cuda", "vaapi": "", "qsv": "_qsv"}
 # chain in transcode() retries such a failure with the CPU decode.
 _GPU_DECODABLE = {
     "h264": {"yuv420p", "yuvj420p"},
-    "hevc": {"yuv420p", "yuvj420p", "yuv420p10le"},
-    "vp9": {"yuv420p", "yuv420p10le"},
+    "hevc": {"yuv420p", "yuvj420p", "yuv420p10le", "yuv420p12le", "yuv444p", "yuv444p10le"},
+    "vp9": {"yuv420p", "yuv420p10le", "yuv420p12le"},
+    "vp8": {"yuv420p"},
     "av1": {"yuv420p", "yuv420p10le"},
     "mpeg2video": {"yuv420p"},
+    "mpeg4": {"yuv420p"},
 }
 
 # Backends that can take CPU-decoded frames: the global args that give the
@@ -470,8 +473,9 @@ _CPU_DECODE_UPLOAD = {
 def _gpu_can_decode(backend: str, stream: dict) -> bool:
     """Whether `backend`'s hardware decoder is expected to handle `stream`.
 
-    True wherever there is nothing to decide -- a backend with no CPU-decode
-    path, or a probe that names no codec -- so those keep the command they had.
+    True for a backend with no CPU-decode path and for a probe that names no
+    codec, so those keep the command they had. A codec with no pix_fmt is
+    predicted not to decode: the CPU decode handles any source.
     """
     if backend not in _CPU_DECODE_UPLOAD:
         return True
@@ -938,8 +942,11 @@ _MAX_COPY_SEGMENT_SECONDS = 12.0
 # library), not input-specific, so re-running the same job on the CPU pipeline
 # is expected to succeed.
 _HW_RUNTIME_FAILURES = (
-    "cuda_error_out_of_memory",
     "out of memory",
+    # Any CUDA driver error, e.g. CUDA_ERROR_NO_DEVICE when the card fell off the
+    # bus. hwupload_cuda opens its device during filter setup and says nothing
+    # else that matches, unlike `-hwaccel cuda` ("Device creation failed").
+    "cuda_error_",
     "hwaccel initialisation returned error",
     "failed setup for format cuda",
     "no capable devices found",
@@ -991,6 +998,20 @@ def _hw_failure_reason(err: str) -> str:
         if marker in lowered:
             return marker
     return "unknown hardware failure"
+
+
+def _failure_detail(err: str) -> str:
+    """The stderr line that names the failure, for the fallback log.
+
+    ffmpeg's last lines are usually teardown ("Terminating thread with return
+    code -22"), so the line holding the marker _hw_failure_reason reports is
+    the readable one. With no marker, the tail is all there is.
+    """
+    marker = _hw_failure_reason(err)
+    for line in (err or "").splitlines():
+        if marker in line.lower():
+            return redact_presigned_urls(line.strip())[:300]
+    return redact_presigned_urls((err or "").strip()[-300:])
 
 
 def get_backend() -> str:
@@ -2126,7 +2147,12 @@ class FFmpegTranscoder(BaseTranscoder):
             # encode on the GPU. A source the GPU cannot decode (ProRes, 4:2:2,
             # 10-bit H.264) starts there; one predicted to decode that turns out
             # not to reaches it through _is_gpu_decode_failure. See
-            # _plan_attempts for the ladder.
+            # _plan_attempts for the ladder. Like a remux, that tier drops to
+            # software on any error: the source decoding there is the one the
+            # software pipeline decodes too, so what fails is the upload, the
+            # GPU scaler or the encoder, and no marker list covers them all (an
+            # 8448x480 source leaves a 360p rung NVENC refuses as too short).
+            # A truly corrupt file then fails once more in software.
             encode_backend = get_backend() if primary_backend == "copy" else primary_backend
             attempts = _plan_attempts(primary_backend, encode_backend, _vid_stream, dv_software)
             if encode_backend in _CPU_DECODE_UPLOAD and not dv_software \
@@ -2190,7 +2216,10 @@ class FFmpegTranscoder(BaseTranscoder):
                 except RuntimeError as exc:
                     is_last = attempt_index == len(attempts) - 1
                     remux = attempt_backend == "copy"
-                    if is_last or not (remux or _is_hw_runtime_failure(str(exc))):
+                    cpu_decode_tier = (attempt_backend in _CPU_DECODE_UPLOAD
+                                       and not gpu_decode and not dv_software)
+                    recognised = _is_hw_runtime_failure(str(exc))
+                    if is_last or not (remux or cpu_decode_tier or recognised):
                         raise
                     next_index = attempt_index + 1
                     if (attempt_backend in _CPU_DECODE_UPLOAD and gpu_decode
@@ -2208,14 +2237,16 @@ class FFmpegTranscoder(BaseTranscoder):
                             flush=True,
                         )
                     else:
-                        # The tail is where ffmpeg says why. The presigned URL
-                        # can appear in it and is a working credential until it
-                        # expires, so it is swapped for the key.
-                        detail = str(exc).replace(input_url, job.input_s3_key).strip()[-300:]
+                        # _failure_detail redacts the presigned URL, a working
+                        # credential until it expires, though _run already
+                        # strips it from what it raises.
+                        detail = _failure_detail(str(exc))
+                        reason = (_hw_failure_reason(str(exc)) if recognised
+                                  else "unrecognised failure on the CPU-decode attempt")
                         nxt = attempts[next_index]
                         print(
                             f"[transcoder] backend {_describe(attempts[attempt_index])} "
-                            f"failed at runtime ({_hw_failure_reason(str(exc))}); retrying "
+                            f"failed at runtime ({reason}); retrying "
                             + ("on the software pipeline" if nxt[0] == "cpu"
                                else f"with {_describe(nxt)}")
                             + f" for {job.input_s3_key}: {detail}",
