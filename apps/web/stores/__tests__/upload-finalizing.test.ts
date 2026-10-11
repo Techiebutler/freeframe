@@ -16,6 +16,7 @@ vi.mock('@/lib/api', () => ({
 
 import { api } from '@/lib/api'
 import { useUploadStore } from '../upload-store'
+import { useUploadSpeedStore } from '../upload-speed-store'
 import { installXhrFake, ok, type PartReply } from '@/test/xhr-fake'
 
 function makeFile(): File {
@@ -110,4 +111,30 @@ describe('finalizing an upload', () => {
 
     expect(finalizingDuringTransfer).toBeFalsy()
   })
+
+  it('measures the transfer into the speed store, and withdraws it once every byte is sent', async () => {
+    mockUpload()
+    let finish!: () => void
+    installXhrFake(async (_url, request) => {
+      const size = request.body!.size
+      request.progress(size / 2)
+      await new Promise((r) => setTimeout(r, 1200))
+      request.progress((size * 3) / 4)
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      request.progress(size)
+      return ok('"etag-1"')
+    })
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await vi.waitFor(
+      () => expect(useUploadSpeedStore.getState().rates[id]?.bytesPerSecond).toBeGreaterThan(0),
+      { timeout: 4000 },
+    )
+
+    finish()
+    await vi.waitFor(() => expect(rowOf(id).finalizing).toBe(true))
+    expect(useUploadSpeedStore.getState().rates[id]).toBeUndefined()
+  }, 10_000)
 })

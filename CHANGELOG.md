@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The uploads panel shows each upload's speed and time left**, right-aligned on the line with its percentage. Speed is smoothed over the last few seconds and drops toward zero if the transfer stalls.
 - **Upload part size in Instance Settings.** In Admin Dashboard → Instance settings, admins can keep Automatic sizing or cut every upload into a fixed part size from 5 to 512 MB. With a fixed size, a file that would need more than 10,000 parts is refused before anything is uploaded, with a message naming the largest file that size allows.
 
 ### Changed

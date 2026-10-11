@@ -18,8 +18,9 @@ import {
   MonitorUp,
   Pencil,
 } from 'lucide-react'
-import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
+import { cn, formatBytes, formatRelativeTime, formatTimeLeft } from '@/lib/utils'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
+import { useUploadSpeedStore } from '@/stores/upload-speed-store'
 import { carriesFiles } from '@/lib/drag'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
@@ -212,6 +213,9 @@ function UploadItem({ upload }: { upload: UploadFile }) {
   // Every byte is across and storage is assembling the parts. Nothing is left
   // for a cancel to stop, and one now would race the completion.
   const isFinalizing = upload.status === 'uploading' && !!upload.finalizing
+  // Only the tab doing the transfer measures it, so a row from another tab or
+  // from before a reload has no rate and shows none.
+  const rate = useUploadSpeedStore((s) => s.rates[upload.id])
   const showProgress = isUploading || isProcessing
 
   // Discard is the one control here whose effect cannot be taken back: the
@@ -274,6 +278,12 @@ function UploadItem({ upload }: { upload: UploadFile }) {
           {upload.status === 'uploading' && (
             <span className="text-[11px] text-text-secondary">
               {isFinalizing ? 'Finalizing...' : `Uploading ${upload.progress}%`}
+            </span>
+          )}
+          {upload.status === 'uploading' && !isFinalizing && rate && (
+            <span className="ml-auto shrink-0 text-[11px] tabular-nums text-text-tertiary">
+              {formatBytes(rate.bytesPerSecond)}/s
+              {rate.secondsLeft !== null && <> &middot; {formatTimeLeft(rate.secondsLeft)}</>}
             </span>
           )}
           {upload.status === 'processing' && (
