@@ -4,7 +4,9 @@
  * Once every part is across, `/upload/complete` has the storage backend assemble
  * them, which on a large file takes minutes. The bar used to sit at 95 with
  * "Uploading 95%" the whole time, which reads as a hung upload. The row is now
- * marked `finalizing` for exactly that request, and nothing else about it changes.
+ * marked `finalizing` from the moment its last byte is sent -- the wait starts
+ * there, while storage answers for the last parts, not at `/upload/complete` --
+ * and nothing else about it changes.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -14,7 +16,7 @@ vi.mock('@/lib/api', () => ({
 
 import { api } from '@/lib/api'
 import { useUploadStore } from '../upload-store'
-import { installXhrFake, ok } from '@/test/xhr-fake'
+import { installXhrFake, ok, type PartReply } from '@/test/xhr-fake'
 
 function makeFile(): File {
   return new File([new Uint8Array(1024)], 'clip.mp4', { type: 'video/mp4' })
@@ -70,6 +72,29 @@ describe('finalizing an upload', () => {
 
     release()
     await vi.waitFor(() => expect(rowOf(id).status).toBe('processing'))
+  })
+
+  it('is marked once every byte is sent, while storage has yet to answer for the last part', async () => {
+    mockUpload()
+    let answer!: (reply: PartReply) => void
+    installXhrFake((_url, request) => {
+      // Every byte handed over, and no reply yet: what the browser sees while
+      // storage writes the part, or a proxy forwards it.
+      request.progress(request.body!.size)
+      return new Promise<PartReply>((resolve) => {
+        answer = resolve
+      })
+    })
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await vi.waitFor(() => expect(rowOf(id).finalizing).toBe(true))
+
+    expect(rowOf(id).status).toBe('uploading')
+    expect(api.post).not.toHaveBeenCalledWith('/upload/complete', expect.anything())
+    answer(ok('"etag-1"'))
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything()),
+    )
   })
 
   it('is not marked while parts are still going up', async () => {

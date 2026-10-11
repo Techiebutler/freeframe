@@ -427,6 +427,12 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * heartbeat from #312, not a progress report: `onProgress` only fires when the
  * percent moves, and on a large file that can be many minutes apart, longer
  * than the window another tab gives a row before it offers Discard.
+ *
+ * `opts.onAllSent` runs once, when the browser has handed over the file's last
+ * byte. That is not the end of the transfer: each part still waits for storage
+ * to answer for it, after writing it, and behind a buffering proxy after
+ * forwarding it too. The bar is already at 95 by then, so this is where the
+ * wait the user sees begins.
  */
 export async function uploadAllParts(
   file: File,
@@ -435,7 +441,12 @@ export async function uploadAllParts(
   controller: AbortController,
   onProgress: (percent: number) => void,
   concurrency: number = UPLOAD_CONCURRENCY,
-  opts?: { chunkSize?: number; alreadyHeld?: readonly number[]; onPartDone?: () => void },
+  opts?: {
+    chunkSize?: number
+    alreadyHeld?: readonly number[]
+    onPartDone?: () => void
+    onAllSent?: () => void
+  },
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
   const chunkSize = opts?.chunkSize ?? CHUNK_SIZE
   const held = new Set(opts?.alreadyHeld ?? [])
@@ -477,11 +488,16 @@ export async function uploadAllParts(
   // again: a part that fails before its first progress event would otherwise
   // write a 0 into a row that has just stopped, and stamp its heartbeat.
   let reported = 0
+  let allSent = false
   const report = () => {
     let sent = doneBytes
     inFlightBytes.forEach((bytes) => {
       sent += bytes
     })
+    if (!allSent && sent >= file.size) {
+      allSent = true
+      opts?.onAllSent?.()
+    }
     const percent = Math.min(95, Math.round((sent / file.size) * 95))
     if (percent <= reported) return
     reported = percent
@@ -678,11 +694,12 @@ export interface UploadFile {
    *  return to, so it leaves the reason here. */
   renameError?: string
   /**
-   * Every byte is across and `/upload/complete` is running: the storage backend
-   * is assembling the parts, which on a large file can take minutes with the
-   * bar at 95. The status stays `uploading` -- recovery, the heartbeat and the
-   * Active tab all treat this as the transfer it still is -- and the panel reads
-   * this only alongside that status, so a stale value on any other is inert.
+   * The browser has sent every byte and is waiting on storage: first for it to
+   * answer for the last parts, then for `/upload/complete`, where it assembles
+   * them. Either can take minutes with the bar at 95. The status stays
+   * `uploading` -- recovery, the heartbeat and the Active tab all treat this as
+   * the transfer it still is -- and the panel reads this only alongside that
+   * status, so a stale value on any other is inert.
    */
   finalizing?: boolean
 }
@@ -1076,6 +1093,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           {
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
+            onAllSent: () => updateFile(id, { finalizing: true }),
           },
         )
 
@@ -1218,6 +1236,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           {
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
+            onAllSent: () => updateFile(id, { finalizing: true }),
           },
         )
 
@@ -1365,6 +1384,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
               chunkSize: info.chunk_size_bytes,
               alreadyHeld: held,
               onPartDone: () => updateFile({ heartbeatAt: Date.now() }),
+              onAllSent: () => updateFile({ finalizing: true }),
             },
           )
         }
