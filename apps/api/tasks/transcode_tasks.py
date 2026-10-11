@@ -87,11 +87,15 @@ def process_asset(self, asset_id: str, version_id: str):
 
         except Exception as exc:
             def _record_failure() -> None:
+                from packages.transcoder.redact import redact_presigned_urls
+
                 version.processing_status = ProcessingStatus.failed
                 db.commit()
+                # Every subscriber to the project's stream receives this, not
+                # only the uploader, so never let a presigned URL through.
                 _publish_event(str(asset.project_id), "transcode_failed", {
                     "asset_id": asset_id,
-                    "error": str(exc),
+                    "error": redact_presigned_urls(str(exc)),
                 })
 
             # `failed` is written only when nothing more is coming. Writing it
@@ -255,6 +259,7 @@ def backfill_media_metadata(self):
         _PRIMARY_VIDEO_STREAM,
         parse_probe_metadata,
     )
+    from packages.transcoder.redact import redact_presigned_urls
 
     db = SessionLocal()
     updated = skipped = 0
@@ -298,7 +303,11 @@ def backfill_media_metadata(self):
             except Exception as exc:
                 db.rollback()
                 skipped += 1
-                log.warning("backfill: skipping media_file %s: %s", row_id, exc)
+                # A timeout quotes the probe's argv, presigned URL included.
+                log.warning(
+                    "backfill: skipping media_file %s: %s",
+                    row_id, redact_presigned_urls(str(exc)),
+                )
                 continue
         return {"updated": updated, "skipped": skipped}
     finally:

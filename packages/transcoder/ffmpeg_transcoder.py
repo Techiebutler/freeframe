@@ -13,6 +13,7 @@ from typing import Optional
 import boto3
 from botocore.config import Config
 from .base import BaseTranscoder, TranscodeJob, TranscodeResult, VideoMetadata
+from .redact import redact_presigned_urls, redacted_timeout
 
 # FFmpeg's uppercase `V` excludes streams flagged with the attached_pic disposition.
 _PRIMARY_VIDEO_STREAM = "V:0"
@@ -1199,12 +1200,13 @@ class FFmpegTranscoder(BaseTranscoder):
 
             if timed_out:
                 # Same exception subprocess.run(timeout=...) raises, so callers
-                # that already handle it keep working unchanged.
-                raise subprocess.TimeoutExpired(cmd, timeout)
+                # that already handle it keep working unchanged. The argv it
+                # quotes holds the presigned input URL.
+                raise redacted_timeout(subprocess.TimeoutExpired(cmd, timeout))
 
             if proc.returncode != 0:
                 err_file.seek(0)
-                stderr = err_file.read().strip()
+                stderr = redact_presigned_urls(err_file.read().strip())
                 raise RuntimeError(
                     f"{label} exited {proc.returncode}: {stderr or 'no stderr output'}"
                 )
@@ -1215,12 +1217,22 @@ class FFmpegTranscoder(BaseTranscoder):
 
         Uses errors='replace' because ffmpeg often echoes input metadata
         (Latin-1 / Shift-JIS) to stderr, which would break strict UTF-8 decode.
+
+        ffmpeg prints its input URL in stderr, and a timeout quotes it in the
+        argv, so both are scrubbed of presigned query strings here: this is
+        where that text becomes an exception, and from there an SSE event and
+        a log line.
         """
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, errors='replace', timeout=timeout,
-        )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, errors='replace', timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # `from None`: a chained original would print the URL in the
+            # traceback that Celery logs and stores.
+            raise redacted_timeout(exc) from None
         if result.returncode != 0:
-            stderr = result.stderr.strip()
+            stderr = redact_presigned_urls(result.stderr.strip())
             raise RuntimeError(
                 f"{label} exited {result.returncode}: {stderr or 'no stderr output'}"
             )
@@ -1368,7 +1380,8 @@ class FFmpegTranscoder(BaseTranscoder):
                 capture_output=True, text=True, errors="replace", timeout=600,
             )
         except subprocess.SubprocessError as exc:
-            return f"the keyframe probe failed ({exc})"
+            # Calls subprocess.run directly, so a timeout here still quotes the URL.
+            return f"the keyframe probe failed ({redact_presigned_urls(str(exc))})"
         if traced.returncode != 0:
             return f"the keyframe probe failed (ffmpeg exited {traced.returncode})"
 
@@ -2121,7 +2134,9 @@ class FFmpegTranscoder(BaseTranscoder):
             )
 
         except Exception as e:
-            return TranscodeResult(success=False, error=str(e))
+            # The runners already scrub what they raise; this catches anything
+            # else on its way to the SSE event and the logs.
+            return TranscodeResult(success=False, error=redact_presigned_urls(str(e)))
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 
