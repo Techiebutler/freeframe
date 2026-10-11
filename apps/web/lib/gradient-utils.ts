@@ -1,4 +1,4 @@
-const GRADIENT_PRESETS = [
+export const GRADIENT_PRESETS = [
   'from-violet-600 via-purple-600 to-fuchsia-500',
   'from-blue-600 via-indigo-600 to-violet-500',
   'from-emerald-600 via-teal-600 to-cyan-500',
