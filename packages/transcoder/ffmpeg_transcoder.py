@@ -437,6 +437,75 @@ _HDR_TRANSFERS = {"smpte2084", "arib-std-b67", "smpte2094"}
 _HDR_TONEMAP_ALGO = "mobius"
 _HDR_UPLOAD = {"nvenc": "_cuda", "vaapi": "", "qsv": "_qsv"}
 
+# Sources the GPU decoders (NVDEC, Intel VAAPI) handle, by codec and pixel
+# format. For anything else -- ProRes, DNxHR, H.264 10-bit or 4:2:2, HEVC 4:2:2
+# before Blackwell -- `-hwaccel` quietly falls back to a software decode, the
+# frames never reach the device, and the GPU scaler fails filter setup with
+# "Function not implemented". Those sources are decoded on the CPU and uploaded
+# explicitly instead, so the scale and the encode still run on the GPU.
+#
+# This is a prediction, not a guarantee: AV1 has no NVDEC before Ampere, and
+# 10-bit HEVC none on a Skylake iGPU. A wrong guess never produces bad output --
+# a software frame in front of a GPU filter fails loudly -- and the attempt
+# chain in transcode() retries such a failure with the CPU decode.
+_GPU_DECODABLE = {
+    "h264": {"yuv420p", "yuvj420p"},
+    "hevc": {"yuv420p", "yuvj420p", "yuv420p10le"},
+    "vp9": {"yuv420p", "yuv420p10le"},
+    "av1": {"yuv420p", "yuv420p10le"},
+    "mpeg2video": {"yuv420p"},
+}
+
+# Backends that can take CPU-decoded frames: the global args that give the
+# filter graph a device to upload to, and the filter that uploads. hwupload_cuda
+# opens its own CUDA device; -vaapi_device doubles as the filter device. QSV is
+# absent (its upload needs -filter_hw_device wiring nobody can test here), so it
+# keeps hardware decode with the plain software fallback.
+_CPU_DECODE_UPLOAD = {
+    "nvenc": {"args": [], "filter": "hwupload_cuda"},
+    "vaapi": {"args": ["-vaapi_device", "/dev/dri/renderD128"], "filter": "hwupload"},
+}
+
+
+def _gpu_can_decode(backend: str, stream: dict) -> bool:
+    """Whether `backend`'s hardware decoder is expected to handle `stream`.
+
+    True wherever there is nothing to decide -- a backend with no CPU-decode
+    path, or a probe that names no codec -- so those keep the command they had.
+    """
+    if backend not in _CPU_DECODE_UPLOAD:
+        return True
+    codec = stream.get("codec_name")
+    if not codec:
+        return True
+    return stream.get("pix_fmt") in _GPU_DECODABLE.get(codec, ())
+
+
+def _plan_attempts(
+    primary_backend: str, encode_backend: str, stream: dict, dv_software: bool,
+) -> list[tuple[str, bool]]:
+    """The ladder of (backend, gpu_decode) attempts, most capable first.
+
+    A hardware backend that can take uploaded frames gets two tiers -- GPU
+    decode, then CPU decode with the GPU still encoding -- and the first is
+    skipped when the source is known not to decode on the GPU. Every hardware
+    chain ends on the software pipeline. Dolby Vision profile 5 is decoded and
+    encoded in software whatever the backend, so it gets a single attempt.
+    """
+    attempts: list[tuple[str, bool]] = []
+    if primary_backend == "copy":
+        attempts.append(("copy", False))
+    backend = encode_backend
+    if backend == "cpu" or dv_software:
+        attempts.append((backend, False))
+        return attempts
+    if _gpu_can_decode(backend, stream):
+        attempts.append((backend, True))
+    if backend in _CPU_DECODE_UPLOAD:
+        attempts.append((backend, False))
+    attempts.append(("cpu", False))
+    return attempts
+
 # NVENC constant-quality (CQ) settings, keyed by output mode.
 # This ffmpeg/nvenc build has no "-rc cq" mode and ignores "-rc vbr -cq",
 # so constant quality is achieved via "-rc constqp -qp <value>"
@@ -882,12 +951,37 @@ _HW_RUNTIME_FAILURES = (
     "failed to create specified hw device",
     "device creation failed",
     "error creating a mfx session",
+    # A software frame handed to a GPU-only filter. Listed so a format mismatch
+    # in the CPU-decode graph degrades to software rather than failing the asset.
+    "impossible to convert between the formats",
+)
+
+# The subset of hardware failures that point at the decoder rather than the
+# device as a whole: the hwaccel would not open for this stream, or it fell back
+# to software and the GPU filter graph refused the frames. A GPU-decode attempt
+# that fails this way is retried with the CPU decoding and the GPU encoding.
+# Anything else (exhausted VRAM, a missing encode library, no free sessions)
+# would stop the GPU encoder too, so it goes straight to software.
+_GPU_DECODE_FAILURES = (
+    "impossible to convert between the formats",
+    "function not implemented",
+    "failed setup for format",
+    "hwaccel initialisation returned error",
 )
 
 
 def _is_hw_runtime_failure(err: str) -> bool:
     lowered = (err or "").lower()
     return any(marker in lowered for marker in _HW_RUNTIME_FAILURES)
+
+
+def _is_gpu_decode_failure(err: str) -> bool:
+    lowered = (err or "").lower()
+    # An NVDEC out-of-memory also logs "hwaccel initialisation returned error",
+    # but it is the device that is full, and the encoder needs VRAM as well.
+    if "out of memory" in lowered:
+        return False
+    return any(marker in lowered for marker in _GPU_DECODE_FAILURES)
 
 
 def _hw_failure_reason(err: str) -> str:
@@ -1783,12 +1877,15 @@ class FFmpegTranscoder(BaseTranscoder):
                 ]
                 return cmd
 
-            def _build_ffmpeg_cmd(backend: str) -> list[str]:
+            def _build_ffmpeg_cmd(backend: str, gpu_decode: bool = True) -> list[str]:
                 """Build the full ffmpeg command for a given backend.
 
                 Kept as a closure so the whole graph (hwaccel, scale filter,
                 HDR prefix, encoders, colour tags) is rebuilt consistently when
                 a hardware attempt has to fall back to software.
+
+                `gpu_decode=False` on a hardware backend decodes on the CPU and
+                uploads the frames, so the scale and the encode stay on the GPU.
                 """
                 if backend == "copy":
                     return _build_copy_cmd()
@@ -1796,6 +1893,10 @@ class FFmpegTranscoder(BaseTranscoder):
                 # below), so force the CPU scale filter for it.
                 scale_filter = "scale" if dv_software else _BACKEND_SCALE.get(backend, "scale")
                 out_mode = _OUTPUT_MODES.get(get_output_mode(), _OUTPUT_MODES["h264_8"])
+                cpu_upload = (
+                    None if gpu_decode or dv_software
+                    else _CPU_DECODE_UPLOAD.get(backend)
+                )
 
 
                 # Build filter_complex: split then per-quality scale.
@@ -1836,13 +1937,24 @@ class FFmpegTranscoder(BaseTranscoder):
                         hdr_prefix += "[tcpu];"
                         src = "[tcpu]"
                     else:
-                        hdr_prefix = f"[0:{_PRIMARY_VIDEO_STREAM}]hwdownload,format=p010"
+                        # A CPU-decoded frame is already in system memory, so
+                        # there is nothing to download.
+                        hdr_prefix = f"[0:{_PRIMARY_VIDEO_STREAM}]"
+                        hdr_prefix += "format=p010" if cpu_upload else "hwdownload,format=p010"
                         if tone_map:
                             hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
                                            f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
                                            f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le")
                         hdr_prefix += f"[tcpu];[tcpu]hwupload{_HDR_UPLOAD.get(backend, '')}[t];"
                         src = "[t]"
+                elif cpu_upload:
+                    # Decoded on the CPU: convert to the encoder's depth there
+                    # (the GPU scalers take no 4:2:2, and nv12 halves the upload
+                    # for 8-bit output), then hand the frames to the device.
+                    fmt = "p010" if out_mode["ten_bit"] else "nv12"
+                    hdr_prefix = (f"[0:{_PRIMARY_VIDEO_STREAM}]format={fmt},"
+                                  f"{cpu_upload['filter']}[up];")
+                    src = "[up]"
                 else:
                     hdr_prefix = ""
                     src = f"[0:{_PRIMARY_VIDEO_STREAM}]"
@@ -1863,7 +1975,9 @@ class FFmpegTranscoder(BaseTranscoder):
                 )
 
                 ffmpeg_cmd = ["ffmpeg", "-y"]
-                if not dv_software:
+                if cpu_upload:
+                    ffmpeg_cmd += cpu_upload["args"]
+                elif not dv_software:
                     ffmpeg_cmd += _BACKEND_HWACCEL.get(backend, [])
                 ffmpeg_cmd += ["-i", input_url]
                 ffmpeg_cmd += ["-filter_complex", filter_complex]
@@ -2006,15 +2120,36 @@ class FFmpegTranscoder(BaseTranscoder):
             # remux drops to the encoder rather than failing the asset, and
             # unlike the hardware case any error is reason enough: a remux has
             # no environmental failures to tell apart from input ones.
-            attempts = [primary_backend]
-            if primary_backend == "copy":
-                attempts.append(get_backend())
-            if attempts[-1] not in ("cpu", "copy") and not dv_software:
-                attempts.append("cpu")
+            #
+            # Between the two, a hardware backend that can take uploaded frames
+            # has a middle tier: decode on the CPU and keep the scale and the
+            # encode on the GPU. A source the GPU cannot decode (ProRes, 4:2:2,
+            # 10-bit H.264) starts there; one predicted to decode that turns out
+            # not to reaches it through _is_gpu_decode_failure. See
+            # _plan_attempts for the ladder.
+            encode_backend = get_backend() if primary_backend == "copy" else primary_backend
+            attempts = _plan_attempts(primary_backend, encode_backend, _vid_stream, dv_software)
+            if encode_backend in _CPU_DECODE_UPLOAD and not dv_software \
+                    and not _gpu_can_decode(encode_backend, _vid_stream):
+                print(
+                    f"[transcoder] {encode_backend} cannot decode "
+                    f"{_vid_stream.get('codec_name')}/{_vid_stream.get('pix_fmt')}; "
+                    f"decoding on the CPU and encoding on {encode_backend} "
+                    f"for {job.input_s3_key}",
+                    flush=True,
+                )
+
+            def _describe(attempt: tuple[str, bool]) -> str:
+                name, gpu_decode = attempt
+                if name in _CPU_DECODE_UPLOAD and not dv_software:
+                    return f"'{name}' ({'GPU' if gpu_decode else 'CPU'} decode)"
+                return f"'{name}'"
 
             backend = primary_backend
-            for attempt_index, attempt_backend in enumerate(attempts):
-                ffmpeg_cmd = _build_ffmpeg_cmd(attempt_backend)
+            attempt_index = 0
+            while attempt_index < len(attempts):
+                attempt_backend, gpu_decode = attempts[attempt_index]
+                ffmpeg_cmd = _build_ffmpeg_cmd(attempt_backend, gpu_decode)
                 try:
                     if job.progress_cb:
                         self._run_with_progress(
@@ -2057,6 +2192,15 @@ class FFmpegTranscoder(BaseTranscoder):
                     remux = attempt_backend == "copy"
                     if is_last or not (remux or _is_hw_runtime_failure(str(exc))):
                         raise
+                    next_index = attempt_index + 1
+                    if (attempt_backend in _CPU_DECODE_UPLOAD and gpu_decode
+                            and not _is_gpu_decode_failure(str(exc))):
+                        # The device itself is in trouble, not its decoder, and
+                        # the CPU-decode tier would hit it too: go to software.
+                        next_index = next(
+                            i for i in range(next_index, len(attempts))
+                            if attempts[i][0] == "cpu"
+                        )
                     if remux:
                         print(
                             f"[transcoder] remuxing {job.input_s3_key} failed; encoding "
@@ -2064,12 +2208,20 @@ class FFmpegTranscoder(BaseTranscoder):
                             flush=True,
                         )
                     else:
+                        # The tail is where ffmpeg says why. The presigned URL
+                        # can appear in it and is a working credential until it
+                        # expires, so it is swapped for the key.
+                        detail = str(exc).replace(input_url, job.input_s3_key).strip()[-300:]
+                        nxt = attempts[next_index]
                         print(
-                            f"[transcoder] backend '{attempt_backend}' failed at runtime "
-                            f"({_hw_failure_reason(str(exc))}); retrying on the software "
-                            f"pipeline for {job.input_s3_key}",
+                            f"[transcoder] backend {_describe(attempts[attempt_index])} "
+                            f"failed at runtime ({_hw_failure_reason(str(exc))}); retrying "
+                            + ("on the software pipeline" if nxt[0] == "cpu"
+                               else f"with {_describe(nxt)}")
+                            + f" for {job.input_s3_key}: {detail}",
                             flush=True,
                         )
+                    attempt_index = next_index
                     # Discard any partial HLS output before retrying.
                     shutil.rmtree(hls_dir, ignore_errors=True)
                     hls_dir.mkdir(exist_ok=True)

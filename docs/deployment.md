@@ -365,8 +365,10 @@ If you build the `2160p` rung, a GPU is worth it: a 4K encode takes about four t
 the CPU of a 1080p one. A master that is already H.264 8-bit 4:2:0 can skip the
 encode entirely with `TRANSCODER_SOURCE_COPY=true` and a single-rung ladder, but most
 4K camera and NLE exports (HEVC, 10-bit, HDR, ProRes) cannot, and are always encoded.
-NVIDIA GPUs have no ProRes decoder, so for ProRes masters the decode stays on the CPU
-and only the encode moves to the GPU.
+The GPU decoders don't handle ProRes, DNxHR, 10-bit or 4:2:2 H.264, or (before
+NVIDIA Blackwell) 4:2:2 HEVC. For those masters, on NVIDIA and Intel, the decode
+stays on the CPU and the frames are uploaded, so scaling and encoding still run on
+the GPU. Expect the CPU decode to be the bottleneck on 4K ProRes.
 
 ### Email Workers
 

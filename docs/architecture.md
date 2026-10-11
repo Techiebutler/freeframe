@@ -124,7 +124,9 @@ Reviewer approves / rejects ──▶ SSE: approval_updated
    - The ladder is trimmed against the source resolution, so a small source never gets
      upscaled renditions. If every rung is above the source, the smallest is kept.
    - An optional NVENC/VAAPI hardware backend is selected at runtime when available, using
-     `-global_quality` in place of `-crf`, and falls back to software on failure. HDR and
+     `-global_quality` in place of `-crf`, and falls back to software on failure. A source
+     the GPU can't decode (ProRes, 4:2:2, 10-bit H.264) is decoded on the CPU and uploaded,
+     so the scale and encode stay on the GPU. HDR and
      Dolby Vision sources are tone-mapped to Rec.709, with the CRF adjusted either way.
 5. One thumbnail generated (`-vf thumbnail`, a single representative frame)
 6. All outputs uploaded to S3 under `processed/{project_id}/{asset_id}/{version_id}/`
