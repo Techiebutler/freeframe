@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { getAccessToken } from '@/lib/auth'
+import { getAccessToken, refreshAccessToken } from '@/lib/auth'
 
 // ─── Event payload types ──────────────────────────────────────────────────────
 
@@ -76,6 +76,25 @@ export interface UseSSEReturn {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const BACKOFF_STEPS = [1000, 2000, 4000, 8000, 16000, 30000]
+// Refresh a token this close to expiry before connecting with it, rather than
+// open a stream the server is about to end.
+const EXPIRY_SKEW_MS = 10_000
+
+// The server re-checks access for as long as a stream is open and ends it with
+// a final `revoked` event once the subscriber may no longer see the project.
+// These two reasons are about the token, so a fresh one may reconnect; any
+// other reason means access itself was taken away.
+const TOKEN_REASONS = new Set(['token_expired', 'token_revoked'])
+
+function isExpiringSoon(token: string): boolean {
+  try {
+    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const { exp } = JSON.parse(atob(part)) as { exp?: number }
+    return typeof exp === 'number' && exp * 1000 <= Date.now() + EXPIRY_SKEW_MS
+  } catch {
+    return false // not ours to judge; the server will answer
+  }
+}
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
@@ -121,11 +140,31 @@ export function useSSE(projectId: string | null | undefined, options: UseSSEOpti
     let retryIndex = 0
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     let destroyed = false
+    // The token the server last refused; it must not be offered again.
+    let rejectedToken: string | null = null
 
-    function connect() {
+    function scheduleReconnect() {
+      // Exponential backoff reconnect
+      const delay = BACKOFF_STEPS[Math.min(retryIndex, BACKOFF_STEPS.length - 1)]
+      retryIndex++
+      retryTimer = setTimeout(connect, delay)
+    }
+
+    async function connect() {
       if (destroyed) return
 
-      const token = getAccessToken()
+      let token = getAccessToken()
+      if (token && (token === rejectedToken || isExpiringSoon(token))) {
+        // A refused refresh signs the user out (lib/auth); a failed one
+        // returns null and we try again later.
+        token = await refreshAccessToken()
+        if (destroyed) return
+        if (!token) {
+          scheduleReconnect()
+          return
+        }
+      }
+      const usedToken = token
       // Use window.location.origin as a base so deployments behind a reverse
       // proxy can set NEXT_PUBLIC_API_URL to a relative path like "/api"
       // without crashing the URL constructor.
@@ -148,12 +187,30 @@ export function useSSE(projectId: string | null | undefined, options: UseSSEOpti
         setIsConnected(false)
         es?.close()
         es = null
-
-        // Exponential backoff reconnect
-        const delay = BACKOFF_STEPS[Math.min(retryIndex, BACKOFF_STEPS.length - 1)]
-        retryIndex++
-        retryTimer = setTimeout(connect, delay)
+        scheduleReconnect()
       }
+
+      // ── revoked: the server is ending this stream ──
+      es.addEventListener('revoked', (e: MessageEvent) => {
+        if (destroyed) return
+        let reason = ''
+        try {
+          reason = (JSON.parse(e.data) as { reason?: string }).reason ?? ''
+        } catch {
+          // treat as access revoked
+        }
+        setIsConnected(false)
+        es?.close()
+        es = null
+        if (TOKEN_REASONS.has(reason)) {
+          rejectedToken = usedToken
+          scheduleReconnect()
+        } else {
+          // No longer allowed to see this project: reconnecting would only be
+          // refused, again and again, for as long as the tab stays open.
+          destroyed = true
+        }
+      })
 
       // ── transcode_progress ──
       es.addEventListener('transcode_progress', (e: MessageEvent) => {
@@ -234,7 +291,7 @@ export function useSSE(projectId: string | null | undefined, options: UseSSEOpti
       })
     }
 
-    connect()
+    void connect()
 
     return () => {
       destroyed = true

@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from urllib.parse import urlparse
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default S3 endpoint (local MinIO). Shared between the field default and the
@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
+    # Live event streams (GET /events/{project_id}). Authorization is checked
+    # again for as long as a stream stays open, not only when it connects, so a
+    # subscriber who loses access (removed from the project, deactivated, token
+    # expired or revoked, project deleted or made private) stops receiving.
+    # An event is never delivered on a check older than SSE_AUTH_MAX_AGE_SECONDS;
+    # 0 checks before every single event. An idle stream is checked every
+    # SSE_AUTH_RECHECK_SECONDS and sent a keepalive at that interval or every
+    # 30 seconds, whichever is shorter. Each check is one indexed query. Token
+    # expiry is exact either way: nothing is sent after the token's `exp`.
+    sse_auth_max_age_seconds: float = Field(1.0, ge=0)
+    sse_auth_recheck_seconds: float = Field(15.0, gt=0)
     frontend_url: str = "http://localhost:3000"
     # Extra browser origins allowed by CORS, comma-separated (in addition to the
     # frontend + localhost defaults). Set to "*" to allow any origin — handy for
