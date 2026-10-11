@@ -81,6 +81,10 @@ Frontend receives  ◀────────── SSE: transcode_complete
 transcode_complete             (or transcode_failed)
 ```
 
+Each upload is cut into parts of one size, chosen at initiate from the instance's part size
+setting (automatic sizing aims for about 500 parts) and pinned to the version, so a resume
+and a later change to the setting never disagree about where a part's bytes start.
+
 A transfer that stops part-way leaves the multipart upload open and its parts in
 the bucket. `AbortMultipartUpload` is only ever called for an explicit user
 cancel (or by the stale-upload reaper), so the version stays `uploading` and the

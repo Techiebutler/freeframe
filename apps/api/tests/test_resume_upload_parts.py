@@ -423,6 +423,7 @@ def test_initiate_tells_the_client_which_chunk_size_to_use(
 ):
     """The constant was dead code, so the client's own was the only one in play."""
     monkeypatch.setattr(upload_module, "upload_guard_error", lambda db, size: None)
+    monkeypatch.setattr(upload_module, "choose_part_size", lambda db, n: (10 * 1024 * 1024, None))
     monkeypatch.setattr(upload_module, "require_project_role", lambda *a, **k: None)
     monkeypatch.setattr(upload_module, "create_multipart_upload", lambda k, m: "upload-1")
 

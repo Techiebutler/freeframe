@@ -19,9 +19,9 @@ from ..services.s3_service import generate_presigned_get_url, build_download_fil
 from .hls_proxy import create_hls_token
 from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
-    ALLOWED_MIME_TYPES, CHUNK_SIZE_BYTES, mime_to_asset_type,
+    ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
-from ..services.storage import upload_guard_error
+from ..services.storage import choose_part_size, upload_guard_error
 from ..services.versions import next_version_number
 from ..services.s3_service import create_multipart_upload
 
@@ -372,6 +372,9 @@ def initiate_new_version(
     guard_error = upload_guard_error(db, body.file_size_bytes)
     if guard_error:
         raise HTTPException(status_code=400, detail=guard_error)
+    part_size, part_error = choose_part_size(db, body.file_size_bytes)
+    if part_error:
+        raise HTTPException(status_code=400, detail=part_error)
 
     next_version = next_version_number(db, asset_id)
 
@@ -395,7 +398,7 @@ def initiate_new_version(
     version.last_activity_at = datetime.now(timezone.utc)
     # See initiate_upload: the part size belongs to the upload, not to the build
     # of the client that happens to be pushing it.
-    version.chunk_size_bytes = CHUNK_SIZE_BYTES
+    version.chunk_size_bytes = part_size
 
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
     media_file = MediaFile(
@@ -414,7 +417,7 @@ def initiate_new_version(
         s3_key=s3_key,
         asset_id=asset_id,
         version_id=version.id,
-        chunk_size_bytes=CHUNK_SIZE_BYTES,
+        chunk_size_bytes=part_size,
     )
 
 

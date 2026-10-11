@@ -7,7 +7,12 @@ const h = vi.hoisted(() => {
   // Controllable, STABLE `data` reference (mirrors real SWR's cache — a fresh object each
   // render would re-fire the component's effect and clobber the in-progress input).
   const DEFAULT = { storage_limit_bytes: 0, storage_used_bytes: 1024 ** 3 }
-  return { DEFAULT, data: DEFAULT as { storage_limit_bytes: number; storage_used_bytes: number } | undefined }
+  return {
+    DEFAULT,
+    data: DEFAULT as
+      | { storage_limit_bytes: number; storage_used_bytes: number; upload_part_size_bytes?: number }
+      | undefined,
+  }
 })
 vi.mock('swr', () => ({
   default: () => ({ data: h.data, isLoading: false }),
@@ -17,6 +22,7 @@ const put = vi.fn().mockResolvedValue({})
 vi.mock('@/lib/api', () => ({ api: { put: (...a: unknown[]) => put(...a) } }))
 
 import { InstanceSettingsTab } from '../instance-settings-tab'
+import { mutate } from 'swr'
 import { useBrandingStore } from '@/stores/branding-store'
 
 function deferred<T = unknown>() {
@@ -32,6 +38,9 @@ function deferred<T = unknown>() {
 const limitInput = () => screen.getByLabelText(/storage limit/i) as HTMLInputElement
 const modeSelect = () => screen.getByLabelText(/default sign-in method/i) as HTMLSelectElement
 const settingsPuts = () => put.mock.calls.filter(([url]) => url === '/instance/settings')
+const MB = 1024 ** 2
+const partModeSelect = () => screen.getByLabelText(/upload part size/i) as HTMLSelectElement
+const partSizeInput = () => screen.queryByLabelText(/part size \(mb\)/i) as HTMLInputElement | null
 
 describe('InstanceSettingsTab', () => {
   beforeEach(() => {
@@ -184,6 +193,92 @@ describe('InstanceSettingsTab', () => {
       h.data = undefined
       render(<InstanceSettingsTab />)
       expect(limitInput()).toBeDisabled()
+    })
+  })
+
+  describe('upload part size', () => {
+    it('is Automatic by default, with no size field', () => {
+      render(<InstanceSettingsTab />)
+      expect(partModeSelect()).toHaveValue('auto')
+      expect(partSizeInput()).not.toBeInTheDocument()
+      expect(screen.getByText(/sized from each file/i)).toBeInTheDocument()
+    })
+
+    it('saves the 10 MB default when switched to Fixed, and shows the field', async () => {
+      // As SWR does: the saved settings become the cached data the tab renders.
+      const saved = { ...h.DEFAULT, upload_part_size_bytes: 10 * MB }
+      put.mockResolvedValue(saved)
+      vi.mocked(mutate).mockImplementationOnce((() => {
+        h.data = saved
+      }) as never)
+      render(<InstanceSettingsTab />)
+      fireEvent.change(partModeSelect(), { target: { value: 'fixed' } })
+
+      await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+      expect(put).toHaveBeenCalledWith('/instance/settings', { upload_part_size_bytes: 10 * MB })
+      expect(partSizeInput()).toHaveValue(10)
+    })
+
+    it('saves 0 when switched back to Automatic', async () => {
+      h.data = { ...h.DEFAULT, upload_part_size_bytes: 64 * MB }
+      render(<InstanceSettingsTab />)
+      expect(partModeSelect()).toHaveValue('fixed')
+      expect(partSizeInput()).toHaveValue(64)
+
+      fireEvent.change(partModeSelect(), { target: { value: 'auto' } })
+      await waitFor(() =>
+        expect(put).toHaveBeenCalledWith('/instance/settings', { upload_part_size_bytes: 0 }),
+      )
+    })
+
+    it('saves a fixed size on blur only, in bytes', async () => {
+      h.data = { ...h.DEFAULT, upload_part_size_bytes: 10 * MB }
+      render(<InstanceSettingsTab />)
+      fireEvent.change(partSizeInput()!, { target: { value: '1' } })
+      fireEvent.change(partSizeInput()!, { target: { value: '12' } })
+      fireEvent.change(partSizeInput()!, { target: { value: '128' } })
+      expect(put).not.toHaveBeenCalled()
+
+      fireEvent.blur(partSizeInput()!)
+      await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+      expect(settingsPuts()).toEqual([['/instance/settings', { upload_part_size_bytes: 128 * MB }]])
+    })
+
+    it.each(['4', '513', '12.5'])('refuses %s MB without saving', (value) => {
+      h.data = { ...h.DEFAULT, upload_part_size_bytes: 10 * MB }
+      render(<InstanceSettingsTab />)
+      fireEvent.change(partSizeInput()!, { target: { value } })
+      fireEvent.blur(partSizeInput()!)
+
+      expect(put).not.toHaveBeenCalled()
+      expect(screen.getByText(/whole number of mb from 5 to 512/i)).toBeInTheDocument()
+    })
+
+    it('puts the saved size back when blurred blank', () => {
+      h.data = { ...h.DEFAULT, upload_part_size_bytes: 64 * MB }
+      render(<InstanceSettingsTab />)
+      fireEvent.change(partSizeInput()!, { target: { value: '' } })
+      fireEvent.blur(partSizeInput()!)
+
+      expect(put).not.toHaveBeenCalled()
+      expect(partSizeInput()).toHaveValue(64)
+    })
+
+    it('shows the error when the save fails', async () => {
+      put.mockRejectedValue(new Error('storage settings unavailable'))
+      render(<InstanceSettingsTab />)
+      fireEvent.change(partModeSelect(), { target: { value: 'fixed' } })
+
+      await waitFor(() =>
+        expect(screen.getByText('storage settings unavailable')).toBeInTheDocument(),
+      )
+      expect(partModeSelect()).toHaveValue('auto')
+    })
+
+    it('is disabled until settings have loaded', () => {
+      h.data = undefined
+      render(<InstanceSettingsTab />)
+      expect(partModeSelect()).toBeDisabled()
     })
   })
 })

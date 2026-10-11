@@ -39,6 +39,7 @@ def _seed(real_db, monkeypatch):
         monkeypatch.setattr(mod, "create_multipart_upload", lambda k, m: "an-upload",
                             raising=False)
         monkeypatch.setattr(mod, "upload_guard_error", lambda db, n: None, raising=False)
+        monkeypatch.setattr(mod, "choose_part_size", lambda db, n: (10 * 1024 * 1024, None), raising=False)
         monkeypatch.setattr(mod, "require_project_role", lambda *a, **k: None, raising=False)
 
     return owner, project

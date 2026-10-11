@@ -321,6 +321,8 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `TRANSCODER_SOURCE_COPY` | Package an already browser-safe source into HLS without re-encoding, where the ladder above resolves to one rendition at the source's own size | `false` |
 | `TRANSCODER_CPU_LIMIT` | Cap the CPU one transcode takes: a core count (`6`) or a share of what the process may use (`50%`). Empty = unbounded. Covers the encoders and the filter graph, not decoding, so a heavy master can run over by roughly a quarter, and a low budget can push a long master past ffmpeg's 4-hour ceiling — see `.env.example`. Per ffmpeg process, so the machine-wide ceiling is this times `TRANSCODING_CONCURRENCY` | *(empty)* |
 
+Upload part size is set in the app rather than the environment: **Admin Dashboard → Instance settings → Uploads**. Automatic (the default) keeps 10 MB parts up to ~5 GB and grows them for bigger files to about 500 parts, which keeps the storage backend's assembly at the end of an upload short. Fixed cuts every upload into one size from 5 to 512 MB, and refuses a file that would need more than 10,000 parts. A completion that takes 5 seconds or more is logged by the API with where the time went (`completing upload … took …`), which is the place to look when uploads wait at "Finalizing".
+
 ---
 
 ## Scaling

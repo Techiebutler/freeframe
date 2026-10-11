@@ -20,11 +20,72 @@ ALLOWED_MIME_TYPES = {
 # idea of the chunk size differs from the one an upload was started with places
 # its parts at the wrong byte ranges, which R2 rejects outright and which
 # assembles a corrupt object anywhere that does not enforce uniform part sizes.
+#
+# This is the smallest part an automatic size picks, and the fallback for
+# versions created before the size was recorded. New uploads are cut on
+# part_size_for.
 CHUNK_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
-# S3 allows at most 10,000 parts, so this is the largest object this scheme can
-# assemble regardless of MAX_UPLOAD_BYTES. Declaring more than this is not a
-# policy question, it is arithmetically impossible.
-MAX_MULTIPART_BYTES = 10_000 * CHUNK_SIZE_BYTES
+
+_MIB = 1024 * 1024
+# The smallest non-final part S3, R2 and B2 accept.
+MIN_PART_SIZE_BYTES = 5 * _MIB
+# The largest fixed size an admin may set. Every byte of a part is sent again
+# when it fails, and it has to fit asset_versions.chunk_size_bytes (an Integer).
+MAX_PART_SIZE_BYTES = 512 * _MIB
+# S3 allows at most 10,000 parts per upload.
+MAX_PARTS = 10_000
+
+# Automatic sizing aims for about this many parts. Completing an upload costs
+# something per part -- ListParts reads them all back, and on MinIO and Silo
+# every part is its own file whose metadata CompleteMultipartUpload reads and
+# moves, which on spinning or network storage is milliseconds each. 10,000
+# parts there is minutes at "95%"; a few hundred is seconds. Far fewer would
+# leave the browser's five parallel PUTs idle at the end of a transfer.
+AUTO_TARGET_PARTS = 500
+# Automatic sizing stops growing parts here and lets the count rise instead, so
+# a retry or an interruption never costs more than this per part in flight.
+AUTO_MAX_PART_SIZE_BYTES = 256 * _MIB
+
+# The largest object this scheme can assemble at all, regardless of
+# MAX_UPLOAD_BYTES or the part size setting: 10,000 parts at the largest size.
+# Declaring more than this is not a policy question, it is arithmetically
+# impossible. The limit the instance's part size setting allows is narrower,
+# and is checked by part_count_error.
+MAX_MULTIPART_BYTES = MAX_PARTS * MAX_PART_SIZE_BYTES
+
+
+def part_size_for(file_size_bytes: int, configured_bytes: int) -> int:
+    """The part size a new upload of `file_size_bytes` is cut on.
+
+    `configured_bytes` is the instance setting: 0 sizes parts from the file,
+    anything else is a fixed size and is used as it is. Automatic sizing keeps
+    the 10 MB parts every upload used to get until a file would need more than
+    AUTO_TARGET_PARTS of them, then grows the part (in whole MiB) to hold the
+    count there, up to AUTO_MAX_PART_SIZE_BYTES.
+    """
+    if configured_bytes:
+        return configured_bytes
+    per_part = -(-file_size_bytes // AUTO_TARGET_PARTS)  # ceil
+    whole_mib = -(-per_part // _MIB) * _MIB
+    return min(max(CHUNK_SIZE_BYTES, whole_mib), AUTO_MAX_PART_SIZE_BYTES)
+
+
+def part_count_error(file_size_bytes: int, part_size_bytes: int, *, fixed: bool) -> str | None:
+    """Why a file this size cannot be uploaded in parts this size, or None.
+
+    `fixed` says the size came from the admin's setting rather than from
+    part_size_for, which changes what the person uploading can be told to do.
+    """
+    if -(-file_size_bytes // part_size_bytes) <= MAX_PARTS:
+        return None
+    largest = _format_bytes(MAX_PARTS * part_size_bytes)
+    if fixed:
+        return (
+            f"File is larger than the {largest} this instance's "
+            f"{_format_bytes(part_size_bytes)} upload part size allows. "
+            "An admin can change the part size in Instance Settings."
+        )
+    return f"File is larger than the {largest} an upload can hold"
 
 def _format_bytes(num_bytes: int) -> str:
     """Human-readable size for error messages, e.g. '10 GB'."""
@@ -62,7 +123,7 @@ class InitiateUploadRequest(BaseModel):
     # gt=0 because a zero or negative value otherwise reaches upload_guard_error
     # and the client's ceil(size / chunk) arithmetic, where it produces a part
     # count of zero and an upload that can never complete. The upper bound is the
-    # structural ceiling of S3 multipart: 10,000 parts at the 10 MB chunk size.
+    # structural ceiling of S3 multipart: 10,000 parts at the largest part size.
     file_size_bytes: int = Field(gt=0, le=MAX_MULTIPART_BYTES)
     # For new version of existing asset
     asset_id: uuid.UUID | None = None

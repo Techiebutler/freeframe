@@ -677,6 +677,14 @@ export interface UploadFile {
    *  the correction sent during `/upload/initiate`'s round trip has nobody to
    *  return to, so it leaves the reason here. */
   renameError?: string
+  /**
+   * Every byte is across and `/upload/complete` is running: the storage backend
+   * is assembling the parts, which on a large file can take minutes with the
+   * bar at 95. The status stays `uploading` -- recovery, the heartbeat and the
+   * Active tab all treat this as the transfer it still is -- and the panel reads
+   * this only alongside that status, so a stale value on any other is inert.
+   */
+  finalizing?: boolean
 }
 
 /** POST /upload/initiate and POST /assets/{id}/versions — both answer with this.
@@ -1072,6 +1080,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         )
 
         completionAttempted = true
+        updateFile(id, { finalizing: true })
         await api.post('/upload/complete', {
           s3_key,
           upload_id,
@@ -1213,6 +1222,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         )
 
         completionAttempted = true
+        updateFile(id, { finalizing: true })
         await api.post('/upload/complete', { s3_key, upload_id, asset_id: assetId, version_id, parts })
         const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
         updateFile(id, { progress: 100, status: isMedia ? 'processing' : 'complete', processingProgress: 0 })
@@ -1279,7 +1289,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let stopBeat = () => {}
       retainWakeLock()
       try {
-        updateFile({ status: 'uploading', progress: 0, error: undefined })
+        // A resumed row may have stopped while finalizing.
+        updateFile({ status: 'uploading', progress: 0, error: undefined, finalizing: false })
 
         // Everything needed to carry on comes from the server, including the key
         // and the upload id: this row may have been rehydrated from history in a
@@ -1359,6 +1370,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         }
 
         completionAttempted = true
+        updateFile({ finalizing: true })
         await api.post('/upload/complete', {
           s3_key: info.s3_key,
           upload_id: info.upload_id,
