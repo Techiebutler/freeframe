@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Large uploads are cut into fewer, larger parts.** Every upload used to go up in 10 MB parts, so a 50 GB file was 5,000 of them, and completing an upload makes the storage backend read back and assemble every part. Files up to about 5 GB still use 10 MB parts; bigger files now get parts sized to hold about 500, up to 256 MB each. The largest file an upload can hold rises from about 97.6 GB to about 2.7 TB. Uploads already in progress keep the size they started with.
 
 ### Fixed
-- **An upload that has sent every byte says "Finalizing" instead of sitting at "Uploading 95%".** The storage backend can take minutes to assemble a large upload, which read as a hung upload. Cancel is hidden for that stretch, since there is nothing left for it to stop. The API also logs any completion that takes 5 seconds or more, split into listing, assembling and finishing time.
+- **An upload that has sent every byte says "Finalizing" instead of sitting at "Uploading 95%".** The storage backend can take minutes to assemble a large upload, which read as a hung upload. Cancel is hidden for that stretch, since there is nothing left for it to stop, and comes back if a part fails and has to be sent again. The API also logs any completion that takes 5 seconds or more, split into listing, assembling and finishing time.
 
 ## [1.17.0] - 2026-10-12
 

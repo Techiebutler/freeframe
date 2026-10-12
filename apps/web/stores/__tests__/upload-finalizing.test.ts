@@ -17,7 +17,7 @@ vi.mock('@/lib/api', () => ({
 import { api } from '@/lib/api'
 import { useUploadStore } from '../upload-store'
 import { useUploadSpeedStore } from '../upload-speed-store'
-import { installXhrFake, ok, type PartReply } from '@/test/xhr-fake'
+import { installXhrFake, ok, fail, type PartReply } from '@/test/xhr-fake'
 
 function makeFile(): File {
   return new File([new Uint8Array(1024)], 'clip.mp4', { type: 'video/mp4' })
@@ -111,6 +111,29 @@ describe('finalizing an upload', () => {
 
     expect(finalizingDuringTransfer).toBeFalsy()
   })
+
+  it('goes back to uploading, with Cancel, when a part fails after every byte was sent', async () => {
+    const { seenWhenCompleting } = mockUpload()
+    let attempts = 0
+    let finalizingOnRetry: boolean | undefined
+    installXhrFake((_url, request) => {
+      attempts++
+      if (attempts === 1) {
+        // The whole part handed over, then storage (or a proxy) gives up on it.
+        request.progress(request.body!.size)
+        return fail(503)
+      }
+      finalizingOnRetry = useUploadStore.getState().files[0].finalizing
+      return ok('"etag-1"')
+    })
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    await vi.waitFor(() => expect(attempts).toBe(2), { timeout: 5000 })
+
+    expect(finalizingOnRetry).toBe(false)
+    await vi.waitFor(() => expect(seenWhenCompleting).toHaveLength(1))
+    expect(rowOf(id).finalizing).toBe(true)
+  }, 10_000)
 
   it('measures the transfer into the speed store, and withdraws it once every byte is sent', async () => {
     mockUpload()

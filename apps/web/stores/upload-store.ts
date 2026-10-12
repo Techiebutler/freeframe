@@ -430,11 +430,15 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * percent moves, and on a large file that can be many minutes apart, longer
  * than the window another tab gives a row before it offers Discard.
  *
- * `opts.onAllSent` runs once, when the browser has handed over the file's last
- * byte. That is not the end of the transfer: each part still waits for storage
- * to answer for it, after writing it, and behind a buffering proxy after
+ * `opts.onAllSent` runs when the browser has handed over the file's last byte.
+ * That is not the end of the transfer: each part still waits for storage to
+ * answer for it, after writing it, and behind a buffering proxy after
  * forwarding it too. The bar is already at 95 by then, so this is where the
  * wait the user sees begins.
+ *
+ * `opts.onResend` undoes it: a part that fails after every byte was sent gives
+ * its bytes back, and its retry is a transfer again, one a user may cancel.
+ * `onAllSent` runs again once the retry has sent them.
  *
  * `opts.onBytes` hears every byte count, not just whole-percent moves, for the
  * speed meter. It must not write to this store: see `useUploadSpeedStore`.
@@ -451,6 +455,7 @@ export async function uploadAllParts(
     alreadyHeld?: readonly number[]
     onPartDone?: () => void
     onAllSent?: () => void
+    onResend?: () => void
     onBytes?: (sent: number) => void
   },
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
@@ -500,6 +505,11 @@ export async function uploadAllParts(
     inFlightBytes.forEach((bytes) => {
       sent += bytes
     })
+    // Before onBytes, so the drop is the first count a restarted meter sees.
+    if (allSent && sent < file.size) {
+      allSent = false
+      opts?.onResend?.()
+    }
     opts?.onBytes?.(sent)
     if (!allSent && sent >= file.size) {
       allSent = true
@@ -797,6 +807,33 @@ function meterFor(fileId: string, totalBytes: number): SpeedMeter {
   return createSpeedMeter(totalBytes, (rate) => useUploadSpeedStore.getState().setRate(fileId, rate))
 }
 
+/**
+ * The `uploadAllParts` hooks that keep a row's `finalizing` flag and speed
+ * figure in step with its transfer: both end when the last byte is sent, and
+ * both come back if a part has to be sent again. `stop` ends the measurement
+ * for good, whichever way the transfer ended.
+ */
+function transferWatch(
+  fileId: string,
+  totalBytes: number,
+  patchRow: (patch: Partial<UploadFile>) => void,
+) {
+  let meter = meterFor(fileId, totalBytes)
+  return {
+    onBytes: (sent: number) => meter.sample(sent),
+    onAllSent: () => {
+      meter.stop()
+      patchRow({ finalizing: true })
+    },
+    onResend: () => {
+      meter.stop()
+      meter = meterFor(fileId, totalBytes)
+      patchRow({ finalizing: false })
+    },
+    stop: () => meter.stop(),
+  }
+}
+
 interface UploadStore {
   files: UploadFile[]
   /** Bumped when something here has changed an asset's versions server-side in
@@ -1047,7 +1084,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
 
       retainWakeLock()
       const stopBeat = beatFor((patch) => updateFile(id, patch))
-      const meter = meterFor(id, file.size)
+      const watch = transferWatch(id, file.size, (patch) => updateFile(id, patch))
       try {
         updateFile(id, { status: 'uploading' })
 
@@ -1108,11 +1145,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           {
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
-            onBytes: meter.sample,
-            onAllSent: () => {
-              meter.stop()
-              updateFile(id, { finalizing: true })
-            },
+            onBytes: watch.onBytes,
+            onAllSent: watch.onAllSent,
+            onResend: watch.onResend,
           },
         )
 
@@ -1191,7 +1226,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           await abortCancelled(set, { s3_key, upload_id, version_id })
         }
       } finally {
-        meter.stop()
+        watch.stop()
         stopBeat()
         releaseWakeLock()
         delete abortControllers[id]
@@ -1232,7 +1267,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let completionAttempted = false
       retainWakeLock()
       const stopBeat = beatFor((patch) => updateFile(id, patch))
-      const meter = meterFor(id, file.size)
+      const watch = transferWatch(id, file.size, (patch) => updateFile(id, patch))
       try {
         updateFile(id, { status: 'uploading' })
         const initRes = await api.post<VersionInitiateResponse>(
@@ -1257,11 +1292,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           {
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
-            onBytes: meter.sample,
-            onAllSent: () => {
-              meter.stop()
-              updateFile(id, { finalizing: true })
-            },
+            onBytes: watch.onBytes,
+            onAllSent: watch.onAllSent,
+            onResend: watch.onResend,
           },
         )
 
@@ -1307,7 +1340,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           await abortCancelled(set, { s3_key, upload_id, version_id })
         }
       } finally {
-        meter.stop()
+        watch.stop()
         stopBeat()
         releaseWakeLock()
         delete abortControllers[id]
@@ -1332,7 +1365,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let info: ResumeInfo | undefined
       let completionAttempted = false
       let stopBeat = () => {}
-      let meter: SpeedMeter | null = null
+      let watch: ReturnType<typeof transferWatch> | null = null
       retainWakeLock()
       try {
         // A resumed row may have stopped while finalizing.
@@ -1403,8 +1436,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           if (file.size !== info.file_size_bytes) {
             throw new Error('File does not match original')
           }
-          const resumeMeter = meterFor(fileId, file.size)
-          meter = resumeMeter
+          const resumeWatch = transferWatch(fileId, file.size, updateFile)
+          watch = resumeWatch
           parts = await uploadAllParts(
             file, info.s3_key, info.upload_id, controller,
             (percent) => updateFile({ progress: percent, heartbeatAt: Date.now() }),
@@ -1413,11 +1446,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
               chunkSize: info.chunk_size_bytes,
               alreadyHeld: held,
               onPartDone: () => updateFile({ heartbeatAt: Date.now() }),
-              onBytes: resumeMeter.sample,
-              onAllSent: () => {
-                resumeMeter.stop()
-                updateFile({ finalizing: true })
-              },
+              onBytes: resumeWatch.onBytes,
+              onAllSent: resumeWatch.onAllSent,
+              onResend: resumeWatch.onResend,
             },
           )
         }
@@ -1493,7 +1524,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           })
         }
       } finally {
-        meter?.stop()
+        watch?.stop()
         stopBeat()
         releaseWakeLock()
         delete abortControllers[fileId]
