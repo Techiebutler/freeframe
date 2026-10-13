@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Selection shortcuts on the project page.** ⌘-A (Ctrl-A on Windows and Linux) selects every asset and folder shown. Shift-click selects every asset between the last one you clicked and this one, and ⌘-click (Ctrl-click) adds an asset to the selection or takes it out. Both add to what's already selected, and neither changes which asset the side panel shows. Shift-click on an asset's checkbox selects a range too. Esc deselects everything, including the asset in the side panel. In a text field, dialog or menu, ⌘-A and Esc keep their usual meaning. The shortcuts are listed in the keyboard shortcuts panel (`?`). (by @jdanna)
+
 ## [1.17.0] - 2026-10-12
 
 Includes the fixes for two security advisories about the live-update stream: [GHSA-mq5v-rvfx-6mmh](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-mq5v-rvfx-6mmh) and [GHSA-85cc-6p7r-ppc4](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-85cc-6p7r-ppc4). Upgrading is recommended.

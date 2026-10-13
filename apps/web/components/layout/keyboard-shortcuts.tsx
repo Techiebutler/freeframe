@@ -52,6 +52,15 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    title: 'Project',
+    items: [
+      { keys: ['⌘', 'A'], label: 'Select all' },
+      { keys: ['Shift', 'Click'], label: 'Select a range of assets' },
+      { keys: ['⌘', 'Click'], label: 'Add / remove an asset from the selection' },
+      { keys: ['Esc'], label: 'Deselect all' },
+    ],
+  },
+  {
     title: 'Comments',
     items: [
       { keys: ['C'], label: 'Focus comment input' },

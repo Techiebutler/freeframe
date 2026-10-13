@@ -77,6 +77,12 @@ interface AssetGridProps {
   onAssetDelete?: (asset: Asset) => void
   /** Actions rendered on the right side of the navigator bar */
   actions?: React.ReactNode
+  /** ⌘/Ctrl-A selects everything shown, shift-click selects a range,
+   *  ⌘/Ctrl-click adds or removes one item, and Esc clears the selection. */
+  selectionShortcuts?: boolean
+  /** Esc with `selectionShortcuts`: clear what the page itself has selected
+   *  (the asset in the side panel), alongside the grid's own selection. */
+  onDeselectAll?: () => void
 }
 
 // Grid column classes based on card size
@@ -129,6 +135,8 @@ export function AssetGrid({
   onAssetRename,
   onAssetDelete,
   actions,
+  selectionShortcuts = false,
+  onDeselectAll,
 }: AssetGridProps) {
   const [selectedAssetIds, setSelectedAssetIds] = React.useState<Set<string>>(new Set())
   const [selectedFolderIds, setSelectedFolderIds] = React.useState<Set<string>>(new Set())
@@ -158,7 +166,11 @@ export function AssetGrid({
     sortDirection,
   } = useViewStore()
 
+  // Where a shift-click range starts: the last asset clicked or toggled.
+  const rangeAnchorRef = React.useRef<string | null>(null)
+
   const toggleAssetSelect = (assetId: string) => {
+    rangeAnchorRef.current = assetId
     setSelectedAssetIds((prev) => {
       const next = new Set(prev)
       if (next.has(assetId)) next.delete(assetId)
@@ -207,6 +219,78 @@ export function AssetGrid({
   }, [assets, sortKey, sortDirection])
 
   const showFolders = !flattenFolders && folders && folders.length > 0
+
+  /** Add every asset between the anchor and `assetId`, in the order shown. */
+  const selectAssetRange = (assetId: string) => {
+    const ids = filtered.map((a) => a.id)
+    const to = ids.indexOf(assetId)
+    const from = ids.indexOf(rangeAnchorRef.current ?? selectedAssetId ?? '')
+    const range = from === -1 ? [assetId] : ids.slice(Math.min(from, to), Math.max(from, to) + 1)
+    setSelectedAssetIds((prev) => new Set([...Array.from(prev), ...range]))
+  }
+
+  const handleAssetClick = (asset: Asset, e: React.MouseEvent) => {
+    if (isCoarsePointer()) return onAssetOpen?.(asset)
+    // Ctrl as well as ⌘ for Windows and Linux. On a Mac, Ctrl-click opens the
+    // context menu and never arrives here as a click.
+    const toggle = e.metaKey || e.ctrlKey
+    if (selectionShortcuts && (e.shiftKey || toggle)) {
+      // Not a click on the asset itself: the side panel keeps what it shows,
+      // and the page behind doesn't treat it as a click on empty space.
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.shiftKey) selectAssetRange(asset.id)
+      else toggleAssetSelect(asset.id)
+      return
+    }
+    rangeAnchorRef.current = asset.id
+    onAssetSelect?.(asset, e)
+  }
+
+  const handleAssetCheckbox = (assetId: string, e: React.MouseEvent) => {
+    if (selectionShortcuts && e.shiftKey) selectAssetRange(assetId)
+    else toggleAssetSelect(assetId)
+  }
+
+  // Shift-click would otherwise also select the page's text between clicks.
+  const suppressShiftTextSelection = (e: React.MouseEvent) => {
+    if (selectionShortcuts && e.shiftKey) e.preventDefault()
+  }
+
+  const hasSelection = selectedAssetIds.size > 0 || selectedFolderIds.size > 0 || !!selectedAssetId
+
+  React.useEffect(() => {
+    if (!selectionShortcuts) return
+    function handleKeyDown(e: KeyboardEvent) {
+      const isSelectAll =
+        (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a'
+      const isDeselect = e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey
+      if (!isSelectAll && !isDeselect) return
+      const target = e.target as HTMLElement
+      // Leave these keys to text fields (select this text / cancel the edit)
+      // and to dialogs and menus, which sit over the grid and close on Esc.
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable ||
+        target.closest('[role="dialog"], [role="menu"]')
+      ) return
+      if (isSelectAll) {
+        e.preventDefault()
+        setSelectedAssetIds(new Set(filtered.map((a) => a.id)))
+        setSelectedFolderIds(new Set(showFolders ? folders!.map((f) => f.id) : []))
+        return
+      }
+      if (!hasSelection) return
+      setSelectedAssetIds(new Set())
+      setSelectedFolderIds(new Set())
+      rangeAnchorRef.current = null
+      onDeselectAll?.()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [selectionShortcuts, filtered, folders, showFolders, hasSelection, onDeselectAll])
 
   if (isLoading) {
     return (
@@ -352,7 +436,8 @@ export function AssetGrid({
                 'rounded-lg transition-all cursor-pointer',
                 selectedAssetId === asset.id && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-primary',
               )}
-              onClick={(e) => (isCoarsePointer() ? onAssetOpen?.(asset) : onAssetSelect?.(asset, e))}
+              onClick={(e) => handleAssetClick(asset, e)}
+              onMouseDown={suppressShiftTextSelection}
               onDoubleClick={() => onAssetOpen?.(asset)}
             >
               <AssetCard
@@ -364,7 +449,7 @@ export function AssetGrid({
                 thumbnailUrl={thumbnails[asset.id]}
                 fileSize={fileSizes[asset.id] ?? null}
                 selected={selectedAssetIds.has(asset.id)}
-                onSelect={() => toggleAssetSelect(asset.id)}
+                onSelect={(e) => handleAssetCheckbox(asset.id, e)}
                 showInfo={showCardInfo}
                 showFileSize={showFileSize}
                 showUploader={showUploader}
@@ -524,7 +609,8 @@ export function AssetGrid({
             return (
               <div
                 key={asset.id}
-                onClick={(e) => (isCoarsePointer() ? onAssetOpen?.(asset) : onAssetSelect?.(asset, e))}
+                onClick={(e) => handleAssetClick(asset, e)}
+                onMouseDown={suppressShiftTextSelection}
                 onDoubleClick={() => onAssetOpen?.(asset)}
                 className={cn(
                   'group flex items-center gap-4 px-3 py-2 transition-colors hover:bg-bg-hover cursor-pointer',
@@ -545,7 +631,7 @@ export function AssetGrid({
                       'absolute inset-0 flex items-center justify-center transition-all',
                       selectedAssetIds.has(asset.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                     )}
-                    onClick={(e) => { e.stopPropagation(); toggleAssetSelect(asset.id) }}
+                    onClick={(e) => { e.stopPropagation(); handleAssetCheckbox(asset.id, e) }}
                   >
                     <div className={cn(
                       'h-4 w-4 rounded border flex items-center justify-center transition-all',
