@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Selection shortcuts on the project page.** ⌘-A (Ctrl-A on Windows and Linux) selects every asset and folder shown. Shift-click selects every asset between the last one you clicked and this one, and ⌘-click (Ctrl-click) adds an asset to the selection or takes it out. Both add to what's already selected, and neither changes which asset the side panel shows. Shift-click on an asset's checkbox selects a range too. Esc deselects everything, including the asset in the side panel. In a text field, dialog or menu, ⌘-A and Esc keep their usual meaning. The shortcuts are listed in the keyboard shortcuts panel (`?`). (by @jdanna)
+- **Selection shortcuts on the project page.** ⌘-A (Ctrl-A on Windows and Linux) selects every asset and folder shown. Shift-click selects every asset between the last one you clicked and this one, and ⌘-click (Ctrl-click) adds an asset to the selection or takes it out. Both add to what's already selected, and neither changes which asset the side panel shows. Shift-click on an asset's checkbox selects a range too. Esc deselects everything, including the asset in the side panel. In a text field, dialog or menu, ⌘-A and Esc keep their usual meaning. (by @jdanna)
+- **Press `?` for a list of keyboard shortcuts.** The panel existed but was never shown, and it listed several shortcuts that did nothing (⌘/, M, F, C and the N/G sequences). It now opens from any signed-in page and lists only shortcuts that work. (by @jdanna)
 
 ## [1.17.0] - 2026-10-12
 
