@@ -44,6 +44,7 @@ from ..services.auth_service import bcrypt_password_bytes
 from ..services.redis_service import create_share_session
 from ..services.search import escape_like
 from ..services.owned_keys import is_project_logo_key
+from ..services.avatar_keys import sign_avatar
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.crypto_service import encrypt_password, decrypt_password
 from .hls_proxy import create_hls_token
@@ -337,6 +338,10 @@ def _build_share_validate_response(
         created_by_name=created_by_name,
         viewer_name=current_user.name if current_user else None,
         viewer_email=current_user.email if current_user else None,
+        # Signed only if it is this user's own uploaded avatar, like every
+        # other user response.
+        viewer_avatar_url=sign_avatar(current_user.id, current_user.avatar_url) if current_user else None,
+        viewer_avatar_color=current_user.avatar_color if current_user else None,
         asset=asset_data,
         branding=branding_data,
         share_session=session_id,

@@ -54,6 +54,8 @@ interface FolderShareViewerProps {
   description: string | null
   createdByName?: string | null
   viewerName?: string | null
+  viewerAvatarUrl?: string | null
+  viewerAvatarColor?: string | null
   permission: SharePermission
   allowDownload: boolean
   showVersions: boolean
@@ -633,6 +635,8 @@ export function FolderShareViewer({
   description,
   createdByName,
   viewerName,
+  viewerAvatarUrl,
+  viewerAvatarColor,
   permission,
   allowDownload,
   showVersions,
@@ -843,8 +847,14 @@ export function FolderShareViewer({
           {viewerName ? (
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>
-                <button className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-text-primary bg-green-600 [@media(hover:hover)]:hover:ring-2 [@media(hover:hover)]:hover:ring-green-400/50 transition-all outline-none">
-                  {viewerName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
+                <button className="shrink-0 rounded-full [@media(hover:hover)]:hover:ring-2 [@media(hover:hover)]:hover:ring-green-400/50 transition-all outline-none">
+                  {/* Their picture, else initials on their own circle colour */}
+                  <Avatar
+                    src={viewerAvatarUrl}
+                    name={viewerName}
+                    color={viewerAvatarColor}
+                    className="h-7 w-7 text-[10px] font-bold bg-green-600"
+                  />
                 </button>
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>

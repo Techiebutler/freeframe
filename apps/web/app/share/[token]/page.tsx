@@ -44,6 +44,8 @@ interface ShareValidateResponse {
   created_by_name?: string | null
   viewer_name?: string | null
   viewer_email?: string | null
+  viewer_avatar_url?: string | null
+  viewer_avatar_color?: string | null
   branding?: ProjectBranding | null
   error?: string
 }
@@ -269,6 +271,8 @@ export default function SharePage({
         description: string | null
         createdByName: string | null
         viewerName: string | null
+        viewerAvatarUrl: string | null
+        viewerAvatarColor: string | null
         permission: SharePermission
         allowDownload: boolean
         showVersions: boolean
@@ -339,6 +343,8 @@ export default function SharePage({
           description: data.description ?? null,
           createdByName: data.created_by_name ?? null,
           viewerName: data.viewer_name ?? null,
+          viewerAvatarUrl: data.viewer_avatar_url ?? null,
+          viewerAvatarColor: data.viewer_avatar_color ?? null,
           permission: data.permission,
           allowDownload: data.allow_download ?? false,
           showVersions: data.show_versions ?? true,
@@ -431,6 +437,8 @@ export default function SharePage({
         description={state.description}
         createdByName={state.createdByName}
         viewerName={state.viewerName}
+        viewerAvatarUrl={state.viewerAvatarUrl}
+        viewerAvatarColor={state.viewerAvatarColor}
         permission={state.permission}
         allowDownload={state.allowDownload}
         showVersions={state.showVersions}
