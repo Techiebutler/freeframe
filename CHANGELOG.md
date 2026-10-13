@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Videos no longer start on 360p in Auto on a fast connection.** The player's first guess at your bandwidth was capped at 5 Mbps, below what 720p and 1080p renditions peak at, so playback began on the lowest rung and only climbed after a few seconds. It now starts from the bandwidth measured on your last playback (kept for a week), and a first-ever guess can reach 20 Mbps. If that proves too high, the player drops a rung as soon as a segment loads too slowly.
+
 ## [1.17.0] - 2026-10-12
 
 Includes the fixes for two security advisories about the live-update stream: [GHSA-mq5v-rvfx-6mmh](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-mq5v-rvfx-6mmh) and [GHSA-85cc-6p7r-ppc4](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-85cc-6p7r-ppc4). Upgrading is recommended.
