@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Appearance and sort menus on the Projects page.** Choose grid or list, and in grid a small, medium or large card size and whether cards show their info row. Sort projects by date created or by name, as you can inside a project. Your choices are saved to your account, so the page opens the way you left it on any device; it used to reset to the grid every visit.
+
+### Fixed
+- **Sorting by date says Newest or Oldest instead of Z-A or A-Z.** The sort menu inside a project labelled the date direction as if it were alphabetical.
+- **Picking a sort inside a project starts it in a sensible direction.** Date starts newest first and everything else A-Z; switching from Date to Name used to carry the direction over and list names Z-A.
+- **Sorting by name orders numbers by value.** "Shot 2" now comes before "Shot 10", and capitals no longer change the order.
+
 ## [1.17.0] - 2026-10-12
 
 Includes the fixes for two security advisories about the live-update stream: [GHSA-mq5v-rvfx-6mmh](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-mq5v-rvfx-6mmh) and [GHSA-85cc-6p7r-ppc4](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-85cc-6p7r-ppc4). Upgrading is recommended.
@@ -18,7 +26,6 @@ Includes the fixes for two security advisories about the live-update stream: [GH
 - **One migration** adds `instance_branding.default_login_mode`. Existing instances keep opening the sign-in page on magic code. (#464 by @jdanna)
 
 ### Added
-- **Appearance and sort menus on the Projects page.** Choose grid or list, and in grid a small, medium or large card size and whether cards show their info row. Sort projects by date created or by name, as you can inside a project. Your choices are saved to your account, so the page opens the way you left it on any device; it used to reset to the grid every visit.
 - **Delete users from Admin → Users.** Once a user is deactivated, a Delete button appears next to Reactivate and asks for confirmation. Deletion is a soft delete: the user leaves the list and can't sign in, and their comments and activity stay. The API only deletes users that are already deactivated, and a deleted user's email can't be invited again. (#464 by @jdanna)
 - **Default sign-in method under Admin → Instance Settings.** Choose whether the sign-in page opens on magic code or on email & password. People can still switch to the other method from the sign-in page. (#464 by @jdanna)
 
@@ -27,9 +34,6 @@ Includes the fixes for two security advisories about the live-update stream: [GH
 - **The upload progress bar moves while a part is being sent.** It used to count finished 10 MB parts, so on a slow uplink it stood still for minutes at a time and looked stalled. Parts are now sent with `XMLHttpRequest` instead of `fetch`, and progress is counted in bytes. The bar still updates at most once per whole percent, never goes past 95% before completion, and does not jump back when a part is retried: it holds until the retry has caught up. A resumed upload starts from the bytes the storage backend already holds. Retries, cancelling, resume and the parallel part uploads are unchanged. Every finished part still marks the upload as live for other tabs, as in #312, and the part PUT is still sent without a `Content-Type`. (#313, #469 by @Lennart-Pingpong)
 
 ### Fixed
-- **Sorting by date says Newest or Oldest instead of Z-A or A-Z.** The sort menu inside a project labelled the date direction as if it were alphabetical.
-- **Picking a sort inside a project starts it in a sensible direction.** Date starts newest first and everything else A-Z; switching from Date to Name used to carry the direction over and list names Z-A.
-- **Sorting by name orders numbers by value.** "Shot 2" now comes before "Shot 10", and capitals no longer change the order.
 - **Origins in `CORS_ALLOW_ORIGINS` can now upload and play media on a non-AWS store, not only call the API.** The bucket CORS rules set at startup allowed only `FRONTEND_URL` and `http://localhost:3000`, so on a store that enforces them (Garage, Silo) an extra origin could sign in and then failed on every upload and every HLS segment. The API and the bucket now read one origin list, and `*` becomes one rule allowing any origin. An entry S3 can't take as an origin (a `?`, or more than one `*`) is left out of the bucket rules with a warning, since S3 rejects the whole configuration over it. (#461)
 - **`.env.example` points the database, Redis and S3 at their compose service names instead of `localhost`.** The production compose takes these values from `.env.prod` without overriding them, so a deployment that followed the template had the app containers dialing themselves and failing with `connection to server at "localhost" ... refused`. With `S3_STORAGE=s3` the old `S3_ENDPOINT=http://localhost:9000` also stopped the API at startup; the new value is the built-in default, which AWS mode accepts. (#460)
 - **The `MINIO_CORS_*` variables are gone from the compose files, `.env.example` and the README.** MinIO never read those names, so they changed nothing; the bucket's CORS comes from FRONTEND_URL and CORS_ALLOW_ORIGINS. (#461)
