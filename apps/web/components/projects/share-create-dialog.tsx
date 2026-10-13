@@ -77,12 +77,22 @@ function AssetTypeIcon({ type, className }: { type: string; className?: string }
   }
 }
 
+// ─── Share URL helper ────────────────────────────────────────────────────────
+
+function buildShareUrl(token: string): string {
+  return typeof window !== 'undefined'
+    ? `${window.location.origin}${withBasePath(`/share/${token}`)}`
+    : withBasePath(`/share/${token}`)
+}
+
 // ─── Copy button ─────────────────────────────────────────────────────────────
 
-function CopyButton({ text, label }: { text: string; label?: string }) {
-  const [status, setStatus] = React.useState<'idle' | 'copied' | 'failed'>('idle')
+type CopyStatus = 'idle' | 'copied' | 'failed'
 
-  async function handleCopy() {
+function useCopyStatus(text: string) {
+  const [status, setStatus] = React.useState<CopyStatus>('idle')
+
+  async function copy() {
     const ok = await copyToClipboard(text)
     if (ok) {
       setStatus('copied')
@@ -93,11 +103,23 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
     }
   }
 
+  return { status, copy }
+}
+
+function CopyAnnouncer({ status }: { status: CopyStatus }) {
+  return (
+    <div className="sr-only" aria-live="polite" role="status">
+      {status === 'copied' ? 'URL copied to clipboard' : status === 'failed' ? 'Copy failed' : ''}
+    </div>
+  )
+}
+
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const { status, copy: handleCopy } = useCopyStatus(text)
+
   return (
     <>
-      <div className="sr-only" aria-live="polite" role="status">
-        {status === 'copied' ? 'URL copied to clipboard' : status === 'failed' ? 'Copy failed' : ''}
-      </div>
+      <CopyAnnouncer status={status} />
       <Button variant="secondary" size="sm" onClick={handleCopy}>
         {status === 'copied' ? (
           <>
@@ -277,9 +299,12 @@ interface ConfigurePhaseProps {
   onBack: () => void
   onCreate: (config: ShareConfig) => void
   creating: boolean
+  /** Set once the link exists; the settings lock and the footer offers Copy and Close */
+  createdUrl: string | null
+  onClose: () => void
 }
 
-function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigurePhaseProps) {
+function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, onClose }: ConfigurePhaseProps) {
   const [title, setTitle] = React.useState(defaultTitle)
   // Comments on, downloads off, matching ShareLinkCreate on the API. Both have to
   // move together or a link created through the API keeps the old behaviour while
@@ -292,6 +317,7 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
   const [watermark, setWatermark] = React.useState(false)
   const [expiresAt, setExpiresAt] = React.useState('')
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
+  const { status: copyStatus, copy } = useCopyStatus(createdUrl ?? '')
 
   function handleCreate() {
     onCreate({
@@ -310,11 +336,13 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div className="flex items-center gap-2 min-w-0">
-          <button onClick={onBack} className="text-text-tertiary hover:text-text-primary transition-colors shrink-0">
-            <ChevronLeft className="h-4 w-4" />
-          </button>
+          {!createdUrl && (
+            <button onClick={onBack} className="text-text-tertiary hover:text-text-primary transition-colors shrink-0">
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          )}
           <Dialog.Title className="text-sm font-semibold text-text-primary truncate">
-            Configure Share Link
+            {createdUrl ? 'Share Link Created' : 'Configure Share Link'}
           </Dialog.Title>
         </div>
         <Dialog.Close className="text-text-tertiary hover:text-text-primary transition-colors">
@@ -322,8 +350,11 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
         </Dialog.Close>
       </div>
 
-      {/* Content */}
-      <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+      {/* Content — locked once the link exists, since the settings are already applied */}
+      <fieldset
+        disabled={!!createdUrl}
+        className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto min-w-0 disabled:opacity-60"
+      >
         {/* Link name */}
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-text-secondary">Link name</label>
@@ -457,16 +488,58 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
             </Switch.Root>
           </div>
         </div>
-      </div>
+      </fieldset>
 
-      {/* Footer */}
-      <div className="flex items-center justify-end border-t border-border px-5 py-3 gap-2">
-        <Button variant="secondary" size="sm" onClick={onBack}>
-          Back
-        </Button>
-        <Button size="sm" onClick={handleCreate} loading={creating} disabled={creating}>
-          Create
-        </Button>
+      {/* Footer, one line: URL | Create→Copy | Back→Close. The buttons have
+          fixed widths and the footer's height doesn't change once the link
+          exists, so the dialog stays put and Copy lands exactly where Create
+          was. It is the same button element, so it keeps focus too. */}
+      <div className="flex items-center gap-3 border-t border-border px-5 py-3">
+        <div className="flex-1 min-w-0">
+          {createdUrl && (
+            <p className="truncate rounded-md border border-border bg-bg-tertiary px-3 py-1.5 font-mono text-xs text-text-primary">
+              {createdUrl}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <CopyAnnouncer status={copyStatus} />
+          <Button
+            size="sm"
+            className="w-24"
+            onClick={createdUrl ? copy : handleCreate}
+            loading={creating}
+            disabled={creating}
+          >
+            {!createdUrl ? (
+              'Create'
+            ) : copyStatus === 'copied' ? (
+              <>
+                <Check className="h-3.5 w-3.5" />
+                Copied!
+              </>
+            ) : copyStatus === 'failed' ? (
+              <>
+                <X className="h-3.5 w-3.5" />
+                Failed
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" />
+                Copy
+              </>
+            )}
+          </Button>
+          {createdUrl ? (
+            <Button key="close" variant="secondary" size="sm" className="w-20" onClick={onClose}>
+              Close
+            </Button>
+          ) : (
+            <Button key="back" variant="secondary" size="sm" className="w-20" onClick={onBack}>
+              Back
+            </Button>
+          )}
+        </div>
       </div>
     </>
   )
@@ -613,10 +686,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
     }).catch(() => {})
   }, [result.token])
 
-  const shareUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}${withBasePath(`/share/${result.token}`)}`
-      : withBasePath(`/share/${result.token}`)
+  const shareUrl = buildShareUrl(result.token)
 
   async function handleSaveTitle() {
     if (!title.trim() || title === result.title) {
@@ -989,6 +1059,7 @@ export function ShareCreateDialog({
   const [error, setError] = React.useState<string | null>(null)
   const [createdResult, setCreatedResult] = React.useState<CreatedShareResult | null>(null)
   const [allCreatedResults, setAllCreatedResults] = React.useState<CreatedShareResult[]>([])
+  const [createdUrl, setCreatedUrl] = React.useState<string | null>(null)
 
   // Compute default title from a given items map (avoids stale state reads)
   function computeDefaultTitle(items: Map<string, SelectedItem>): string {
@@ -1052,6 +1123,7 @@ export function ShareCreateDialog({
       setError(null)
       setCreatedResult(initialResult ?? null)
       setAllCreatedResults(initialResult ? [initialResult] : [])
+      setCreatedUrl(null)
     }
   }, [open, preselectedItem, preselectedItems, assets])
 
@@ -1132,7 +1204,8 @@ export function ShareCreateDialog({
       }
 
       onShareCreated()
-      onOpenChange(false)
+      // Stay open so the person can copy the new link; Create becomes Close.
+      setCreatedUrl(buildShareUrl(shareLink.token))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create share link')
     } finally {
@@ -1182,6 +1255,8 @@ export function ShareCreateDialog({
               onBack={preselectedItem ? () => onOpenChange(false) : () => setPhase('selection')}
               onCreate={handleCreate}
               creating={creating}
+              createdUrl={createdUrl}
+              onClose={handleDone}
             />
           ) : (
             <SelectionPhase

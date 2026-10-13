@@ -310,6 +310,7 @@ export interface ShareLinkListItem {
   target_name: string
   view_count: number
   last_viewed_at: string | null
+  created_at: string
 }
 
 export type ShareActivityAction = "opened" | "viewed_asset" | "commented" | "approved" | "rejected" | "downloaded"

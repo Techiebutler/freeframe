@@ -984,6 +984,7 @@ def list_project_share_links(
             Asset.name.label("target_name"),
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
+            ShareLink.created_at,
         )
         .join(Asset, ShareLink.asset_id == Asset.id)
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
@@ -1007,6 +1008,7 @@ def list_project_share_links(
             Folder.name.label("target_name"),
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
+            ShareLink.created_at,
         )
         .join(Folder, ShareLink.folder_id == Folder.id)
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
@@ -1030,6 +1032,7 @@ def list_project_share_links(
             ShareLink.title.label("target_name"),
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
+            ShareLink.created_at,
         )
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
         .filter(
@@ -1045,6 +1048,9 @@ def list_project_share_links(
         project_query = project_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
 
     results = asset_query.union_all(folder_query).union_all(project_query).all()
+    # Newest first. The union has no order of its own, and sorting here avoids
+    # ORDER BY column adaptation on a legacy Query union.
+    results = sorted(results, key=lambda row: row.created_at, reverse=True)
 
     return [
         ShareLinkListItem(
@@ -1058,6 +1064,7 @@ def list_project_share_links(
             target_name=row.target_name,
             view_count=row.view_count,
             last_viewed_at=row.last_viewed_at,
+            created_at=row.created_at,
         )
         for row in results
     ]
