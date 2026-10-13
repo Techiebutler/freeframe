@@ -3,7 +3,7 @@
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images, Link as LinkIcon, Pencil } from 'lucide-react'
-import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { cn, compareNames, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
@@ -193,7 +193,7 @@ export function AssetGrid({
         if (sortKey === 'date') {
           cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
         } else if (sortKey === 'name') {
-          cmp = a.name.localeCompare(b.name)
+          cmp = compareNames(a.name, b.name)
         } else if (sortKey === 'status') {
           cmp = statusOrder[a.status] - statusOrder[b.status]
         } else if (sortKey === 'type') {

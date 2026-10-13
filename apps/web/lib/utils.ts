@@ -110,6 +110,14 @@ export function formatRelativeTime(date: string): string {
 }
 
 /**
+ * Compare two names the way people read them: numbers by value, so
+ * "Project 2" sorts before "Project 10", and case ignored.
+ */
+export function compareNames(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+}
+
+/**
  * Truncate a string to the given length, appending "..." if truncated
  */
 export function truncate(str: string, length: number): string {

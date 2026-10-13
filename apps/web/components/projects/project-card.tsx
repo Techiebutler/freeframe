@@ -14,6 +14,8 @@ interface ProjectCardProps {
   project: Project
   showRole?: boolean
   isOwner?: boolean
+  /** Show the info row under the poster. */
+  showInfo?: boolean
   className?: string
   onMutate?: () => void
 }
@@ -22,6 +24,7 @@ export function ProjectCard({
   project,
   showRole,
   isOwner,
+  showInfo = true,
   className,
   onMutate,
 }: ProjectCardProps) {
@@ -97,13 +100,15 @@ export function ProjectCard({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between px-3 py-2.5">
-            <span className="text-2xs text-text-tertiary">
-              {assetCount > 0
-                ? `${assetCount} item${assetCount !== 1 ? 's' : ''} · ${formatBytes(project.storage_bytes ?? 0)}`
-                : `Updated ${formatRelativeTime(project.created_at)}`}
-            </span>
-          </div>
+          {showInfo && (
+            <div className="flex items-center justify-between px-3 py-2.5">
+              <span className="text-2xs text-text-tertiary">
+                {assetCount > 0
+                  ? `${assetCount} item${assetCount !== 1 ? 's' : ''} · ${formatBytes(project.storage_bytes ?? 0)}`
+                  : `Updated ${formatRelativeTime(project.created_at)}`}
+              </span>
+            </div>
+          )}
         </Link>
 
         {/* Context menu trigger */}
@@ -111,7 +116,13 @@ export function ProjectCard({
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
-                className="absolute bottom-2 right-2.5 flex h-7 w-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-all opacity-0 group-hover:opacity-100"
+                className={cn(
+                  'absolute flex h-7 w-7 items-center justify-center rounded-md transition-all opacity-0 group-hover:opacity-100',
+                  // Without the info row it sits on the poster, styled like the badges.
+                  showInfo
+                    ? 'bottom-2 right-2.5 text-text-tertiary hover:bg-bg-hover hover:text-text-primary'
+                    : 'top-2.5 right-2.5 bg-black/30 backdrop-blur-sm text-white/90 hover:bg-black/50 hover:text-white',
+                )}
                 onClick={(e) => { e.preventDefault(); e.stopPropagation() }}
               >
                 <MoreHorizontal className="h-4 w-4" />
