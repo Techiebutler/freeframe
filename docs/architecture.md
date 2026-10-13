@@ -124,7 +124,9 @@ Reviewer approves / rejects ──▶ SSE: approval_updated
    - The ladder is trimmed against the source resolution, so a small source never gets
      upscaled renditions. If every rung is above the source, the smallest is kept.
    - An optional NVENC/VAAPI hardware backend is selected at runtime when available, using
-     `-global_quality` in place of `-crf`, and falls back to software on failure. HDR and
+     `-global_quality` in place of `-crf`, and falls back to software on failure. A source
+     the GPU can't decode (ProRes, 4:2:2, 10-bit H.264) is decoded on the CPU and uploaded,
+     so the scale and encode stay on the GPU. HDR and
      Dolby Vision sources are tone-mapped to Rec.709, with the CRF adjusted either way.
 5. One thumbnail generated (`-vf thumbnail`, a single representative frame)
 6. All outputs uploaded to S3 under `processed/{project_id}/{asset_id}/{version_id}/`
@@ -217,8 +219,22 @@ All six are published through `event_service.publish_sync`, which is the single 
 is best-effort: every call site publishes after its commit, and a broker that is down or slow
 degrades to "no live update" rather than failing the request that produced it.
 
-Clients reconnect automatically on disconnect. SSE was chosen over WebSockets because it's
-simpler, works through most proxies, and is sufficient for an async review workflow.
+Access is checked when a stream connects and again for as long as it stays open, with the same
+rule both times: an active, undeleted account, an unexpired access token whose `ver` matches
+`users.token_version`, and a live project the user is a member of or that is public. An open
+stream re-checks before it delivers an event once its last check is older than
+`SSE_AUTH_MAX_AGE_SECONDS` (default 1), and every `SSE_AUTH_RECHECK_SECONDS` (default 15) while
+idle. Token expiry is exact rather than gated: the token's `exp` is compared before every write,
+and an idle stream wakes at `exp` to close. An idle stream is sent a keepalive at the recheck
+interval or every 30 seconds, whichever is shorter. Each check is one indexed query on its own
+short-lived session, so an open stream holds no database connection. When a check fails, the
+stream sends a final `revoked` event with `{reason}` (`access_revoked`, `token_expired` or
+`token_revoked`) and closes; a connection that fails the check is refused with 403.
+
+Clients reconnect automatically on disconnect. After `revoked`, `hooks/use-sse.ts` refreshes the
+token and reconnects for the two token reasons, and stops for `access_revoked`. SSE was chosen
+over WebSockets because it's simpler, works through most proxies, and is sufficient for an async
+review workflow.
 
 ---
 

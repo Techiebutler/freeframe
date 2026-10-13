@@ -1,7 +1,8 @@
 from fastapi import HTTPException, status
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 import uuid
-from ..models.user import User
+from ..models.user import User, UserStatus
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.asset import Asset
 from ..models.folder import Folder
@@ -55,6 +56,53 @@ def is_public_project(db: Session, project_id: uuid.UUID) -> bool:
         Project.deleted_at.is_(None),
     ).first()
     return project is not None and project.is_public
+
+
+# Reasons project_events_denial() can give. They are sent to the subscriber in
+# the stream's final `revoked` event, so the client can tell "sign in again"
+# (the token) apart from "you no longer have access" (everything else).
+EVENTS_TOKEN_EXPIRED = "token_expired"
+EVENTS_TOKEN_REVOKED = "token_revoked"
+EVENTS_ACCESS_REVOKED = "access_revoked"
+
+
+def project_events_denial(
+    db: Session,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    token_version: int,
+) -> str | None:
+    """Why this user, holding an access token minted at `token_version`, may not
+    receive the project's live events. None means they may.
+
+    The same rule as connecting to GET /events/{project_id}: a live, active
+    account whose token has not been revoked (token_version is bumped by a
+    password change), on a project that is not deleted, which the user is a
+    member of or which is public. An open event stream calls this repeatedly
+    for as long as it stays open, so it is a single indexed round trip.
+    Token expiry is not checked here; the caller has the token's `exp`.
+    """
+    is_member = exists().where(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == user_id,
+        ProjectMember.deleted_at.is_(None),
+    )
+    row = db.execute(
+        select(User.status, User.token_version, Project.is_public, is_member.label("is_member"))
+        .join(Project, Project.id == project_id)
+        .where(
+            User.id == user_id,
+            User.deleted_at.is_(None),
+            Project.deleted_at.is_(None),
+        )
+    ).first()
+    if row is None or row.status == UserStatus.deactivated:
+        return EVENTS_ACCESS_REVOKED
+    if row.token_version != token_version:
+        return EVENTS_TOKEN_REVOKED
+    if not (row.is_member or row.is_public):
+        return EVENTS_ACCESS_REVOKED
+    return None
 
 
 def can_access_asset(db: Session, asset: Asset, user: User) -> bool:
