@@ -26,6 +26,7 @@ import { useProjectsViewStore } from "@/stores/projects-view-store";
 import type { ViewLayout, CardSize } from "@/stores/view-store";
 import { sortProjects } from "@/lib/project-sort";
 import { usePageTitle } from "@/hooks/use-page-title";
+import { useProjectsViewReady } from "@/hooks/use-projects-view-ready";
 import type { Project, ProjectType } from "@/types";
 
 const projectGridColsMap: Record<CardSize, string> = {
@@ -33,11 +34,6 @@ const projectGridColsMap: Record<CardSize, string> = {
   M: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5",
   L: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
 };
-
-// Runs before paint in the browser, so the cached appearance replaces the
-// server-rendered defaults without a visible flash. useLayoutEffect warns on the server.
-const useIsomorphicLayoutEffect =
-  typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect;
 
 interface CreateProjectForm {
   name: string;
@@ -232,8 +228,10 @@ export default function ProjectsPage() {
     showCardInfo,
     sortKey,
     sortDirection,
-    syncFromServer,
   } = useProjectsViewStore();
+  // Until the user's appearance is known, draw no projects: anything drawn
+  // at the defaults would jump to their settings a moment later.
+  const viewReady = useProjectsViewReady();
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [isCreating, setIsCreating] = React.useState(false);
   const [formError, setFormError] = React.useState("");
@@ -272,17 +270,6 @@ export default function ProjectsPage() {
       ),
     [sortedProjects, user?.id],
   );
-
-  // Read this browser's cached appearance only after hydration, so the first
-  // client render matches the server's (default) HTML.
-  useIsomorphicLayoutEffect(() => {
-    useProjectsViewStore.persist.rehydrate();
-  }, []);
-
-  // The account's saved appearance wins over this browser's cached one.
-  React.useEffect(() => {
-    if (user?.preferences) syncFromServer(user.preferences);
-  }, [user?.preferences, syncFromServer]);
 
   const resetForm = () => {
     setForm({ name: "", description: "", project_type: "personal" });
@@ -334,7 +321,13 @@ export default function ProjectsPage() {
           )}
         </div>
 
-        <div className="order-last flex w-full items-center gap-1 sm:order-none sm:w-auto">
+        <div
+          className={cn(
+            "order-last flex w-full items-center gap-1 sm:order-none sm:w-auto",
+            // Keeps its space, so nothing shifts when the real labels appear.
+            !viewReady && "invisible",
+          )}
+        >
           <ProjectsAppearancePopover />
           <div className="h-4 w-px bg-border mx-0.5" />
           <ProjectsSortPopover />
@@ -417,7 +410,7 @@ export default function ProjectsPage() {
       </div>
 
       {/* Content */}
-      {isLoading ? (
+      {!viewReady ? null : isLoading ? (
         viewMode === "list" ? (
           <div className="rounded-xl border border-border overflow-hidden bg-bg-secondary">
             {Array.from({ length: 5 }).map((_, i) => (

@@ -15,7 +15,7 @@ export type ProjectSortKey = 'date' | 'name'
  *
  * The cache is not read when the store is created: the server renders the
  * defaults, so reading it then would make the first client render disagree
- * with the server's HTML. The page calls `persist.rehydrate()` once mounted.
+ * with the server's HTML. `useProjectsViewReady` reads it once mounted.
  */
 interface ProjectsViewSettings {
   layout: ViewLayout
@@ -34,6 +34,8 @@ interface ProjectsViewStore extends ProjectsViewSettings {
   /** Apply the account's saved value, if it has a valid one. */
   syncFromServer: (preferences: Record<string, unknown>) => void
 }
+
+export const PROJECTS_VIEW_STORAGE_KEY = 'freeframe-projects-view'
 
 const LAYOUTS: ViewLayout[] = ['grid', 'list']
 const CARD_SIZES: CardSize[] = ['S', 'M', 'L']
@@ -115,7 +117,7 @@ export const useProjectsViewStore = create<ProjectsViewStore>()(
       }
     },
     {
-      name: 'freeframe-projects-view',
+      name: PROJECTS_VIEW_STORAGE_KEY,
       skipHydration: true,
       partialize: (s) => ({
         layout: s.layout,
