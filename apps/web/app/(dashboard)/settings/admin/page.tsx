@@ -374,7 +374,7 @@ export default function AdminPage() {
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
-                        <Avatar src={u.avatar_url} name={u.name} size="sm" />
+                        <Avatar src={u.avatar_url} name={u.name} color={u.avatar_color} size="sm" />
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-text-primary truncate">
                             {u.name}

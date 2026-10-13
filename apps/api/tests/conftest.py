@@ -50,6 +50,7 @@ def _make_user(
     u.password_hash = _FAKE_HASH
     u.status = UserStatus.active
     u.avatar_url = None
+    u.avatar_color = None
     u.created_at = datetime.now(timezone.utc)
     u.deleted_at = None
     u.is_superadmin = False

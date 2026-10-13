@@ -51,7 +51,7 @@ def test_omitting_the_name_leaves_it_alone(client, mock_db, test_user, auth_head
     before = test_user.name
 
     resp = client.patch(
-        f"/users/{user_id}", json={"avatar_url": "https://example.test/a.png"},
+        f"/users/{user_id}", json={"avatar_color": "#112233"},
         headers=auth_headers,
     )
 

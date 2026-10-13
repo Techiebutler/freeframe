@@ -88,6 +88,7 @@ class AuthorInfo(BaseModel):
     id: uuid.UUID
     name: str
     avatar_url: Optional[str] = None
+    avatar_color: Optional[str] = None
 
     @model_validator(mode="after")
     def resolve_avatar_url(self) -> "AuthorInfo":

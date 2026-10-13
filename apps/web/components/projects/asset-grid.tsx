@@ -669,7 +669,7 @@ export function AssetGrid({
                 </div>
                 {/* Assignee */}
                 <div className="w-8 shrink-0 flex justify-center">
-                  {assignee && <Avatar src={assignee.avatar_url} name={assignee.name} size="sm" />}
+                  {assignee && <Avatar src={assignee.avatar_url} name={assignee.name} color={assignee.avatar_color} size="sm" />}
                 </div>
                 {/* Context menu — hidden until hover */}
                 <div className="w-8 shrink-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity">

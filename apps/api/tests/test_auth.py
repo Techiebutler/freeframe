@@ -29,6 +29,7 @@ def _mock_user(
     u.password_hash = password_hash
     u.status = UserStatus.active
     u.avatar_url = None
+    u.avatar_color = None
     u.token_version = 1
     u.created_at = datetime.now(timezone.utc)
     u.deleted_at = None

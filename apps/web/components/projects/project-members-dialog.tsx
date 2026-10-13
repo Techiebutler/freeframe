@@ -225,7 +225,7 @@ function AddView({
                     selectedUser?.id === user.id && 'bg-bg-hover',
                   )}
                 >
-                  <Avatar name={user.name} src={user.avatar_url} size="md" />
+                  <Avatar name={user.name} src={user.avatar_url} color={user.avatar_color} size="md" />
                   <span className="text-sm font-medium text-text-primary truncate">{user.name}</span>
                   <span className="text-sm text-text-tertiary truncate">{user.email}</span>
                 </button>
@@ -269,7 +269,7 @@ function AddView({
           {membersList.length > 0 && (
             <div className="flex -space-x-2">
               {membersList.slice(0, 5).map((m) => (
-                <Avatar key={m.id} name={m.user.name} src={m.user.avatar_url} size="sm" className="ring-2 ring-bg-secondary" />
+                <Avatar key={m.id} name={m.user.name} src={m.user.avatar_url} color={m.user.avatar_color} size="sm" className="ring-2 ring-bg-secondary" />
               ))}
             </div>
           )}
@@ -358,7 +358,7 @@ function ManageView({
               key={m.id}
               className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-bg-hover/50 transition-colors group"
             >
-              <Avatar name={m.user.name} src={m.user.avatar_url} size="md" />
+              <Avatar name={m.user.name} src={m.user.avatar_url} color={m.user.avatar_color} size="md" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5">
                   <p className="text-sm font-medium text-text-primary truncate">{m.user.name}</p>

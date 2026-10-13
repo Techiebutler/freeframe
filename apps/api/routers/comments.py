@@ -238,7 +238,10 @@ def _build_comment_response(
     if comment.author_id:
         author = db.query(User).filter(User.id == comment.author_id).first()
         if author:
-            author_info = AuthorInfo(id=author.id, name=author.name, avatar_url=author.avatar_url)
+            author_info = AuthorInfo(
+                id=author.id, name=author.name,
+                avatar_url=author.avatar_url, avatar_color=author.avatar_color,
+            )
 
     guest_author_info = None
     if comment.guest_author_id:
@@ -340,7 +343,10 @@ def _build_comment_responses_batched(
         resp = CommentResponse.model_validate(comment)
         author = authors.get(comment.author_id) if comment.author_id else None
         resp.author = (
-            AuthorInfo(id=author.id, name=author.name, avatar_url=author.avatar_url)
+            AuthorInfo(
+                id=author.id, name=author.name,
+                avatar_url=author.avatar_url, avatar_color=author.avatar_color,
+            )
             if author else None
         )
         guest = guests.get(comment.guest_author_id) if comment.guest_author_id else None

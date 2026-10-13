@@ -8,6 +8,7 @@ function makeUser(overrides: Partial<User>): User {
     email: 'u@example.com',
     name: 'U',
     avatar_url: null,
+    avatar_color: null,
     status: 'active',
     is_superadmin: false,
     email_verified: true,

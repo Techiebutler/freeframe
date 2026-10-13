@@ -47,6 +47,11 @@ def _require_non_blank_name(v: str) -> str:
 # bound is applied before trimming, so the stored value is always within it.
 DisplayName = Annotated[str, Field(min_length=1, max_length=255), AfterValidator(_require_non_blank_name)]
 
+# A `#rrggbb` colour, stored lowercase so the same colour is always the same
+# string. Six digits only: `User.avatar_color` is String(7), and the frontend
+# colour input emits nothing else.
+HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$"), AfterValidator(str.lower)]
+
 class LoginRequest(BaseModel):
     email: EmailStr
     # No length bounds on login. A creation-side floor prevents new weak
@@ -72,6 +77,7 @@ class UserResponse(BaseModel):
     email: str
     name: str
     avatar_url: str | None
+    avatar_color: str | None = None
     status: UserStatus
     email_verified: bool = False
     is_superadmin: bool = False
@@ -143,6 +149,13 @@ class UpdateProfileRequest(BaseModel):
     # is only ever set by the avatar upload confirm step, which checks the key
     # is under the caller's own prefix. A client that still sends it gets the
     # usual extra-field treatment: ignored.
+    #
+    # Unlike `name`, an explicit null is meaningful (back to the default
+    # colour), so the router checks `model_fields_set` rather than `is None`.
+    avatar_color: HexColor | None = None
+
+class AvatarConfirmRequest(BaseModel):
+    key: str
 
 class UpdateUserRoleRequest(BaseModel):
     is_admin: bool

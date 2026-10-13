@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Avatar } from '@/components/shared/avatar'
+import { ProfileAvatarEditor } from '@/components/settings/profile-avatar-editor'
 import { setTokens } from '@/lib/auth'
 
 export default function ProfilePage() {
@@ -113,15 +113,7 @@ export default function ProfilePage() {
           Profile
         </h2>
 
-        <div className="flex items-center gap-4">
-          <Avatar src={user?.avatar_url} name={user?.name} size="lg" />
-          <div>
-            <p className="text-sm font-medium text-text-primary">
-              {user?.name ?? 'Loading...'}
-            </p>
-            <p className="text-xs text-text-tertiary">{user?.email ?? ''}</p>
-          </div>
-        </div>
+        <ProfileAvatarEditor />
 
         <form onSubmit={handleProfileSave} className="space-y-4">
           <div className="space-y-1.5">

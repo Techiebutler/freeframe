@@ -5,12 +5,15 @@ import { createPortal } from 'react-dom'
 import { Pause, Play, RotateCcw } from 'lucide-react'
 import { cn, formatTimecode } from '@/lib/utils'
 import { frameStep, markerPosition, type SideTiming } from '@/lib/compare-time'
-import { getAvatarColor, getInitials } from '@/components/review/progress-bar'
+import { getAvatarColor } from '@/components/review/progress-bar'
+import { Avatar } from '@/components/shared/avatar'
 
 export interface ScrubberMarker {
   id: string
   tc: number
   authorName: string
+  avatarUrl?: string | null
+  avatarColor?: string | null
   body: string
   hasAnnotation: boolean
 }
@@ -60,7 +63,6 @@ function ScrubberCommentMarker({
 }) {
   const markerRef = React.useRef<HTMLDivElement>(null)
   const [tooltipPos, setTooltipPos] = React.useState<{ left: number; top: number } | null>(null)
-  const initials = getInitials(marker.authorName)
   const color = getAvatarColor(marker.authorName)
 
   // Recalculate tooltip position when hovered to avoid viewport clipping.
@@ -95,12 +97,13 @@ function ScrubberCommentMarker({
       onClick={onClick}
     >
       {/* Avatar dot */}
-      <div
-        className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-bg-primary text-[9px] font-bold text-white shadow-md transition-transform [@media(hover:hover)]:hover:scale-110"
+      <Avatar
+        src={marker.avatarUrl}
+        name={marker.authorName}
+        color={marker.avatarColor}
+        className="h-5 w-5 border-2 border-bg-primary text-[9px] font-bold text-white shadow-md transition-transform [@media(hover:hover)]:hover:scale-110"
         style={{ backgroundColor: color }}
-      >
-        {initials}
-      </div>
+      />
 
       {/* Tooltip — portaled to document.body to escape all overflow */}
       {isHovered && tooltipPos && createPortal(
@@ -117,12 +120,13 @@ function ScrubberCommentMarker({
         >
           <div className="bg-[#1e1e22] border border-white/10 rounded-lg shadow-2xl p-3">
             <div className="flex items-center gap-2 mb-1.5">
-              <div
-                className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
+              <Avatar
+                src={marker.avatarUrl}
+                name={marker.authorName}
+                color={marker.avatarColor}
+                className="w-5 h-5 text-[9px] font-bold text-white"
                 style={{ backgroundColor: color }}
-              >
-                {initials}
-              </div>
+              />
               <span className="text-xs font-medium text-white truncate">{marker.authorName}</span>
               <span className="ml-auto text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
                 {formatTimecode(marker.tc, fps ?? 24)}

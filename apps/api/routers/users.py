@@ -1,10 +1,13 @@
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 import uuid
 import secrets
 from datetime import datetime, timezone, timedelta
 from ..database import get_db
-from ..schemas.auth import UserResponse, AdminUserResponse, InviteRequest, UpdateProfileRequest
+from ..schemas.auth import (
+    UserResponse, AdminUserResponse, InviteRequest, UpdateProfileRequest, AvatarConfirmRequest,
+)
 from ..models.user import User, UserStatus
 from ..middleware.auth import get_current_user
 from ..services.auth_service import hash_password
@@ -103,26 +106,55 @@ def update_user(user_id: uuid.UUID, body: UpdateProfileRequest, db: Session = De
     if body.name is not None:
         # Already trimmed and checked non-blank by `DisplayName`.
         user.name = body.name
+    if "avatar_color" in body.model_fields_set:
+        # An explicit null resets to the default colour; omitting it leaves it.
+        user.avatar_color = body.avatar_color
     db.commit()
     db.refresh(user)
     return user
 
 
 
+# The frontend crops and re-encodes every avatar before upload, so these are
+# the only types it sends. Anything else is refused rather than signed: the
+# object is served back from the bucket with whatever type it was stored as.
+AVATAR_CONTENT_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+}
+# The frontend uploads a 256px square, a few tens of KB. The ceiling is only
+# there so a client calling the API directly can't make every avatar on every
+# comment a multi-megabyte download.
+AVATAR_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _get_own_user(db: Session, user_id: uuid.UUID, current_user: User, detail: str) -> User:
+    """The target user, if the caller is that user or a superadmin."""
+    if current_user.id != user_id and not current_user.is_superadmin:
+        raise HTTPException(status_code=403, detail=detail)
+    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
 @router.post("/{user_id}/avatar-upload", status_code=status.HTTP_201_CREATED)
 def get_avatar_upload_url(
     user_id: uuid.UUID,
-    content_type: str = Query(default="image/png", description="MIME type of the avatar file"),
+    content_type: str = Query(default="image/png", description="MIME type of the avatar file: image/png, image/jpeg or image/webp"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Generate a presigned S3 URL for uploading a profile avatar."""
-    if current_user.id != user_id and not current_user.is_superadmin:
-        raise HTTPException(status_code=403, detail="Can only upload your own avatar")
-    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    key = f"avatars/{user_id}/{uuid.uuid4()}"
+    _get_own_user(db, user_id, current_user, "Can only upload your own avatar")
+    ext = AVATAR_CONTENT_TYPES.get(content_type)
+    if not ext:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Avatar must be one of: {', '.join(AVATAR_CONTENT_TYPES)}",
+        )
+    key = f"avatars/{user_id}/{uuid.uuid4()}.{ext}"
     upload_url = s3_service.generate_presigned_put_url(key, content_type=content_type, expires_in=3600)
     return {"upload_url": upload_url, "key": key}
 
@@ -130,21 +162,30 @@ def get_avatar_upload_url(
 @router.post("/{user_id}/avatar-confirm", response_model=UserResponse)
 def confirm_avatar_upload(
     user_id: uuid.UUID,
-    body: dict,
+    body: AvatarConfirmRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Confirm avatar upload: generate a presigned GET URL and update the user."""
-    if current_user.id != user_id and not current_user.is_superadmin:
-        raise HTTPException(status_code=403, detail="Can only update your own avatar")
-    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    s3_key = body.get("key")
+    """Confirm avatar upload: point the user at the uploaded object."""
+    user = _get_own_user(db, user_id, current_user, "Can only update your own avatar")
+    s3_key = body.key
     if not s3_key:
         raise HTTPException(status_code=400, detail="key is required")
     if not isinstance(s3_key, str) or not is_own_avatar_key(user.id, s3_key):
         raise HTTPException(status_code=400, detail="Invalid key for this user")
+    try:
+        size = s3_service.head_object_size(s3_key)
+    except s3_service.ObjectSizeUnavailable:
+        # The object is there, storage just won't say how big. The cap is a
+        # guard against direct API callers, not worth refusing a real upload.
+        size = 0
+    except (ClientError, BotoCoreError):
+        raise HTTPException(status_code=503, detail="Could not check the upload, try again")
+    if size is None:
+        raise HTTPException(status_code=400, detail="Avatar upload not found")
+    if size > AVATAR_MAX_BYTES:
+        delete_own_avatar(user.id, s3_key)
+        raise HTTPException(status_code=400, detail="Avatar must be under 2 MB")
     old_key = user.avatar_url
     user.avatar_url = s3_key
     db.commit()
@@ -154,6 +195,24 @@ def confirm_avatar_upload(
     # any object in the bucket.
     if old_key != s3_key:
         delete_own_avatar(user.id, old_key)
+    return user
+
+
+@router.delete("/{user_id}/avatar", response_model=UserResponse)
+def remove_avatar(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove the user's profile picture; they fall back to initials."""
+    user = _get_own_user(db, user_id, current_user, "Can only remove your own avatar")
+    old_key = user.avatar_url
+    user.avatar_url = None
+    db.commit()
+    db.refresh(user)
+    # After the commit, and only if the stored key is this user's own: a row
+    # written before the key guard existed can name any object in the bucket.
+    delete_own_avatar(user.id, old_key)
     return user
 
 

@@ -45,3 +45,11 @@ export function accentVars(color: string | null | undefined): Record<string, str
     '--accent-muted': `color-mix(in srgb, ${color} 18%, var(--bg-secondary))`,
   }
 }
+
+/** Text colour for initials drawn on a user-chosen avatar colour: whichever of
+ *  near-white and near-black reads better against it. */
+export function readableTextOn(color: string): string {
+  const rgb = parseHex(color)
+  if (!rgb) return '#ffffff'
+  return luminance(rgb) > 0.6 ? '#18181b' : '#ffffff'
+}

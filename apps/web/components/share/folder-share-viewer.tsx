@@ -27,6 +27,7 @@ import { useReviewStore } from '@/stores/review-store'
 import { fetchDownloadUrl, handleDownload, triggerDownload } from './share-download'
 import { ShareReviewScreen } from './share-review-screen'
 import { useBranding } from '@/components/shared/branding-provider'
+import { Avatar } from '@/components/shared/avatar'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -389,7 +390,7 @@ interface GuestComment {
   guest_name: string
   guest_email: string
   author_name?: string
-  author?: { id: string; name: string; avatar_url?: string | null } | null
+  author?: { id: string; name: string; avatar_url?: string | null; avatar_color?: string | null } | null
   guest_author?: { id: string; name: string; email: string } | null
   created_at: string
   timecode_start?: number | null
@@ -498,9 +499,12 @@ function ShareCommentList({ comments, loading, canComment, onReply }: ShareComme
           <div key={comment.id} className="py-3 border-b border-border last:border-0">
             {/* Comment header */}
             <div className="flex items-start gap-3">
-              <div className={cn('h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-text-primary shrink-0', color)}>
-                {name.charAt(0).toUpperCase()}
-              </div>
+              <Avatar
+                src={comment.author?.avatar_url}
+                name={name}
+                color={comment.author?.avatar_color}
+                className={cn('font-bold', color)}
+              />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-text-primary">{name}</span>
@@ -529,9 +533,13 @@ function ShareCommentList({ comments, loading, canComment, onReply }: ShareComme
                   const rColor = getAvatarColor(rName)
                   return (
                     <div key={r.id} className="flex items-start gap-2.5 py-1">
-                      <div className={cn('h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-bold text-text-primary shrink-0', rColor)}>
-                        {rName.charAt(0).toUpperCase()}
-                      </div>
+                      <Avatar
+                        src={r.author?.avatar_url}
+                        name={rName}
+                        color={r.author?.avatar_color}
+                        size="sm"
+                        className={cn('text-[10px] font-bold', rColor)}
+                      />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-text-primary">{rName}</span>

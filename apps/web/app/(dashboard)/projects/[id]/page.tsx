@@ -1174,7 +1174,13 @@ export default function ProjectDetailPage() {
                               Assignee
                             </span>
                             <div className="flex items-center gap-1.5">
-                              <Avatar size="sm" className="h-5 w-5" />
+                              <Avatar
+                                src={assigneesMap[selectedAsset.assignee_id].avatar_url}
+                                name={assigneesMap[selectedAsset.assignee_id].name}
+                                color={assigneesMap[selectedAsset.assignee_id].avatar_color}
+                                size="sm"
+                                className="h-5 w-5"
+                              />
                               <span className="text-xs text-text-primary">
                                 {assigneesMap[selectedAsset.assignee_id].name}
                               </span>

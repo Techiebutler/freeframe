@@ -6,6 +6,7 @@ import Hls from 'hls.js'
 import { cn, formatTimecode } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import type { Comment } from '@/types'
+import { Avatar } from '@/components/shared/avatar'
 
 // ─── Avatar helpers ───────────────────────────────────────────────────────────
 
@@ -20,12 +21,6 @@ export function getAvatarColor(name: string): string {
     hash = name.charCodeAt(i) + ((hash << 5) - hash)
   }
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
-}
-
-export function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/)
-  if (parts.length === 1) return parts[0].charAt(0).toUpperCase()
-  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase()
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -151,7 +146,6 @@ interface CommentMarkerProps {
   index: number
   leftPercent: number
   authorName: string
-  initials: string
   color: string
   isHovered: boolean
   isFocused: boolean
@@ -165,7 +159,6 @@ function CommentMarker({
   index,
   leftPercent,
   authorName,
-  initials,
   color,
   isHovered,
   isFocused,
@@ -215,15 +208,16 @@ function CommentMarker({
       onClick={handleClick}
     >
       {/* Avatar dot */}
-      <div
+      <Avatar
+        src={comment.author?.avatar_url}
+        name={authorName}
+        color={comment.author?.avatar_color}
         className={cn(
-          'w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shadow-md border-2 transition-transform hover:scale-110',
+          'w-5 h-5 text-[9px] font-bold text-white shadow-md border-2 transition-transform hover:scale-110',
           isFocused ? 'border-accent scale-125 ring-2 ring-accent/40' : 'border-bg-primary',
         )}
         style={{ backgroundColor: color }}
-      >
-        {initials}
-      </div>
+      />
 
       {/* Tooltip — portaled to document.body to escape all overflow */}
       {isHovered && tooltipPos && createPortal(
@@ -240,12 +234,13 @@ function CommentMarker({
         >
           <div className="bg-[#1e1e22] border border-white/10 rounded-lg shadow-2xl p-3">
             <div className="flex items-center gap-2 mb-1.5">
-              <div
-                className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
+              <Avatar
+                src={comment.author?.avatar_url}
+                name={authorName}
+                color={comment.author?.avatar_color}
+                className="w-5 h-5 text-[9px] font-bold text-white"
                 style={{ backgroundColor: color }}
-              >
-                {initials}
-              </div>
+              />
               <span className="text-xs font-medium text-white truncate">{authorName}</span>
               {comment.timecode_start !== null && (
                 <span className="ml-auto text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
@@ -478,7 +473,6 @@ export function ProgressBar({
             if (c.timecode_start === null) return null
             const left = timeToPercent(c.timecode_start)
             const authorName = c.author?.name ?? c.guest_author?.name ?? 'Unknown'
-            const initials = getInitials(authorName)
             const color = getAvatarColor(authorName)
             const isHovered = hoveredCommentId === c.id
 
@@ -489,7 +483,6 @@ export function ProgressBar({
                 index={idx}
                 leftPercent={left}
                 authorName={authorName}
-                initials={initials}
                 color={color}
                 isHovered={isHovered}
                 isFocused={focusedCommentId === c.id}

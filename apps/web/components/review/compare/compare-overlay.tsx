@@ -238,6 +238,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     .map((c) => ({
       id: c.id, tc: c.timecode_start as number,
       authorName: c.author?.name ?? c.guest_author?.name ?? 'Unknown',
+      avatarUrl: c.author?.avatar_url, avatarColor: c.author?.avatar_color,
       body: c.body, hasAnnotation: Boolean(c.annotation),
     }))
   const markersB: ScrubberMarker[] = sideB.comments
@@ -245,6 +246,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     .map((c) => ({
       id: c.id, tc: c.timecode_start as number,
       authorName: c.author?.name ?? c.guest_author?.name ?? 'Unknown',
+      avatarUrl: c.author?.avatar_url, avatarColor: c.author?.avatar_color,
       body: c.body, hasAnnotation: Boolean(c.annotation),
     }))
 

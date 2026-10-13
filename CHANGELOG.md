@@ -9,12 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 - **One migration** adds `instance_settings.upload_part_size_bytes` (default 0, automatic sizing). (#483 by @jdanna)
+- **One migration** adds `users.avatar_color`. Everyone starts with no color, which looks the same as before. (#487 by @jdanna)
 
 ### Added
 - **The uploads panel shows each upload's speed and time left**, right-aligned on the line with its percentage. Speed is smoothed over the last few seconds and drops toward zero if the transfer stalls. (#483 by @jdanna)
 - **Upload part size in Instance Settings.** In Admin Dashboard → Instance settings, admins can keep Automatic sizing or cut every upload into a fixed part size from 5 to 512 MB. With a fixed size, a file that would need more than 10,000 parts is refused before anything is uploaded, with a message naming the largest file that size allows. (#483 by @jdanna)
 - **Selection shortcuts on the project page.** ⌘-A (Ctrl-A on Windows and Linux) selects every asset and folder shown. Shift-click selects every asset between the last one you clicked and this one, and ⌘-click (Ctrl-click) adds an asset to the selection or takes it out. Both add to what's already selected, and neither changes which asset the side panel shows. Shift-click on an asset's checkbox selects a range too. Esc deselects everything, including the asset in the side panel. In a text field, dialog or menu, ⌘-A and Esc keep their usual meaning. (#488 by @jdanna)
 - **Press `?` for a list of keyboard shortcuts.** The panel existed but was never shown, and it listed several shortcuts that did nothing (⌘/, M, F, C and the N/G sequences). It now opens from any signed-in page and lists only shortcuts that work. (#488 by @jdanna)
+- **Profile pictures.** Upload, replace or remove one under Settings → Profile. The picture is cropped to a square and scaled down to 256px in the browser before it's uploaded, so a phone photo doesn't become a multi-megabyte download on every comment. It shows wherever you appear: comments and replies (including on share links), timeline comment markers, the compare view, approvals, assignees, project members, the sidebar and Admin → Users. Comments and markers used to show initials only, even for someone who had a picture. (#487 by @jdanna)
+- **A circle color for people without a picture.** It's set under Settings → Profile, next to the picture, and replaces the default color behind your initials everywhere they're shown. Reset goes back to the default. (#487 by @jdanna)
 
 ### Changed
 - **Large uploads are cut into fewer, larger parts.** Every upload used to go up in 10 MB parts, so a 50 GB file was 5,000 of them, and completing an upload makes the storage backend read back and assemble every part. Files up to about 5 GB still use 10 MB parts; bigger files now get parts sized to hold about 500, up to 256 MB each. The largest file an upload can hold rises from about 97.7 GB to about 2.4 TB. Uploads already in progress keep the size they started with. (#483 by @jdanna)

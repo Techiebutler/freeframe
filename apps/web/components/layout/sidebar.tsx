@@ -234,7 +234,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 )}
                 title={collapsed ? (user?.name ?? 'Account') : undefined}
               >
-                <Avatar src={user?.avatar_url} name={user?.name} size="sm" />
+                <Avatar src={user?.avatar_url} name={user?.name} color={user?.avatar_color} size="sm" />
                 {!collapsed && (
                   <div className="flex flex-col items-start overflow-hidden min-w-0">
                     <span className="truncate text-[13px] font-medium text-text-primary leading-tight w-full text-left">

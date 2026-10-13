@@ -38,6 +38,7 @@ import {
   type ExportFormat,
 } from "@/lib/export-comments";
 import { FpsPromptDialog } from "@/components/review/fps-prompt-dialog";
+import { Avatar } from "@/components/shared/avatar";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -123,12 +124,6 @@ function getAvatarColor(name: string): string {
     hash = name.charCodeAt(i) + ((hash << 5) - hash);
   }
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-}
-
-function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
-  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
 // ─── useClickOutside ─────────────────────────────────────────────────────────
@@ -513,15 +508,13 @@ function CommentItem({
       }}
     >
       <div className="flex gap-2.5 py-3">
-        {/* Colored avatar */}
-        <div
-          className={cn(
-            "h-8 w-8 rounded-full flex items-center justify-center text-[11px] font-bold text-text-inverse shrink-0 mt-0.5",
-            avatarColor,
-          )}
-        >
-          {getInitials(authorName)}
-        </div>
+        {/* Profile picture, else initials on the author's colour */}
+        <Avatar
+          src={comment.author?.avatar_url}
+          name={authorName}
+          color={comment.author?.avatar_color}
+          className={cn("text-[11px] font-bold text-text-inverse mt-0.5", avatarColor)}
+        />
 
         <div className="flex-1 min-w-0">
           {/* Header row */}

@@ -48,6 +48,7 @@ export interface User {
   email: string;
   name: string;
   avatar_url: string | null;
+  avatar_color: string | null;
   status: UserStatus;
   is_superadmin: boolean;
   email_verified: boolean;
@@ -187,6 +188,7 @@ export interface CommentAuthor {
   id: string;
   name: string;
   avatar_url: string | null;
+  avatar_color?: string | null;
 }
 
 export interface GuestAuthor {
