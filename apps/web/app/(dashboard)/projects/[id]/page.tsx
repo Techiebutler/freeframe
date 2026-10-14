@@ -768,6 +768,8 @@ export default function ProjectDetailPage() {
               authorNames={authorNames}
               fileSizes={fileSizes}
               selectedAssetId={selectedAsset?.id}
+              selectionShortcuts
+              onDeselectAll={() => setSelectedAsset(null)}
               onUpload={() => setUploadOpen(true)}
               onAssetSelect={(asset, e) => {
                 e?.stopPropagation();

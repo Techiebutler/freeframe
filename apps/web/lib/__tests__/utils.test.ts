@@ -4,6 +4,7 @@ import {
   formatTimecode,
   formatBytes,
   formatRelativeTime,
+  formatTimeLeft,
   truncate,
   cn,
   storageMeterState,
@@ -213,5 +214,17 @@ describe('uploadNameForFile', () => {
 
   it('keeps a name that is nothing but an extension', () => {
     expect(uploadNameForFile('.gitignore', '', 2)).toBe('.gitignore')
+  })
+})
+
+describe('formatTimeLeft', () => {
+  it.each([
+    [20, '< 1 min left'],
+    [60, '1 min left'],
+    [150, '3 min left'],        // rounded up: never promise less than is left
+    [3600, '1 h left'],
+    [4800, '1 h 20 min left'],
+  ])('%s s reads "%s"', (seconds, expected) => {
+    expect(formatTimeLeft(seconds)).toBe(expected)
   })
 })

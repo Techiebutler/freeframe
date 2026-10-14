@@ -30,13 +30,14 @@ def abort_rows(mock_db, test_user):
     version.asset_id = uuid.uuid4()
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
+    version.upload_id = "u-1"
 
     media_file = MagicMock()
     media_file.version_id = version.id
     media_file.s3_key_raw = KEY
     media_file.file_size_bytes = 23 * MB
 
-    # version lookup, then (only on the uploading path) the media file lookup
+    # version lookup, then the media file lookup that pins the key being aborted
     mock_db.first.side_effect = [version, media_file]
     return version, media_file
 
@@ -111,7 +112,10 @@ def test_a_version_that_already_reached_processing_is_left_alone(
     version = MagicMock()
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.processing
-    mock_db.first.side_effect = [version]
+    version.upload_id = "u-1"
+    media_file = MagicMock()
+    media_file.s3_key_raw = KEY
+    mock_db.first.side_effect = [version, media_file]
     monkeypatch.setattr(upload_module, "abort_multipart_upload", lambda k, u: None)
     monkeypatch.setattr(upload_module, "head_object_size",
                         lambda k: pytest.fail("must not even ask"))

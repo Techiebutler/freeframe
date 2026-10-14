@@ -18,6 +18,7 @@ from ..schemas.branding import (
 )
 from ..services.permissions import require_project_role, require_asset_access
 from ..services import s3_service
+from ..services.owned_keys import is_project_logo_key, project_logo_prefix, sign_if_owned
 from ..config import settings
 
 router = APIRouter(tags=["branding"])
@@ -52,11 +53,13 @@ def _get_or_create_watermark(db: Session, project_id: uuid.UUID) -> WatermarkSet
 
 def _branding_to_response(branding: ProjectBranding) -> BrandingResponse:
     resp = BrandingResponse.model_validate(branding)
-    if branding.logo_s3_key:
-        try:
-            resp.logo_url = s3_service.generate_presigned_get_url(branding.logo_s3_key)
-        except Exception:
-            resp.logo_url = None
+    # Only a logo this project's upload step issued is signed. A row written
+    # before that was checked can name any object in the bucket, and is shown
+    # as no logo at all.
+    owned = is_project_logo_key(branding.project_id, branding.logo_s3_key)
+    if not owned:
+        resp.logo_s3_key = None
+    resp.logo_url = sign_if_owned(owned, branding.logo_s3_key)
     return resp
 
 
@@ -81,8 +84,19 @@ def upsert_branding(
     current_user: User = Depends(get_current_user),
 ):
     require_project_role(db, project_id, current_user, ProjectRole.editor)
-    branding = _get_or_create_branding(db, project_id)
     update_data = body.model_dump(exclude_none=True)
+    if "logo_s3_key" in body.model_fields_set:
+        # The logo is a storage key the response signs and the project purge
+        # deletes, so only a key the logo upload step issued for this project is
+        # accepted. Null or empty clears it.
+        if not body.logo_s3_key:
+            update_data["logo_s3_key"] = None
+        elif not is_project_logo_key(project_id, body.logo_s3_key):
+            raise HTTPException(
+                status_code=422,
+                detail="logo_s3_key must be a key issued by this project's logo upload",
+            )
+    branding = _get_or_create_branding(db, project_id)
     for field, value in update_data.items():
         setattr(branding, field, value)
     db.commit()
@@ -101,7 +115,7 @@ def get_logo_upload_url(
     current_user: User = Depends(get_current_user),
 ):
     require_project_role(db, project_id, current_user, ProjectRole.editor)
-    key = f"branding/{project_id}/logo/{uuid.uuid4()}.webp"
+    key = f"{project_logo_prefix(project_id)}{uuid.uuid4()}.webp"
     upload_url = s3_service.get_s3_client().generate_presigned_url(
         "put_object",
         Params={

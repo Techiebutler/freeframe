@@ -16,18 +16,15 @@ from ..schemas.instance_branding import (
     InstanceBrandingLogoUploadResponse,
 )
 from ..services import s3_service
+from ..services.owned_keys import (
+    INSTANCE_LOGO_SLOTS, instance_logo_prefix, is_instance_logo_key, sign_if_owned,
+)
 
 router = APIRouter(tags=["instance_branding"])
 
 _SINGLETON_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
-LOGO_TYPES = {
-    "logo-light": "logo_light_key",
-    "logo-dark": "logo_dark_key",
-    "favicon": "favicon_key",
-    "apple-icon": "apple_icon_key",
-    "login-logo": "login_logo_key",
-}
+LOGO_TYPES = INSTANCE_LOGO_SLOTS
 
 
 def _default_instance_branding() -> InstanceBranding:
@@ -60,31 +57,15 @@ def _get_or_create_instance_branding(db: Session) -> InstanceBranding:
 
 def _enrich_branding_response(branding: InstanceBranding) -> InstanceBrandingResponse:
     resp = InstanceBrandingResponse.model_validate(branding)
-    if branding.logo_light_key:
-        try:
-            resp.logo_light_url = s3_service.generate_presigned_get_url(branding.logo_light_key)
-        except Exception:
-            resp.logo_light_url = None
-    if branding.logo_dark_key:
-        try:
-            resp.logo_dark_url = s3_service.generate_presigned_get_url(branding.logo_dark_key)
-        except Exception:
-            resp.logo_dark_url = None
-    if branding.favicon_key:
-        try:
-            resp.favicon_url = s3_service.generate_presigned_get_url(branding.favicon_key)
-        except Exception:
-            resp.favicon_url = None
-    if branding.apple_icon_key:
-        try:
-            resp.apple_icon_url = s3_service.generate_presigned_get_url(branding.apple_icon_key)
-        except Exception:
-            resp.apple_icon_url = None
-    if branding.login_logo_key:
-        try:
-            resp.login_logo_url = s3_service.generate_presigned_get_url(branding.login_logo_key)
-        except Exception:
-            resp.login_logo_url = None
+    # The public GET signs these for anonymous callers, so only a key the slot's
+    # own upload step issued is signed. Anything else (a row written before the
+    # check existed) is shown as an empty slot.
+    for column in LOGO_TYPES.values():
+        key = getattr(branding, column)
+        owned = is_instance_logo_key(column, key)
+        if not owned:
+            setattr(resp, column, None)
+        setattr(resp, column.replace("_key", "_url"), sign_if_owned(owned, key))
     return resp
 
 
@@ -109,25 +90,33 @@ def upsert_instance_branding(
     current_user: User = Depends(require_admin),
 ):
     """Admin only: update instance branding."""
-    branding = _get_or_create_instance_branding(db)
     update_data = body.model_dump(exclude_unset=True)
 
-    _LOGO_KEY_FIELDS = [
-        "logo_light_key",
-        "logo_dark_key",
-        "favicon_key",
-        "apple_icon_key",
-        "login_logo_key",
-    ]
+    # Each logo field is a storage key the public GET signs and a later replace
+    # deletes, so only a key that slot's upload step issued is accepted. Null or
+    # empty clears the slot. Checked before anything is written.
+    for field in LOGO_TYPES.values():
+        if field not in update_data:
+            continue
+        if not update_data[field]:
+            update_data[field] = None
+        elif not is_instance_logo_key(field, update_data[field]):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field} must be a key issued by its logo upload",
+            )
+
+    branding = _get_or_create_instance_branding(db)
 
     # Collect the replaced keys and only drop them once the row that still points
     # at them is safely committed — a rollback would otherwise leave the branding
-    # referencing an S3 object we already deleted.
+    # referencing an S3 object we already deleted. Only a key the slot issued is
+    # ever deleted: a stored value from before that was checked can name any object.
     replaced_keys = []
     for field, value in update_data.items():
-        if field in _LOGO_KEY_FIELDS:
+        if field in LOGO_TYPES.values():
             old_key = getattr(branding, field)
-            if old_key and old_key != value:
+            if old_key and old_key != value and is_instance_logo_key(field, old_key):
                 replaced_keys.append(old_key)
         setattr(branding, field, value)
 
@@ -165,7 +154,7 @@ def get_logo_upload_url(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid logo type. Must be one of: {', '.join(LOGO_TYPES.keys())}"
         )
-    key = f"branding/{logo_type}/{uuid.uuid4()}"
+    key = f"{instance_logo_prefix(logo_type)}{uuid.uuid4()}"
     upload_url = s3_service.generate_presigned_put_url(key, content_type=content_type, expires_in=3600)
     return InstanceBrandingLogoUploadResponse(upload_url=upload_url, key=key)
 
@@ -189,8 +178,9 @@ def reset_logo(
     db.commit()
     db.refresh(branding)
     # Only after the cleared row is committed: an orphaned object beats a row
-    # pointing at an object that no longer exists.
-    if old_key:
+    # pointing at an object that no longer exists. And only a key this slot
+    # issued: a stored value from before that was checked can name any object.
+    if is_instance_logo_key(column, old_key):
         try:
             s3_service.delete_object(old_key)
         except Exception:

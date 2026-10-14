@@ -34,31 +34,35 @@ def get_or_create_instance_settings(db: Session) -> InstanceSettings:
     return row
 
 
-def _build_response(db: Session, row: InstanceSettings) -> InstanceSettingsResponse:
+def _build_response(db: Session, row: InstanceSettings | None, user: User) -> InstanceSettingsResponse:
+    """`row` is None before the first PUT creates it, which reads as the defaults."""
     return InstanceSettingsResponse(
-        storage_limit_bytes=row.storage_limit_bytes,
+        storage_limit_bytes=row.storage_limit_bytes if row else 0,
         storage_used_bytes=storage_service.instance_storage_used_bytes(db),
+        upload_part_size_bytes=(
+            (row.upload_part_size_bytes if row else 0) if user.is_superadmin else None
+        ),
     )
 
 
-@router.get("/instance/settings", response_model=InstanceSettingsResponse)
+# exclude_none: a member gets no admin-only key at all, rather than a null in
+# its place (see InstanceSettingsResponse).
+@router.get("/instance/settings", response_model=InstanceSettingsResponse, response_model_exclude_none=True)
 def get_instance_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Any authenticated member: instance storage limit + current usage.
+    """Any authenticated member: instance storage limit + current usage. Admins
+    also get the upload part size.
 
-    Read-only: does not create the settings row. Defaults to unlimited (0)
-    when no row exists yet — only PUT creates the singleton row.
+    Read-only: does not create the settings row. Defaults to unlimited (0) and
+    automatic part sizing (0) when no row exists yet — only PUT creates the
+    singleton row.
     """
-    row = db.query(InstanceSettings).first()
-    return InstanceSettingsResponse(
-        storage_limit_bytes=row.storage_limit_bytes if row else 0,
-        storage_used_bytes=storage_service.instance_storage_used_bytes(db),
-    )
+    return _build_response(db, db.query(InstanceSettings).first(), current_user)
 
 
-@router.put("/instance/settings", response_model=InstanceSettingsResponse)
+@router.put("/instance/settings", response_model=InstanceSettingsResponse, response_model_exclude_none=True)
 def update_instance_settings(
     body: InstanceSettingsUpdate,
     db: Session = Depends(get_db),
@@ -68,6 +72,8 @@ def update_instance_settings(
     row = get_or_create_instance_settings(db)
     if body.storage_limit_bytes is not None:
         row.storage_limit_bytes = body.storage_limit_bytes
+    if body.upload_part_size_bytes is not None:
+        row.upload_part_size_bytes = body.upload_part_size_bytes
     db.commit()
     db.refresh(row)
-    return _build_response(db, row)
+    return _build_response(db, row, current_user)

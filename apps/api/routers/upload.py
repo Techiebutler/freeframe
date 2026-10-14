@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import time
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
@@ -26,12 +27,17 @@ from ..schemas.upload import (
     PresignPartRequest, PresignPartResponse,
     CompleteUploadRequest, CompleteUploadResponse, AbortUploadRequest,
     ResumeUploadResponse,
-    ALLOWED_MIME_TYPES, CHUNK_SIZE_BYTES, mime_to_asset_type,
+    ALLOWED_MIME_TYPES, CHUNK_SIZE_BYTES, _format_bytes, mime_to_asset_type,
 )
-from ..services.storage import upload_guard_error
+from ..services.storage import choose_part_size, upload_guard_error
 from ..services.versions import next_version_number
 
 logger = logging.getLogger(__name__)
+
+# A completion slower than this is logged with where the time went. Logged as a
+# warning because nothing configures this logger: only warnings reach the API's
+# output, and a fast completion is not worth a line per upload.
+SLOW_COMPLETION_SECONDS = 5.0
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -47,6 +53,9 @@ def initiate_upload(
     guard_error = upload_guard_error(db, body.file_size_bytes)
     if guard_error:
         raise HTTPException(status_code=400, detail=guard_error)
+    part_size, part_error = choose_part_size(db, body.file_size_bytes)
+    if part_error:
+        raise HTTPException(status_code=400, detail=part_error)
 
     # Verify project access (editor or above)
     project = db.query(Project).filter(Project.id == body.project_id, Project.deleted_at.is_(None)).first()
@@ -113,7 +122,7 @@ def initiate_upload(
     # the browser's build carries. A resume has to cut the file on the same
     # boundaries the parts already in the bucket were cut on, and R2 rejects a
     # non-final part that is not the same size as its siblings.
-    version.chunk_size_bytes = CHUNK_SIZE_BYTES
+    version.chunk_size_bytes = part_size
 
     # Create MediaFile record
     file_type_map = {AssetType.image: FileType.image, AssetType.audio: FileType.audio, AssetType.video: FileType.video, AssetType.image_carousel: FileType.image}
@@ -133,7 +142,7 @@ def initiate_upload(
         s3_key=s3_key,
         asset_id=asset.id,
         version_id=version.id,
-        chunk_size_bytes=CHUNK_SIZE_BYTES,
+        chunk_size_bytes=part_size,
     )
 
 
@@ -668,6 +677,12 @@ def complete_upload(
             status="processing", asset_id=asset_id, version_id=version_id
         )
 
+    # Read before anything commits: `expire_on_commit` would turn each into a
+    # SELECT once _finish has run.
+    timed_version_id = version.id
+    timed_part_size = version.chunk_size_bytes
+    timed_file_size = media_file.file_size_bytes
+    started = time.monotonic()
     try:
         stored = list_upload_parts(s3_key, body.upload_id)
     except (ClientError, BotoCoreError) as e:
@@ -730,6 +745,7 @@ def complete_upload(
             )
             raise HTTPException(status_code=409, detail=str(e)) from e
 
+    listed = time.monotonic()
     try:
         complete_multipart_upload(s3_key, body.upload_id, parts)
     except ClientError as e:
@@ -762,7 +778,20 @@ def complete_upload(
             headers={"Retry-After": "5"},
         ) from e
 
-    return _finish()
+    assembled = time.monotonic()
+    response = _finish()
+    finished = time.monotonic()
+    if finished - started >= SLOW_COMPLETION_SECONDS:
+        # Where an upload's "95%" went: listing the parts back, the storage
+        # backend assembling them, or the size check and the status write.
+        logger.warning(
+            "completing upload %s took %.1fs (%d parts of %s, %s total): "
+            "listing %.1fs, assembling %.1fs, finishing %.1fs",
+            timed_version_id, finished - started, len(parts),
+            _format_bytes(timed_part_size or CHUNK_SIZE_BYTES), _format_bytes(timed_file_size),
+            listed - started, assembled - listed, finished - assembled,
+        )
+    return response
 
 
 def _trigger_processing(asset_id: uuid.UUID, version_id: uuid.UUID):
@@ -800,12 +829,28 @@ def abort_upload(
     if version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
 
+    # Abort what this version recorded, not what the body names. Ownership was
+    # proved for the version only, so a key or upload id taken from the request
+    # could point the abort at somebody else's upload. The request's values must
+    # match the stored ones, the same checks complete and presign-part make. A
+    # NULL upload id predates it being stored and is accepted, as there.
+    media_file = db.query(MediaFile).filter(
+        MediaFile.version_id == version.id,
+        MediaFile.s3_key_raw == body.s3_key,
+    ).first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="Upload not found for this version")
+    if version.upload_id is not None and version.upload_id != body.upload_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this upload")
+    s3_key = media_file.s3_key_raw
+    upload_id = version.upload_id or body.upload_id
+
     # The status write must happen even if S3 refuses the abort. An upload the
     # reaper already took raises NoSuchUpload here, and letting that propagate
     # leaves the version at `uploading` forever -- indistinguishable in the UI
     # from a stalled transcode, and the exact state this endpoint exists to avoid.
     try:
-        abort_multipart_upload(body.s3_key, body.upload_id)
+        abort_multipart_upload(s3_key, upload_id)
     except ClientError as e:
         # Only swallow "there was nothing to abort". Anything else -- a permissions
         # problem, the wrong bucket, a throttle -- means parts are still sitting in
@@ -892,15 +937,7 @@ def abort_upload(
         # which leaves a finished object and a version that still looks in-flight.
         # Marking that failed hands it to the reaper, which deletes the finished file
         # a day later -- so ask storage what actually happened before deciding.
-        media_file = db.query(MediaFile).filter(
-            MediaFile.version_id == version.id,
-            MediaFile.s3_key_raw == body.s3_key,
-        ).first()
-        assembled = (
-            _already_assembled(body.s3_key, media_file.file_size_bytes, version.id)
-            if media_file is not None
-            else False
-        )
+        assembled = _already_assembled(s3_key, media_file.file_size_bytes, version.id)
         # Only a confirmed object promotes the version. "Could not find out" is
         # recorded as failed exactly like "not there", because the two have the
         # same consequence: `_reap_stale_uploads` sweeps `uploading` and `failed`
