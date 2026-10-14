@@ -270,7 +270,10 @@ export function useVideoPlayer(
       // Remember the measured bandwidth so the next video starts at the right
       // rung. hls.js samples on the same fragments, in a listener registered
       // before this one, so the estimate here already includes this fragment.
+      // Compare panes don't save: two players share the link, so each measures
+      // about half of it, and whichever saved last would win.
       hls.on(Hls.Events.FRAG_BUFFERED, (_event, { frag }) => {
+        if (detached) return
         if (frag.type !== 'main' || frag.sn === 'initSegment' || frag.stats.aborted) return
         saveBandwidth(hls.bandwidthEstimate)
       })
@@ -301,7 +304,7 @@ export function useVideoPlayer(
         hlsRef.current = null
       }
     }
-  }, [src, setPlayheadTime, cancelPlayRetry])
+  }, [src, setPlayheadTime, cancelPlayRetry, detached])
 
   // ─── Controls ───────────────────────────────────────────────────────────────
 

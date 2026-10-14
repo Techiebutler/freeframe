@@ -42,8 +42,8 @@ vi.mock('hls.js', async () => {
   return { default: FakeHls, Events }
 })
 
-function Harness() {
-  const player = useVideoPlayer('http://example.test/video.m3u8')
+function Harness({ detached = false }: { detached?: boolean }) {
+  const player = useVideoPlayer('http://example.test/video.m3u8', { detached })
   return <video ref={player.videoRef} />
 }
 
@@ -59,11 +59,17 @@ beforeEach(() => {
 
 describe('useVideoPlayer starting quality', () => {
   it('starts Auto from the bandwidth measured last time', () => {
-    saveBandwidth(25_000_000)
+    saveBandwidth(15_000_000)
     render(<Harness />)
 
-    expect(hls.instances[0].config.abrEwmaDefaultEstimate).toBe(25_000_000)
-    expect(hls.instances[0].config.abrEwmaDefaultEstimateMax).toBe(20_000_000)
+    expect(hls.instances[0].config.abrEwmaDefaultEstimate).toBe(15_000_000)
+  })
+
+  it('leaves a first-time viewer on hls.js\'s own first guess', () => {
+    render(<Harness />)
+
+    expect(hls.instances[0].config).not.toHaveProperty('abrEwmaDefaultEstimate')
+    expect(hls.instances[0].config).not.toHaveProperty('abrEwmaDefaultEstimateMax')
   })
 
   it('saves the estimate after each buffered video segment', () => {
@@ -88,5 +94,16 @@ describe('useVideoPlayer starting quality', () => {
     })
 
     expect(savedBandwidth()).toBeUndefined()
+  })
+
+  it('does not save from a compare pane, which measures only its share of the link', () => {
+    saveBandwidth(15_000_000, Date.now())
+    render(<Harness detached />)
+    const instance = hls.instances[0]
+
+    instance.bandwidthEstimate = 7_000_000
+    act(() => instance.emit(hls.Events.FRAG_BUFFERED, frag()))
+
+    expect(savedBandwidth()).toBe(15_000_000)
   })
 })

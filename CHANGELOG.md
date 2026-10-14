@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Videos no longer start on 360p in Auto on a fast connection.** The player's first guess at your bandwidth was capped at 5 Mbps, below what 720p and 1080p renditions peak at, so playback began on the lowest rung and only climbed after a few seconds. It now starts from the bandwidth measured on your last playback (kept for a week), and a first-ever guess can reach 20 Mbps. If that proves too high, the player drops a rung as soon as a segment loads too slowly.
+- **Videos you open after watching another start in Auto at the quality your connection carried.** Before its first segment loads, the player guesses your bandwidth from the top rendition, capped at 5 Mbps. Whenever a rung peaks above that, playback began below it and climbed only after a few seconds, even on a link that could carry it. It now starts from the bandwidth this browser measured on a playback in the last day, capped at 20 Mbps. The first video in a browser starts as before. (#486 by @jdanna)
 
 ## [1.17.0] - 2026-10-12
 
