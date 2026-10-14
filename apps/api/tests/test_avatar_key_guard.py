@@ -43,6 +43,7 @@ def s3(monkeypatch):
 
     monkeypatch.setattr(s3_service, "generate_presigned_get_url", sign)
     monkeypatch.setattr(s3_service, "delete_object", lambda key: calls["deleted"].append(key))
+    monkeypatch.setattr(s3_service, "head_object_size", lambda key: 1024)  # avatar-confirm's 2 MB check
     return calls
 
 

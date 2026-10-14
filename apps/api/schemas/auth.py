@@ -154,9 +154,6 @@ class UpdateProfileRequest(BaseModel):
     # colour), so the router checks `model_fields_set` rather than `is None`.
     avatar_color: HexColor | None = None
 
-class AvatarConfirmRequest(BaseModel):
-    key: str
-
 class UpdateUserRoleRequest(BaseModel):
     is_admin: bool
 

@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from ..database import get_db
 from ..schemas.auth import (
-    UserResponse, AdminUserResponse, InviteRequest, UpdateProfileRequest, AvatarConfirmRequest,
+    UserResponse, AdminUserResponse, InviteRequest, UpdateProfileRequest,
 )
 from ..models.user import User, UserStatus
 from ..middleware.auth import get_current_user
@@ -162,13 +162,13 @@ def get_avatar_upload_url(
 @router.post("/{user_id}/avatar-confirm", response_model=UserResponse)
 def confirm_avatar_upload(
     user_id: uuid.UUID,
-    body: AvatarConfirmRequest,
+    body: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Confirm avatar upload: point the user at the uploaded object."""
     user = _get_own_user(db, user_id, current_user, "Can only update your own avatar")
-    s3_key = body.key
+    s3_key = body.get("key")
     if not s3_key:
         raise HTTPException(status_code=400, detail="key is required")
     if not isinstance(s3_key, str) or not is_own_avatar_key(user.id, s3_key):

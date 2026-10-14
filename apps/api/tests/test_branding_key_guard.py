@@ -58,6 +58,7 @@ def s3(monkeypatch):
     monkeypatch.setattr(upload_module, "abort_multipart_upload",
                         lambda key, upload_id: calls["aborted"].append((key, upload_id)))
     monkeypatch.setattr(upload_module, "head_object_size", lambda key: None)
+    monkeypatch.setattr(s3_service, "head_object_size", lambda key: 1024)  # avatar-confirm's 2 MB check
     return calls
 
 
