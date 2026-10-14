@@ -283,7 +283,7 @@ def test_purge_project_removes_everything(real_db, monkeypatch):
     foldered = _asset(real_db, project, owner, folder=folder)
     loose = _asset(real_db, project, owner)
     _version(real_db, loose, owner)
-    real_db.add(ProjectBranding(project_id=project.id, logo_s3_key="branding/logo.png"))
+    real_db.add(ProjectBranding(project_id=project.id, logo_s3_key=f"branding/{project.id}/logo/l.webp"))
     real_db.add(WatermarkSettings(project_id=project.id))
     real_db.add(ProjectMember(project_id=project.id, user_id=owner.id))
     coll = Collection(project_id=project.id, name="c", created_by=owner.id)
@@ -310,7 +310,7 @@ def test_purge_project_removes_everything(real_db, monkeypatch):
     assert real_db.query(MetadataField).filter_by(project_id=project.id).count() == 0
     assert real_db.query(ShareLink).filter_by(project_id=project.id).count() == 0
     assert real_db.query(ActivityLog).filter_by(project_id=project.id).count() == 0
-    assert "branding/logo.png" in deleted and "posters/p.webp" in deleted
+    assert f"branding/{project.id}/logo/l.webp" in deleted and "posters/p.webp" in deleted
     assert counts.projects == 1 and counts.assets == 2 and counts.folders == 1
 
 

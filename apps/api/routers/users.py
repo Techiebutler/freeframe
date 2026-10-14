@@ -13,6 +13,7 @@ from ..tasks.celery_app import send_task_safe
 from ..models.instance_branding import InstanceBranding
 from ..config import settings
 from ..services import s3_service
+from ..services.avatar_keys import delete_own_avatar, is_own_avatar_key
 from ..services.search import escape_like
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -102,8 +103,6 @@ def update_user(user_id: uuid.UUID, body: UpdateProfileRequest, db: Session = De
     if body.name is not None:
         # Already trimmed and checked non-blank by `DisplayName`.
         user.name = body.name
-    if body.avatar_url is not None:
-        user.avatar_url = body.avatar_url
     db.commit()
     db.refresh(user)
     return user
@@ -144,16 +143,17 @@ def confirm_avatar_upload(
     s3_key = body.get("key")
     if not s3_key:
         raise HTTPException(status_code=400, detail="key is required")
-    if not s3_key.startswith(f"avatars/{user_id}/"):
+    if not isinstance(s3_key, str) or not is_own_avatar_key(user.id, s3_key):
         raise HTTPException(status_code=400, detail="Invalid key for this user")
-    if user.avatar_url:
-        try:
-            s3_service.delete_object(user.avatar_url)
-        except Exception:
-            pass
+    old_key = user.avatar_url
     user.avatar_url = s3_key
     db.commit()
     db.refresh(user)
+    # Only ever removes this user's own previous avatar. The stored value is
+    # not trusted on its own: a row written before this check existed can name
+    # any object in the bucket.
+    if old_key != s3_key:
+        delete_own_avatar(user.id, old_key)
     return user
 
 

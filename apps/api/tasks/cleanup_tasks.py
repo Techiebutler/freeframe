@@ -21,6 +21,7 @@ from ..models.branding import ProjectBranding, WatermarkSettings
 from ..models.instance_branding import InstanceBranding
 from ..models.user import User
 from ..models.activity import Mention, ActivityLog, Notification
+from ..services.owned_keys import is_project_logo_key
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
 )
@@ -221,7 +222,10 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
     db.query(Collection).filter(Collection.project_id == project_id).delete(synchronize_session=False)
     branding = db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).first()
     if branding is not None:
-        if branding.logo_s3_key:
+        # Only a logo this project's upload step issued. A row written before
+        # that was checked can name any object in the bucket, another project's
+        # media included, and purging this project must not take it with it.
+        if is_project_logo_key(project_id, branding.logo_s3_key):
             _safe(delete_object, branding.logo_s3_key)
             counts.s3_deletes += 1
         db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).delete(synchronize_session=False)

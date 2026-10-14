@@ -60,6 +60,8 @@ export interface User {
 export interface InstanceSettings {
   storage_limit_bytes: number;
   storage_used_bytes: number;
+  /** Admins only. 0 sizes upload parts from each file; anything else is fixed. */
+  upload_part_size_bytes?: number;
 }
 
 export interface Team {

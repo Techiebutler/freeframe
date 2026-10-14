@@ -7,13 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+- **One migration** adds `instance_settings.upload_part_size_bytes` (default 0, automatic sizing). (#483 by @jdanna)
+
 ### Added
+- **The uploads panel shows each upload's speed and time left**, right-aligned on the line with its percentage. Speed is smoothed over the last few seconds and drops toward zero if the transfer stalls. (#483 by @jdanna)
+- **Upload part size in Instance Settings.** In Admin Dashboard → Instance settings, admins can keep Automatic sizing or cut every upload into a fixed part size from 5 to 512 MB. With a fixed size, a file that would need more than 10,000 parts is refused before anything is uploaded, with a message naming the largest file that size allows. (#483 by @jdanna)
+- **Selection shortcuts on the project page.** ⌘-A (Ctrl-A on Windows and Linux) selects every asset and folder shown. Shift-click selects every asset between the last one you clicked and this one, and ⌘-click (Ctrl-click) adds an asset to the selection or takes it out. Both add to what's already selected, and neither changes which asset the side panel shows. Shift-click on an asset's checkbox selects a range too. Esc deselects everything, including the asset in the side panel. In a text field, dialog or menu, ⌘-A and Esc keep their usual meaning. (#488 by @jdanna)
+- **Press `?` for a list of keyboard shortcuts.** The panel existed but was never shown, and it listed several shortcuts that did nothing (⌘/, M, F, C and the N/G sequences). It now opens from any signed-in page and lists only shortcuts that work. (#488 by @jdanna)
 - **Appearance and sort menus on the Projects page.** Choose grid or list, and in grid a small, medium or large card size and whether cards show their info row. Sort projects by date created or by name, as you can inside a project. Your choices are saved to your account, so the page opens the way you left it on any device; it used to reset to the grid every visit. (#485 by @jdanna)
 
+### Changed
+- **Large uploads are cut into fewer, larger parts.** Every upload used to go up in 10 MB parts, so a 50 GB file was 5,000 of them, and completing an upload makes the storage backend read back and assemble every part. Files up to about 5 GB still use 10 MB parts; bigger files now get parts sized to hold about 500, up to 256 MB each. The largest file an upload can hold rises from about 97.7 GB to about 2.4 TB. Uploads already in progress keep the size they started with. (#483 by @jdanna)
+
 ### Fixed
+- **An upload that has sent every byte says "Finalizing" instead of sitting at "Uploading 95%".** The storage backend can take minutes to assemble a large upload, which read as a hung upload. Cancel is hidden for that stretch, since there is nothing left for it to stop, and comes back if a part fails and has to be sent again. The API also logs any completion that takes 5 seconds or more, split into listing, assembling and finishing time. (#483 by @jdanna)
 - **Sorting by date says Newest or Oldest instead of Z-A or A-Z.** The sort menu inside a project labelled the date direction as if it were alphabetical. (#485 by @jdanna)
 - **Picking a sort inside a project starts it in a sensible direction.** Date starts newest first and everything else A-Z; switching from Date to Name used to carry the direction over and list names Z-A. (#485 by @jdanna)
 - **Sorting by name orders numbers by value.** "Shot 2" now comes before "Shot 10". (#485 by @jdanna)
+
+## [1.17.1] - 2026-10-14
+
+Security release: fixes [GHSA-q5pw-99q5-vp8x](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-q5pw-99q5-vp8x), which let any signed-in user read or delete files in the storage bucket through avatar and project-logo keys. Upgrading is strongly recommended.
+
+### Upgrade notes
+- **Two migrations** clear avatar values, and project and instance branding logo values, that do not point at a file uploaded for them. Those users show their initials and those logos fall back to the default; uploaded avatars and logos are kept. (#490)
+
+### Fixed
+- **WAV files uploaded from Safari, and AIFF files from any browser, now upload.** The upload allowlist knew one spelling per format, but the browser picks the MIME type and they disagree: Safari sends `audio/x-wav` for a `.wav` where Chrome sends `audio/wav`, and both send `audio/vnd.wave` for a `.bwf`, so those uploads stopped at "Unsupported file type". The allowlist now takes the spellings browsers actually send for WAV, BWF, AIFF, FLAC and M4A, and for MKV, AVI and M4V from Chrome or Safari. Nothing downstream reads the type, so these files process like any other. (#484 reported by @rm95sdbgtk-a11y, #489)
+
+### Security
+- **Profile avatars are limited to pictures the user uploaded.** An account could set its avatar to a storage key it did not upload, which could expose or remove other files in the bucket. Now only avatars uploaded through the avatar upload step are accepted, signed and replaced, and `PATCH /users/{id}` ignores `avatar_url` (the web app never sent it). Existing values that don't point at an uploaded avatar are cleared. The same rule now applies to project branding logos and to the instance logos and icons: only a key issued by that logo's own upload step is accepted, signed or deleted, and existing values that don't match are cleared. (#490)
+
+### Contributors
+
+Thank you to @rm95sdbgtk-a11y for reporting #484.
 
 ## [1.17.0] - 2026-10-12
 
