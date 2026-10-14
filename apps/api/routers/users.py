@@ -226,4 +226,10 @@ def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db), current_user:
     if user.status != UserStatus.deactivated:
         raise HTTPException(status_code=409, detail="Deactivate this user before deleting them")
     user.deleted_at = datetime.now(timezone.utc)
+    # The picture goes with the account: their comments show initials, and the
+    # object is reclaimed rather than left in the bucket for good. A deleted
+    # user can't be restored, so nothing would ever need it again.
+    old_key = user.avatar_url
+    user.avatar_url = None
     db.commit()
+    delete_own_avatar(user.id, old_key)

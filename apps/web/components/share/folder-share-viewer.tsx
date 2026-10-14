@@ -386,7 +386,7 @@ interface RightPanelProps {
   onOpenAsset?: (asset: FolderShareAssetItem) => void
 }
 
-interface GuestComment {
+export interface GuestComment {
   id: string
   body: string
   guest_name: string
@@ -473,7 +473,8 @@ interface ShareCommentListProps {
   onReply?: (commentId: string) => void
 }
 
-function ShareCommentList({ comments, loading, canComment, onReply }: ShareCommentListProps) {
+/** Exported for tests. */
+export function ShareCommentList({ comments, loading, canComment, onReply }: ShareCommentListProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
