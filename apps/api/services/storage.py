@@ -3,13 +3,27 @@ from sqlalchemy.orm import Session
 
 from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus
 from ..models.instance_settings import InstanceSettings
-from ..schemas.upload import _format_bytes, upload_size_error
+from ..schemas.upload import _format_bytes, part_count_error, part_size_for, upload_size_error
 
 
 def get_storage_limit(db: Session) -> int:
     """Non-creating read of the instance storage cap. 0 (or no row) == unlimited."""
     row = db.query(InstanceSettings).first()
     return row.storage_limit_bytes if row else 0
+
+
+def get_upload_part_size(db: Session) -> int:
+    """Non-creating read of the upload part size setting. 0 (or no row) == automatic."""
+    row = db.query(InstanceSettings).first()
+    return row.upload_part_size_bytes if row else 0
+
+
+def choose_part_size(db: Session, file_size_bytes: int) -> tuple[int, str | None]:
+    """The part size a new upload is cut on, and why it cannot be uploaded at all
+    (a fixed size too small for 10,000 parts to hold the file), or None."""
+    configured = get_upload_part_size(db)
+    part_size = part_size_for(file_size_bytes, configured)
+    return part_size, part_count_error(file_size_bytes, part_size, fixed=bool(configured))
 
 
 def _committed_media_sum(db: Session):

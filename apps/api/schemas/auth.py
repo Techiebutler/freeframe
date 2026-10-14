@@ -1,8 +1,9 @@
-from pydantic import AfterValidator, BaseModel, EmailStr, field_validator, Field
+from pydantic import AfterValidator, BaseModel, EmailStr, model_validator, Field
 from typing import Annotated
 import uuid
 from ..models.user import UserStatus
 from ..services.auth_service import BCRYPT_MAX_PASSWORD_BYTES
+from ..services.avatar_keys import sign_avatar
 
 
 def _reject_bcrypt_overflow(v: str) -> str:
@@ -78,13 +79,13 @@ class UserResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @field_validator("avatar_url", mode="after")
-    @classmethod
-    def resolve_avatar_url(cls, v: str | None) -> str | None:
-        if v and not v.startswith("http"):
-            from ..services import s3_service
-            return s3_service.generate_presigned_get_url(v)
-        return v
+    @model_validator(mode="after")
+    def resolve_avatar_url(self) -> "UserResponse":
+        # The column holds a storage key. Only this user's own uploaded avatar
+        # is signed; any other value (another prefix, another user's key, a
+        # full URL) is shown as no avatar rather than handed out as a link.
+        self.avatar_url = sign_avatar(self.id, self.avatar_url)
+        return self
 
 class AdminUserResponse(UserResponse):
     """UserResponse plus the pending invite token.
@@ -138,7 +139,10 @@ class UpdateProfileRequest(BaseModel):
     # that trims to empty renders as a blank author everywhere it is shown.
     # Optional because this is a PATCH; a body that omits it leaves it alone.
     name: DisplayName | None = None
-    avatar_url: str | None = None
+    # No `avatar_url`. It holds a storage key that every response signs, so it
+    # is only ever set by the avatar upload confirm step, which checks the key
+    # is under the caller's own prefix. A client that still sends it gets the
+    # usual extra-field treatment: ignored.
 
 class UpdateUserRoleRequest(BaseModel):
     is_admin: bool

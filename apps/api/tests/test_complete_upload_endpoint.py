@@ -532,11 +532,12 @@ def test_abort_marks_the_version_failed_when_the_upload_was_already_gone(
     version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
+    version.upload_id = "u"
     media_file = MagicMock()
     media_file.s3_key_raw = "raw/k"
     media_file.file_size_bytes = 23 * MB
-    # Second lookup: abort now asks whether the object actually got assembled before
-    # deciding this upload failed.
+    # Second lookup: the version's own file, which pins the key being aborted and
+    # is later asked whether the object actually got assembled.
     mock_db.first.side_effect = [version, media_file]
 
     def already_gone(k, u):
@@ -568,7 +569,10 @@ def test_abort_does_not_fail_a_version_that_already_finished(
     version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.ready
-    mock_db.first.side_effect = [version]
+    version.upload_id = "u"
+    media_file = MagicMock()
+    media_file.s3_key_raw = "raw/k"
+    mock_db.first.side_effect = [version, media_file]
     monkeypatch.setattr(upload_module, "abort_multipart_upload", lambda k, u: None)
 
     resp = client.post(
@@ -590,7 +594,10 @@ def test_abort_surfaces_a_real_storage_failure(
     version.asset_id = ASSET_ID
     version.created_by = test_user.id
     version.processing_status = ProcessingStatus.uploading
-    mock_db.first.side_effect = [version]
+    version.upload_id = "u"
+    media_file = MagicMock()
+    media_file.s3_key_raw = "raw/k"
+    mock_db.first.side_effect = [version, media_file]
 
     def denied(k, u):
         raise _client_error("AccessDenied", "AbortMultipartUpload")

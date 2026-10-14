@@ -15,6 +15,20 @@ const LOGIN_MODE_LABELS: Record<LoginMode, string> = {
   password: "Email & password",
 };
 
+type PartSizeMode = "auto" | "fixed";
+
+const PART_SIZE_MODE_LABELS: Record<PartSizeMode, string> = {
+  auto: "Automatic",
+  fixed: "Fixed",
+};
+
+const MB = 1024 * 1024;
+// The bounds the API enforces: 5 MB is the smallest part S3, R2 and B2 accept.
+const MIN_PART_MB = 5;
+const MAX_PART_MB = 512;
+// What choosing Fixed starts from: the size every upload used before Automatic.
+const DEFAULT_FIXED_PART_BYTES = 10 * MB;
+
 /** A "Saved" flag that clears itself after 2s; a second save restarts the clock. */
 function useSavedFlash(): [boolean, () => void] {
   const [saved, setSaved] = React.useState(false);
@@ -70,15 +84,93 @@ export function InstanceSettingsTab() {
   const [modeError, setModeError] = React.useState("");
   const [modeSaved, flashModeSaved] = useSavedFlash();
 
+  // Part size: 0 is Automatic, anything else the fixed size. Admin-only on the
+  // API, and this tab is only shown to admins.
+  const partSizeBytes = data?.upload_part_size_bytes ?? 0;
+  const [pendingPartMode, setPendingPartMode] = React.useState<PartSizeMode | null>(null);
+  const partMode: PartSizeMode = pendingPartMode ?? (partSizeBytes ? "fixed" : "auto");
+  const [partError, setPartError] = React.useState("");
+  const [partSaved, flashPartSaved] = useSavedFlash();
+  const [partMb, setPartMb] = React.useState<string>("");
+  const [partSaving, setPartSaving] = React.useState(false);
+  // Same guard as the storage limit: a second blur while the first save runs.
+  const partInFlight = React.useRef(false);
+
   // Depend on storage_limit_bytes only — NOT the whole `data` object, whose volatile
   // storage_used_bytes changes on every SWR revalidation and would clobber an in-progress edit.
   React.useEffect(() => {
     if (data) setGb(formatGb(data.storage_limit_bytes));
   }, [data?.storage_limit_bytes]);
 
+  // Same rule as the storage limit: follow the saved value only, so a
+  // revalidation can't clobber a size being typed.
+  React.useEffect(() => {
+    if (partSizeBytes) setPartMb(String(partSizeBytes / MB));
+  }, [partSizeBytes]);
+
   React.useEffect(() => {
     if (!brandingLoaded) fetchBranding();
   }, [brandingLoaded, fetchBranding]);
+
+  const savePartSize = async (bytes: number) => {
+    const updated = await api.put<InstanceSettings>("/instance/settings", {
+      upload_part_size_bytes: bytes,
+    });
+    mutate("/instance/settings", updated, { revalidate: false });
+    flashPartSaved();
+  };
+
+  const handlePartModeChange = async (mode: PartSizeMode) => {
+    if (mode === partMode) return;
+    setPendingPartMode(mode);
+    setPartError("");
+    try {
+      await savePartSize(mode === "auto" ? 0 : DEFAULT_FIXED_PART_BYTES);
+      if (mode === "fixed") setPartMb(String(DEFAULT_FIXED_PART_BYTES / MB));
+    } catch (err: unknown) {
+      setPartError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setPendingPartMode(null);
+    }
+  };
+
+  // Blur only, like the storage limit: every PUT applies at once, so saving
+  // per keystroke would cut uploads into 1 MB parts on the way to typing 128.
+  const commitPartSize = async (input: HTMLInputElement) => {
+    if (!data || partInFlight.current) return;
+    const saved = partSizeBytes;
+    const outOfRange = `Enter a whole number of MB from ${MIN_PART_MB} to ${MAX_PART_MB}.`;
+    if (input.validity.badInput) {
+      setPartError(outOfRange);
+      return;
+    }
+    const raw = partMb.trim();
+    // Blank is not Automatic -- that is the select's job. Put the saved value back.
+    if (raw === "") {
+      setPartMb(String(saved / MB));
+      setPartError("");
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < MIN_PART_MB || n > MAX_PART_MB) {
+      setPartError(outOfRange);
+      return;
+    }
+    setPartError("");
+    const bytes = n * MB;
+    if (bytes === saved) return;
+
+    partInFlight.current = true;
+    setPartSaving(true);
+    try {
+      await savePartSize(bytes);
+    } catch (err: unknown) {
+      setPartError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      partInFlight.current = false;
+      setPartSaving(false);
+    }
+  };
 
   const handleModeChange = async (mode: LoginMode) => {
     setPendingMode(mode);
@@ -176,6 +268,71 @@ export function InstanceSettingsTab() {
             <p className="text-xs text-text-tertiary">Enter 0 for unlimited.</p>
           )}
         </div>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold text-text-primary">Uploads</h2>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <label htmlFor="upload-part-size-mode" className="text-sm font-medium text-text-secondary">
+              Upload part size
+            </label>
+            {partSaved && <SavedMark />}
+          </div>
+          <div className="relative">
+            {/* disabled while saving, so two quick changes can't land out of order */}
+            <select
+              id="upload-part-size-mode"
+              value={partMode}
+              onChange={(e) => handlePartModeChange(e.target.value as PartSizeMode)}
+              disabled={!data || pendingPartMode !== null || partSaving}
+              className="w-full appearance-none cursor-pointer rounded-md border border-border bg-bg-secondary py-1.5 pl-3 pr-8 text-sm text-text-primary transition-colors hover:border-border-focus focus:outline-none focus:border-border-focus focus:ring-1 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {(Object.keys(PART_SIZE_MODE_LABELS) as PartSizeMode[]).map((mode) => (
+                <option key={mode} value={mode}>
+                  {PART_SIZE_MODE_LABELS[mode]}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
+          </div>
+          {partMode === "auto" &&
+            (partError ? (
+              <p className="text-xs text-status-error">{partError}</p>
+            ) : (
+              <p className="text-xs text-text-tertiary">
+                Sized from each file: 10 MB parts, larger for big files so they finish quickly.
+              </p>
+            ))}
+        </div>
+        {partMode === "fixed" && (
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="upload-part-size-mb" className="text-sm font-medium text-text-secondary">
+              Part size (MB)
+            </label>
+            <Input
+              id="upload-part-size-mb"
+              type="number"
+              min={MIN_PART_MB}
+              max={MAX_PART_MB}
+              value={partMb}
+              onChange={(e) => setPartMb(e.target.value)}
+              onBlur={(e) => commitPartSize(e.currentTarget)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              disabled={!data || pendingPartMode !== null || partSaving}
+            />
+            {partError ? (
+              <p className="text-xs text-status-error">{partError}</p>
+            ) : (
+              <p className="text-xs text-text-tertiary">
+                Between {MIN_PART_MB} and {MAX_PART_MB} MB. Files that would need more than 10,000
+                parts are refused.
+              </p>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="space-y-4">

@@ -1,8 +1,9 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import uuid
 from datetime import datetime
 from typing import Optional
 from ..models.comment import CommentVisibility
+from ..services.avatar_keys import sign_avatar
 
 class AnnotationData(BaseModel):
     drawing_data: dict  # Fabric.js canvas JSON
@@ -88,13 +89,12 @@ class AuthorInfo(BaseModel):
     name: str
     avatar_url: Optional[str] = None
 
-    @field_validator("avatar_url", mode="after")
-    @classmethod
-    def resolve_avatar_url(cls, v: Optional[str]) -> Optional[str]:
-        if v and not v.startswith("http"):
-            from ..services import s3_service
-            return s3_service.generate_presigned_get_url(v)
-        return v
+    @model_validator(mode="after")
+    def resolve_avatar_url(self) -> "AuthorInfo":
+        # Same rule as UserResponse: sign only this author's own uploaded
+        # avatar, and show anything else as no avatar.
+        self.avatar_url = sign_avatar(self.id, self.avatar_url)
+        return self
 
 class GuestAuthorInfo(BaseModel):
     id: uuid.UUID

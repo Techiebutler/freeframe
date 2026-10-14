@@ -18,8 +18,9 @@ import {
   MonitorUp,
   Pencil,
 } from 'lucide-react'
-import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
+import { cn, formatBytes, formatRelativeTime, formatTimeLeft } from '@/lib/utils'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
+import { useUploadSpeedStore } from '@/stores/upload-speed-store'
 import { carriesFiles } from '@/lib/drag'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
@@ -74,12 +75,12 @@ function groupByDate(files: UploadFile[]): { label: string; items: UploadFile[] 
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: UploadStatus }) {
+function StatusBadge({ status, finalizing }: { status: UploadStatus; finalizing?: boolean }) {
   switch (status) {
     case 'pending':
       return <span className="inline-flex items-center rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-tertiary">Queued</span>
     case 'uploading':
-      return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><Loader2 className="h-2.5 w-2.5 animate-spin" />Uploading</span>
+      return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><Loader2 className="h-2.5 w-2.5 animate-spin" />{finalizing ? 'Finalizing' : 'Uploading'}</span>
     case 'processing':
       return <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"><Cog className="h-2.5 w-2.5 animate-spin" />Processing</span>
     case 'complete':
@@ -209,6 +210,12 @@ function UploadItem({ upload }: { upload: UploadFile }) {
   const isUploading = upload.status === 'pending' || upload.status === 'uploading'
   const isProcessing = upload.status === 'processing'
   const isInterrupted = upload.status === 'interrupted'
+  // Every byte is across and storage is assembling the parts. Nothing is left
+  // for a cancel to stop, and one now would race the completion.
+  const isFinalizing = upload.status === 'uploading' && !!upload.finalizing
+  // Only the tab doing the transfer measures it, so a row from another tab or
+  // from before a reload has no rate and shows none.
+  const rate = useUploadSpeedStore((s) => s.rates[upload.id])
   const showProgress = isUploading || isProcessing
 
   // Discard is the one control here whose effect cannot be taken back: the
@@ -240,7 +247,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <UploadName upload={upload} onError={setRenameError} />
-          <StatusBadge status={upload.status} />
+          <StatusBadge status={upload.status} finalizing={upload.finalizing} />
         </div>
         <p className="text-xs text-text-tertiary truncate mt-0.5">
           {/* The file, whenever it is not simply the asset's name. Uploading a
@@ -270,7 +277,13 @@ function UploadItem({ upload }: { upload: UploadFile }) {
         <div className="flex items-center gap-1 mt-1">
           {upload.status === 'uploading' && (
             <span className="text-[11px] text-text-secondary">
-              Uploading {upload.progress}%
+              {isFinalizing ? 'Finalizing...' : `Uploading ${upload.progress}%`}
+            </span>
+          )}
+          {upload.status === 'uploading' && !isFinalizing && rate && (
+            <span className="ml-auto shrink-0 text-[11px] tabular-nums text-text-tertiary">
+              {formatBytes(rate.bytesPerSecond)}/s
+              {rate.secondsLeft !== null && <> &middot; {formatTimeLeft(rate.secondsLeft)}</>}
             </span>
           )}
           {upload.status === 'processing' && (
@@ -366,7 +379,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
             }
           }}
         />
-        {isUploading && (
+        {isUploading && !isFinalizing && (
           <button
             onClick={() => cancelUpload(upload.id)}
             className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"

@@ -153,6 +153,7 @@ def test_initiate_upload_allowed_when_guard_passes(client, auth_headers, mock_db
     # guard returns None; expect to pass the gate and fail later on project lookup (404)
     # — proving the guard did NOT block it.
     monkeypatch.setattr(upload_router, "upload_guard_error", lambda db, n: None)
+    monkeypatch.setattr(upload_router, "choose_part_size", lambda db, n: (10 * 1024 * 1024, None))
     mock_db.first.return_value = None                    # project not found → 404 after the gate
     body = {
         "project_id": str(uuid.uuid4()),
