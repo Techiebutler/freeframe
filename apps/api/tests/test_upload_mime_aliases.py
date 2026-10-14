@@ -43,6 +43,7 @@ def test_initiate_accepts_browser_mime_type(
     client, auth_headers, mock_db, test_user, monkeypatch, mime_type, ext, expected
 ):
     monkeypatch.setattr(upload_module, "upload_guard_error", lambda db, n: None)
+    monkeypatch.setattr(upload_module, "choose_part_size", lambda db, n: (10 * 1024 * 1024, None))
     monkeypatch.setattr(upload_module, "require_project_role", lambda db, pid, u, r: None)
     monkeypatch.setattr(upload_module, "create_multipart_upload", lambda key, mt: "fake-upload-id")
     mock_db.first.side_effect = [MagicMock(), None]  # project, then no prior version
