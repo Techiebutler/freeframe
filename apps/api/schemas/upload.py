@@ -5,13 +5,25 @@ import uuid
 from ..models.asset import AssetType
 from ..config import settings
 
+# The web client sends the browser's File.type verbatim, and browsers do not
+# agree on a name for the same container: for a .wav Chromium reports
+# audio/wav, Safari/WebKit audio/x-wav, and a .bwf comes in as audio/vnd.wave.
+# Every spelling a browser can produce for a format we accept has to be here,
+# or the upload is refused before a byte is sent (#484). The pipeline never
+# reads this value (ffmpeg probes the bytes), so an alias costs nothing.
 ALLOWED_MIME_TYPES = {
     # Images
     "image/jpeg", "image/png", "image/webp", "image/heic", "image/tiff", "image/gif",
     # Audio
-    "audio/mpeg", "audio/wav", "audio/flac", "audio/aac", "audio/ogg", "audio/x-m4a",
+    "audio/mpeg", "audio/aac", "audio/ogg",
+    "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave", "audio/x-pn-wav",
+    "audio/aiff", "audio/x-aiff",
+    "audio/flac", "audio/x-flac",
+    "audio/x-m4a", "audio/mp4",
     # Video
-    "video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska",
+    "video/mp4", "video/x-m4v", "video/quicktime",
+    "video/x-msvideo", "video/avi",
+    "video/x-matroska", "video/matroska",
     "video/webm", "video/mpeg", "video/x-ms-wmv",
 }
 
