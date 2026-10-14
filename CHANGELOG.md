@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+- **One migration** clears avatar values that do not point at an uploaded avatar. Those users show their initials instead; uploaded avatars are kept.
+
+### Security
+- **Profile avatars are limited to pictures the user uploaded.** An account could set its avatar to a storage key it did not upload, which could expose or remove other files in the bucket. Now only avatars uploaded through the avatar upload step are accepted, signed and replaced, and `PATCH /users/{id}` ignores `avatar_url` (the web app never sent it). Existing values that don't point at an uploaded avatar are cleared.
+
 ## [1.17.0] - 2026-10-12
 
 Includes the fixes for two security advisories about the live-update stream: [GHSA-mq5v-rvfx-6mmh](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-mq5v-rvfx-6mmh) and [GHSA-85cc-6p7r-ppc4](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-85cc-6p7r-ppc4). Upgrading is recommended.
