@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-10-14
+
+Security release: fixes [GHSA-q5pw-99q5-vp8x](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-q5pw-99q5-vp8x), which let any signed-in user read or delete files in the storage bucket through avatar and project-logo keys. Upgrading is strongly recommended.
+
 ### Upgrade notes
 - **Two migrations** clear avatar values, and project and instance branding logo values, that do not point at a file uploaded for them. Those users show their initials and those logos fall back to the default; uploaded avatars and logos are kept. (#490)
 
@@ -15,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - **Profile avatars are limited to pictures the user uploaded.** An account could set its avatar to a storage key it did not upload, which could expose or remove other files in the bucket. Now only avatars uploaded through the avatar upload step are accepted, signed and replaced, and `PATCH /users/{id}` ignores `avatar_url` (the web app never sent it). Existing values that don't point at an uploaded avatar are cleared. The same rule now applies to project branding logos and to the instance logos and icons: only a key issued by that logo's own upload step is accepted, signed or deleted, and existing values that don't match are cleared. (#490)
+
+### Contributors
+
+Thank you to @rm95sdbgtk-a11y for reporting #484.
 
 ## [1.17.0] - 2026-10-12
 
