@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Anamorphic videos get correctly proportioned thumbnails, and every video thumbnail has the same shape.** The poster frame was saved at the source's storage size, and JPEG keeps no pixel aspect a browser honours, so a 1440x1080 HDV clip or a 2x-squeezed scope master came out squeezed. Thumbnails are now scaled to square pixels and letterboxed onto a 1280x720 (16:9) canvas, so wide and portrait clips show whole in Fill mode and folder previews too, and a 4K source no longer makes a 4K JPEG. Existing thumbnails change only when the asset is transcoded again. (#480 by @jdanna)
+- **Anamorphic videos get correctly proportioned thumbnails.** The poster frame was saved at the source's storage size, and JPEG keeps no pixel aspect a browser honours, so a 1440x1080 HDV clip or a 2x-squeezed scope master came out squeezed. Thumbnails are now scaled to square pixels and fit within 1280x1280, keeping the clip's own shape, so a 4K source no longer makes a 4K JPEG. Existing thumbnails change only when the asset is transcoded again. (#480 by @jdanna)
 - **Projects without a poster show their colour gradient instead of a plain grey card.** The gradient classes live in `lib/`, which Tailwind did not scan, so seven of the eight presets were never generated. (#480 by @jdanna)
 
 ## [1.17.0] - 2026-10-12

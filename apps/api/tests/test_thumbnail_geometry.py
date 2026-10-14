@@ -1,13 +1,14 @@
-"""Video thumbnails are de-squeezed and letterboxed onto one 16:9 canvas.
+"""Video thumbnails are de-squeezed to square pixels and fit within 1280x1280.
 
 The poster frame used to be written at the source's storage size. JPEG carries
 no pixel aspect a browser honours, so an anamorphic master (1440x1080 at 4:3
-pixels, a 2x-squeezed scope frame) came out squeezed. Now the frame is scaled
-to square pixels and padded to 1280x720, so every card in a grid has the same
-shape whether it is shown fitted or filled.
+pixels, a 2x-squeezed scope frame) came out squeezed, and a 4K source made a 4K
+JPEG. Now the frame is scaled to square pixels and fit within a 1280 box,
+keeping its shape: no letterbox, so a portrait clip stays portrait.
 """
 import asyncio
 import json
+import math
 import shutil
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -31,17 +32,43 @@ def _desqueeze_index(vf: str) -> int:
 
 # ── the filter ────────────────────────────────────────────────────────────────
 
-def test_sdr_frames_are_desqueezed_then_letterboxed():
+def test_sdr_frames_are_desqueezed_then_fit():
     vf = _thumbnail_filter(is_hdr=False, dv_software=False)
 
     assert vf.startswith("thumbnail,")
     assert vf.endswith(",format=yuvj420p")
     desqueeze = _desqueeze_index(vf)
-    fit = vf.index("force_original_aspect_ratio=decrease")
-    pad = vf.index("pad=1280:720:")
+    fit = vf.index("scale=1280:1280:force_original_aspect_ratio=decrease")
     # force_original_aspect_ratio ignores SAR, so the de-squeeze must come first.
-    assert desqueeze < fit < pad
-    assert vf.count("setsar=1") == 2
+    assert desqueeze < fit
+    # No letterbox: the thumbnail keeps the source's shape.
+    assert "pad=" not in vf
+
+
+def _desqueezed_size(width: int, height: int, sar: float) -> tuple[int, int]:
+    """Evaluate the de-squeeze scale's own w/h expressions for a known SAR.
+
+    CI has no ffmpeg, so the real-ffmpeg test below is skipped there. This runs
+    the expressions from the filter string itself, so a flipped operator in
+    either one fails in CI too. ffmpeg evaluates them in doubles, as Python does.
+    """
+    desqueeze = _THUMB_GEOMETRY.split(",setsar=1,")[0]
+    w_expr = desqueeze.split("w='")[1].split("'")[0].replace("\\,", ",")
+    h_expr = desqueeze.split("h='")[1].split("'")[0].replace("\\,", ",")
+    names = {"iw": width, "ih": height, "sar": sar, "trunc": math.trunc, "min": min, "max": max}
+    return eval(w_expr, {"__builtins__": {}}, names), eval(h_expr, {"__builtins__": {}}, names)
+
+
+@pytest.mark.parametrize("width, height, sar, expected", [
+    (1920, 1080, 2.0, (1920, 540)),      # 2x anamorphic: height halves
+    (3840, 2160, 2.0, (3840, 1080)),     # 4K 2x: never widened to 8K
+    (1440, 1080, 4 / 3, (1440, 810)),    # HDV
+    (720, 576, 64 / 45, (720, 404)),     # PAL 16:9
+    (720, 480, 8 / 9, (640, 480)),       # NTSC DV: width narrows
+    (1080, 1920, 1.0, (1080, 1920)),     # square pixels: untouched
+])
+def test_the_desqueeze_math_for_a_known_sar(width, height, sar, expected):
+    assert _desqueezed_size(width, height, sar) == expected
 
 
 @pytest.mark.parametrize("is_hdr, dv_software, colour_step", [
@@ -91,7 +118,7 @@ def _thumbnail_vf(video_stream: dict) -> str:
 
 
 @pytest.mark.parametrize("stream, is_hdr", [(SDR, False), (HDR, True)])
-def test_transcode_uses_the_letterboxed_thumbnail_filter(stream, is_hdr):
+def test_transcode_uses_the_thumbnail_filter(stream, is_hdr):
     assert _thumbnail_vf(stream) == _thumbnail_filter(is_hdr=is_hdr, dv_software=False)
 
 
@@ -107,28 +134,19 @@ def _probe(path) -> tuple[int, int, str]:
     return s["width"], s["height"], s.get("sample_aspect_ratio", "1:1")
 
 
-def _picture_size(source: str, tmp_path) -> tuple[int, int]:
-    """The frame's size inside the letterbox: the filter without its pad."""
-    fit_only = _THUMB_GEOMETRY.split(",pad=")[0]
-    out = tmp_path / "inner.png"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", source,
-                    "-vf", fit_only, "-frames:v", "1", str(out)], check=True)
-    width, height, _ = _probe(out)
-    return width, height
-
-
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-@pytest.mark.parametrize("source, picture", [
-    ("testsrc=s=960x540:d=1,setsar=2", (1280, 360)),     # 2x squeeze, 3.56:1
+@pytest.mark.parametrize("source, size", [
+    ("testsrc=s=960x540:d=1,setsar=2", (1280, 360)),      # 2x squeeze, 3.56:1
+    ("testsrc=s=3840x2160:d=1,setsar=2", (1280, 360)),    # 4K 2x, not a 4K JPEG
     ("testsrc=s=1440x1080:d=1,setsar=4/3", (1280, 720)),  # HDV, 16:9
-    ("testsrc=s=720x480:d=1,setsar=8/9", (960, 720)),     # NTSC DV, 4:3
-    ("testsrc=s=540x960:d=1", (406, 720)),                # portrait, pillarboxed
+    ("testsrc=s=720x576:d=1,setsar=64/45", (1280, 718)),  # PAL 16:9
+    ("testsrc=s=720x480:d=1,setsar=8/9", (1280, 960)),    # NTSC DV, 4:3
+    ("testsrc=s=540x960:d=1", (720, 1280)),               # portrait stays portrait
 ])
-def test_real_ffmpeg_makes_a_square_pixel_16x9_jpeg(source, picture, tmp_path):
+def test_real_ffmpeg_makes_a_square_pixel_jpeg_within_the_box(source, size, tmp_path):
     out = tmp_path / "thumb.jpg"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", source,
                     "-vf", _thumbnail_filter(is_hdr=False, dv_software=False),
                     "-q:v", "2", "-frames:v", "1", str(out)], check=True)
 
-    assert _probe(out) == (1280, 720, "1:1")
-    assert _picture_size(source, tmp_path) == picture
+    assert _probe(out) == (*size, "1:1")

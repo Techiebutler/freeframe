@@ -510,24 +510,27 @@ def _plan_attempts(
     attempts.append(("cpu", False))
     return attempts
 
-# Thumbnails are square-pixel and letterboxed onto one 16:9 canvas, so every
-# card in a grid has the same shape whatever the source. JPEG carries no pixel
-# aspect a browser honours, so an anamorphic frame has to be de-squeezed here:
-# the first scale shrinks the long axis by the sample aspect ratio (`sar` is 1
-# when the source sets none), rather than widening, so a 2x-squeezed 4K frame
-# never passes through an 8K one. The fit that follows needs that step first,
-# because force_original_aspect_ratio works on pixel dimensions and ignores SAR.
-# Display rotation needs nothing extra: autorotate's transpose flips the SAR too.
-_THUMB_W, _THUMB_H = 1280, 720
+# Thumbnails are square-pixel and fit within a 1280x1280 box, keeping the
+# source's shape. JPEG carries no pixel aspect a browser honours, so an
+# anamorphic frame has to be de-squeezed here: the first scale shrinks the long
+# axis by the sample aspect ratio (`sar` is 1 when the source sets none), rather
+# than widening, so a 2x-squeezed 4K frame never passes through an 8K one. The
+# fit that follows needs that step first, because force_original_aspect_ratio
+# works on pixel dimensions and ignores SAR. Display rotation needs nothing
+# extra: autorotate's transpose flips the SAR too.
+#
+# The fit can leave a SAR a hair off 1 (PAL 16:9 lands on 3231:3232), so the
+# result is marked square again for anything that reads the JFIF density.
+_THUMB_BOX = 1280
 _THUMB_GEOMETRY = (
     "scale=w='trunc(iw*min(1\\,sar)/2)*2':h='trunc(ih/max(1\\,sar)/2)*2',setsar=1,"
-    f"scale={_THUMB_W}:{_THUMB_H}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
-    f"pad={_THUMB_W}:{_THUMB_H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
+    f"scale={_THUMB_BOX}:{_THUMB_BOX}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+    "setsar=1"
 )
 
 
 def _thumbnail_filter(is_hdr: bool, dv_software: bool) -> str:
-    """The -vf for the poster frame: pick, tone-map, de-squeeze, letterbox."""
+    """The -vf for the poster frame: pick, tone-map, de-squeeze, fit."""
     vf = "thumbnail"
     if dv_software:
         vf += ",libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv,format=yuvj420p"
