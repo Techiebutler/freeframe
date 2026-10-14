@@ -92,6 +92,9 @@ def test_an_image_upload_is_signed_under_the_callers_prefix(client, me, auth_hea
     key = resp.json()["key"]
     assert key.startswith(f"avatars/{me.id}/") and key.endswith(f".{ext}")
     assert put.call_args.kwargs["content_type"] == ctype
+    # Short-lived: the 2 MB check runs once, at confirm, and the same key could
+    # otherwise be uploaded again, larger, for as long as the link works.
+    assert put.call_args.kwargs["expires_in"] <= 300
 
 
 @pytest.mark.parametrize("ctype", ["text/html", "image/svg+xml", "application/octet-stream"])

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen } from '@testing-library/react'
 import { Avatar } from '../shared/avatar'
 
 describe('Avatar component', () => {
@@ -89,5 +89,43 @@ describe('Avatar component', () => {
     const root = container.firstChild as HTMLElement
     expect(root).toBeInTheDocument()
     expect(root.tagName).toBe('SPAN')
+  })
+})
+
+describe('Avatar picture URL across refetches', () => {
+  class LoadedImage {
+    complete = true
+    naturalWidth = 1
+    src = ''
+    referrerPolicy = ''
+    crossOrigin: string | null = null
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  beforeEach(() => { vi.stubGlobal('Image', LoadedImage) })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const signed = (path: string, sig: string) => `https://s3.test/${path}?X-Amz-Signature=${sig}`
+
+  it('keeps the URL it shows when a refetch re-signs the same picture', () => {
+    const { rerender } = render(<Avatar name="Ada" src={signed('avatars/u1/a.webp', '1')} />)
+    rerender(<Avatar name="Ada" src={signed('avatars/u1/a.webp', '2')} />)
+
+    expect((screen.getByAltText('Ada') as HTMLImageElement).src).toBe(signed('avatars/u1/a.webp', '1'))
+  })
+
+  it('switches when the picture itself changes', () => {
+    const { rerender } = render(<Avatar name="Ada" src={signed('avatars/u1/a.webp', '1')} />)
+    rerender(<Avatar name="Ada" src={signed('avatars/u1/b.webp', '2')} />)
+
+    expect((screen.getByAltText('Ada') as HTMLImageElement).src).toBe(signed('avatars/u1/b.webp', '2'))
+  })
+
+  it('drops the picture when it is removed', () => {
+    const { rerender } = render(<Avatar name="Ada Lovelace" src={signed('avatars/u1/a.webp', '1')} />)
+    rerender(<Avatar name="Ada Lovelace" src={null} />)
+
+    expect(screen.queryByAltText('Ada Lovelace')).toBeNull()
+    expect(screen.getByText('AL')).toBeInTheDocument()
   })
 })

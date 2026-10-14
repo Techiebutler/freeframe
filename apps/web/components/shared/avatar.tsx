@@ -32,7 +32,34 @@ function getInitials(name?: string | null): string {
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase()
 }
 
-export function Avatar({ src, name, color, size = 'md', className, style }: AvatarProps) {
+/** Same object: equal ignoring the query string, where a signature lives. */
+function samePicture(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  if (a === b) return true
+  try {
+    const x = new URL(a)
+    const y = new URL(b)
+    return x.origin === y.origin && x.pathname === y.pathname
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Every response signs a fresh download link, so a refetch hands the same
+ * picture over under a new URL, and Radix resets to the initials and loads it
+ * again: every avatar on a comment list flashed on each refetch. Keep the URL
+ * already showing while the new one names the same object.
+ */
+function useStablePictureUrl(src: string | null | undefined) {
+  const [shown, setShown] = React.useState(src)
+  const same = samePicture(src, shown)
+  if (src !== shown && !same) setShown(src)
+  return same ? shown : src
+}
+
+export function Avatar({ src: incomingSrc, name, color, size = 'md', className, style }: AvatarProps) {
+  const src = useStablePictureUrl(incomingSrc)
   return (
     <RadixAvatar.Root
       className={cn(

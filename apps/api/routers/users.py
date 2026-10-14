@@ -123,6 +123,10 @@ AVATAR_CONTENT_TYPES = {
     "image/jpeg": "jpg",
     "image/webp": "webp",
 }
+# The upload link is short-lived because the size check runs once, at confirm:
+# for as long as the link works, the same key could be uploaded again, larger.
+# The browser uses it within seconds of asking.
+AVATAR_UPLOAD_LINK_SECONDS = 300
 # The frontend uploads a 256px square, a few tens of KB. The ceiling is only
 # there so a client calling the API directly can't make every avatar on every
 # comment a multi-megabyte download.
@@ -155,7 +159,9 @@ def get_avatar_upload_url(
             detail=f"Avatar must be one of: {', '.join(AVATAR_CONTENT_TYPES)}",
         )
     key = f"avatars/{user_id}/{uuid.uuid4()}.{ext}"
-    upload_url = s3_service.generate_presigned_put_url(key, content_type=content_type, expires_in=3600)
+    upload_url = s3_service.generate_presigned_put_url(
+        key, content_type=content_type, expires_in=AVATAR_UPLOAD_LINK_SECONDS,
+    )
     return {"upload_url": upload_url, "key": key}
 
 
