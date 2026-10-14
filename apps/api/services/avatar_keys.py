@@ -10,10 +10,13 @@ only place the avatar upload step ever writes to:
 
 Anything else, including a full URL, a key under another prefix, another
 user's avatar, or a key with extra or dot path segments, is treated as no
-avatar: it is never signed and never deleted.
+avatar: it is never signed and never deleted. The segment rule itself is
+`owned_keys.is_owned_key`, shared with the branding logo columns.
 """
 import uuid
 from typing import Optional
+
+from .owned_keys import is_owned_key
 
 
 def avatar_prefix(user_id: uuid.UUID | str) -> str:
@@ -22,13 +25,9 @@ def avatar_prefix(user_id: uuid.UUID | str) -> str:
 
 def is_own_avatar_key(user_id: uuid.UUID | str | None, key: Optional[str]) -> bool:
     """True only for a key the avatar upload step could have issued to this user."""
-    if not user_id or not key:
+    if not user_id:
         return False
-    prefix = avatar_prefix(user_id)
-    if not key.startswith(prefix):
-        return False
-    name = key[len(prefix):]
-    return name not in ("", ".", "..") and "/" not in name and "\\" not in name
+    return is_owned_key(avatar_prefix(user_id), key)
 
 
 def sign_avatar(user_id: uuid.UUID | str | None, key: Optional[str]) -> Optional[str]:

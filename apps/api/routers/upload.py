@@ -800,12 +800,28 @@ def abort_upload(
     if version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
 
+    # Abort what this version recorded, not what the body names. Ownership was
+    # proved for the version only, so a key or upload id taken from the request
+    # could point the abort at somebody else's upload. The request's values must
+    # match the stored ones, the same checks complete and presign-part make. A
+    # NULL upload id predates it being stored and is accepted, as there.
+    media_file = db.query(MediaFile).filter(
+        MediaFile.version_id == version.id,
+        MediaFile.s3_key_raw == body.s3_key,
+    ).first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="Upload not found for this version")
+    if version.upload_id is not None and version.upload_id != body.upload_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this upload")
+    s3_key = media_file.s3_key_raw
+    upload_id = version.upload_id or body.upload_id
+
     # The status write must happen even if S3 refuses the abort. An upload the
     # reaper already took raises NoSuchUpload here, and letting that propagate
     # leaves the version at `uploading` forever -- indistinguishable in the UI
     # from a stalled transcode, and the exact state this endpoint exists to avoid.
     try:
-        abort_multipart_upload(body.s3_key, body.upload_id)
+        abort_multipart_upload(s3_key, upload_id)
     except ClientError as e:
         # Only swallow "there was nothing to abort". Anything else -- a permissions
         # problem, the wrong bucket, a throttle -- means parts are still sitting in
@@ -892,15 +908,7 @@ def abort_upload(
         # which leaves a finished object and a version that still looks in-flight.
         # Marking that failed hands it to the reaper, which deletes the finished file
         # a day later -- so ask storage what actually happened before deciding.
-        media_file = db.query(MediaFile).filter(
-            MediaFile.version_id == version.id,
-            MediaFile.s3_key_raw == body.s3_key,
-        ).first()
-        assembled = (
-            _already_assembled(body.s3_key, media_file.file_size_bytes, version.id)
-            if media_file is not None
-            else False
-        )
+        assembled = _already_assembled(s3_key, media_file.file_size_bytes, version.id)
         # Only a confirmed object promotes the version. "Could not find out" is
         # recorded as failed exactly like "not there", because the two have the
         # same consequence: `_reap_stale_uploads` sweeps `uploading` and `failed`
