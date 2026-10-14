@@ -49,8 +49,39 @@ const DEFAULTS: ProjectsViewSettings = {
   sortDirection: 'desc',
 }
 
+type ProjectsViewPreference = {
+  layout: ViewLayout
+  card_size: CardSize
+  show_card_info: boolean
+  sort_key: ProjectSortKey
+  sort_direction: SortDirection
+}
+
+// One PATCH at a time. The endpoint reads, merges and writes the whole
+// preferences document without a lock, so two in flight can land out of order
+// and store the older value. While one is out, only the latest change waits;
+// it goes when the first settles.
+let saving = false
+let queued: ProjectsViewPreference | null = null
+
+function sendToAccount(projects_view: ProjectsViewPreference) {
+  if (saving) {
+    queued = projects_view
+    return
+  }
+  saving = true
+  api.patch('/auth/me/preferences', { projects_view })
+    .catch(() => {})
+    .finally(() => {
+      saving = false
+      const next = queued
+      queued = null
+      if (next) sendToAccount(next)
+    })
+}
+
 function saveToAccount({ layout, cardSize, showCardInfo, sortKey, sortDirection }: ProjectsViewSettings) {
-  const projects_view = {
+  const projects_view: ProjectsViewPreference = {
     layout,
     card_size: cardSize,
     show_card_info: showCardInfo,
@@ -62,7 +93,7 @@ function saveToAccount({ layout, cardSize, showCardInfo, sortKey, sortDirection 
   const { user, setUser } = useAuthStore.getState()
   if (!user) return
   setUser({ ...user, preferences: { ...user.preferences, projects_view } })
-  api.patch('/auth/me/preferences', { projects_view }).catch(() => {})
+  sendToAccount(projects_view)
 }
 
 export const useProjectsViewStore = create<ProjectsViewStore>()(

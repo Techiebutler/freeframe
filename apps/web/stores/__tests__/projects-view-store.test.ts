@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useProjectsViewStore } from '../projects-view-store'
 import { useAuthStore } from '../auth-store'
 import type { User } from '@/types'
@@ -34,6 +34,12 @@ describe('useProjectsViewStore', () => {
     useAuthStore.setState({ user: { ...mockUser }, isAuthenticated: true })
   })
 
+  // Saves go out one at a time; let any still in flight settle so the next
+  // test's first save isn't queued behind this one's.
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 0))
+  })
+
   it('defaults to a medium grid with card info', () => {
     const { layout, cardSize, showCardInfo } = useProjectsViewStore.getState()
     expect(layout).toBe('grid')
@@ -43,13 +49,14 @@ describe('useProjectsViewStore', () => {
     expect(useProjectsViewStore.getState().sortDirection).toBe('desc')
   })
 
-  it('setSortKey and toggleSortDirection save the sort to the account', () => {
+  it('setSortKey and toggleSortDirection save the sort to the account', async () => {
     useProjectsViewStore.getState().setSortKey('name')
     useProjectsViewStore.getState().toggleSortDirection()
 
     const { sortKey, sortDirection } = useProjectsViewStore.getState()
     expect(sortKey).toBe('name')
     expect(sortDirection).toBe('desc')
+    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledTimes(2))
     expect(api.patch).toHaveBeenLastCalledWith('/auth/me/preferences', {
       projects_view: {
         layout: 'grid', card_size: 'M', show_card_info: true, sort_key: 'name', sort_direction: 'desc',
@@ -80,8 +87,42 @@ describe('useProjectsViewStore', () => {
     expect(useProjectsViewStore.getState().sortDirection).toBe('desc')
   })
 
-  it('setLayout saves the full projects_view to the account', () => {
+  it('sends one save at a time, then only the latest change', async () => {
+    // The endpoint read-modify-writes the whole preferences document, so two
+    // PATCHes in flight could land out of order and store the older value.
+    let finishFirst!: () => void
+    vi.mocked(api.patch).mockImplementationOnce(
+      () => new Promise((resolve) => { finishFirst = () => resolve(undefined) }),
+    )
+
+    const store = useProjectsViewStore.getState()
+    store.setLayout('list')
+    store.setCardSize('S')
+    store.setCardSize('L')
+
+    expect(api.patch).toHaveBeenCalledTimes(1)
+    finishFirst()
+    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledTimes(2))
+
+    const sent = vi.mocked(api.patch).mock.calls.map((c) => (c[1] as { projects_view: { card_size: string } }).projects_view.card_size)
+    expect(sent).toEqual(['M', 'L'])
+  })
+
+  it('still sends the queued change when a save fails', async () => {
+    vi.mocked(api.patch).mockRejectedValueOnce(new Error('500'))
+
+    useProjectsViewStore.getState().setLayout('list')
     useProjectsViewStore.getState().setCardSize('L')
+
+    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledTimes(2))
+    expect(api.patch).toHaveBeenLastCalledWith('/auth/me/preferences', {
+      projects_view: expect.objectContaining({ layout: 'list', card_size: 'L' }),
+    })
+  })
+
+  it('setLayout saves the full projects_view to the account', async () => {
+    useProjectsViewStore.getState().setCardSize('L')
+    await new Promise((r) => setTimeout(r, 0)) // let that save settle
     vi.mocked(api.patch).mockClear()
 
     useProjectsViewStore.getState().setLayout('list')

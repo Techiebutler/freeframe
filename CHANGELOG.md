@@ -8,12 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Appearance and sort menus on the Projects page.** Choose grid or list, and in grid a small, medium or large card size and whether cards show their info row. Sort projects by date created or by name, as you can inside a project. Your choices are saved to your account, so the page opens the way you left it on any device; it used to reset to the grid every visit.
+- **Appearance and sort menus on the Projects page.** Choose grid or list, and in grid a small, medium or large card size and whether cards show their info row. Sort projects by date created or by name, as you can inside a project. Your choices are saved to your account, so the page opens the way you left it on any device; it used to reset to the grid every visit. (#485 by @jdanna)
 
 ### Fixed
-- **Sorting by date says Newest or Oldest instead of Z-A or A-Z.** The sort menu inside a project labelled the date direction as if it were alphabetical.
-- **Picking a sort inside a project starts it in a sensible direction.** Date starts newest first and everything else A-Z; switching from Date to Name used to carry the direction over and list names Z-A.
-- **Sorting by name orders numbers by value.** "Shot 2" now comes before "Shot 10", and capitals no longer change the order.
+- **Sorting by date says Newest or Oldest instead of Z-A or A-Z.** The sort menu inside a project labelled the date direction as if it were alphabetical. (#485 by @jdanna)
+- **Picking a sort inside a project starts it in a sensible direction.** Date starts newest first and everything else A-Z; switching from Date to Name used to carry the direction over and list names Z-A. (#485 by @jdanna)
+- **Sorting by name orders numbers by value.** "Shot 2" now comes before "Shot 10". (#485 by @jdanna)
 
 ## [1.17.0] - 2026-10-12
 

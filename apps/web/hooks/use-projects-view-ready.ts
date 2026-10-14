@@ -22,17 +22,12 @@ const useIsomorphicLayoutEffect =
 export function useProjectsViewReady(): boolean {
   const preferences = useAuthStore((s) => s.user?.preferences)
   const syncFromServer = useProjectsViewStore((s) => s.syncFromServer)
-  const userLoading = useAuthStore((s) => s.isLoading)
+  // Not "not loading and no user": the dashboard layout starts the fetch in
+  // an effect, which runs after this page's own, so at mount that also
+  // describes a fetch that hasn't started. A fetch that had already failed
+  // before the page mounted (a 5xx, a network error) used to leave it blank.
+  const userSettled = useAuthStore((s) => s.userFetched)
   const [cache, setCache] = React.useState<'unread' | 'found' | 'missing'>('unread')
-
-  // isLoading starts false before the first fetch, so "not loading" alone
-  // doesn't mean the fetch is over: it must have been seen loading first.
-  const sawUserLoading = React.useRef(userLoading)
-  const [userSettled, setUserSettled] = React.useState(false)
-  React.useEffect(() => {
-    if (userLoading) sawUserLoading.current = true
-    else if (sawUserLoading.current) setUserSettled(true)
-  }, [userLoading])
 
   useIsomorphicLayoutEffect(() => {
     let found = false

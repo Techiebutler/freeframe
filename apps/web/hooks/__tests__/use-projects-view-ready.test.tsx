@@ -7,6 +7,7 @@ import { act, renderHook } from '@testing-library/react'
 import { useAuthStore } from '@/stores/auth-store'
 import { PROJECTS_VIEW_STORAGE_KEY, useProjectsViewStore } from '@/stores/projects-view-store'
 import { useProjectsViewReady } from '../use-projects-view-ready'
+import { api } from '@/lib/api'
 import type { User } from '@/types'
 
 vi.mock('@/lib/api', () => ({ api: { patch: vi.fn() } }))
@@ -25,7 +26,8 @@ function cache(state: Record<string, unknown>) {
 
 describe('useProjectsViewReady', () => {
   beforeEach(() => {
-    useAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false })
+    vi.mocked(api.patch).mockClear()
+    useAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false, userFetched: false })
     useProjectsViewStore.setState({
       layout: 'grid', cardSize: 'M', showCardInfo: true, sortKey: 'date', sortDirection: 'desc',
     })
@@ -40,6 +42,8 @@ describe('useProjectsViewReady', () => {
 
     expect(result.current).toBe(true)
     expect(useProjectsViewStore.getState().cardSize).toBe('S')
+    // Loading saved settings is not a change to save.
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
   it('with nothing cached, waits for the account and applies its settings', () => {
@@ -56,6 +60,7 @@ describe('useProjectsViewReady', () => {
     expect(result.current).toBe(true)
     expect(useProjectsViewStore.getState().layout).toBe('list')
     expect(useProjectsViewStore.getState().cardSize).toBe('L')
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
   it('with nothing cached or saved, becomes ready on the defaults', () => {
@@ -75,9 +80,26 @@ describe('useProjectsViewReady', () => {
     act(() => { useAuthStore.setState({ isLoading: true }) })
     expect(result.current).toBe(false)
 
-    act(() => { useAuthStore.setState({ isLoading: false }) })
+    act(() => { useAuthStore.setState({ isLoading: false, userFetched: true }) })
     expect(result.current).toBe(true)
     expect(useProjectsViewStore.getState().cardSize).toBe('M')
+  })
+
+  it('with nothing cached, does not wait for an account that failed before the page mounted', () => {
+    useAuthStore.setState({ user: null, isLoading: false, userFetched: true })
+
+    const { result } = renderHook(() => useProjectsViewReady())
+
+    expect(result.current).toBe(true)
+    expect(useProjectsViewStore.getState().cardSize).toBe('M')
+  })
+
+  it('with nothing cached, still waits when the fetch has not started yet', () => {
+    // How a first load looks at mount: the layout's fetch effect runs after
+    // the page's, so the store is not loading and has no user yet.
+    const { result } = renderHook(() => useProjectsViewReady())
+
+    expect(result.current).toBe(false)
   })
 
   it('lets the account replace a stale cached value', () => {

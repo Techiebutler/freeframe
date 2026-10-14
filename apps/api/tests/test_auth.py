@@ -591,3 +591,16 @@ def test_update_preferences_projects_view_rejects_unknown_sort_key(client, auth_
 
     assert resp.status_code == 422
     assert test_user.preferences == {}
+
+
+def test_update_preferences_projects_view_rejects_unknown_sort_direction(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — a sort runs ascending or descending, nothing else."""
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch(
+            "/auth/me/preferences",
+            json={"projects_view": {"layout": "grid", "card_size": "M", "sort_direction": "up"}},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 422
+    assert test_user.preferences == {}

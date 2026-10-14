@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { SortPopoverView, dateDirectionLabels, type SortOption } from '../sort-popover'
+import { SortPopover, SortPopoverView, dateDirectionLabels, type SortOption } from '../sort-popover'
+import { useViewStore } from '@/stores/view-store'
 
 type Key = 'date' | 'name'
 const options: SortOption<Key>[] = [
@@ -36,5 +37,37 @@ describe('SortPopoverView direction labels', () => {
   it('keeps A-Z / Z-A for alphabetical sorts', () => {
     open('name', 'asc')
     expect(screen.getByText('A-Z')).toBeInTheDocument()
+  })
+})
+
+// The in-project menu itself, wired to the real view store, not just the view.
+describe('SortPopover inside a project', () => {
+  beforeEach(() => {
+    useViewStore.setState({ sortKey: 'date', sortDirection: 'desc' })
+  })
+
+  function menuItem(label: string) {
+    return screen.getByRole('button', { name: new RegExp(`^${label}`) })
+  }
+
+  it('labels the date direction Newest and Oldest as it is flipped', () => {
+    render(<SortPopover />)
+    fireEvent.click(screen.getByRole('button', { name: /sorted by/i }))
+
+    expect(menuItem('Date')).toHaveTextContent('Newest')
+    fireEvent.click(menuItem('Date'))
+    expect(useViewStore.getState().sortDirection).toBe('asc')
+    expect(menuItem('Date')).toHaveTextContent('Oldest')
+  })
+
+  it('starts Name at A-Z after a newest-first date sort, and Date back at Newest', () => {
+    render(<SortPopover />)
+    fireEvent.click(screen.getByRole('button', { name: /sorted by/i }))
+
+    fireEvent.click(menuItem('Name'))
+    expect(menuItem('Name')).toHaveTextContent('A-Z')
+
+    fireEvent.click(menuItem('Date'))
+    expect(menuItem('Date')).toHaveTextContent('Newest')
   })
 })

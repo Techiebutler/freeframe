@@ -17,9 +17,17 @@ const projects = [
 ]
 
 describe('compareNames', () => {
-  it('orders numbers by value and ignores case', () => {
+  it('orders numbers by value', () => {
     expect(['Project 10', 'project 2', 'Project 1'].sort(compareNames))
       .toEqual(['Project 1', 'project 2', 'Project 10'])
+  })
+
+  it('treats names that differ only in case as equal', () => {
+    // Plain localeCompare already sorts case-insensitively; it only differs on
+    // an exact case-only tie, where it puts lowercase first. With
+    // sensitivity 'base' the two are equal, so a stable sort keeps their order.
+    expect(compareNames('Apple', 'apple')).toBe(0)
+    expect(['Apple', 'apple'].sort(compareNames)).toEqual(['Apple', 'apple'])
   })
 })
 

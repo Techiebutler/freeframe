@@ -8,6 +8,8 @@ interface AuthState {
   isAuthenticated: boolean
   isSuperAdmin: boolean
   isLoading: boolean
+  /** True once a fetchUser call has finished, whether it found a user or not. */
+  userFetched: boolean
   setUser: (user: User) => void
   logout: () => void
   fetchUser: () => Promise<void>
@@ -18,6 +20,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   isAuthenticated: false,
   isSuperAdmin: false,
   isLoading: false,
+  userFetched: false,
 
   setUser: (user: User) => {
     set({
@@ -52,7 +55,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
         isSuperAdmin: false,
       })
     } finally {
-      set({ isLoading: false })
+      set({ isLoading: false, userFetched: true })
     }
   },
 }))
