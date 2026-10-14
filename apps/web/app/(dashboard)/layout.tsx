@@ -7,6 +7,7 @@ import { useUploadStore } from "@/stores/upload-store";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { CommandPalette } from "@/components/layout/command-palette";
+import { KeyboardShortcuts } from "@/components/layout/keyboard-shortcuts";
 import { UploadsPanel } from "@/components/layout/uploads-panel";
 import { UploadSSEBridge } from "@/components/layout/upload-sse-bridge";
 import { PoweredByBadge } from "@/components/shared/powered-by-badge";
@@ -98,6 +99,7 @@ export default function DashboardLayout({
       <UploadsPanel railCollapsed={sidebarCollapsed} />
       <UploadSSEBridge />
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
+      <KeyboardShortcuts standalone />
     </div>
   );
 }

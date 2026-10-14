@@ -43,6 +43,7 @@ from ..services.permissions import (
 from ..services.auth_service import bcrypt_password_bytes
 from ..services.redis_service import create_share_session
 from ..services.search import escape_like
+from ..services.owned_keys import is_project_logo_key
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.crypto_service import encrypt_password, decrypt_password
 from .hls_proxy import create_hls_token
@@ -304,7 +305,11 @@ def _build_share_validate_response(
         ).first()
         if branding:
             branding_data = {
-                "logo_url": branding.logo_s3_key,
+                # A key, not a link, and only when it is this project's own
+                # uploaded logo, the same rule GET /projects/{id}/branding applies.
+                "logo_url": (branding.logo_s3_key
+                             if is_project_logo_key(asset.project_id, branding.logo_s3_key)
+                             else None),
                 "primary_color": branding.primary_color,
                 "custom_title": branding.custom_title,
                 "custom_footer": branding.custom_footer,

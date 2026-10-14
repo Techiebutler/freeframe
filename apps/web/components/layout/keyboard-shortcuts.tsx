@@ -19,43 +19,40 @@ interface ShortcutGroup {
 
 // ─── Shortcut definitions ─────────────────────────────────────────────────────
 
+// Only shortcuts that are actually bound. Keep this in step with the handlers:
+// the panel went unmounted for a long time while listing keys nothing handled.
 const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: 'Navigation',
     items: [
       { keys: ['⌘', 'K'], label: 'Open command palette / search' },
       { keys: ['?'], label: 'Show keyboard shortcuts' },
-      { keys: ['⌘', '/'], label: 'Toggle sidebar' },
     ],
   },
   {
     title: 'Review',
     items: [
       { keys: ['Space'], label: 'Play / pause video or audio' },
-      { keys: ['←'], label: 'Seek back 5 seconds' },
-      { keys: ['→'], label: 'Seek forward 5 seconds' },
       { keys: ['J'], label: 'Jump back 10 seconds' },
       { keys: ['K'], label: 'Play / pause' },
       { keys: ['L'], label: 'Jump forward 10 seconds' },
-      { keys: ['M'], label: 'Mute / unmute' },
-      { keys: ['F'], label: 'Toggle fullscreen' },
     ],
   },
   {
-    title: 'Actions',
+    title: 'Project',
     items: [
-      { keys: ['N', 'P'], label: 'New project' },
-      { keys: ['N', 'A'], label: 'Upload asset' },
-      { keys: ['G', 'H'], label: 'Go to home' },
-      { keys: ['G', 'P'], label: 'Go to projects' },
-      { keys: ['G', 'A'], label: 'Go to assets' },
+      { keys: ['⌘', 'A'], label: 'Select all' },
+      { keys: ['Shift', 'Click'], label: 'Select a range of assets' },
+      { keys: ['⌘', 'Click'], label: 'Add / remove an asset from the selection' },
+      { keys: ['Esc'], label: 'Deselect all' },
     ],
   },
   {
     title: 'Comments',
     items: [
-      { keys: ['C'], label: 'Focus comment input' },
-      { keys: ['Esc'], label: 'Cancel comment / close panel' },
+      { keys: ['Enter'], label: 'Post comment' },
+      { keys: ['Shift', 'Enter'], label: 'New line' },
+      { keys: ['Esc'], label: 'Cancel reply' },
     ],
   },
 ]
@@ -123,7 +120,11 @@ export function KeyboardShortcuts({
           className={cn(
             'fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2',
             'rounded-2xl border border-border bg-bg-elevated shadow-2xl',
-            'data-[state=open]:animate-slide-down',
+            // tailwindcss-animate's enter keyframes keep the centering translate;
+            // the custom `animate-slide-down` set `transform` outright, so the
+            // panel opened off to the bottom right and then jumped to the middle.
+            'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+            'data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
             'max-h-[80vh] flex flex-col',
           )}
         >

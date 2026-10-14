@@ -61,6 +61,19 @@ export function formatBytes(bytes: number): string {
   return `${parseFloat(value.toFixed(1))} ${units[i]}`
 }
 
+/**
+ * Time remaining as the uploads panel words it, rounded up to the minute
+ * e.g. 20 → "< 1 min left", 180 → "3 min left", 4800 → "1 h 20 min left"
+ */
+export function formatTimeLeft(seconds: number): string {
+  if (seconds < 60) return '< 1 min left'
+  const minutes = Math.ceil(seconds / 60)
+  if (minutes < 60) return `${minutes} min left`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `${hours} h ${rest} min left` : `${hours} h left`
+}
+
 export const GB = 1024 ** 3
 
 export function gbToBytes(gb: number): number {

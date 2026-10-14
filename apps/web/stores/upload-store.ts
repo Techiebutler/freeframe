@@ -2,6 +2,8 @@ import { create, type StateCreator } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { mutate as globalMutate } from 'swr'
 import { api, ApiError } from '@/lib/api'
+import { createSpeedMeter, type SpeedMeter } from '@/lib/upload-speed'
+import { useUploadSpeedStore } from './upload-speed-store'
 import type { AssetResponse } from '@/types'
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -427,6 +429,19 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * heartbeat from #312, not a progress report: `onProgress` only fires when the
  * percent moves, and on a large file that can be many minutes apart, longer
  * than the window another tab gives a row before it offers Discard.
+ *
+ * `opts.onAllSent` runs when the browser has handed over the file's last byte.
+ * That is not the end of the transfer: each part still waits for storage to
+ * answer for it, after writing it, and behind a buffering proxy after
+ * forwarding it too. The bar is already at 95 by then, so this is where the
+ * wait the user sees begins.
+ *
+ * `opts.onResend` undoes it: a part that fails after every byte was sent gives
+ * its bytes back, and its retry is a transfer again, one a user may cancel.
+ * `onAllSent` runs again once the retry has sent them.
+ *
+ * `opts.onBytes` hears every byte count, not just whole-percent moves, for the
+ * speed meter. It must not write to this store: see `useUploadSpeedStore`.
  */
 export async function uploadAllParts(
   file: File,
@@ -435,7 +450,14 @@ export async function uploadAllParts(
   controller: AbortController,
   onProgress: (percent: number) => void,
   concurrency: number = UPLOAD_CONCURRENCY,
-  opts?: { chunkSize?: number; alreadyHeld?: readonly number[]; onPartDone?: () => void },
+  opts?: {
+    chunkSize?: number
+    alreadyHeld?: readonly number[]
+    onPartDone?: () => void
+    onAllSent?: () => void
+    onResend?: () => void
+    onBytes?: (sent: number) => void
+  },
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
   const chunkSize = opts?.chunkSize ?? CHUNK_SIZE
   const held = new Set(opts?.alreadyHeld ?? [])
@@ -477,11 +499,22 @@ export async function uploadAllParts(
   // again: a part that fails before its first progress event would otherwise
   // write a 0 into a row that has just stopped, and stamp its heartbeat.
   let reported = 0
+  let allSent = false
   const report = () => {
     let sent = doneBytes
     inFlightBytes.forEach((bytes) => {
       sent += bytes
     })
+    // Before onBytes, so the drop is the first count a restarted meter sees.
+    if (allSent && sent < file.size) {
+      allSent = false
+      opts?.onResend?.()
+    }
+    opts?.onBytes?.(sent)
+    if (!allSent && sent >= file.size) {
+      allSent = true
+      opts?.onAllSent?.()
+    }
     const percent = Math.min(95, Math.round((sent / file.size) * 95))
     if (percent <= reported) return
     reported = percent
@@ -677,6 +710,15 @@ export interface UploadFile {
    *  the correction sent during `/upload/initiate`'s round trip has nobody to
    *  return to, so it leaves the reason here. */
   renameError?: string
+  /**
+   * The browser has sent every byte and is waiting on storage: first for it to
+   * answer for the last parts, then for `/upload/complete`, where it assembles
+   * them. Either can take minutes with the bar at 95. The status stays
+   * `uploading` -- recovery, the heartbeat and the Active tab all treat this as
+   * the transfer it still is -- and the panel reads this only alongside that
+   * status, so a stale value on any other is inert.
+   */
+  finalizing?: boolean
 }
 
 /** POST /upload/initiate and POST /assets/{id}/versions — both answer with this.
@@ -756,6 +798,40 @@ function beatFor(
   update({ ownerTab: currentTabId(), heartbeatAt: Date.now() })
   const timer = setInterval(() => update({ heartbeatAt: Date.now() }), HEARTBEAT_MS)
   return () => clearInterval(timer)
+}
+
+/** Measures a row's transfer rate into `useUploadSpeedStore`, which the panel
+ *  shows beside its percentage. Stopped once every byte is sent, and whenever
+ *  the transfer ends. */
+function meterFor(fileId: string, totalBytes: number): SpeedMeter {
+  return createSpeedMeter(totalBytes, (rate) => useUploadSpeedStore.getState().setRate(fileId, rate))
+}
+
+/**
+ * The `uploadAllParts` hooks that keep a row's `finalizing` flag and speed
+ * figure in step with its transfer: both end when the last byte is sent, and
+ * both come back if a part has to be sent again. `stop` ends the measurement
+ * for good, whichever way the transfer ended.
+ */
+function transferWatch(
+  fileId: string,
+  totalBytes: number,
+  patchRow: (patch: Partial<UploadFile>) => void,
+) {
+  let meter = meterFor(fileId, totalBytes)
+  return {
+    onBytes: (sent: number) => meter.sample(sent),
+    onAllSent: () => {
+      meter.stop()
+      patchRow({ finalizing: true })
+    },
+    onResend: () => {
+      meter.stop()
+      meter = meterFor(fileId, totalBytes)
+      patchRow({ finalizing: false })
+    },
+    stop: () => meter.stop(),
+  }
 }
 
 interface UploadStore {
@@ -1008,6 +1084,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
 
       retainWakeLock()
       const stopBeat = beatFor((patch) => updateFile(id, patch))
+      const watch = transferWatch(id, file.size, (patch) => updateFile(id, patch))
       try {
         updateFile(id, { status: 'uploading' })
 
@@ -1068,10 +1145,14 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           {
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
+            onBytes: watch.onBytes,
+            onAllSent: watch.onAllSent,
+            onResend: watch.onResend,
           },
         )
 
         completionAttempted = true
+        updateFile(id, { finalizing: true })
         await api.post('/upload/complete', {
           s3_key,
           upload_id,
@@ -1145,6 +1226,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           await abortCancelled(set, { s3_key, upload_id, version_id })
         }
       } finally {
+        watch.stop()
         stopBeat()
         releaseWakeLock()
         delete abortControllers[id]
@@ -1185,6 +1267,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let completionAttempted = false
       retainWakeLock()
       const stopBeat = beatFor((patch) => updateFile(id, patch))
+      const watch = transferWatch(id, file.size, (patch) => updateFile(id, patch))
       try {
         updateFile(id, { status: 'uploading' })
         const initRes = await api.post<VersionInitiateResponse>(
@@ -1209,10 +1292,14 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           {
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
+            onBytes: watch.onBytes,
+            onAllSent: watch.onAllSent,
+            onResend: watch.onResend,
           },
         )
 
         completionAttempted = true
+        updateFile(id, { finalizing: true })
         await api.post('/upload/complete', { s3_key, upload_id, asset_id: assetId, version_id, parts })
         const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
         updateFile(id, { progress: 100, status: isMedia ? 'processing' : 'complete', processingProgress: 0 })
@@ -1253,6 +1340,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           await abortCancelled(set, { s3_key, upload_id, version_id })
         }
       } finally {
+        watch.stop()
         stopBeat()
         releaseWakeLock()
         delete abortControllers[id]
@@ -1277,9 +1365,11 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       let info: ResumeInfo | undefined
       let completionAttempted = false
       let stopBeat = () => {}
+      let watch: ReturnType<typeof transferWatch> | null = null
       retainWakeLock()
       try {
-        updateFile({ status: 'uploading', progress: 0, error: undefined })
+        // A resumed row may have stopped while finalizing.
+        updateFile({ status: 'uploading', progress: 0, error: undefined, finalizing: false })
 
         // Everything needed to carry on comes from the server, including the key
         // and the upload id: this row may have been rehydrated from history in a
@@ -1346,6 +1436,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           if (file.size !== info.file_size_bytes) {
             throw new Error('File does not match original')
           }
+          const resumeWatch = transferWatch(fileId, file.size, updateFile)
+          watch = resumeWatch
           parts = await uploadAllParts(
             file, info.s3_key, info.upload_id, controller,
             (percent) => updateFile({ progress: percent, heartbeatAt: Date.now() }),
@@ -1354,11 +1446,15 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
               chunkSize: info.chunk_size_bytes,
               alreadyHeld: held,
               onPartDone: () => updateFile({ heartbeatAt: Date.now() }),
+              onBytes: resumeWatch.onBytes,
+              onAllSent: resumeWatch.onAllSent,
+              onResend: resumeWatch.onResend,
             },
           )
         }
 
         completionAttempted = true
+        updateFile({ finalizing: true })
         await api.post('/upload/complete', {
           s3_key: info.s3_key,
           upload_id: info.upload_id,
@@ -1428,6 +1524,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           })
         }
       } finally {
+        watch?.stop()
         stopBeat()
         releaseWakeLock()
         delete abortControllers[fileId]
