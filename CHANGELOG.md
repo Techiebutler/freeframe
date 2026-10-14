@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **An upload that has sent every byte says "Finalizing" instead of sitting at "Uploading 95%".** The storage backend can take minutes to assemble a large upload, which read as a hung upload. Cancel is hidden for that stretch, since there is nothing left for it to stop, and comes back if a part fails and has to be sent again. The API also logs any completion that takes 5 seconds or more, split into listing, assembling and finishing time. (#483 by @jdanna)
-- **Prev/next in the asset viewer stays in the asset's folder and follows your sort order.** It used to step through every asset in the project, in whatever order the server returned them, so from inside a folder it jumped out into other folders. It now walks the same list the project view shows for that folder (or the project's top level), in the view's current sort, and the "2 of 7" count matches it. (by @jdanna)
+- **Prev/next in the asset viewer stays in the asset's folder and follows your sort order.** It used to step through every asset in the project, in whatever order the server returned them, so from inside a folder it jumped out into other folders. It now walks the same list the project view shows for that folder (or the project's top level), in the view's current sort, and the "2 of 7" count matches it. (#495 by @jdanna)
 
 ## [1.17.1] - 2026-10-14
 
