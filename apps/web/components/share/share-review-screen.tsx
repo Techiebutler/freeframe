@@ -11,7 +11,7 @@
  * (#117, #123).
  */
 import * as React from 'react'
-import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { ArrowLeft, ChevronDown, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
 import { MobileCommentSheet, PEEK_PX, type SheetState } from '@/components/review/mobile-comment-sheet'
@@ -19,7 +19,8 @@ import { useMediaQuery } from '@/hooks/use-media-query'
 import { useMediaTransport } from '@/hooks/use-media-transport'
 import { formatTimecode } from '@/lib/utils'
 import type { SharePermission } from '@/types'
-import { handleDownload } from './share-download'
+import { fetchShareDownloadOptions, handleDownload } from './share-download'
+import { DownloadMenu } from '@/components/shared/download-menu'
 
 /** Signed in, or a guest who has already given a name and email. */
 function hasIdentity(): boolean {
@@ -292,9 +293,15 @@ function ShareReviewInner({
             <VersionSwitcher versions={versions} />
           )}
           {allowDownload && (
-            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
-              <Download className="h-3 w-3" /> Download
-            </button>
+            <DownloadMenu
+              load={() => fetchShareDownloadOptions(token, asset.id, shareSession)}
+              onPick={(rendition) => handleDownload(token, asset.id, shareSession, rendition)}
+            >
+              <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors">
+                <Download className="h-3 w-3" /> Download
+                <ChevronDown className="h-3 w-3 opacity-70" />
+              </button>
+            </DownloadMenu>
           )}
           <button onClick={() => (useSheet ? setSheetState(st => (st === 'peek' ? 'half' : 'peek')) : setSidebarOpen(v => !v))} className="flex items-center justify-center h-8 w-8 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
             {(useSheet ? sheetState !== 'peek' : sidebarOpen) ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}

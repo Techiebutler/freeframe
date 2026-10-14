@@ -8,6 +8,7 @@ import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
+import { DownloadSubmenu } from '@/components/shared/download-menu'
 import { AssetCard } from './asset-card'
 import { FolderCard } from './folder-card'
 import { AppearancePopover } from './appearance-popover'
@@ -15,7 +16,7 @@ import { SortPopover } from './sort-popover'
 import { MoveToDialog } from './move-to-dialog'
 import { useViewStore } from '@/stores/view-store'
 import { sortAssets } from '@/lib/sort-assets'
-import type { Asset, User, Folder, FolderTreeNode } from '@/types'
+import type { Asset, DownloadOption, User, Folder, FolderTreeNode } from '@/types'
 
 function isCoarsePointer(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
@@ -72,7 +73,10 @@ interface AssetGridProps {
   projectName?: string
   folderTree?: FolderTreeNode[]
   onAssetShare?: (asset: Asset) => void
-  onAssetDownload?: (asset: Asset) => void
+  /** `rendition` is a DownloadOption id; left out, the server picks. */
+  onAssetDownload?: (asset: Asset, rendition?: string) => void
+  /** With this, Download opens a submenu of what the asset can be downloaded as. */
+  loadAssetDownloadOptions?: (asset: Asset) => Promise<DownloadOption[] | null>
   onAssetRename?: (asset: Asset) => void
   onAssetDelete?: (asset: Asset) => void
   /** Actions rendered on the right side of the navigator bar */
@@ -132,6 +136,7 @@ export function AssetGrid({
   folderTree = [],
   onAssetShare,
   onAssetDownload,
+  loadAssetDownloadOptions,
   onAssetRename,
   onAssetDelete,
   actions,
@@ -470,7 +475,8 @@ export function AssetGrid({
                 aspectRatio={aspectRatio}
                 thumbnailScale={thumbnailScale}
                 onShare={onAssetShare ? () => onAssetShare(asset) : undefined}
-                onDownload={onAssetDownload ? () => onAssetDownload(asset) : undefined}
+                onDownload={onAssetDownload ? (rendition) => onAssetDownload(asset, rendition) : undefined}
+                loadDownloadOptions={loadAssetDownloadOptions ? () => loadAssetDownloadOptions(asset) : undefined}
                 onRename={onAssetRename ? () => onAssetRename(asset) : undefined}
                 onDelete={onAssetDelete ? () => onAssetDelete(asset) : undefined}
                 onDragStart={(e: React.DragEvent) => {
@@ -715,13 +721,20 @@ export function AssetGrid({
                           Create Share Link
                         </DropdownMenu.Item>
                         <DropdownMenu.Separator className="my-1 h-px bg-border mx-1" />
-                        <DropdownMenu.Item
-                          onSelect={() => onAssetDownload?.(asset)}
-                          className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                        >
-                          <Download className="h-3.5 w-3.5 text-text-tertiary" />
-                          Download
-                        </DropdownMenu.Item>
+                        {loadAssetDownloadOptions && onAssetDownload ? (
+                          <DownloadSubmenu
+                            load={() => loadAssetDownloadOptions(asset)}
+                            onPick={(rendition) => onAssetDownload(asset, rendition)}
+                          />
+                        ) : (
+                          <DropdownMenu.Item
+                            onSelect={() => onAssetDownload?.(asset)}
+                            className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
+                          >
+                            <Download className="h-3.5 w-3.5 text-text-tertiary" />
+                            Download
+                          </DropdownMenu.Item>
+                        )}
                         <DropdownMenu.Item
                           onSelect={() => {
                             const url = `${window.location.origin}${withBasePath(`/projects/${asset.project_id}/assets/${asset.id}`)}`

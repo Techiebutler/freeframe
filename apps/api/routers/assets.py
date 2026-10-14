@@ -12,10 +12,11 @@ from ..models.asset import Asset, AssetVersion, MediaFile, AssetType, FileType, 
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.share import AssetShare
 from ..models.activity import Mention, Notification, NotificationType
-from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse
+from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
+from ..services.downloads import download_choices, describe_choices, pick_download
 from .hls_proxy import create_hls_token
 from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
@@ -286,14 +287,10 @@ def list_asset_versions(
     return result
 
 
-@router.get("/assets/{asset_id}/stream", response_model=StreamUrlResponse)
-def get_stream_url(
-    asset_id: uuid.UUID,
-    version_id: Optional[uuid.UUID] = Query(default=None),
-    download: bool = Query(default=False),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+def _ready_media_file(
+    db: Session, asset_id: uuid.UUID, version_id: Optional[uuid.UUID], current_user: User,
+) -> tuple[Asset, MediaFile]:
+    """The asset and the media file of the version a stream or download serves."""
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -322,36 +319,60 @@ def get_stream_url(
     media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
     if not media_file:
         raise HTTPException(status_code=404, detail="Media file not found")
+    return asset, media_file
 
-    if asset.asset_type == AssetType.video and media_file.s3_key_processed:
-        if download:
-            # A download needs one file, and the ladder is segments. Prefer the
-            # MP4 remuxed from the top rung: it is what the reviewer watched,
-            # where the raw file is the camera master and can be an order of
-            # magnitude larger. Versions transcoded before that rung existed
-            # (and any whose remux failed) have none, and still get the master.
-            s3_key = (
-                media_file.s3_key_download
-                or media_file.s3_key_raw
-                or media_file.s3_key_processed
-            )
-            filename = build_download_filename(asset.name, s3_key, media_file.original_filename)
-            url = generate_presigned_get_url(s3_key, download_filename=filename)
-        else:
-            # Route through the HLS proxy so the master playlist, variant
-            # playlists, and .ts segments all get served via short-lived
-            # presigned URLs — the S3 bucket can stay fully private. (#51)
-            token = create_hls_token(media_file.s3_key_processed)
-            url = f"/stream/hls/master.m3u8?token={token}"
+
+@router.get("/assets/{asset_id}/stream", response_model=StreamUrlResponse)
+def get_stream_url(
+    asset_id: uuid.UUID,
+    version_id: Optional[uuid.UUID] = Query(default=None),
+    download: bool = Query(default=False),
+    # Which file a download serves: an id from GET /assets/{id}/downloads.
+    # Omitted, a download is the first transcode, as it was before the choice.
+    rendition: Optional[str] = Query(default=None, max_length=32),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    asset, media_file = _ready_media_file(db, asset_id, version_id, current_user)
+
+    if download:
+        # A download needs one file, and the ladder is segments. With no choice
+        # made this is the MP4 remuxed from the top rung: it is what the reviewer
+        # watched, where the raw file is the camera master and can be an order of
+        # magnitude larger. Versions transcoded before that rung existed (and any
+        # whose remux failed) have none, and still get the master.
+        choice = pick_download(asset.asset_type, media_file, rendition)
+        if not choice:
+            raise HTTPException(status_code=404, detail="Download option not found")
+        filename = build_download_filename(asset.name, choice.s3_key, media_file.original_filename)
+        url = generate_presigned_get_url(choice.s3_key, download_filename=filename)
+    elif asset.asset_type == AssetType.video and media_file.s3_key_processed:
+        # Route through the HLS proxy so the master playlist, variant
+        # playlists, and .ts segments all get served via short-lived
+        # presigned URLs — the S3 bucket can stay fully private. (#51)
+        token = create_hls_token(media_file.s3_key_processed)
+        url = f"/stream/hls/master.m3u8?token={token}"
     else:
-        s3_key = media_file.s3_key_processed or media_file.s3_key_raw
-        if download:
-            filename = build_download_filename(asset.name, s3_key, media_file.original_filename)
-            url = generate_presigned_get_url(s3_key, download_filename=filename)
-        else:
-            url = generate_presigned_get_url(s3_key)
+        url = generate_presigned_get_url(media_file.s3_key_processed or media_file.s3_key_raw)
 
     return StreamUrlResponse(url=url, asset_type=asset.asset_type)
+
+
+@router.get("/assets/{asset_id}/downloads", response_model=list[DownloadOption])
+def list_download_options(
+    asset_id: uuid.UUID,
+    version_id: Optional[uuid.UUID] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The files a version can be downloaded as: the original, then each transcode."""
+    asset, media_file = _ready_media_file(db, asset_id, version_id, current_user)
+    choices = download_choices(asset.asset_type, media_file)
+    describe_choices(asset.asset_type, media_file, choices)
+    return [
+        DownloadOption(id=c.id, label=c.label, format=c.format, size_bytes=c.size_bytes)
+        for c in choices
+    ]
 
 
 @router.post("/assets/{asset_id}/versions", response_model=InitiateUploadResponse)

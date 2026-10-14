@@ -5,7 +5,8 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal, Check, Share2, Download, Link as LinkIcon, Pencil, Trash2 } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
-import type { Asset, AssetType, User } from '@/types'
+import type { Asset, AssetType, DownloadOption, User } from '@/types'
+import { DownloadSubmenu } from '@/components/shared/download-menu'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
 
 const assetTypeIcons: Record<AssetType, React.ElementType> = {
@@ -34,7 +35,10 @@ interface AssetCardProps {
   onSelect?: (e: React.MouseEvent) => void
   onDragStart?: (e: React.DragEvent) => void
   onShare?: () => void
-  onDownload?: () => void
+  /** `rendition` is a DownloadOption id; left out, the server picks. */
+  onDownload?: (rendition?: string) => void
+  /** With this, Download opens a submenu of what the asset can be downloaded as. */
+  loadDownloadOptions?: () => Promise<DownloadOption[] | null>
   onRename?: () => void
   onDelete?: () => void
   fileSize?: number | null
@@ -73,6 +77,7 @@ export function AssetCard({
   onDragStart,
   onShare,
   onDownload,
+  loadDownloadOptions,
   onRename,
   onDelete,
   fileSize,
@@ -188,13 +193,17 @@ export function AssetCard({
                     Create Share Link
                   </DropdownMenu.Item>
                   <DropdownMenu.Separator className="my-1 h-px bg-border mx-1" />
-                  <DropdownMenu.Item
-                    onSelect={onDownload}
-                    className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                  >
-                    <Download className="h-3.5 w-3.5 text-text-tertiary" />
-                    Download
-                  </DropdownMenu.Item>
+                  {loadDownloadOptions && onDownload ? (
+                    <DownloadSubmenu load={loadDownloadOptions} onPick={onDownload} />
+                  ) : (
+                    <DropdownMenu.Item
+                      onSelect={() => onDownload?.()}
+                      className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
+                    >
+                      <Download className="h-3.5 w-3.5 text-text-tertiary" />
+                      Download
+                    </DropdownMenu.Item>
+                  )}
                   <DropdownMenu.Item
                     onSelect={() => {
                       const url = `${window.location.origin}${withBasePath(`/projects/${asset.project_id}/assets/${asset.id}`)}`

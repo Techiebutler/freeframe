@@ -5,6 +5,8 @@
  * (#117, #123); importing them back from there would make the two modules
  * circular, so they live here instead.
  */
+import type { DownloadOption } from '@/types'
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export function triggerDownload(url: string) {
@@ -20,9 +22,10 @@ export function triggerDownload(url: string) {
 }
 
 export async function fetchDownloadUrl(
-  token: string, assetId: string, shareSession?: string | null,
+  token: string, assetId: string, shareSession?: string | null, rendition?: string,
 ): Promise<string | null> {
-  const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+  let sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+  if (rendition) sp += `&rendition=${encodeURIComponent(rendition)}`
   try {
     const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true${sp}`)
     if (!response.ok) return null
@@ -34,8 +37,22 @@ export async function fetchDownloadUrl(
 }
 
 export async function handleDownload(
-  token: string, assetId: string, shareSession?: string | null,
+  token: string, assetId: string, shareSession?: string | null, rendition?: string,
 ) {
-  const url = await fetchDownloadUrl(token, assetId, shareSession)
+  const url = await fetchDownloadUrl(token, assetId, shareSession, rendition)
   if (url) triggerDownload(url)
+}
+
+/** What an asset in a share link can be downloaded as: the original, then the transcode. */
+export async function fetchShareDownloadOptions(
+  token: string, assetId: string, shareSession?: string | null,
+): Promise<DownloadOption[] | null> {
+  const sp = shareSession ? `?share_session=${encodeURIComponent(shareSession)}` : ''
+  try {
+    const response = await fetch(`${API_URL}/share/${token}/downloads/${assetId}${sp}`)
+    if (!response.ok) return null
+    return (await response.json()) as DownloadOption[]
+  } catch {
+    return null
+  }
 }

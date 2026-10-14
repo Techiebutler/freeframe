@@ -38,6 +38,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/shared/avatar";
 import { AssetGrid } from "@/components/projects/asset-grid";
+import { DownloadMenu } from "@/components/shared/download-menu";
+import { downloadAsset, fetchAssetDownloadOptions } from "@/lib/asset-download";
 import { CommentPanel } from "@/components/review/comment-panel";
 import { UploadZone } from "@/components/upload/upload-zone";
 import { useFileDropRegion } from "@/components/projects/use-file-drop-region";
@@ -817,20 +819,12 @@ export default function ProjectDetailPage() {
                 setShareDialogResult(null);
                 setShareDialogOpen(true);
               }}
-              onAssetDownload={async (asset) => {
+              onAssetDownload={async (asset, rendition) => {
                 try {
-                  const data = await api.get<{ url: string }>(
-                    `/assets/${asset.id}/stream?download=true`,
-                  );
-                  if (data?.url) {
-                    const iframe = document.createElement("iframe");
-                    iframe.style.display = "none";
-                    iframe.src = data.url;
-                    document.body.appendChild(iframe);
-                    setTimeout(() => iframe.remove(), 30000);
-                  }
+                  await downloadAsset(asset.id, rendition);
                 } catch {}
               }}
+              loadAssetDownloadOptions={(asset) => fetchAssetDownloadOptions(asset.id)}
               onAssetRename={(asset) => setAssetToRename(asset as AssetResponse)}
               onAssetDelete={(asset) => setAssetToDelete(asset as AssetResponse)}
               onBulkMove={async (assetIds, folderIds, targetFolderId) => {
@@ -843,29 +837,18 @@ export default function ProjectDetailPage() {
                 setPendingBulkDelete({ assetIds, folderIds });
               }}
               onBulkDownload={async (assetIds, folderIds) => {
-                function triggerDownload(url: string) {
-                  const iframe = document.createElement("iframe");
-                  iframe.style.display = "none";
-                  iframe.src = url;
-                  document.body.appendChild(iframe);
-                  setTimeout(() => iframe.remove(), 30000);
-                }
-
-                async function downloadAsset(id: string) {
+                // No choice per asset here, so every asset comes down as the
+                // file that was uploaded.
+                async function downloadOne(id: string) {
                   try {
-                    const data = await api.get<{ url: string }>(
-                      `/assets/${id}/stream?download=true`,
-                    );
-                    if (data?.url) {
-                      triggerDownload(data.url);
-                      await new Promise((r) => setTimeout(r, 300));
-                    }
+                    await downloadAsset(id, "original");
+                    await new Promise((r) => setTimeout(r, 300));
                   } catch {}
                 }
 
                 // Download selected assets
                 for (const id of assetIds) {
-                  await downloadAsset(id);
+                  await downloadOne(id);
                 }
 
                 // Download assets from selected folders
@@ -875,7 +858,7 @@ export default function ProjectDetailPage() {
                       `/projects/${projectId}/assets?folder_id=${folderId}&skip=0&limit=100`,
                     );
                     for (const fa of folderAssets) {
-                      await downloadAsset(fa.id);
+                      await downloadOne(fa.id);
                     }
                   } catch {}
                 }
@@ -1212,29 +1195,21 @@ export default function ProjectDetailPage() {
                       >
                         <LinkIcon className="h-3.5 w-3.5" /> Share
                       </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="gap-1"
-                        onClick={async () => {
+                      <DownloadMenu
+                        load={() => fetchAssetDownloadOptions(selectedAsset.id)}
+                        onPick={async (rendition) => {
                           try {
-                            const res = await api.get<{ url: string }>(
-                              `/assets/${selectedAsset.id}/stream?download=true`,
-                            );
-                            if (res.url) {
-                              const iframe = document.createElement("iframe");
-                              iframe.style.display = "none";
-                              iframe.src = res.url;
-                              document.body.appendChild(iframe);
-                              setTimeout(() => iframe.remove(), 30000);
-                            }
+                            await downloadAsset(selectedAsset.id, rendition);
                           } catch {
                             // Silent fail
                           }
                         }}
                       >
-                        <Download className="h-3.5 w-3.5" /> Download
-                      </Button>
+                        <Button variant="secondary" size="sm" className="gap-1">
+                          <Download className="h-3.5 w-3.5" /> Download
+                          <ChevronDown className="h-3 w-3 opacity-60" />
+                        </Button>
+                      </DownloadMenu>
                     </div>
                   </div>
                 )

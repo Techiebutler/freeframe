@@ -168,6 +168,15 @@ export interface MediaFile {
   created_at: string;
 }
 
+/** One file a version can be downloaded as: the original, or a transcode. */
+export interface DownloadOption {
+  /** "original" or "transcode"; passed back as `rendition` when downloading. */
+  id: string;
+  label: string;
+  format: string;
+  size_bytes: number | null;
+}
+
 export interface CarouselItem {
   id: string;
   version_id: string;
