@@ -133,7 +133,7 @@ class ShareLinkListItem(BaseModel):
     target_name: str
     view_count: int = 0
     last_viewed_at: Optional[datetime] = None
-    created_at: Optional[datetime] = None
+    created_at: datetime
     model_config = {"from_attributes": True}
 
 

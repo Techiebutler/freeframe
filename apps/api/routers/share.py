@@ -1048,9 +1048,10 @@ def list_project_share_links(
         project_query = project_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
 
     results = asset_query.union_all(folder_query).union_all(project_query).all()
-    # Newest first. The union has no order of its own, and sorting here avoids
-    # ORDER BY column adaptation on a legacy Query union.
-    results = sorted(results, key=lambda row: row.created_at, reverse=True)
+    # Newest first, ties broken by id so the order is fully deterministic. The
+    # union has no order of its own, and sorting here avoids ORDER BY column
+    # adaptation on a legacy Query union.
+    results = sorted(results, key=lambda row: (row.created_at, str(row.id)), reverse=True)
 
     return [
         ShareLinkListItem(

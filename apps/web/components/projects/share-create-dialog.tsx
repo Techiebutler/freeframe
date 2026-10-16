@@ -1070,9 +1070,15 @@ export function ShareCreateDialog({
     return 'Shared Project'
   }
 
-  // Reset state when dialog opens/closes
+  // Reset only when the dialog opens. The other deps are read for the reset but
+  // must not trigger one: `assets` is a new array after every SWR revalidation
+  // (fresh signed thumbnail URLs), and resetting after Create would turn Copy
+  // back into Create and post a second link.
+  const wasOpenRef = React.useRef(false)
   React.useEffect(() => {
-    if (open) {
+    const justOpened = open && !wasOpenRef.current
+    wasOpenRef.current = open
+    if (justOpened) {
       const initial = new Map<string, SelectedItem>()
       if (preselectedItem) {
         const key = `${preselectedItem.type}:${preselectedItem.id}`
