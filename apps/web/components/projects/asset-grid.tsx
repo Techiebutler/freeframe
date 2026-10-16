@@ -3,7 +3,7 @@
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images, Link as LinkIcon, Pencil } from 'lucide-react'
-import { cn, compareNames, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
@@ -14,10 +14,18 @@ import { AppearancePopover } from './appearance-popover'
 import { SortPopover } from './sort-popover'
 import { MoveToDialog } from './move-to-dialog'
 import { useViewStore } from '@/stores/view-store'
-import type { Asset, AssetStatus, User, Folder, FolderTreeNode } from '@/types'
+import { sortAssets } from '@/lib/sort-assets'
+import type { Asset, User, Folder, FolderTreeNode } from '@/types'
 
 function isCoarsePointer(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+}
+
+type ItemKind = 'asset' | 'folder'
+
+/** One key space for folders and assets, whose ids could otherwise collide. */
+function itemKey(kind: ItemKind, id: string): string {
+  return `${kind}:${id}`
 }
 
 const assetTypeIcons: Record<string, React.ElementType> = {
@@ -25,14 +33,6 @@ const assetTypeIcons: Record<string, React.ElementType> = {
   audio: Music,
   image: ImageIcon,
   image_carousel: Images,
-}
-
-const statusOrder: Record<AssetStatus, number> = {
-  in_review: 0,
-  draft: 1,
-  approved: 2,
-  rejected: 3,
-  archived: 4,
 }
 
 interface AssetGridProps {
@@ -166,11 +166,12 @@ export function AssetGrid({
     sortDirection,
   } = useViewStore()
 
-  // Where a shift-click range starts: the last asset clicked or toggled.
+  // Where a shift-click range starts: the last item clicked or toggled, as an
+  // `itemKey`, since folders and assets share one range.
   const rangeAnchorRef = React.useRef<string | null>(null)
 
   const toggleAssetSelect = (assetId: string) => {
-    rangeAnchorRef.current = assetId
+    rangeAnchorRef.current = itemKey('asset', assetId)
     setSelectedAssetIds((prev) => {
       const next = new Set(prev)
       if (next.has(assetId)) next.delete(assetId)
@@ -180,6 +181,7 @@ export function AssetGrid({
   }
 
   const toggleFolderSelect = (folderId: string) => {
+    rangeAnchorRef.current = itemKey('folder', folderId)
     setSelectedFolderIds((prev) => {
       const next = new Set(prev)
       if (next.has(folderId)) next.delete(folderId)
@@ -196,60 +198,63 @@ export function AssetGrid({
   const totalSelected = selectedAssetIds.size + selectedFolderIds.size
   const selectedTotalSize = Array.from(selectedAssetIds).reduce((sum, id) => sum + (fileSizes[id] ?? 0), 0)
 
-  const filtered = React.useMemo(() => {
-    let result = [...assets]
-
-    if (sortKey !== 'custom') {
-      result.sort((a, b) => {
-        let cmp = 0
-        if (sortKey === 'date') {
-          cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
-        } else if (sortKey === 'name') {
-          cmp = compareNames(a.name, b.name)
-        } else if (sortKey === 'status') {
-          cmp = statusOrder[a.status] - statusOrder[b.status]
-        } else if (sortKey === 'type') {
-          cmp = a.asset_type.localeCompare(b.asset_type)
-        }
-        return sortDirection === 'asc' ? cmp : -cmp
-      })
-    }
-
-    return result
-  }, [assets, sortKey, sortDirection])
+  const filtered = React.useMemo(
+    () => sortAssets(assets, sortKey, sortDirection),
+    [assets, sortKey, sortDirection],
+  )
 
   const showFolders = !flattenFolders && folders && folders.length > 0
 
-  /** Add every asset between the anchor and `assetId`, in the order shown. */
-  const selectAssetRange = (assetId: string) => {
-    const ids = filtered.map((a) => a.id)
-    const to = ids.indexOf(assetId)
-    const from = ids.indexOf(rangeAnchorRef.current ?? selectedAssetId ?? '')
-    const range = from === -1 ? [assetId] : ids.slice(Math.min(from, to), Math.max(from, to) + 1)
-    setSelectedAssetIds((prev) => new Set([...Array.from(prev), ...range]))
+  /** Add every folder and asset between the anchor and this item, in the
+   *  order shown: folders first, then assets. */
+  const selectRange = (kind: ItemKind, id: string) => {
+    const keys = [
+      ...(showFolders ? folders!.map((f) => itemKey('folder', f.id)) : []),
+      ...filtered.map((a) => itemKey('asset', a.id)),
+    ]
+    const target = itemKey(kind, id)
+    const to = keys.indexOf(target)
+    const anchor = rangeAnchorRef.current ?? (selectedAssetId ? itemKey('asset', selectedAssetId) : '')
+    const from = keys.indexOf(anchor)
+    const range = from === -1 ? [target] : keys.slice(Math.min(from, to), Math.max(from, to) + 1)
+    const pick = (k: ItemKind) => range.filter((key) => key.startsWith(`${k}:`)).map((key) => key.slice(k.length + 1))
+    setSelectedAssetIds((prev) => new Set([...Array.from(prev), ...pick('asset')]))
+    setSelectedFolderIds((prev) => new Set([...Array.from(prev), ...pick('folder')]))
+  }
+
+  /** Shift- or ⌘/Ctrl-click with `selectionShortcuts`: change the selection
+   *  and report true, so the caller skips what a plain click would do. */
+  const handleModifierClick = (kind: ItemKind, id: string, e: React.MouseEvent): boolean => {
+    // Ctrl as well as ⌘ for Windows and Linux. On a Mac, Ctrl-click opens the
+    // context menu and never arrives here as a click.
+    if (!selectionShortcuts || !(e.shiftKey || e.metaKey || e.ctrlKey)) return false
+    // Not a click on the item itself: the side panel keeps what it shows, a
+    // folder stays closed, and the page behind doesn't treat it as a click on
+    // empty space.
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.shiftKey) selectRange(kind, id)
+    else if (kind === 'asset') toggleAssetSelect(id)
+    else toggleFolderSelect(id)
+    return true
   }
 
   const handleAssetClick = (asset: Asset, e: React.MouseEvent) => {
     if (isCoarsePointer()) return onAssetOpen?.(asset)
-    // Ctrl as well as ⌘ for Windows and Linux. On a Mac, Ctrl-click opens the
-    // context menu and never arrives here as a click.
-    const toggle = e.metaKey || e.ctrlKey
-    if (selectionShortcuts && (e.shiftKey || toggle)) {
-      // Not a click on the asset itself: the side panel keeps what it shows,
-      // and the page behind doesn't treat it as a click on empty space.
-      e.preventDefault()
-      e.stopPropagation()
-      if (e.shiftKey) selectAssetRange(asset.id)
-      else toggleAssetSelect(asset.id)
-      return
-    }
-    rangeAnchorRef.current = asset.id
+    if (handleModifierClick('asset', asset.id, e)) return
+    rangeAnchorRef.current = itemKey('asset', asset.id)
     onAssetSelect?.(asset, e)
   }
 
   const handleAssetCheckbox = (assetId: string, e: React.MouseEvent) => {
-    if (selectionShortcuts && e.shiftKey) selectAssetRange(assetId)
+    if (selectionShortcuts && e.shiftKey) selectRange('asset', assetId)
     else toggleAssetSelect(assetId)
+  }
+
+  const handleFolderCheckbox = (folderId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (selectionShortcuts && e.shiftKey) selectRange('folder', folderId)
+    else toggleFolderSelect(folderId)
   }
 
   // Shift-click would otherwise also select the page's text between clicks.
@@ -379,7 +384,15 @@ export function AssetGrid({
                     'group/folder relative',
                     isFolderSelected && 'ring-2 ring-accent rounded-lg',
                   )}
-                  onClick={shareMode ? (e) => { e.stopPropagation(); toggleFolderSelect(folder.id) } : undefined}
+                  onClick={(e) => {
+                    if (shareMode) {
+                      e.stopPropagation()
+                      toggleFolderSelect(folder.id)
+                    } else if (!handleModifierClick('folder', folder.id, e)) {
+                      rangeAnchorRef.current = itemKey('folder', folder.id)
+                    }
+                  }}
+                  onMouseDown={suppressShiftTextSelection}
                 >
                   <button
                     className={cn(
@@ -388,7 +401,7 @@ export function AssetGrid({
                         ? 'bg-accent border-accent text-white opacity-100'
                         : 'bg-black/40 border-white/30 text-transparent opacity-0 group-hover/folder:opacity-100',
                     )}
-                    onClick={(e) => { e.stopPropagation(); toggleFolderSelect(folder.id) }}
+                    onClick={(e) => handleFolderCheckbox(folder.id, e)}
                   >
                     {isFolderSelected && <Check className="h-3 w-3" />}
                   </button>
@@ -500,7 +513,12 @@ export function AssetGrid({
                   i !== folders!.length - 1 || filtered.length > 0 ? 'border-b border-border' : '',
                   isFolderSelected && 'bg-accent/5',
                 )}
-                onClick={() => onFolderOpen?.(folder)}
+                onClick={(e) => {
+                  if (handleModifierClick('folder', folder.id, e)) return
+                  rangeAnchorRef.current = itemKey('folder', folder.id)
+                  onFolderOpen?.(folder)
+                }}
+                onMouseDown={suppressShiftTextSelection}
                 onDoubleClick={() => onFolderOpen?.(folder)}
               >
                 {/* Folder icon with checkbox overlay — aligned with asset thumbnail */}
@@ -511,7 +529,7 @@ export function AssetGrid({
                       'absolute inset-0 flex items-center justify-center transition-all',
                       isFolderSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                     )}
-                    onClick={(e) => { e.stopPropagation(); toggleFolderSelect(folder.id) }}
+                    onClick={(e) => handleFolderCheckbox(folder.id, e)}
                   >
                     <div className={cn(
                       'h-4 w-4 rounded border flex items-center justify-center transition-all',

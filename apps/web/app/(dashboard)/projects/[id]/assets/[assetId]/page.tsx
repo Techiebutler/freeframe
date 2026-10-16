@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import { ReviewProvider, useReview } from '@/components/review/review-provider'
@@ -25,6 +25,8 @@ import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
 import { useUploadStore } from '@/stores/upload-store'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
+import { useViewStore } from '@/stores/view-store'
+import { sortAssets } from '@/lib/sort-assets'
 import { canCompare } from '@/lib/compare-time'
 import {
   ArrowLeft,
@@ -173,10 +175,18 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const currentRole = currentMember?.role ?? 'viewer'
   const canComment = currentRole !== 'viewer'
 
-  // Fetch all assets for navigation (1 of N)
-  const { data: allAssets } = useSWR<AssetResponse[]>(
-    `/projects/${projectId}/assets`,
-    () => api.get<AssetResponse[]>(`/projects/${projectId}/assets`),
+  // Prev/next walks the asset's own folder in the order the project view shows
+  // it, not the whole project. Same key as the project page, so the list is
+  // usually already cached.
+  const { data: folderAssets } = useSWR<AssetResponse[]>(
+    asset ? `/projects/${projectId}/assets?folder_id=${asset.folder_id ?? 'root'}` : null,
+    (key: string) => api.get<AssetResponse[]>(key),
+  )
+  const sortKey = useViewStore((s) => s.sortKey)
+  const sortDirection = useViewStore((s) => s.sortDirection)
+  const navAssets = useMemo(
+    () => (folderAssets ? sortAssets(folderAssets, sortKey, sortDirection) : undefined),
+    [folderAssets, sortKey, sortDirection],
   )
 
   const {
@@ -248,10 +258,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   }, [router, pathname, searchParams])
 
   // Asset navigation
-  const currentIndex = allAssets?.findIndex((a) => a.id === asset?.id) ?? -1
-  const totalAssets = allAssets?.length ?? 0
-  const prevAsset = currentIndex > 0 ? allAssets?.[currentIndex - 1] : null
-  const nextAsset = currentIndex < totalAssets - 1 ? allAssets?.[currentIndex + 1] : null
+  const currentIndex = navAssets?.findIndex((a) => a.id === asset?.id) ?? -1
+  const totalAssets = navAssets?.length ?? 0
+  const prevAsset = currentIndex > 0 ? navAssets?.[currentIndex - 1] : null
+  const nextAsset = currentIndex < totalAssets - 1 ? navAssets?.[currentIndex + 1] : null
 
   const navigateAsset = (assetId: string) => {
     router.push(`/projects/${projectId}/assets/${assetId}`)

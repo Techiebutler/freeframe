@@ -3,6 +3,7 @@
 import Hls, { type Level } from 'hls.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useReviewStore } from '@/stores/review-store'
+import { hlsStartConfig, saveBandwidth } from '@/lib/hls-bandwidth'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -236,6 +237,7 @@ export function useVideoPlayer(
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
+        ...hlsStartConfig(),
       })
       hlsRef.current = hls
       hls.loadSource(src)
@@ -264,6 +266,17 @@ export function useVideoPlayer(
       hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         setCurrentQuality(data.level)
       })
+
+      // Remember the measured bandwidth so the next video starts at the right
+      // rung. hls.js samples on the same fragments, in a listener registered
+      // before this one, so the estimate here already includes this fragment.
+      // Compare panes don't save: two players share the link, so each measures
+      // about half of it, and whichever saved last would win.
+      hls.on(Hls.Events.FRAG_BUFFERED, (_event, { frag }) => {
+        if (detached) return
+        if (frag.type !== 'main' || frag.sn === 'initSegment' || frag.stats.aborted) return
+        saveBandwidth(hls.bandwidthEstimate)
+      })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS
       video.src = src
@@ -291,7 +304,7 @@ export function useVideoPlayer(
         hlsRef.current = null
       }
     }
-  }, [src, setPlayheadTime, cancelPlayRetry])
+  }, [src, setPlayheadTime, cancelPlayRetry, detached])
 
   // ─── Controls ───────────────────────────────────────────────────────────────
 
