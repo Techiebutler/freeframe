@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Project pictures in the Projects list view.** The list showed the same purple gradient for every project. Each row now shows the project's poster, or its own gradient, the same as the grid. (by @jdanna)
+
 ## [1.18.0] - 2026-10-16
 
 Profile pictures, a choice of original or transcode on download, Projects page view options, larger upload parts with a Finalizing state and upload speed, and selection shortcuts. On NVIDIA GPUs, portrait phone videos now come out upright and very tall or wide videos no longer fail to transcode.
