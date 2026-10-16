@@ -30,9 +30,15 @@ export function NameDialog({
   const [value, setValue] = React.useState(defaultValue)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
-  React.useEffect(() => {
+  // Reset to the default as the dialog opens, in the same render, so the
+  // field already holds it when it is focused and selected below. Set in an
+  // effect it arrived a moment later, which moved the caret to the end: typing
+  // added to the old name instead of replacing it.
+  const [wasOpen, setWasOpen] = React.useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
     if (open) setValue(defaultValue)
-  }, [open, defaultValue])
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -48,6 +54,7 @@ export function NameDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <Dialog.Content
           className="fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] rounded-xl border border-border bg-bg-secondary p-5 shadow-xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+          // Straight into the name, all of it selected: typing replaces it.
           onOpenAutoFocus={(e) => {
             e.preventDefault()
             inputRef.current?.focus()

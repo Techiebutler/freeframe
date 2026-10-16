@@ -2,12 +2,11 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { MoreHorizontal, ImagePlus, Settings, Trash2, Globe, Lock } from 'lucide-react'
+import { MoreHorizontal, ImagePlus, Globe, Lock } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { getGradientForProject } from '@/lib/gradient-utils'
-import { api } from '@/lib/api'
-import { ProjectSettingsDialog } from './project-settings-dialog'
+import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { useProjectMenu } from './menus/project-menu'
 import type { Project } from '@/types'
 
 interface ProjectCardProps {
@@ -30,24 +29,11 @@ export function ProjectCard({
 }: ProjectCardProps) {
   const gradient = getGradientForProject(project.id)
   const assetCount = project.asset_count ?? 0
-  const [settingsOpen, setSettingsOpen] = React.useState(false)
-  const [deleting, setDeleting] = React.useState(false)
-
-  const handleDelete = async () => {
-    if (!confirm(`Delete "${project.name}"? This action cannot be undone.`)) return
-    setDeleting(true)
-    try {
-      await api.delete(`/projects/${project.id}`)
-      onMutate?.()
-    } catch {
-      // silently fail
-    } finally {
-      setDeleting(false)
-    }
-  }
+  const { items: menuItems, dialogs: menuDialogs } = useProjectMenu(project, { isOwner, onMutate })
 
   return (
     <>
+      <ContextMenuArea items={menuItems}>
       <div className={cn('group relative', className)}>
         <Link
           href={`/projects/${project.id}`}
@@ -111,65 +97,28 @@ export function ProjectCard({
           )}
         </Link>
 
-        {/* Context menu trigger */}
-        {(isOwner || project.role === 'owner') && (
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <button
-                className={cn(
-                  'absolute flex h-7 w-7 items-center justify-center rounded-md transition-all opacity-0 group-hover:opacity-100',
-                  // Without the info row it sits on the poster, styled like the badges.
-                  showInfo
-                    ? 'bottom-2 right-2.5 text-text-tertiary hover:bg-bg-hover hover:text-text-primary'
-                    : 'top-2.5 right-2.5 bg-black/30 backdrop-blur-sm text-white/90 hover:bg-black/50 hover:text-white',
-                )}
-                onClick={(e) => { e.preventDefault(); e.stopPropagation() }}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
-            </DropdownMenu.Trigger>
-
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                className="z-50 min-w-[180px] rounded-xl border border-border bg-bg-secondary p-1 shadow-xl"
-                sideOffset={4}
-                align="end"
-              >
-                <DropdownMenu.Label className="px-3 py-1.5 text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">
-                  Project
-                </DropdownMenu.Label>
-
-                <DropdownMenu.Item
-                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                  onSelect={() => setSettingsOpen(true)}
-                >
-                  <Settings className="h-4 w-4 text-text-tertiary" />
-                  Project Settings
-                </DropdownMenu.Item>
-
-                <DropdownMenu.Separator className="my-1 h-px bg-border" />
-
-                <DropdownMenu.Item
-                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-status-error hover:bg-status-error/10 cursor-pointer outline-none transition-colors"
-                  onSelect={handleDelete}
-                  disabled={deleting}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+        {/* Menu button: owners only, like the menu itself */}
+        {menuItems && (
+          <DotsMenu items={menuItems}>
+            <button
+              aria-label={`${project.name} menu`}
+              className={cn(
+                'absolute flex h-7 w-7 items-center justify-center rounded-md transition-all opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100',
+                // Without the info row it sits on the poster, styled like the badges.
+                showInfo
+                  ? 'bottom-2 right-2.5 text-text-tertiary hover:bg-bg-hover hover:text-text-primary'
+                  : 'top-2.5 right-2.5 bg-black/30 backdrop-blur-sm text-white/90 hover:bg-black/50 hover:text-white',
+              )}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation() }}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          </DotsMenu>
         )}
       </div>
+      </ContextMenuArea>
 
-      {/* Project Settings Dialog */}
-      <ProjectSettingsDialog
-        project={project}
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        onUpdated={() => onMutate?.()}
-      />
+      {menuDialogs}
     </>
   )
 }

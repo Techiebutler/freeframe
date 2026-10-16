@@ -8,11 +8,10 @@ import {
   Plus,
   Trash2,
   MoreHorizontal,
-  Pencil,
-  FolderPlus,
-  Trash,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { FolderMenuItems } from './menus/folder-menu'
 import type { FolderTreeNode } from '@/types'
 import { carriesFiles } from '@/lib/drag'
 
@@ -26,6 +25,8 @@ interface FolderTreeProps {
   onCreateFolder: (name: string, parentId: string | null) => Promise<void>
   onRenameFolder: (folderId: string, name: string) => Promise<void>
   onDeleteFolder: (folderId: string) => Promise<void>
+  /** Create Share Link in a folder's menu. Absent = not offered. */
+  onShareFolder?: (folderId: string, folderName: string) => void
   // Drag-drop targets
   onDropItems?: (targetFolderId: string | null, assetIds: string[], folderIds: string[]) => void
   /** Files dropped on a folder row upload into it, `null` being the project
@@ -183,6 +184,7 @@ interface FolderNodeProps {
   onCreateFolder: (name: string, parentId: string | null) => Promise<void>
   onRenameFolder: (folderId: string, name: string) => Promise<void>
   onDeleteFolder: (folderId: string) => Promise<void>
+  onShareFolder?: (folderId: string, folderName: string) => void
   onDropItems?: (targetFolderId: string | null, assetIds: string[], folderIds: string[]) => void
   /** Files dropped on a folder row upload into it. Absent = uploads not allowed. */
   onDropFiles?: (targetFolderId: string, files: File[]) => void
@@ -200,13 +202,13 @@ function FolderNode({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  onShareFolder,
   onDropItems,
   onDropFiles,
   onFileDragOverFolder,
   fileDragTarget,
 }: FolderNodeProps) {
   const [expanded, setExpanded] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [renameName, setRenameName] = useState(node.name)
   const isActive = currentFolderId === node.id
@@ -239,8 +241,31 @@ function FolderNode({
     onFileDragOverFolder,
   })
 
+  // The same items for the ⋯ button and right-click. Rename stays inline here,
+  // where the grid asks in a dialog.
+  const menuItems = (
+    <FolderMenuItems
+      onShare={onShareFolder ? () => onShareFolder(node.id, node.name) : undefined}
+      onNewSubfolder={() => onCreateFolder('', node.id)}
+      // Runs once the menu has closed (see item-menu), so the field that
+      // appears keeps focus: blur would end the rename.
+      onRename={() => {
+        setRenameName(node.name)
+        setRenaming(true)
+      }}
+      onDelete={async () => {
+        if (confirm(`Delete folder "${node.name}" and all its contents?`)) {
+          await onDeleteFolder(node.id)
+        }
+      }}
+    />
+  )
+
   return (
     <div>
+      {/* Right-click opens the folder's menu; while renaming, the input gets
+          the browser's own menu back. */}
+      <ContextMenuArea items={menuItems} disabled={renaming}>
       <div
         className={cn(
           'group flex items-center gap-1 px-2 py-1 rounded-md text-[13px] cursor-pointer transition-colors',
@@ -252,10 +277,6 @@ function FolderNode({
         style={{ paddingLeft: `${8 + depth * 16}px` }}
         onClick={handleClick}
         {...dragHandlers}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          setMenuOpen((p) => !p)
-        }}
       >
         {/* Expand chevron */}
         <span className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}>
@@ -296,54 +317,19 @@ function FolderNode({
           <span className="text-[10px] text-text-tertiary shrink-0">{node.item_count}</span>
         )}
 
-        {/* Context menu button */}
-        <button
-          className="opacity-0 group-hover:opacity-100 shrink-0 h-5 w-5 flex items-center justify-center rounded hover:bg-bg-hover transition-opacity"
-          onClick={(e) => {
-            e.stopPropagation()
-            setMenuOpen((p) => !p)
-          }}
-        >
-          <MoreHorizontal className="h-3 w-3" />
-        </button>
+        {/* Menu button */}
+        <DotsMenu items={menuItems}>
+          <button
+            aria-label={`${node.name} menu`}
+            className="opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 shrink-0 h-5 w-5 flex items-center justify-center rounded hover:bg-bg-hover transition-opacity"
+            // Opening the menu is not a click on the folder.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreHorizontal className="h-3 w-3" />
+          </button>
+        </DotsMenu>
       </div>
-
-      {/* Context menu */}
-      {menuOpen && (
-        <div className="ml-8 mt-0.5 mb-1 rounded-lg border border-border bg-bg-elevated shadow-xl py-1 z-50 w-44">
-          <button
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-            onClick={() => {
-              setMenuOpen(false)
-              setRenaming(true)
-              setRenameName(node.name)
-            }}
-          >
-            <Pencil className="h-3 w-3" /> Rename
-          </button>
-          <button
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-            onClick={() => {
-              setMenuOpen(false)
-              onCreateFolder('', node.id)
-            }}
-          >
-            <FolderPlus className="h-3 w-3" /> New Subfolder
-          </button>
-          <div className="my-1 border-t border-border" />
-          <button
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-red-400 hover:bg-red-500/10"
-            onClick={async () => {
-              setMenuOpen(false)
-              if (confirm(`Delete folder "${node.name}" and all its contents?`)) {
-                await onDeleteFolder(node.id)
-              }
-            }}
-          >
-            <Trash className="h-3 w-3" /> Delete
-          </button>
-        </div>
-      )}
+      </ContextMenuArea>
 
       {/* Children */}
       {expanded && hasChildren && (
@@ -358,6 +344,7 @@ function FolderNode({
               onCreateFolder={onCreateFolder}
               onRenameFolder={onRenameFolder}
               onDeleteFolder={onDeleteFolder}
+              onShareFolder={onShareFolder}
               onDropItems={onDropItems}
               onDropFiles={onDropFiles}
               onFileDragOverFolder={onFileDragOverFolder}
@@ -380,6 +367,7 @@ export function FolderTree({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  onShareFolder,
   onDropItems,
   onDropFiles,
   onFileDragOverFolder,
@@ -433,6 +421,7 @@ export function FolderTree({
           onCreateFolder={onCreateFolder}
           onRenameFolder={onRenameFolder}
           onDeleteFolder={onDeleteFolder}
+          onShareFolder={onShareFolder}
           onDropItems={onDropItems}
           onDropFiles={onDropFiles}
           onFileDragOverFolder={onFileDragOverFolder}
