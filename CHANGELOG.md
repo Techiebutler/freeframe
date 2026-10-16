@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Project pictures in the Projects list view.** The list showed the same purple gradient for every project. Each row now shows the project's poster, or its own gradient, the same as the grid. (by @jdanna)
+- **Project pictures in the Projects list view.** The list showed the same purple gradient for every project. Each row now shows the project's poster, or its own gradient, the same as the grid. (#505 by @jdanna)
 
 ## [1.18.0] - 2026-10-16
 
