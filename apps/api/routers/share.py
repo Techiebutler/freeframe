@@ -1032,7 +1032,13 @@ def list_project_share_links(
             ShareLink.is_enabled,
             ShareLink.permission,
             sqlalchemy.literal("folder").label("share_type"),
-            ShareLink.title.label("target_name"),
+            # A project-root link has no target row, so its own title stands in.
+            # It must be a distinct expression, not ShareLink.title relabelled:
+            # with the bare column already selected above, the nested
+            # Query.union_all() adapts both result columns to `target_name`
+            # and every asset and folder link came back titled with its
+            # target's name. coalesce() is a no-op here (title is NOT NULL).
+            sa_func.coalesce(ShareLink.title, "").label("target_name"),
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
         )

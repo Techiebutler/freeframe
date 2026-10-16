@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sorting by date says Newest or Oldest instead of Z-A or A-Z.** The sort menu inside a project labelled the date direction as if it were alphabetical. (#485 by @jdanna)
 - **Picking a sort inside a project starts it in a sensible direction.** Date starts newest first and everything else A-Z; switching from Date to Name used to carry the direction over and list names Z-A. (#485 by @jdanna)
 - **Sorting by name orders numbers by value.** "Shot 2" now comes before "Shot 10". (#485 by @jdanna)
+- **The share links list shows each link's own title.** Asset and folder links were listed under the name of the asset or folder they share, so a link you had named "Client cut" on a folder called "F" showed up as "F", and searching for it by its name found the right row under the wrong label. Project links were not affected.
 
 ## [1.17.1] - 2026-10-14
 
