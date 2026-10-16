@@ -2,11 +2,12 @@
 
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal, Check, Share2, Download, Link as LinkIcon, Pencil, Trash2 } from 'lucide-react'
+import { Film, Music, Image as ImageIcon, Images, MoreHorizontal, Check, Share2, Download, Link as LinkIcon, Pencil, Trash2 } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import type { Asset, AssetType, DownloadOption, User } from '@/types'
 import { DownloadSubmenu } from '@/components/shared/download-menu'
+import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
 
 const assetTypeIcons: Record<AssetType, React.ElementType> = {
@@ -152,13 +153,8 @@ export function AssetCard({
           </span>
         )}
 
-        {/* Comment count badge — bottom-left */}
-        {commentCount != null && commentCount > 0 && (
-          <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white backdrop-blur-sm">
-            <MessageSquare className="h-3 w-3" />
-            {commentCount}
-          </span>
-        )}
+        {/* Comment count badge — bottom-left, as in a share link's grid */}
+        <CommentCountBadge count={commentCount} />
       </div>
 
       {/* Info section */}

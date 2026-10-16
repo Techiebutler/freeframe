@@ -131,6 +131,8 @@ export interface Asset {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  /** Comments on the latest version, replies included, as its comment panel shows them. */
+  comment_count?: number;
 }
 
 export interface AssetVersion {
