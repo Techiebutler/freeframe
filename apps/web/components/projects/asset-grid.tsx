@@ -14,7 +14,8 @@ import { AppearancePopover } from './appearance-popover'
 import { SortPopover } from './sort-popover'
 import { MoveToDialog } from './move-to-dialog'
 import { useViewStore } from '@/stores/view-store'
-import type { Asset, AssetStatus, User, Folder, FolderTreeNode } from '@/types'
+import { sortAssets } from '@/lib/sort-assets'
+import type { Asset, User, Folder, FolderTreeNode } from '@/types'
 
 function isCoarsePointer(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
@@ -32,14 +33,6 @@ const assetTypeIcons: Record<string, React.ElementType> = {
   audio: Music,
   image: ImageIcon,
   image_carousel: Images,
-}
-
-const statusOrder: Record<AssetStatus, number> = {
-  in_review: 0,
-  draft: 1,
-  approved: 2,
-  rejected: 3,
-  archived: 4,
 }
 
 interface AssetGridProps {
@@ -205,27 +198,10 @@ export function AssetGrid({
   const totalSelected = selectedAssetIds.size + selectedFolderIds.size
   const selectedTotalSize = Array.from(selectedAssetIds).reduce((sum, id) => sum + (fileSizes[id] ?? 0), 0)
 
-  const filtered = React.useMemo(() => {
-    let result = [...assets]
-
-    if (sortKey !== 'custom') {
-      result.sort((a, b) => {
-        let cmp = 0
-        if (sortKey === 'date') {
-          cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
-        } else if (sortKey === 'name') {
-          cmp = a.name.localeCompare(b.name)
-        } else if (sortKey === 'status') {
-          cmp = statusOrder[a.status] - statusOrder[b.status]
-        } else if (sortKey === 'type') {
-          cmp = a.asset_type.localeCompare(b.asset_type)
-        }
-        return sortDirection === 'asc' ? cmp : -cmp
-      })
-    }
-
-    return result
-  }, [assets, sortKey, sortDirection])
+  const filtered = React.useMemo(
+    () => sortAssets(assets, sortKey, sortDirection),
+    [assets, sortKey, sortDirection],
+  )
 
   const showFolders = !flattenFolders && folders && folders.length > 0
 

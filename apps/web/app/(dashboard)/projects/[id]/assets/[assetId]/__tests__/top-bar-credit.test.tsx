@@ -29,9 +29,15 @@ const asset = {
   name: 'Episode 4 — rough cut.mov',
   project_id: 'p1',
   asset_type: 'video',
+  folder_id: null as string | null,
   latest_version: { id: 'v1', version_number: 1, processing_status: 'ready' },
 }
-const allAssets = [{ id: 'a1' }, asset, { id: 'a3' }]
+/** What GET /projects/p1/assets?folder_id=… returns, per folder. */
+const { assetsByFolder, swrKeys, viewState } = vi.hoisted(() => ({
+  assetsByFolder: {} as Record<string, unknown[]>,
+  swrKeys: [] as string[],
+  viewState: { sortKey: 'custom', sortDirection: 'asc' } as Record<string, unknown>,
+}))
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -39,13 +45,17 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }))
 vi.mock('swr', () => ({
-  default: (key: string) => ({
+  default: (key: string) => {
+    if (typeof key === 'string') swrKeys.push(key)
+    const folder = typeof key === 'string' ? key.match(/\/assets\?folder_id=(.+)$/)?.[1] : undefined
+    return {
     data: typeof key !== 'string' ? undefined
-      : key.endsWith('/assets') ? allAssets
+      : folder ? assetsByFolder[folder]
       // An editor, so the page renders its composer.
       : key.endsWith('/members') ? [{ user_id: 'u1', role: 'editor' }]
       : undefined,
-  }),
+    }
+  },
 }))
 vi.mock('@/components/review/review-provider', () => ({
   ReviewProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -98,6 +108,7 @@ vi.mock('@/stores/review-store', () => ({
 vi.mock('@/stores/upload-store', () => ({
   useUploadStore: storeHook({ startVersionUpload: vi.fn() }),
 }))
+vi.mock('@/stores/view-store', () => ({ useViewStore: storeHook(viewState) }))
 vi.mock('@/stores/breadcrumb-store', () => ({
   useBreadcrumbStore: storeHook({ setExtraCrumbs: vi.fn(), setLabel: vi.fn() }),
 }))
@@ -129,6 +140,17 @@ import ReviewPage from '../page'
 function renderPage() {
   return render(<ReviewPage params={{ id: 'p1', assetId: 'a2' }} />)
 }
+
+const defaultRootAssets = [{ id: 'a1' }, asset, { id: 'a3' }]
+
+beforeEach(() => {
+  asset.folder_id = null
+  for (const k of Object.keys(assetsByFolder)) delete assetsByFolder[k]
+  assetsByFolder.root = defaultRootAssets
+  swrKeys.length = 0
+  viewState.sortKey = 'custom'
+  viewState.sortDirection = 'asc'
+})
 
 describe('the credit and the asset navigator in the top bar', () => {
   beforeEach(() => {
@@ -207,5 +229,64 @@ describe('the review page composer', () => {
     const composer = sheetComposers.at(-1)
     expect(composer).toBeDefined()
     expect(composer!.props.allowInternal).not.toBe(false)
+  })
+})
+
+// Prev/next used to walk every asset in the project, in whatever order the API
+// returned them, so from inside a folder it jumped out into other folders.
+describe('prev/next in the top bar', () => {
+  function sortable(id: string, name: string, updated_at: string) {
+    return { id, name, updated_at, status: 'in_review', asset_type: 'video' }
+  }
+
+  it('stays inside the asset\'s folder', () => {
+    asset.folder_id = 'f1'
+    assetsByFolder.f1 = [{ id: 'f1-a' }, asset]
+    assetsByFolder.root = [{ id: 'r1' }, { id: 'r2' }, { id: 'r3' }, { id: 'r4' }]
+
+    renderPage()
+
+    expect(swrKeys).toContain('/projects/p1/assets?folder_id=f1')
+    expect(swrKeys.some((k) => k.endsWith('/assets'))).toBe(false)
+    expect(screen.getByText('2 of 2')).toBeTruthy()
+  })
+
+  it('uses the root level for an asset outside any folder', () => {
+    renderPage()
+
+    expect(swrKeys).toContain('/projects/p1/assets?folder_id=root')
+    expect(screen.getByText('2 of 3')).toBeTruthy()
+  })
+
+  it('follows the view\'s date sort, newest first', () => {
+    Object.assign(asset, { name: 'b', updated_at: '2026-01-09T00:00:00Z', status: 'in_review' })
+    assetsByFolder.root = [
+      sortable('a', 'a', '2026-01-01T00:00:00Z'),
+      sortable('c', 'c', '2026-01-03T00:00:00Z'),
+      asset,
+    ]
+    viewState.sortKey = 'date'
+    viewState.sortDirection = 'desc'
+
+    renderPage()
+
+    // Last in API order, but the newest, so first in the view.
+    expect(screen.getByText('1 of 3')).toBeTruthy()
+  })
+
+  it('counts from the view\'s order, not the order the API sent', () => {
+    Object.assign(asset, { name: 'b', updated_at: '2026-01-02T00:00:00Z', status: 'in_review' })
+    assetsByFolder.root = [
+      asset,
+      sortable('c', 'c', '2026-01-03T00:00:00Z'),
+      sortable('a', 'a', '2026-01-01T00:00:00Z'),
+    ]
+    viewState.sortKey = 'name'
+    viewState.sortDirection = 'asc'
+
+    renderPage()
+
+    // API order puts "b" first; by name ascending (a, b, c) it is second.
+    expect(screen.getByText('2 of 3')).toBeTruthy()
   })
 })
