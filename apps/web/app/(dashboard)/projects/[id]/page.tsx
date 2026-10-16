@@ -5,7 +5,6 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Upload,
   X,
@@ -14,15 +13,12 @@ import {
   Download,
   Share2,
   Plus,
-  Trash2,
   ChevronDown,
   MessageSquare,
   FolderPlus,
   Folder as FolderIcon,
   FileText,
   MoreHorizontal,
-  MinusCircle,
-  ExternalLink,
   Users,
 } from "lucide-react";
 import {
@@ -52,6 +48,8 @@ import { useFolders, useTrash } from "@/hooks/use-folders";
 import { useShareLinks } from "@/hooks/use-share-links";
 import { FolderTree } from "@/components/projects/folder-tree";
 import { ShareLinksTable } from "@/components/projects/share-links-table";
+import { ShareLinkMenuItems } from "@/components/projects/menus/share-link-menu";
+import { ContextMenuArea, DotsMenu } from "@/components/shared/item-menu";
 import {
   ShareLinkContent,
   ShareLinkSettingsPanel,
@@ -307,6 +305,17 @@ export default function ProjectDetailPage() {
   const canSeeShareLinks = currentRole === "owner" || currentRole === "editor";
   const canComment = currentRole !== "viewer";
 
+  // One folder's share link, from its menu in the tree, grid or list.
+  function openFolderShareDialog(folderId: string, folderName: string) {
+    setShareDialogPreselect({ type: "folder", id: folderId, name: folderName });
+    setShareDialogOpen(true);
+  }
+
+  async function handleDeleteShareLink(token: string) {
+    await deleteShareLink(token);
+    if (selectedShareLink === token) setSelectedShareLink(null);
+  }
+
   function openShareDialog(assetIds: string[], folderIds: string[]) {
     if (folderIds.length === 1 && assetIds.length === 0) {
       const folder = subfolders?.find((f) => f.id === folderIds[0]);
@@ -482,6 +491,7 @@ export default function ProjectDetailPage() {
               mutateAssets();
               mutateSubfolders();
             }}
+            onShareFolder={canShare ? openFolderShareDialog : undefined}
             // `canUpload`, not `canDropFiles`. What the main pane is showing
             // says nothing about the sidebar: a folder row means "upload into
             // this folder" while the trash or the share-link list is open just
@@ -552,9 +562,17 @@ export default function ProjectDetailPage() {
                 <LinkIcon className="h-4 w-4" />
                 <span>All Share Links ({shareLinks.length})</span>
               </button>
-              {shareLinks.map((link) => (
+              {shareLinks.map((link) => {
+                const linkMenu = (
+                  <ShareLinkMenuItems
+                    link={link}
+                    onToggleEnabled={toggleEnabled}
+                    onDelete={handleDeleteShareLink}
+                  />
+                );
+                return (
+                <ContextMenuArea key={link.token} items={linkMenu}>
                 <div
-                  key={link.token}
                   className={cn(
                     "group w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors cursor-pointer",
                     selectedShareLink === link.token
@@ -576,72 +594,21 @@ export default function ProjectDetailPage() {
                   <span className="truncate flex-1">
                     {link.title || link.target_name}
                   </span>
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger asChild>
-                      <button
-                        className="h-5 w-5 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                        }}
-                      >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
-                      </button>
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        className="z-50 min-w-[180px] rounded-xl border border-border bg-bg-secondary p-1 shadow-xl"
-                        sideOffset={4}
-                        align="end"
-                      >
-                        <DropdownMenu.Item
-                          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                          onSelect={() =>
-                            window.open(
-                              `${window.location.origin}${withBasePath(`/share/${link.token}`)}`,
-                              "_blank",
-                            )
-                          }
-                        >
-                          <ExternalLink className="h-4 w-4 text-text-tertiary" />
-                          Open Share
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                          onSelect={() =>
-                            navigator.clipboard.writeText(
-                              `${window.location.origin}${withBasePath(`/share/${link.token}`)}`,
-                            )
-                          }
-                        >
-                          <LinkIcon className="h-4 w-4 text-text-tertiary" />
-                          Copy Link
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator className="my-1 h-px bg-border" />
-                        <DropdownMenu.Item
-                          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                          onSelect={() =>
-                            toggleEnabled(link.token, !link.is_enabled)
-                          }
-                        >
-                          <MinusCircle className="h-4 w-4 text-text-tertiary" />
-                          {link.is_enabled ? "Disable Access" : "Enable Access"}
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-status-error hover:bg-status-error/10 cursor-pointer outline-none transition-colors"
-                          onSelect={async () => {
-                            await deleteShareLink(link.token);
-                            if (selectedShareLink === link.token)
-                              setSelectedShareLink(null);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Delete
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
+                  <DotsMenu items={linkMenu}>
+                    <button
+                      aria-label={`${link.title || link.target_name} menu`}
+                      className="h-5 w-5 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 transition-opacity shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                      }}
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </button>
+                  </DotsMenu>
                 </div>
-              ))}
+                </ContextMenuArea>
+                );
+              })}
             </div>
           )}
         </div>}
@@ -675,6 +642,7 @@ export default function ProjectDetailPage() {
               onToggleEnabled={(token, enabled) =>
                 toggleEnabled(token, enabled)
               }
+              onDelete={handleDeleteShareLink}
               onViewActivity={(token) => setSelectedShareLink(token)}
               frontendUrl={
                 typeof window !== "undefined" ? window.location.origin : ""
@@ -790,13 +758,12 @@ export default function ProjectDetailPage() {
                 mutateAssets();
                 mutateSubfolders();
               }}
-              onFolderShare={async (folderId, folderName) => {
-                setShareDialogPreselect({
-                  type: "folder",
-                  id: folderId,
-                  name: folderName,
-                });
-                setShareDialogOpen(true);
+              onFolderShare={async (folderId, folderName) =>
+                openFolderShareDialog(folderId, folderName)
+              }
+              onFolderNewSubfolder={(parentId) => {
+                setFolderDialogParentId(parentId);
+                setFolderDialogOpen(true);
               }}
               onDropFilesToFolder={canDropFiles ? handleDropFilesToFolder : undefined}
               onFileDragOverFolder={canDropFiles ? setFolderTarget : undefined}

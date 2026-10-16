@@ -4,6 +4,9 @@ import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { ChevronRight, Download, Loader2 } from 'lucide-react'
 import { cn, formatBytes } from '@/lib/utils'
+import {
+  MenuItem, MenuLabel, MenuSub, MenuSubContent, MenuSubTrigger, menuItemClass,
+} from '@/components/shared/item-menu'
 import type { DownloadOption } from '@/types'
 
 /**
@@ -61,9 +64,6 @@ function useFocusFirstItemWhenLoaded(
 const contentClass =
   'z-[100] min-w-[220px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'
 
-const itemClass =
-  'flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary cursor-pointer outline-none transition-colors'
-
 function optionDetail(option: DownloadOption): string {
   const parts = [option.format, option.size_bytes != null ? formatBytes(option.size_bytes) : null]
   return parts.filter(Boolean).join(' · ')
@@ -90,23 +90,23 @@ function DownloadOptionItems({
     // The list could not be had; a download with no choice still works, and
     // is the file a download always was.
     return (
-      <DropdownMenu.Item onSelect={() => onPick()} className={itemClass}>
+      <MenuItem onSelect={() => onPick()} className={menuItemClass}>
         <Download className="h-3.5 w-3.5 text-text-tertiary" />
         Download
-      </DropdownMenu.Item>
+      </MenuItem>
     )
   }
   return (
     <>
       {options.map((option) => (
-        <DropdownMenu.Item
+        <MenuItem
           key={option.id}
           onSelect={() => onPick(option.id)}
-          className={itemClass}
+          className={menuItemClass}
         >
           <span className="flex-1 text-text-primary">{option.label}</span>
           <span className="text-xs text-text-tertiary tabular-nums">{optionDetail(option)}</span>
-        </DropdownMenu.Item>
+        </MenuItem>
       ))}
     </>
   )
@@ -140,9 +140,7 @@ export function DownloadMenu({
           // sit inside clickable cards and rows.
           onClick={(e) => e.stopPropagation()}
         >
-          <DropdownMenu.Label className="px-3.5 pt-1 pb-1.5 text-2xs font-medium uppercase tracking-wide text-text-tertiary">
-            Download
-          </DropdownMenu.Label>
+          <MenuLabel>Download</MenuLabel>
           <DownloadOptionItems options={options} state={state} onPick={onPick} />
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
@@ -150,7 +148,8 @@ export function DownloadMenu({
   )
 }
 
-/** The same choice as a submenu, for a "Download" entry in a larger menu. */
+/** The same choice as a submenu, for a "Download" entry in a larger menu --
+ *  a ⋯ menu or a right-click one, whichever it is placed in. */
 export function DownloadSubmenu({
   load,
   onPick,
@@ -162,22 +161,20 @@ export function DownloadSubmenu({
   const contentRef = React.useRef<HTMLDivElement>(null)
   useFocusFirstItemWhenLoaded(contentRef, state)
   return (
-    <DropdownMenu.Sub onOpenChange={(open) => { if (open) void refresh() }}>
-      <DropdownMenu.SubTrigger className={cn(itemClass, 'data-[state=open]:bg-bg-hover data-[state=open]:text-text-primary')}>
+    <MenuSub onOpenChange={(open) => { if (open) void refresh() }}>
+      <MenuSubTrigger className={cn(menuItemClass, 'data-[state=open]:bg-bg-hover data-[state=open]:text-text-primary')}>
         <Download className="h-3.5 w-3.5 text-text-tertiary" />
         <span className="flex-1">Download</span>
         <ChevronRight className="h-3.5 w-3.5 text-text-tertiary" />
-      </DropdownMenu.SubTrigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.SubContent
-          ref={contentRef}
-          sideOffset={6}
-          className={contentClass}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <DownloadOptionItems options={options} state={state} onPick={onPick} />
-        </DropdownMenu.SubContent>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Sub>
+      </MenuSubTrigger>
+      <MenuSubContent
+        ref={contentRef}
+        sideOffset={6}
+        className={contentClass}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <DownloadOptionItems options={options} state={state} onPick={onPick} />
+      </MenuSubContent>
+    </MenuSub>
   )
 }

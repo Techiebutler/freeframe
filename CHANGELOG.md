@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Right-click menus on projects, assets, folders and share links.** Right-click (or long-press on a touch screen) opens the same menu as the item's ⋯ button: on project cards and rows, asset cards and rows, folders in the grid, the list and the sidebar tree, and share links in the sidebar and the Share Links table. Right-clicking an item that is one of several selected opens a menu for the whole selection, with the selection bar's Create Share Link, Download, Move to and Delete. (by @jdanna)
+
+### Changed
+- **One folder menu everywhere.** A folder's menu is the same in the sidebar tree, the grid and the list: Create Share Link, New Subfolder, Rename, Delete. The tree gains Create Share Link, and the grid and list gain New Subfolder. (by @jdanna)
+
+### Fixed
+- **The sidebar tree's folder menu closes when you click elsewhere or press Esc.** It used to stay open until one of its items was picked. (by @jdanna)
+- **Rename and Delete on a folder in list view.** Rename changed nothing (it sent back the folder's current name) and now asks for the new one, as the grid does. Delete removed the folder at once and now asks first. (by @jdanna)
+
 ## [1.18.0] - 2026-10-16
 
 Profile pictures, a choice of original or transcode on download, Projects page view options, larger upload parts with a Finalizing state and upload speed, and selection shortcuts. On NVIDIA GPUs, portrait phone videos now come out upright and very tall or wide videos no longer fail to transcode.

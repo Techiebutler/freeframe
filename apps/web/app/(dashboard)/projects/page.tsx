@@ -18,6 +18,8 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProjectCard } from "@/components/projects/project-card";
+import { useProjectMenu } from "@/components/projects/menus/project-menu";
+import { ContextMenuArea } from "@/components/shared/item-menu";
 import { ProjectsAppearancePopover } from "@/components/projects/projects-appearance-popover";
 import { ProjectsSortPopover } from "@/components/projects/projects-sort-popover";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -44,10 +46,19 @@ interface CreateProjectForm {
 function ProjectListRow({
   project,
   showRole,
+  isOwner,
+  onMutate,
 }: {
   project: Project;
   showRole?: boolean;
+  isOwner?: boolean;
+  onMutate?: () => void;
 }) {
+  // The card's menu, on right-click: a list row has no ⋯ button.
+  const { items: menuItems, dialogs: menuDialogs } = useProjectMenu(project, {
+    isOwner,
+    onMutate,
+  });
   const roleName =
     project.role === "owner"
       ? "Owner"
@@ -60,6 +71,8 @@ function ProjectListRow({
             : "Member";
 
   return (
+    <>
+    <ContextMenuArea items={menuItems}>
     <Link
       href={`/projects/${project.id}`}
       className="flex items-center gap-4 px-4 py-3 hover:bg-bg-hover transition-colors border-b border-border last:border-b-0"
@@ -105,6 +118,9 @@ function ProjectListRow({
         </span>
       )}
     </Link>
+    </ContextMenuArea>
+    {menuDialogs}
+    </>
   );
 }
 
@@ -199,6 +215,8 @@ function ProjectSection({
               key={project.id}
               project={project}
               showRole={showRole}
+              isOwner={!!userId && project.created_by === userId}
+              onMutate={onMutate}
             />
           ))}
           {showNewButton && onNewProject && (
