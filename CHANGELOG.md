@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The player's back arrow returns to the asset's folder.** It went to the project root from anywhere, so leaving an asset inside a folder dropped you out of that folder. A share link's back arrow already did this. (by @jdanna)
+
 ## [1.18.0] - 2026-10-16
 
 Profile pictures, a choice of original or transcode on download, Projects page view options, larger upload parts with a Finalizing state and upload speed, and selection shortcuts. On NVIDIA GPUs, portrait phone videos now come out upright and very tall or wide videos no longer fail to transcode.
