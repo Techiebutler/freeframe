@@ -146,6 +146,8 @@ class ShareLinkActivityResponse(BaseModel):
     actor_name: Optional[str] = None
     asset_id: Optional[uuid.UUID] = None
     asset_name: Optional[str] = None
+    # For a download: "original" or "transcode". None for older rows.
+    rendition: Optional[str] = None
     created_at: datetime
     model_config = {"from_attributes": True}
 

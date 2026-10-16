@@ -323,6 +323,8 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 
 Upload part size is set in the app rather than the environment: **Admin Dashboard → Instance settings → Uploads**. Automatic (the default) keeps 10 MB parts up to ~5 GB and grows them for bigger files to about 500 parts, which keeps the storage backend's assembly at the end of an upload short. Fixed cuts every upload into one size from 5 to 512 MB, and refuses a file that would need more than 10,000 parts. A completion that takes 5 seconds or more is logged by the API with where the time went (`completing upload … took …`), which is the place to look when uploads wait at "Finalizing".
 
+Who may download originals is also set in the app: **Admin Dashboard → Instance settings → Downloads**. *Transcode only* (the default) gives share-link visitors, visitors to a public project and people an asset is shared with directly the transcode (a video's MP4, an audio file's MP3, an image's WebP), as earlier releases did; a video with no MP4 still downloads its original. *Original or transcode* lets them pick the original too. Project members can always pick the original one asset at a time. Bulk downloads (a selection on the project page, Download All on a share link) follow this setting for everyone: originals when it is on, transcodes when it is off. Camera masters can be many times the size of the transcode, so turning it on can raise storage egress considerably.
+
 ---
 
 ## Scaling

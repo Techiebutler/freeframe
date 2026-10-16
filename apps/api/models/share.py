@@ -104,6 +104,8 @@ class ShareLinkActivity(Base):
     actor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     asset_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # For a download, which file it handed out: "original" or "transcode".
+    rendition: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (

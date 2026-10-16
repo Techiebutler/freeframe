@@ -156,10 +156,12 @@ async function handleDownloadAll(
 ) {
   // Recursively collect all assets (including those in subfolders),
   // pre-fetch presigned URLs in parallel, then trigger downloads
-  // sequentially with a delay so the browser doesn't block them.
+  // sequentially with a delay so the browser doesn't block them. Same rule as
+  // bulk download on the project page: originals when the instance allows them,
+  // transcodes otherwise.
   const allAssets = await collectAllAssetsRecursive(token, folderId, shareSession)
   const urls = await Promise.all(
-    allAssets.map((a) => fetchDownloadUrl(token, a.id, shareSession)),
+    allAssets.map((a) => fetchDownloadUrl(token, a.id, shareSession, undefined, true)),
   )
   for (const url of urls) {
     if (!url) continue

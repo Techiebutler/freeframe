@@ -164,3 +164,43 @@ def test_initiate_upload_allowed_when_guard_passes(client, auth_headers, mock_db
     }
     r = client.post("/upload/initiate", headers=auth_headers, json=body)
     assert r.status_code == 404                          # got past the guard gate
+
+
+# ── allow_original_downloads ────────────────────────────────────────────────
+# Off by default: before there was a choice, people outside a project could only
+# download the transcode, and an upgrade must not change that on its own.
+
+def test_original_downloads_are_off_by_default():
+    col = InstanceSettings.__table__.columns["allow_original_downloads"]
+    assert col.server_default.arg == "false"
+    assert col.nullable is False
+
+
+def test_admin_can_turn_original_downloads_on(client, auth_headers, mock_db, test_user, monkeypatch):
+    test_user.is_superadmin = True
+    row = MagicMock(storage_limit_bytes=0, upload_part_size_bytes=0, allow_original_downloads=False)
+    mock_db.first.return_value = row
+    monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 0)
+
+    r = client.put("/instance/settings", headers=auth_headers, json={"allow_original_downloads": True})
+
+    assert r.status_code == 200, r.text
+    assert row.allow_original_downloads is True
+    assert r.json()["allow_original_downloads"] is True
+    assert storage_service.get_allow_original_downloads(mock_db) is True
+
+
+def test_a_member_cannot_change_or_see_original_downloads(
+    client, auth_headers, mock_db, test_user, monkeypatch,
+):
+    mock_db.first.return_value = MagicMock(
+        storage_limit_bytes=0, upload_part_size_bytes=0, allow_original_downloads=True,
+    )
+    monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 0)
+    test_user.is_superadmin = False
+
+    assert client.put(
+        "/instance/settings", headers=auth_headers, json={"allow_original_downloads": False}
+    ).status_code == 403
+    assert "allow_original_downloads" not in client.get(
+        "/instance/settings", headers=auth_headers).json()

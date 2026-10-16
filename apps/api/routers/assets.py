@@ -16,7 +16,10 @@ from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, St
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
-from ..services.downloads import download_choices, describe_choices, pick_download
+from ..services.downloads import (
+    describe_choices, download_choices, download_filename, may_download_original,
+    original_allowed_for_download, pick_or_refuse,
+)
 from .hls_proxy import create_hls_token
 from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
@@ -330,6 +333,9 @@ def get_stream_url(
     # Which file a download serves: an id from GET /assets/{id}/downloads.
     # Omitted, a download is the first transcode, as it was before the choice.
     rendition: Optional[str] = Query(default=None, max_length=32),
+    # Bulk downloads: the original when the instance allows originals outside a
+    # project, else the default. Members included; see original_allowed_for_download.
+    prefer_original: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -341,11 +347,16 @@ def get_stream_url(
         # watched, where the raw file is the camera master and can be an order of
         # magnitude larger. Versions transcoded before that rung existed (and any
         # whose remux failed) have none, and still get the master.
-        choice = pick_download(asset.asset_type, media_file, rendition)
-        if not choice:
-            raise HTTPException(status_code=404, detail="Download option not found")
-        filename = build_download_filename(asset.name, choice.s3_key, media_file.original_filename)
-        url = generate_presigned_get_url(choice.s3_key, download_filename=filename)
+        choice = pick_or_refuse(
+            asset, media_file, rendition,
+            allow_original=original_allowed_for_download(
+                db, asset, current_user, rendition, prefer_original,
+            ),
+            prefer_original=prefer_original,
+        )
+        url = generate_presigned_get_url(
+            choice.s3_key, download_filename=download_filename(asset, media_file, choice),
+        )
     elif asset.asset_type == AssetType.video and media_file.s3_key_processed:
         # Route through the HLS proxy so the master playlist, variant
         # playlists, and .ts segments all get served via short-lived
@@ -367,7 +378,10 @@ def list_download_options(
 ):
     """The files a version can be downloaded as: the original, then each transcode."""
     asset, media_file = _ready_media_file(db, asset_id, version_id, current_user)
-    choices = download_choices(asset.asset_type, media_file)
+    choices = download_choices(
+        asset.asset_type, media_file,
+        allow_original=may_download_original(db, asset, current_user),
+    )
     describe_choices(asset.asset_type, media_file, choices)
     return [
         DownloadOption(id=c.id, label=c.label, format=c.format, size_bytes=c.size_bytes)

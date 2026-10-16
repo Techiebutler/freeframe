@@ -40,6 +40,24 @@ export function useDownloadOptions(load: () => Promise<DownloadOption[] | null>)
   return { options, state, refresh }
 }
 
+/**
+ * Keyboard users open the menu before the options arrive, so Radix focuses the
+ * menu itself and Enter does nothing until an arrow key moves into the list.
+ * Once the options are in, move focus to the first one -- but only while focus
+ * is still on the menu, so a pointer or arrow key that already chose is left be.
+ */
+function useFocusFirstItemWhenLoaded(
+  contentRef: React.RefObject<HTMLDivElement>,
+  state: LoadState,
+) {
+  React.useEffect(() => {
+    if (state !== 'ready' && state !== 'error') return
+    const content = contentRef.current
+    if (!content || document.activeElement !== content) return
+    content.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+  }, [contentRef, state])
+}
+
 const contentClass =
   'z-[100] min-w-[220px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'
 
@@ -107,11 +125,14 @@ export function DownloadMenu({
   align?: 'start' | 'center' | 'end'
 }) {
   const { options, state, refresh } = useDownloadOptions(load)
+  const contentRef = React.useRef<HTMLDivElement>(null)
+  useFocusFirstItemWhenLoaded(contentRef, state)
   return (
     <DropdownMenu.Root onOpenChange={(open) => { if (open) void refresh() }}>
       <DropdownMenu.Trigger asChild>{children}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
+          ref={contentRef}
           align={align}
           sideOffset={4}
           className={contentClass}
@@ -138,6 +159,8 @@ export function DownloadSubmenu({
   onPick: (rendition?: string) => void
 }) {
   const { options, state, refresh } = useDownloadOptions(load)
+  const contentRef = React.useRef<HTMLDivElement>(null)
+  useFocusFirstItemWhenLoaded(contentRef, state)
   return (
     <DropdownMenu.Sub onOpenChange={(open) => { if (open) void refresh() }}>
       <DropdownMenu.SubTrigger className={cn(itemClass, 'data-[state=open]:bg-bg-hover data-[state=open]:text-text-primary')}>
@@ -147,6 +170,7 @@ export function DownloadSubmenu({
       </DropdownMenu.SubTrigger>
       <DropdownMenu.Portal>
         <DropdownMenu.SubContent
+          ref={contentRef}
           sideOffset={6}
           className={contentClass}
           onClick={(e) => e.stopPropagation()}

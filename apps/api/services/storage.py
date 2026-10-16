@@ -18,6 +18,12 @@ def get_upload_part_size(db: Session) -> int:
     return row.upload_part_size_bytes if row else 0
 
 
+def get_allow_original_downloads(db: Session) -> bool:
+    """Non-creating read: may people outside a project download originals? No row == no."""
+    row = db.query(InstanceSettings).first()
+    return bool(row.allow_original_downloads) if row else False
+
+
 def choose_part_size(db: Session, file_size_bytes: int) -> tuple[int, str | None]:
     """The part size a new upload is cut on, and why it cannot be uploaded at all
     (a fixed size too small for 10,000 parts to hold the file), or None."""

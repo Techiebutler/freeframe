@@ -47,7 +47,10 @@ from ..services.owned_keys import is_project_logo_key
 from ..services.avatar_keys import sign_avatar
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..schemas.asset import DownloadOption
-from ..services.downloads import download_choices, describe_choices, pick_download
+from ..services.downloads import (
+    describe_choices, download_choices, download_filename, may_download_original,
+    original_allowed_for_download, pick_or_refuse,
+)
 from ..services.crypto_service import encrypt_password, decrypt_password
 from .hls_proxy import create_hls_token
 from ..models.project import Project, ProjectRole
@@ -94,6 +97,7 @@ def _log_share_activity(
     actor_name: Optional[str] = None,
     asset_id: Optional[uuid.UUID] = None,
     asset_name: Optional[str] = None,
+    rendition: Optional[str] = None,
     dedup_seconds: int = 30,
 ):
     """Log share activity, skipping duplicates within dedup_seconds window."""
@@ -104,6 +108,8 @@ def _log_share_activity(
             ShareLinkActivity.action == action,
             ShareLinkActivity.actor_email == actor_email,
             ShareLinkActivity.asset_id == asset_id,
+            # The original and then the transcode are two downloads, not one.
+            ShareLinkActivity.rendition.is_(None) if rendition is None else ShareLinkActivity.rendition == rendition,
             ShareLinkActivity.created_at >= cutoff,
         ).first()
         if existing:
@@ -115,6 +121,7 @@ def _log_share_activity(
             actor_name=actor_name,
             asset_id=asset_id,
             asset_name=asset_name,
+            rendition=rendition,
         )
         db.add(activity)
         db.commit()
@@ -1475,7 +1482,12 @@ def _share_media_file(db: Session, link, asset, version_id: Optional[uuid.UUID])
     return media_file
 
 
-@router.get("/share/{token}/downloads/{asset_id}", response_model=list[DownloadOption])
+@router.get(
+    "/share/{token}/downloads/{asset_id}",
+    response_model=list[DownloadOption],
+    # Each call reads the master playlist and HEADs storage, and needs no sign-in.
+    dependencies=[Depends(rate_limit("share_downloads", 30, 60))],
+)
 def list_share_download_options(
     token: str,
     asset_id: uuid.UUID,
@@ -1492,7 +1504,10 @@ def list_share_download_options(
     asset = _get_asset(db, asset_id)
     validate_asset_in_share(db, link, asset)
     media_file = _share_media_file(db, link, asset, version_id)
-    choices = download_choices(asset.asset_type, media_file)
+    choices = download_choices(
+        asset.asset_type, media_file,
+        allow_original=may_download_original(db, asset, current_user),
+    )
     describe_choices(asset.asset_type, media_file, choices)
     return [
         DownloadOption(id=c.id, label=c.label, format=c.format, size_bytes=c.size_bytes)
@@ -1509,6 +1524,9 @@ def get_share_stream_url(
     download: bool = Query(default=False),
     # Which file a download serves: an id from GET /share/{token}/downloads/{asset_id}.
     rendition: Optional[str] = Query(default=None, max_length=32),
+    # Bulk downloads: the original when the instance allows originals outside a
+    # project, else the default. Members included; see original_allowed_for_download.
+    prefer_original: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
@@ -1530,15 +1548,22 @@ def get_share_stream_url(
 
     media_file = _share_media_file(db, link, asset, version_id)
 
+    choice = None
     if download:
         # The MP4 remuxed from the top rung unless another file was chosen,
         # falling back to the camera master for versions that predate it (see
-        # routers/assets.py).
-        choice = pick_download(asset.asset_type, media_file, rendition)
-        if not choice:
-            raise HTTPException(status_code=404, detail="Download option not found")
-        filename = build_download_filename(asset.name, choice.s3_key, media_file.original_filename)
-        url = generate_presigned_get_url(choice.s3_key, download_filename=filename)
+        # routers/assets.py). The original by name only where the instance
+        # lets people outside the project have it.
+        choice = pick_or_refuse(
+            asset, media_file, rendition,
+            allow_original=original_allowed_for_download(
+                db, asset, current_user, rendition, prefer_original,
+            ),
+            prefer_original=prefer_original,
+        )
+        url = generate_presigned_get_url(
+            choice.s3_key, download_filename=download_filename(asset, media_file, choice),
+        )
     elif asset.asset_type == AssetType.video and media_file.s3_key_processed:
         # Route through /stream/hls so S3 can stay private (#51)
         hls_token = create_hls_token(media_file.s3_key_processed)
@@ -1554,6 +1579,7 @@ def get_share_stream_url(
         actor_name=current_user.name if current_user else None,
         asset_id=asset.id,
         asset_name=asset.name,
+        rendition=choice.id if choice else None,
     )
 
     # Get thumbnail URL

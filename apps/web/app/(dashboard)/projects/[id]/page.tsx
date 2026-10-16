@@ -837,11 +837,13 @@ export default function ProjectDetailPage() {
                 setPendingBulkDelete({ assetIds, folderIds });
               }}
               onBulkDownload={async (assetIds, folderIds) => {
-                // No choice per asset here, so every asset comes down as the
-                // file that was uploaded.
+                // No choice per asset here. The instance setting decides, for
+                // members too: originals when an admin allows them outside a
+                // project, transcodes otherwise -- the same rule as Download
+                // All on a share link.
                 async function downloadOne(id: string) {
                   try {
-                    await downloadAsset(id, "original");
+                    await downloadAsset(id, undefined, true);
                     await new Promise((r) => setTimeout(r, 300));
                   } catch {}
                 }

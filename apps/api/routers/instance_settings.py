@@ -42,6 +42,9 @@ def _build_response(db: Session, row: InstanceSettings | None, user: User) -> In
         upload_part_size_bytes=(
             (row.upload_part_size_bytes if row else 0) if user.is_superadmin else None
         ),
+        allow_original_downloads=(
+            (row.allow_original_downloads if row else False) if user.is_superadmin else None
+        ),
     )
 
 
@@ -53,7 +56,7 @@ def get_instance_settings(
     current_user: User = Depends(get_current_user),
 ):
     """Any authenticated member: instance storage limit + current usage. Admins
-    also get the upload part size.
+    also get the upload part size and whether outsiders may download originals.
 
     Read-only: does not create the settings row. Defaults to unlimited (0) and
     automatic part sizing (0) when no row exists yet — only PUT creates the
@@ -74,6 +77,8 @@ def update_instance_settings(
         row.storage_limit_bytes = body.storage_limit_bytes
     if body.upload_part_size_bytes is not None:
         row.upload_part_size_bytes = body.upload_part_size_bytes
+    if body.allow_original_downloads is not None:
+        row.allow_original_downloads = body.allow_original_downloads
     db.commit()
     db.refresh(row)
     return _build_response(db, row, current_user)

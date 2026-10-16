@@ -10,7 +10,12 @@ const h = vi.hoisted(() => {
   return {
     DEFAULT,
     data: DEFAULT as
-      | { storage_limit_bytes: number; storage_used_bytes: number; upload_part_size_bytes?: number }
+      | {
+          storage_limit_bytes: number
+          storage_used_bytes: number
+          upload_part_size_bytes?: number
+          allow_original_downloads?: boolean
+        }
       | undefined,
   }
 })
@@ -41,6 +46,7 @@ const settingsPuts = () => put.mock.calls.filter(([url]) => url === '/instance/s
 const MB = 1024 ** 2
 const partModeSelect = () => screen.getByLabelText(/upload part size/i) as HTMLSelectElement
 const partSizeInput = () => screen.queryByLabelText(/part size \(mb\)/i) as HTMLInputElement | null
+const originalsSelect = () => screen.getByLabelText(/outside a project/i) as HTMLSelectElement
 
 describe('InstanceSettingsTab', () => {
   beforeEach(() => {
@@ -279,6 +285,44 @@ describe('InstanceSettingsTab', () => {
       h.data = undefined
       render(<InstanceSettingsTab />)
       expect(partModeSelect()).toBeDisabled()
+    })
+  })
+
+  describe('original downloads', () => {
+    // Off by default: people outside a project get the transcode, as before.
+    it('is Transcode only by default', () => {
+      render(<InstanceSettingsTab />)
+      expect(originalsSelect()).toHaveValue('transcode')
+    })
+
+    it('saves only this setting when changed', async () => {
+      render(<InstanceSettingsTab />)
+      fireEvent.change(originalsSelect(), { target: { value: 'original' } })
+
+      await waitFor(() =>
+        expect(put).toHaveBeenCalledWith('/instance/settings', { allow_original_downloads: true }),
+      )
+    })
+
+    it('shows a saved setting', () => {
+      h.data = { ...h.DEFAULT, allow_original_downloads: true }
+      render(<InstanceSettingsTab />)
+      expect(originalsSelect()).toHaveValue('original')
+    })
+
+    it('goes back to the saved value and shows the error when the save fails', async () => {
+      put.mockRejectedValue(new Error('nope'))
+      render(<InstanceSettingsTab />)
+      fireEvent.change(originalsSelect(), { target: { value: 'original' } })
+
+      await waitFor(() => expect(screen.getByText('nope')).toBeInTheDocument())
+      expect(originalsSelect()).toHaveValue('transcode')
+    })
+
+    it('is disabled until settings have loaded', () => {
+      h.data = undefined
+      render(<InstanceSettingsTab />)
+      expect(originalsSelect()).toBeDisabled()
     })
   })
 })

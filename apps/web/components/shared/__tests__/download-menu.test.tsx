@@ -52,4 +52,21 @@ describe('DownloadMenu', () => {
     // No choice named: the server serves what a download always served.
     await waitFor(() => expect(onPick).toHaveBeenCalledWith())
   })
+
+  it('moves keyboard focus to the first option once the options arrive', async () => {
+    // Opened from the keyboard before the list loads, Radix focuses the menu
+    // itself; Enter must still pick something without an arrow key first.
+    let resolve!: (o: DownloadOption[]) => void
+    const onPick = renderMenu(() => new Promise((r) => { resolve = r }))
+    screen.getByRole('button', { name: 'Download' }).focus()
+    await userEvent.keyboard('{Enter}')
+    await screen.findByText('Loading…')
+
+    resolve(OPTIONS)
+
+    const first = await screen.findByRole('menuitem', { name: /Original/ })
+    await waitFor(() => expect(document.activeElement).toBe(first))
+    await userEvent.keyboard('{Enter}')
+    expect(onPick).toHaveBeenCalledWith('original')
+  })
 })

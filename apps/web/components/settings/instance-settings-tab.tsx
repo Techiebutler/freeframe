@@ -22,6 +22,13 @@ const PART_SIZE_MODE_LABELS: Record<PartSizeMode, string> = {
   fixed: "Fixed",
 };
 
+type OriginalDownloads = "transcode" | "original";
+
+const ORIGINAL_DOWNLOADS_LABELS: Record<OriginalDownloads, string> = {
+  transcode: "Transcode only",
+  original: "Original or transcode",
+};
+
 const MB = 1024 * 1024;
 // The bounds the API enforces: 5 MB is the smallest part S3, R2 and B2 accept.
 const MIN_PART_MB = 5;
@@ -111,6 +118,31 @@ export function InstanceSettingsTab() {
   React.useEffect(() => {
     if (!brandingLoaded) fetchBranding();
   }, [brandingLoaded, fetchBranding]);
+
+  // What people outside a project can download. Off by default; members always
+  // get the choice. Shown in the select while its PUT is in flight.
+  const [pendingOriginals, setPendingOriginals] = React.useState<OriginalDownloads | null>(null);
+  const [originalsError, setOriginalsError] = React.useState("");
+  const [originalsSaved, flashOriginalsSaved] = useSavedFlash();
+  const originals: OriginalDownloads =
+    pendingOriginals ?? (data?.allow_original_downloads ? "original" : "transcode");
+
+  const handleOriginalsChange = async (value: OriginalDownloads) => {
+    if (value === originals) return;
+    setPendingOriginals(value);
+    setOriginalsError("");
+    try {
+      const updated = await api.put<InstanceSettings>("/instance/settings", {
+        allow_original_downloads: value === "original",
+      });
+      mutate("/instance/settings", updated, { revalidate: false });
+      flashOriginalsSaved();
+    } catch (err: unknown) {
+      setOriginalsError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setPendingOriginals(null);
+    }
+  };
 
   const savePartSize = async (bytes: number) => {
     const updated = await api.put<InstanceSettings>("/instance/settings", {
@@ -333,6 +365,44 @@ export function InstanceSettingsTab() {
             )}
           </div>
         )}
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold text-text-primary">Downloads</h2>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <label htmlFor="original-downloads" className="text-sm font-medium text-text-secondary">
+              Outside a project
+            </label>
+            {originalsSaved && <SavedMark />}
+          </div>
+          <div className="relative">
+            {/* disabled while saving, so two quick changes can't land out of order */}
+            <select
+              id="original-downloads"
+              value={originals}
+              onChange={(e) => handleOriginalsChange(e.target.value as OriginalDownloads)}
+              disabled={!data || pendingOriginals !== null}
+              className="w-full appearance-none cursor-pointer rounded-md border border-border bg-bg-secondary py-1.5 pl-3 pr-8 text-sm text-text-primary transition-colors hover:border-border-focus focus:outline-none focus:border-border-focus focus:ring-1 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {(Object.keys(ORIGINAL_DOWNLOADS_LABELS) as OriginalDownloads[]).map((value) => (
+                <option key={value} value={value}>
+                  {ORIGINAL_DOWNLOADS_LABELS[value]}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
+          </div>
+          {originalsError ? (
+            <p className="text-xs text-status-error">{originalsError}</p>
+          ) : (
+            <p className="text-xs text-text-tertiary">
+              What share-link visitors, visitors to a public project and people an asset is
+              shared with directly can download. Project members can always download the
+              original.
+            </p>
+          )}
+        </div>
       </section>
 
       <section className="space-y-4">

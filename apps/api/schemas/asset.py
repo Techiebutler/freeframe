@@ -70,8 +70,7 @@ class StreamUrlResponse(BaseModel):
 
 class DownloadOption(BaseModel):
     """One file a version can be downloaded as: the original, or a transcode."""
-    # "original", a ladder rung's name ("720p"), or "transcode". Passed back as
-    # `rendition` on the stream endpoint.
+    # "original" or "transcode". Passed back as `rendition` on the stream endpoint.
     id: str
     label: str
     format: str

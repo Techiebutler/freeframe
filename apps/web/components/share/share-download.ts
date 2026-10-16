@@ -21,11 +21,17 @@ export function triggerDownload(url: string) {
   setTimeout(() => a.remove(), 1000)
 }
 
+/**
+ * `rendition` is an id from fetchShareDownloadOptions; left out, the transcode.
+ * `preferOriginal` (Download All) asks for the original when the instance allows it.
+ */
 export async function fetchDownloadUrl(
   token: string, assetId: string, shareSession?: string | null, rendition?: string,
+  preferOriginal = false,
 ): Promise<string | null> {
   let sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
   if (rendition) sp += `&rendition=${encodeURIComponent(rendition)}`
+  if (preferOriginal) sp += '&prefer_original=true'
   try {
     const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true${sp}`)
     if (!response.ok) return null

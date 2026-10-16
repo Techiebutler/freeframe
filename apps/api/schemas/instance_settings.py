@@ -8,6 +8,9 @@ class InstanceSettingsUpdate(BaseModel):
     storage_limit_bytes: int | None = Field(default=None, ge=0, le=9223372036854775807)
     # 0 sizes parts from each file; anything else is the fixed size every upload is cut on.
     upload_part_size_bytes: int | None = None
+    # Lets share-link visitors, public-project visitors and direct shares download
+    # originals. Project members always can.
+    allow_original_downloads: bool | None = None
 
     @field_validator("upload_part_size_bytes")
     @classmethod
@@ -29,3 +32,4 @@ class InstanceSettingsResponse(BaseModel):
     storage_used_bytes: int
     # Admin only.
     upload_part_size_bytes: int | None = None
+    allow_original_downloads: bool | None = None
