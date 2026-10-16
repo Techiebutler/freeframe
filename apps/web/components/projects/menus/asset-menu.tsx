@@ -36,12 +36,13 @@ export function AssetMenuItems({
       {loadDownloadOptions && onDownload ? (
         <DownloadSubmenu load={loadDownloadOptions} onPick={onDownload} />
       ) : (
-        <MenuAction icon={Download} onSelect={() => onDownload?.()}>
+        <MenuAction icon={Download} onSelect={() => onDownload?.()} immediate>
           Download
         </MenuAction>
       )}
       <MenuAction
         icon={LinkIcon}
+        immediate
         onSelect={() => {
           void copyToClipboard(
             `${window.location.origin}${withBasePath(`/projects/${asset.project_id}/assets/${asset.id}`)}`,

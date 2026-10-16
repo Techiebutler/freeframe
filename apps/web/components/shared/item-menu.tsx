@@ -21,6 +21,39 @@ const MenuKindContext = React.createContext<MenuKind>('dropdown')
 
 const useMenuKind = () => React.useContext(MenuKindContext)
 
+/**
+ * Most picks open a dialog (Rename, Delete, Share, Move to…) or remove the
+ * row the menu belongs to, so they run once the menu has fully closed, not
+ * while it is still on screen.
+ *
+ * A menu and a dialog each set `pointer-events: none` on <body> while open and
+ * put back what they found. A dialog that opens while the closing menu still
+ * holds the page saves that lock as the value to restore; when two copies of
+ * Radix's layer code are installed (npm resolving its own versions does this)
+ * the menu then unlocks, the dialog closes, puts the lock back, and nothing on
+ * the page can be clicked until a reload. Waiting for the menu removes the
+ * overlap. Radix signals the end with onCloseAutoFocus, after its exit
+ * animation and after it has released <body>.
+ */
+const AfterCloseContext = React.createContext<((action: () => void) => void) | null>(null)
+
+function useAfterClose() {
+  const pending = React.useRef<(() => void) | null>(null)
+  const schedule = React.useCallback((action: () => void) => {
+    pending.current = action
+  }, [])
+  const onCloseAutoFocus = React.useCallback((e: Event) => {
+    const action = pending.current
+    if (!action) return
+    pending.current = null
+    // Focus is the dialog's (or the rename field's) to take now; handing it
+    // back to the trigger first would blur an inline field that just appeared.
+    e.preventDefault()
+    action()
+  }, [])
+  return { schedule, onCloseAutoFocus }
+}
+
 export const menuContentClass =
   'z-[100] min-w-[200px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'
 
@@ -89,16 +122,22 @@ export function MenuAction({
   onSelect,
   danger,
   disabled,
+  immediate,
 }: {
   icon: React.ElementType
   children: React.ReactNode
   onSelect: () => void
   danger?: boolean
   disabled?: boolean
+  /** Run at once, inside the click, instead of after the menu closes: for
+   *  what needs the click itself (opening a tab, writing the clipboard) and
+   *  opens no dialog. */
+  immediate?: boolean
 }) {
+  const afterClose = React.useContext(AfterCloseContext)
   return (
     <MenuItem
-      onSelect={onSelect}
+      onSelect={() => (immediate || !afterClose ? onSelect() : afterClose(onSelect))}
       disabled={disabled}
       className={danger ? menuDangerItemClass : menuItemClass}
     >
@@ -118,15 +157,13 @@ export function DotsMenu({
   children,
   align = 'end',
   onOpenChange,
-  onCloseAutoFocus,
 }: {
   items: React.ReactNode
   children: React.ReactNode
   align?: 'start' | 'center' | 'end'
   onOpenChange?: (open: boolean) => void
-  /** See ContextMenuArea. */
-  onCloseAutoFocus?: (e: Event) => void
 }) {
+  const { schedule, onCloseAutoFocus } = useAfterClose()
   return (
     <DropdownMenu.Root onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>{children}</DropdownMenu.Trigger>
@@ -138,7 +175,9 @@ export function DotsMenu({
           onClick={stopPropagation}
           onCloseAutoFocus={onCloseAutoFocus}
         >
-          <MenuKindContext.Provider value="dropdown">{items}</MenuKindContext.Provider>
+          <MenuKindContext.Provider value="dropdown">
+            <AfterCloseContext.Provider value={schedule}>{items}</AfterCloseContext.Provider>
+          </MenuKindContext.Provider>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -158,17 +197,13 @@ export function ContextMenuArea({
   disabled,
   children,
   onOpenChange,
-  onCloseAutoFocus,
 }: {
   items: React.ReactNode
   disabled?: boolean
   children: React.ReactElement
   onOpenChange?: (open: boolean) => void
-  /** On close, focus goes back to what opened the menu. An item that moves
-   *  focus itself (an inline rename field) calls preventDefault here, or the
-   *  field loses focus as soon as it appears. */
-  onCloseAutoFocus?: (e: Event) => void
 }) {
+  const { schedule, onCloseAutoFocus } = useAfterClose()
   if (!items) return children
   return (
     <ContextMenu.Root onOpenChange={onOpenChange}>
@@ -181,7 +216,9 @@ export function ContextMenuArea({
           onClick={stopPropagation}
           onCloseAutoFocus={onCloseAutoFocus}
         >
-          <MenuKindContext.Provider value="context">{items}</MenuKindContext.Provider>
+          <MenuKindContext.Provider value="context">
+            <AfterCloseContext.Provider value={schedule}>{items}</AfterCloseContext.Provider>
+          </MenuKindContext.Provider>
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>

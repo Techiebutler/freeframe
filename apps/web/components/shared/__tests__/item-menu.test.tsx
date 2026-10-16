@@ -107,3 +107,50 @@ describe('DotsMenu', () => {
     expect(fromDots).toEqual(['Rename', 'Delete'])
   })
 })
+
+describe('a pick that opens a dialog', () => {
+  // Rename from a menu once left every control dead until a reload: the dialog
+  // opened while the menu still held <body> at pointer-events: none, saved that
+  // as the value to restore, and put it back on close. A pick now runs only
+  // once the menu has let go of the page.
+  function recordState() {
+    return {
+      pointerEvents: document.body.style.pointerEvents,
+      menuOpen: !!document.querySelector('[role="menu"]'),
+    }
+  }
+
+  it.each(['right-click', 'dots'] as const)('runs after the menu has released the page (%s)', async (via) => {
+    const seen: ReturnType<typeof recordState>[] = []
+    const items = <MenuAction icon={Pencil} onSelect={() => seen.push(recordState())}>Rename</MenuAction>
+    render(
+      <>
+        <ContextMenuArea items={items}><div>Selects</div></ContextMenuArea>
+        <DotsMenu items={items}><button>More</button></DotsMenu>
+      </>,
+    )
+    if (via === 'right-click') fireEvent.contextMenu(screen.getByText('Selects'))
+    else await user().click(screen.getByRole('button', { name: 'More' }))
+    expect(document.body.style.pointerEvents).toBe('none')
+
+    await user().click(await screen.findByRole('menuitem', { name: 'Rename' }))
+
+    await waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({ pointerEvents: '', menuOpen: false })
+  })
+
+  it('an immediate pick runs inside the click, for what needs it (a new tab, the clipboard)', async () => {
+    const seen: ReturnType<typeof recordState>[] = []
+    render(
+      <ContextMenuArea
+        items={<MenuAction icon={Pencil} immediate onSelect={() => seen.push(recordState())}>Copy</MenuAction>}
+      >
+        <div>Selects</div>
+      </ContextMenuArea>,
+    )
+    fireEvent.contextMenu(screen.getByText('Selects'))
+    await user().click(await screen.findByRole('menuitem', { name: 'Copy' }))
+    expect(seen).toHaveLength(1)
+    expect(seen[0].menuOpen).toBe(true)
+  })
+})

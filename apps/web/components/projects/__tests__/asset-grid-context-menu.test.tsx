@@ -144,10 +144,12 @@ describe.each(['grid', 'list'] as const)('AssetGrid right-click (%s view)', (lay
     fireEvent.contextMenu(screen.getByText('Selects'))
     await user().click(await screen.findByRole('menuitem', { name: 'Rename' }))
 
+    // Straight into the field with the name selected, so typing replaces it.
     const dialog = await screen.findByRole('dialog')
-    const input = within(dialog).getByRole('textbox')
-    await user().clear(input)
-    await user().type(input, 'Picks{Enter}')
+    const input = within(dialog).getByRole('textbox') as HTMLInputElement
+    await waitFor(() => expect(document.activeElement).toBe(input))
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 'Selects'.length])
+    await user().keyboard('Picks{Enter}')
 
     await waitFor(() => expect(h.onFolderRename).toHaveBeenCalledWith('f1', 'Picks'))
   })

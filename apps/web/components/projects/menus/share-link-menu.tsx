@@ -22,10 +22,10 @@ export function ShareLinkMenuItems({
 }) {
   return (
     <>
-      <MenuAction icon={ExternalLink} onSelect={() => window.open(shareUrl(link.token), '_blank')}>
+      <MenuAction icon={ExternalLink} onSelect={() => window.open(shareUrl(link.token), '_blank')} immediate>
         Open Share
       </MenuAction>
-      <MenuAction icon={LinkIcon} onSelect={() => { void copyToClipboard(shareUrl(link.token)) }}>
+      <MenuAction icon={LinkIcon} onSelect={() => { void copyToClipboard(shareUrl(link.token)) }} immediate>
         Copy Link
       </MenuAction>
       <MenuSeparator />

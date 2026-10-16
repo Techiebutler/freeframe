@@ -211,18 +211,6 @@ function FolderNode({
   const [expanded, setExpanded] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [renameName, setRenameName] = useState(node.name)
-  // Rename is picked in the menu but starts once the menu has closed. While it
-  // is open its focus trap takes focus back from a new field, and when it
-  // closes it hands focus to the row; either blurs the field, and blur ends
-  // the rename. So the pick is remembered, and acted on as the menu lets go.
-  const renamePicked = useRef(false)
-  const startRenameAfterClose = useCallback((e: Event) => {
-    if (!renamePicked.current) return
-    renamePicked.current = false
-    e.preventDefault()
-    setRenameName(node.name)
-    setRenaming(true)
-  }, [node.name])
   const isActive = currentFolderId === node.id
 
   const hasChildren = node.children.length > 0
@@ -259,8 +247,11 @@ function FolderNode({
     <FolderMenuItems
       onShare={onShareFolder ? () => onShareFolder(node.id, node.name) : undefined}
       onNewSubfolder={() => onCreateFolder('', node.id)}
+      // Runs once the menu has closed (see item-menu), so the field that
+      // appears keeps focus: blur would end the rename.
       onRename={() => {
-        renamePicked.current = true
+        setRenameName(node.name)
+        setRenaming(true)
       }}
       onDelete={async () => {
         if (confirm(`Delete folder "${node.name}" and all its contents?`)) {
@@ -274,7 +265,7 @@ function FolderNode({
     <div>
       {/* Right-click opens the folder's menu; while renaming, the input gets
           the browser's own menu back. */}
-      <ContextMenuArea items={menuItems} disabled={renaming} onCloseAutoFocus={startRenameAfterClose}>
+      <ContextMenuArea items={menuItems} disabled={renaming}>
       <div
         className={cn(
           'group flex items-center gap-1 px-2 py-1 rounded-md text-[13px] cursor-pointer transition-colors',
@@ -327,7 +318,7 @@ function FolderNode({
         )}
 
         {/* Menu button */}
-        <DotsMenu items={menuItems} onCloseAutoFocus={startRenameAfterClose}>
+        <DotsMenu items={menuItems}>
           <button
             aria-label={`${node.name} menu`}
             className="opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 shrink-0 h-5 w-5 flex items-center justify-center rounded hover:bg-bg-hover transition-opacity"
