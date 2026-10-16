@@ -24,5 +24,7 @@ class InstanceSettings(Base):
     storage_limit_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     upload_part_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     allow_original_downloads: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Thumbnail switch for share-link OG/Twitter cards (see routers/share.py).
+    share_previews_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

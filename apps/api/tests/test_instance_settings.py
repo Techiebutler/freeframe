@@ -115,7 +115,7 @@ def test_get_settings_member(client, auth_headers, mock_db, test_user, monkeypat
     monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 100)
     r = client.get("/instance/settings", headers=auth_headers)
     assert r.status_code == 200
-    assert r.json() == {"storage_limit_bytes": 8000, "storage_used_bytes": 100}
+    assert r.json() == {"storage_limit_bytes": 8000, "storage_used_bytes": 100, "share_previews_enabled": True}
 
 
 def test_get_settings_no_row_is_read_only_and_unlimited(client, auth_headers, mock_db, test_user, monkeypatch):
@@ -125,7 +125,7 @@ def test_get_settings_no_row_is_read_only_and_unlimited(client, auth_headers, mo
     monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 100)
     r = client.get("/instance/settings", headers=auth_headers)
     assert r.status_code == 200
-    assert r.json() == {"storage_limit_bytes": 0, "storage_used_bytes": 100}
+    assert r.json() == {"storage_limit_bytes": 0, "storage_used_bytes": 100, "share_previews_enabled": True}
     mock_db.add.assert_not_called()
     mock_db.commit.assert_not_called()
 
@@ -166,6 +166,7 @@ def test_initiate_upload_allowed_when_guard_passes(client, auth_headers, mock_db
     assert r.status_code == 404                          # got past the guard gate
 
 
+
 # ── allow_original_downloads ────────────────────────────────────────────────
 # Off by default: before there was a choice, people outside a project could only
 # download the transcode, and an upgrade must not change that on its own.
@@ -204,3 +205,60 @@ def test_a_member_cannot_change_or_see_original_downloads(
     ).status_code == 403
     assert "allow_original_downloads" not in client.get(
         "/instance/settings", headers=auth_headers).json()
+
+
+# ─── Share-preview master switch (share_previews_enabled) ────────────────────
+
+
+def test_instance_settings_share_previews_column_shape():
+    cols = InstanceSettings.__table__.columns
+    assert "share_previews_enabled" in cols
+    assert cols["share_previews_enabled"].server_default.arg == "true"
+    assert cols["share_previews_enabled"].nullable is False
+
+
+def test_put_settings_admin_updates_share_previews_toggle(
+    client, auth_headers, mock_db, test_user, monkeypatch
+):
+    test_user.is_superadmin = True
+    mock_db.first.return_value = None                    # get_or_create → creates row
+    monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 3)
+
+    def _refresh(obj):
+        if obj.storage_limit_bytes is None:
+            obj.storage_limit_bytes = 0
+        if obj.share_previews_enabled is None:
+            obj.share_previews_enabled = True
+    mock_db.refresh.side_effect = _refresh
+
+    r = client.put(
+        "/instance/settings", headers=auth_headers, json={"share_previews_enabled": False}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["share_previews_enabled"] is False
+
+
+def test_put_settings_does_not_touch_toggle_when_absent(
+    client, auth_headers, mock_db, test_user, monkeypatch
+):
+    """PUT without the `share_previews_enabled` key must leave the toggle as is."""
+    test_user.is_superadmin = True
+    existing = MagicMock(storage_limit_bytes=0, share_previews_enabled=True)
+    mock_db.first.return_value = existing                # get_or_create → existing row
+    monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 3)
+
+    r = client.put(
+        "/instance/settings", headers=auth_headers, json={"storage_limit_bytes": 5000}
+    )
+    assert r.status_code == 200, r.text
+    assert existing.share_previews_enabled is True       # unchanged
+    assert r.json()["share_previews_enabled"] is True
+
+
+def test_instance_settings_response_defaults_to_enabled():
+    from apps.api.schemas.instance_settings import InstanceSettingsResponse
+
+    r = InstanceSettingsResponse(storage_limit_bytes=0, storage_used_bytes=0)
+    assert r.share_previews_enabled is True
+

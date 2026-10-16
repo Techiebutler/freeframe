@@ -1,10 +1,12 @@
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 import bcrypt
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse, StreamingResponse
 import sqlalchemy
 from sqlalchemy import func as sa_func, case
 from sqlalchemy.orm import Session
@@ -18,6 +20,7 @@ from ..models.folder import Folder
 from ..models.share import AssetShare, ShareLink, ShareLinkItem, SharePermission, ShareLinkActivity, ShareActivityAction
 from ..models.activity import ActivityLog, ActivityAction
 from ..models.branding import ProjectBranding
+from ..models.instance_settings import InstanceSettings
 from ..models.asset import AssetVersion, AssetType, MediaFile, ProcessingStatus
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.share import (
@@ -34,6 +37,7 @@ from ..schemas.share import (
     ShareLinkResponse,
     ShareLinkUpdate,
     ShareLinkValidateResponse,
+    SharePreviewResponse,
     ShareVerifyRequest,
 )
 from ..services.permissions import (
@@ -45,7 +49,12 @@ from ..services.redis_service import create_share_session
 from ..services.search import escape_like
 from ..services.owned_keys import is_project_logo_key
 from ..services.avatar_keys import sign_avatar
-from ..services.s3_service import generate_presigned_get_url, build_download_filename
+from ..services.s3_service import (
+    generate_presigned_get_url,
+    build_download_filename,
+    get_s3_client,
+    get_content_type,
+)
 from ..schemas.asset import DownloadOption
 from ..services.downloads import (
     describe_choices, download_choices, download_filename, may_download_original,
@@ -188,6 +197,253 @@ def _ready_version_count(db: Session, asset_id: uuid.UUID) -> int:
         AssetVersion.deleted_at.is_(None),
         AssetVersion.processing_status == ProcessingStatus.ready,
     ).scalar() or 0
+
+
+# ── Share preview (link crawlers) ─────────────────────────────────────────────
+#
+# Unfurling endpoints for Telegram/WhatsApp/Slack link previews. They answer
+# ONLY for shares a logged-out visitor could already open — the preview gate
+# below is STRICTLY stricter than validate_share_link, because the existing
+# GET /share/{token} cannot be reused: it answers 200 (with the private title)
+# for password-protected and login-required links, because its own client needs
+# that to render the sign-in prompt. Crawlers must never see that.
+#
+# Nothing here touches ShareLinkActivity: a preview is not a share "open", and
+# it must not pollute view counts with bot visits. Both endpoints share their
+# own generous rate-limit bucket, NOT the per-IP share_validate limiter — the
+# web app resolves metadata server-side from one IP, so a shared bucket would
+# 429 the tenant's own link previews.
+
+#: How long crawlers may cache a preview image (thumbnail or fallback).
+PREVIEW_IMAGE_CACHE_SECONDS = 10800  # 3 hours — presigned URLs alone live 1 h
+
+#: Static fallback served when a share is gated or has no thumbnail yet.
+PREVIEW_FALLBACK_LOGO_PATH = Path(__file__).resolve().parent.parent / "static" / "logo-full.png"
+
+
+def _validate_share_link_for_preview(db: Session, token: str) -> Optional[ShareLink]:
+    """The link this token refers to, if — and only if — a preview of it may
+    be published. None otherwise.
+
+    One uniform verdict for every refusing case (unknown / soft-deleted token,
+    disabled, expired, login-required, password-protected,
+    or the shared target gone): callers get a bare 404 / the static
+    fallback image and MUST NOT be able to distinguish *why* from the answer.
+    """
+    link = db.query(ShareLink).filter(
+        ShareLink.token == token,
+        ShareLink.deleted_at.is_(None),
+    ).first()
+    if link is None:
+        return None
+    if not link.is_enabled:
+        return None
+    if link.expires_at and link.expires_at < datetime.now(timezone.utc):
+        return None
+    if link.visibility == "secure":
+        return None
+    if link.password_hash:
+        return None
+    # Check the actual target, not only its project ID: links may carry both,
+    # and _get_project_id_from_link returns project_id without a DB lookup.
+    if link.asset_id:
+        target = db.query(Asset).filter(
+            Asset.id == link.asset_id, Asset.deleted_at.is_(None),
+        ).first()
+    elif link.folder_id:
+        target = db.query(Folder).filter(
+            Folder.id == link.folder_id, Folder.deleted_at.is_(None),
+        ).first()
+    elif link.project_id:
+        target = db.query(Project).filter(
+            Project.id == link.project_id, Project.deleted_at.is_(None),
+        ).first()
+    else:
+        return None
+    return link if target is not None else None
+
+
+def _preview_thumbnails_enabled(db: Session) -> bool:
+    """The instance switch controls frames, not public title/description."""
+    row = db.query(InstanceSettings).first()
+    return row is None or bool(row.share_previews_enabled)
+
+
+def _asset_thumbnail_key(db: Session, asset: Asset) -> Optional[str]:
+    """The latest ready version's thumbnail key for an asset, or None."""
+    media_file = _get_latest_media_file(db, asset.id)
+    if media_file and media_file.s3_key_thumbnail:
+        return media_file.s3_key_thumbnail
+    return None
+
+
+def _folder_assets_with_thumbnails(db: Session, folder_id: uuid.UUID):
+    """Assets directly inside `folder_id`, newest first — the order the share
+    page lists them, so the preview shows what a visitor sees first."""
+    return db.query(Asset).filter(
+        Asset.folder_id == folder_id,
+        Asset.deleted_at.is_(None),
+    ).order_by(Asset.created_at.desc()).all()
+
+
+def _resolve_share_thumbnail_key(db: Session, link: ShareLink) -> Optional[str]:
+    """The S3 key of the thumbnail the share card should show.
+
+    Asset shares use the latest ready version (the same rule the share page's
+    player follows). Folder and project shares show their first item's
+    thumbnail — the multi-item loop mirrors `add_asset_to_share_link`'s item
+    order and the folder walk mirrors `get_folder_share_assets`'s listing
+    (direct assets first, then subfolders), newest first.
+    """
+    if link.asset_id:
+        asset = db.query(Asset).filter(
+            Asset.id == link.asset_id,
+            Asset.deleted_at.is_(None),
+        ).first()
+        return _asset_thumbnail_key(db, asset) if asset else None
+
+    if link.folder_id:
+        for asset in _folder_assets_with_thumbnails(db, link.folder_id):
+            return _asset_thumbnail_key(db, asset)
+        subfolders = db.query(Folder).filter(
+            Folder.parent_id == link.folder_id,
+            Folder.deleted_at.is_(None),
+        ).order_by(Folder.name).all()
+        for subfolder in subfolders:
+            for asset in _folder_assets_with_thumbnails(db, subfolder.id):
+                return _asset_thumbnail_key(db, asset)
+        return None
+
+    if link.project_id:
+        multi_items = db.query(ShareLinkItem).filter(
+            ShareLinkItem.share_link_id == link.id,
+        ).all()
+        if multi_items:
+            # Multi-share: walk the explicitly chosen items — assets in
+            # selection order, then the selected folders' contents — exactly
+            # the order the share page's own grid presents them.
+            for item in multi_items:
+                if item.asset_id:
+                    asset = db.query(Asset).filter(
+                        Asset.id == item.asset_id,
+                        Asset.deleted_at.is_(None),
+                    ).first()
+                    if asset is not None:
+                        return _asset_thumbnail_key(db, asset)
+            for item in multi_items:
+                if item.folder_id:
+                    for asset in _folder_assets_with_thumbnails(db, item.folder_id):
+                        return _asset_thumbnail_key(db, asset)
+            return None
+        # Plain project-root share: root-level assets, then root subfolders —
+        # what `get_folder_share_assets` shows at project root.
+        for asset in db.query(Asset).filter(
+            Asset.folder_id.is_(None),
+            Asset.project_id == link.project_id,
+            Asset.deleted_at.is_(None),
+        ).order_by(Asset.created_at.desc()).all():
+            return _asset_thumbnail_key(db, asset)
+        subfolders = db.query(Folder).filter(
+            Folder.parent_id.is_(None),
+            Folder.project_id == link.project_id,
+            Folder.deleted_at.is_(None),
+        ).order_by(Folder.name).all()
+        for subfolder in subfolders:
+            for asset in _folder_assets_with_thumbnails(db, subfolder.id):
+                return _asset_thumbnail_key(db, asset)
+    return None
+
+
+def _share_preview_title(db: Session, link: ShareLink) -> str:
+    """The share link's title, falling back to the shared target's name."""
+    title = (link.title or "").strip()
+    if title:
+        return title
+    if link.asset_id:
+        asset = db.query(Asset).filter(Asset.id == link.asset_id, Asset.deleted_at.is_(None)).first()
+        if asset:
+            return asset.name
+    elif link.folder_id:
+        folder = db.query(Folder).filter(Folder.id == link.folder_id, Folder.deleted_at.is_(None)).first()
+        if folder:
+            return folder.name
+    elif link.project_id:
+        project = db.query(Project).filter(Project.id == link.project_id, Project.deleted_at.is_(None)).first()
+        if project:
+            return project.name
+    return ""
+
+
+@router.get(
+    "/share/{token}/preview",
+    response_model=SharePreviewResponse,
+    dependencies=[Depends(rate_limit("share_preview", 240, 60))],
+)
+def get_share_preview(token: str, db: Session = Depends(get_db)):
+    """Card data for link crawlers — title, description, has_image. Nothing else.
+
+    Answers with a uniform 404 for anything that does not pass the preview
+    gate (`_validate_share_link_for_preview`), including password-protected,
+    login-required, disabled, expired and unknown links: the response body
+    carries no link-specific text in any refusing case, not even the title.
+    Never logs a share "open" and never rate-limited by `share_validate`.
+    """
+    link = _validate_share_link_for_preview(db, token)
+    if link is None:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    thumbnail_key = _resolve_share_thumbnail_key(db, link) if _preview_thumbnails_enabled(db) else None
+    return SharePreviewResponse(
+        title=_share_preview_title(db, link),
+        description=link.description,
+        has_image=bool(thumbnail_key),
+    )
+
+
+@router.get(
+    "/share/{token}/preview.jpg",
+    dependencies=[Depends(rate_limit("share_preview", 240, 60))],
+)
+def get_share_preview_image(token: str, db: Session = Depends(get_db)):
+    """The share card's image, as a stable crawler-facing URL.
+
+    Streams the shared target's thumbnail (latest ready version; first item
+    for folder/project shares) straight from S3, so the never-leaving-server
+    presigned S3 URLs keep their 1-hour TTL without ever reaching a crawler.
+    Gated, unknown or thumbnail-less links stream the static `logo-full.png`
+    instead, indistinguishably. Cacheable for a few hours either way.
+    """
+    link = _validate_share_link_for_preview(db, token)
+    thumbnail_key = (
+        _resolve_share_thumbnail_key(db, link)
+        if link is not None and _preview_thumbnails_enabled(db) else None
+    )
+    headers = {"Cache-Control": f"public, max-age={PREVIEW_IMAGE_CACHE_SECONDS}"}
+
+    if thumbnail_key:
+        content_type, _ = get_content_type(thumbnail_key)
+        if not content_type.startswith("image/"):
+            content_type = "image/png"
+        try:
+            s3 = get_s3_client()
+            obj = s3.get_object(Bucket=settings.s3_bucket, Key=thumbnail_key)
+        except Exception:
+            # Storage hiccup, missing object — degrade to the fallback logo,
+            # never to a 500 the unfurl would remember.
+            return _preview_fallback_response(headers)
+        return StreamingResponse(obj["Body"], media_type=content_type, headers=headers)
+    return _preview_fallback_response(headers)
+
+
+def _preview_fallback_response(headers: dict) -> FileResponse:
+    if not PREVIEW_FALLBACK_LOGO_PATH.is_file():
+        # The static asset ships with the API (apps/api/static/logo-full.png);
+        # a broken deployment must not 500 a crawler either.
+        raise HTTPException(status_code=404, detail="No preview image")
+    return FileResponse(
+        PREVIEW_FALLBACK_LOGO_PATH,
+        media_type="image/png",
+        headers=headers,
+    )
 
 
 # ── Share links ───────────────────────────────────────────────────────────────

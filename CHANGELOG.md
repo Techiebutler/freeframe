@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - **Comment counts on project thumbnails.** Assets in the project grid show how many comments their latest version has, with the same badge as a share link's grid, bottom-left on the thumbnail. Replies count, and internal comments do too, as the comment panel shows them to project members. The project asset list adds `comment_count` to each asset. (#504 by @jdanna)
+- **Share links unfurl into a card of their own when pasted into Telegram, WhatsApp or Slack.** Two new unauthenticated endpoints drive the preview: `GET /share/{token}/preview` returns only the card title, description and whether a thumbnail exists, and `GET /share/{token}/preview.jpg` streams the thumbnail of the latest version (the first item for folder and project shares) so crawlers get a stable URL that outlives the 1-hour presigned links. Rich previews appear **only for links a logged-out visitor could already open** — enabled, not expired, not login-required (`secure`), not password-protected. Every other state answers with the same generic branded card and no link-specific text, not even the title, because the usual `GET /share/{token}` deliberately includes the title in its password and sign-in gates. A preview neither counts as a share "open" in the activity log nor shares the per-IP rate-limit bucket of the share page, so a busy instance cannot 429 its own unfurls. Thumbnail previews can be turned off for the whole instance with the new `share_previews_enabled` switch on the instance settings (`GET/PUT /instance/settings` — no row yet means on). ([og-share-previews](docs/og-share-previews.md))
+- **One migration** adds `instance_settings.share_previews_enabled` (defaults to on, so upgrading instances start unfurling rich previews and an operator can suppress thumbnails through the instance-settings API).
 
 ### Fixed
 - **The player's back arrow returns to the asset's folder.** It went to the project root from anywhere, so leaving an asset inside a folder dropped you out of that folder. A share link's back arrow already did this. (#503 by @jdanna)
@@ -57,6 +60,7 @@ Profile pictures, a choice of original or transcode on download, Projects page v
 ### Contributors
 
 Thank you to @jdanna for the pull requests in this release and for reporting #478, and to @Paracid for the request in #462 that the original-download option answers.
+
 
 ## [1.17.1] - 2026-10-14
 
