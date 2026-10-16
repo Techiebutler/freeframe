@@ -208,3 +208,45 @@ describe.each(['grid', 'list'] as const)('AssetGrid right-click (%s view)', (lay
     expect(await menuItems()).toEqual(ASSET_ITEMS)
   })
 })
+
+describe('after a bulk delete', () => {
+  beforeEach(() => {
+    mockViewState.layout = 'grid'
+  })
+
+  it('the selection bar goes away once the deleted items are gone', () => {
+    const props = { projectId: 'p1', selectionShortcuts: true, onBulkDelete: vi.fn() }
+    const { rerender } = render(<AssetGrid assets={assets} folders={folders} {...props} />)
+    fireEvent.click(screen.getByText('Clip 1'), { metaKey: true })
+    fireEvent.click(screen.getByText('Clip 3'), { metaKey: true })
+    fireEvent.click(screen.getByText('Selects'), { metaKey: true })
+    expect(screen.getByText('3 Items selected')).toBeTruthy()
+
+    // The page deletes after its confirmation, and the lists refetch.
+    rerender(<AssetGrid assets={[assets[1]]} folders={[]} {...props} />)
+
+    expect(screen.queryByText(/items? selected/i)).toBeNull()
+  })
+
+  it('keeps what is still there, as when only part of it was deleted', () => {
+    const props = { projectId: 'p1', selectionShortcuts: true }
+    const { rerender } = render(<AssetGrid assets={assets} folders={folders} {...props} />)
+    fireEvent.click(screen.getByText('Clip 1'), { metaKey: true })
+    fireEvent.click(screen.getByText('Clip 3'), { metaKey: true })
+
+    rerender(<AssetGrid assets={[assets[0], assets[1]]} folders={folders} {...props} />)
+
+    expect(screen.getByText('1 Item selected')).toBeTruthy()
+  })
+
+  it('a refetch that removes nothing (the delete was cancelled) keeps the selection', () => {
+    const props = { projectId: 'p1', selectionShortcuts: true }
+    const { rerender } = render(<AssetGrid assets={assets} folders={folders} {...props} />)
+    fireEvent.click(screen.getByText('Clip 1'), { metaKey: true })
+    fireEvent.click(screen.getByText('Clip 2'), { metaKey: true })
+
+    rerender(<AssetGrid assets={assets.map((a) => ({ ...a }))} folders={folders.map((f) => ({ ...f }))} {...props} />)
+
+    expect(screen.getByText('2 Items selected')).toBeTruthy()
+  })
+})

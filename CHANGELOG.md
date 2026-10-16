@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **The sidebar tree's folder menu closes when you click elsewhere or press Esc.** It used to stay open until one of its items was picked. (by @jdanna)
+- **The selection bar goes away after a bulk delete.** It used to stay up, counting the items that had just been deleted. (by @jdanna)
 - **Rename dialogs open ready to type.** The name field is focused with the whole name selected, so typing replaces it. Renaming an asset used to leave the cursor after the old name, and opening the dialog from a menu could leave focus outside the field. (by @jdanna)
 - **Rename and Delete on a folder in list view.** Rename changed nothing (it sent back the folder's current name) and now asks for the new one, as the grid does. Delete removed the folder at once and now asks first. (by @jdanna)
 

@@ -204,6 +204,21 @@ export function AssetGrid({
     setSelectedFolderIds(new Set())
   }
 
+  // Drop from the selection whatever is no longer here. A bulk delete is
+  // confirmed in the page's dialog and only lands when the lists refetch, so
+  // without this the bar went on counting items that were gone. Cancelling
+  // the delete removes nothing, and the selection stays.
+  React.useEffect(() => {
+    const assetIds = new Set(assets.map((a) => a.id))
+    const folderIds = new Set((folders ?? []).map((f) => f.id))
+    const prune = (prev: Set<string>, present: Set<string>) =>
+      Array.from(prev).every((id) => present.has(id))
+        ? prev
+        : new Set(Array.from(prev).filter((id) => present.has(id)))
+    setSelectedAssetIds((prev) => prune(prev, assetIds))
+    setSelectedFolderIds((prev) => prune(prev, folderIds))
+  }, [assets, folders])
+
   const totalSelected = selectedAssetIds.size + selectedFolderIds.size
 
   // What the selection bar offers, shared with right-click on a selected item.
