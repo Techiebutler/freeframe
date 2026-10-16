@@ -372,7 +372,10 @@ encode entirely with `TRANSCODER_SOURCE_COPY=true` and a single-rung ladder, but
 The GPU decoders don't handle ProRes, DNxHR, 10-bit H.264, or 4:2:2 H.264 or HEVC.
 For those masters, on NVIDIA and Intel, the decode stays on the CPU and the frames
 are uploaded, so scaling and encoding still run on the GPU. Expect the CPU decode
-to be the bottleneck on 4K ProRes.
+to be the bottleneck on 4K ProRes. Video with a display rotation (most portrait
+phone footage) has to be turned upright in system memory: on NVIDIA it is still
+decoded on the GPU and passed through system memory, which costs a little CPU; on
+Intel it is decoded on the CPU.
 
 ### Email Workers
 

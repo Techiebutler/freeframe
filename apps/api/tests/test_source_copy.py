@@ -332,7 +332,9 @@ def test_a_rotated_source_is_encoded():
     # A portrait clip off a phone is H.264 8-bit 4:2:0 SDR at its own size and
     # passes every other condition. The orientation is a display matrix in the
     # container, MPEG-TS cannot carry one, and the encode path only gets it
-    # right because a filter graph makes ffmpeg autorotate -- so a copy would
+    # right because ffmpeg autorotates frames on their way into the filter
+    # graph (system-memory frames only; see test_transcoder_display_rotation)
+    # -- so a copy would
     # produce a video lying on its side beside an upright thumbnail.
     for rotation in (90, -90, 180, 270):
         cmd, _, _ = _transcode(["1080p"], video_stream={

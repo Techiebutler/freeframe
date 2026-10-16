@@ -469,6 +469,27 @@ _CPU_DECODE_UPLOAD = {
     "vaapi": {"args": ["-vaapi_device", "/dev/dri/renderD128"], "filter": "hwupload"},
 }
 
+# A source with a display matrix -- a portrait phone clip, stored landscape --
+# is turned upright by ffmpeg ahead of the filter graph (autorotate), but only
+# when its frames are in system memory: ffmpeg 7.1 skips any hardware pixel
+# format, so CUDA, VAAPI and QSV frames reach the scaler as stored, and the
+# rendition lies on its side. MPEG-TS cannot carry the matrix, so nothing later
+# can undo it. For such a source the GPU-decode attempt drops
+# -hwaccel_output_format: NVDEC still decodes, the frames are copied into system
+# memory, ffmpeg turns them exactly as it does on the CPU (rotations and flips),
+# and they are uploaded for the scale and the encode.
+#
+# `copy` first, because a vertical flip is done by negating the frame's linesize
+# rather than moving pixels, and hwupload_cuda cannot copy from a negative pitch
+# -- it logs CUDA_ERROR_INVALID_VALUE, sends garbage and exits 0. The upload
+# takes the decoder's own nv12 or p010 and scale_cuda sets the encoder's depth:
+# converting 4K 8-bit to p010 on the CPU first made the job cost four times the
+# CPU. Measured on an RTX 5070 Ti with ffmpeg 7.1.5, 10 s of 4K HEVC: about 7
+# CPU-seconds, against 18-28 on the CPU-decode tier. VAAPI has no entry because
+# nobody can test it here: a rotated source starts on its CPU-decode tier instead
+# (_plan_attempts).
+_MEMORY_DECODE_HWACCEL = {"nvenc": ["-hwaccel", "cuda"]}
+
 
 def _gpu_can_decode(backend: str, stream: dict) -> bool:
     """Whether `backend`'s hardware decoder is expected to handle `stream`.
@@ -492,9 +513,11 @@ def _plan_attempts(
 
     A hardware backend that can take uploaded frames gets two tiers -- GPU
     decode, then CPU decode with the GPU still encoding -- and the first is
-    skipped when the source is known not to decode on the GPU. Every hardware
-    chain ends on the software pipeline. Dolby Vision profile 5 is decoded and
-    encoded in software whatever the backend, so it gets a single attempt.
+    skipped when the source is known not to decode on the GPU, or when it has a
+    display matrix and the backend cannot decode into system memory for it (see
+    _MEMORY_DECODE_HWACCEL). Every hardware chain ends on the software pipeline.
+    Dolby Vision profile 5 is decoded and encoded in software whatever the
+    backend, so it gets a single attempt.
     """
     attempts: list[tuple[str, bool]] = []
     if primary_backend == "copy":
@@ -503,7 +526,12 @@ def _plan_attempts(
     if backend == "cpu" or dv_software:
         attempts.append((backend, False))
         return attempts
-    if _gpu_can_decode(backend, stream):
+    turned_on_the_cpu_only = (
+        backend in _CPU_DECODE_UPLOAD
+        and backend not in _MEMORY_DECODE_HWACCEL
+        and is_display_transformed(stream)
+    )
+    if _gpu_can_decode(backend, stream) and not turned_on_the_cpu_only:
         attempts.append((backend, True))
     if backend in _CPU_DECODE_UPLOAD:
         attempts.append((backend, False))
@@ -913,9 +941,11 @@ def display_rotation(stream: dict) -> float:
     condition, and comes out lying on its side, next to a thumbnail that is
     upright because thumbnails are made through a filter graph.
 
-    The encoding path never had to ask, because ffmpeg autorotates whenever a
-    filter graph is present and the ladder always has one -- so the rotation is
-    baked into the pixels there, and the rendition is upright.
+    The encoding path bakes the rotation into the pixels instead, because
+    ffmpeg autorotates a frame on its way into the filter graph -- but only a
+    frame in system memory. It leaves a hardware frame (CUDA, VAAPI, QSV) as it
+    is, so a GPU decode has to be told to hand over system-memory frames for a
+    rotated source; see _MEMORY_DECODE_HWACCEL and is_display_transformed.
 
     `rotate` in the stream tags is the older spelling of the same thing and is
     still what some files carry, so both are read.
@@ -933,6 +963,22 @@ def display_rotation(stream: dict) -> float:
         except (TypeError, ValueError):
             return 0.0
     return 0.0
+
+
+def is_display_transformed(stream: dict) -> bool:
+    """Whether ffmpeg will turn this stream's frames before the filter graph.
+
+    Any display matrix, not only a rotation: a vertical flip probes as rotation
+    0 and ffmpeg still flips the frames for it. The demuxers export a matrix only
+    when it is not the identity, so its presence is the test. Deliberately wider
+    than display_rotation(), whose job is the stream-copy gate: here a false
+    positive costs a little CPU and a false negative a picture on its side.
+    """
+    for side_data in stream.get("side_data_list") or []:
+        if side_data.get("side_data_type") == "Display Matrix" \
+                or "rotation" in side_data or "displaymatrix" in side_data:
+            return True
+    return bool(display_rotation(stream))
 
 
 def rung_is_source_size(target: str, width: int, height: int) -> bool:
@@ -1853,6 +1899,9 @@ class FFmpegTranscoder(BaseTranscoder):
             # ordinary HDR path and retain hardware decode/scale/encode.
             dv_software = dovi_profile == 5
             tone_map = (is_hdr and hdr_mode == "convert") or dv_software
+            # A display matrix, which ffmpeg applies to system-memory frames
+            # only; see _MEMORY_DECODE_HWACCEL.
+            turned = is_display_transformed(_vid_stream)
 
             # 2. Check if input has an audio stream
             audio_cmd = [
@@ -2029,6 +2078,9 @@ class FFmpegTranscoder(BaseTranscoder):
 
                 `gpu_decode=False` on a hardware backend decodes on the CPU and
                 uploads the frames, so the scale and the encode stay on the GPU.
+                A GPU decode of a source with a display matrix also uploads: the
+                frames come off the GPU decoder into system memory, where ffmpeg
+                turns them upright (_MEMORY_DECODE_HWACCEL).
                 """
                 if backend == "copy":
                     return _build_copy_cmd()
@@ -2036,8 +2088,12 @@ class FFmpegTranscoder(BaseTranscoder):
                 # below), so force the CPU scale filter for it.
                 scale_filter = "scale" if dv_software else _BACKEND_SCALE.get(backend, "scale")
                 out_mode = _OUTPUT_MODES.get(get_output_mode(), _OUTPUT_MODES["h264_8"])
+                memory_decode = (
+                    gpu_decode and not dv_software and turned
+                    and backend in _MEMORY_DECODE_HWACCEL
+                )
                 cpu_upload = (
-                    None if gpu_decode or dv_software
+                    None if dv_software or (gpu_decode and not memory_decode)
                     else _CPU_DECODE_UPLOAD.get(backend)
                 )
 
@@ -2081,15 +2137,25 @@ class FFmpegTranscoder(BaseTranscoder):
                         src = "[tcpu]"
                     else:
                         # A CPU-decoded frame is already in system memory, so
-                        # there is nothing to download.
+                        # there is nothing to download; nor is one the GPU
+                        # decoder put there, which `copy` gives a positive pitch.
                         hdr_prefix = f"[0:{_PRIMARY_VIDEO_STREAM}]"
-                        hdr_prefix += "format=p010" if cpu_upload else "hwdownload,format=p010"
+                        if memory_decode:
+                            hdr_prefix += "copy,format=p010"
+                        else:
+                            hdr_prefix += "format=p010" if cpu_upload else "hwdownload,format=p010"
                         if tone_map:
                             hdr_prefix += (",zscale=t=linear:npl=100,format=gbrpf32le,"
                                            f"zscale=p=bt709,tonemap=tonemap={_HDR_TONEMAP_ALGO}:desat=0,"
                                            f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le")
                         hdr_prefix += f"[tcpu];[tcpu]hwupload{_HDR_UPLOAD.get(backend, '')}[t];"
                         src = "[t]"
+                elif memory_decode:
+                    # Already nv12 or p010 off the decoder; scale_cuda sets the
+                    # encoder's depth. See _MEMORY_DECODE_HWACCEL for the copy.
+                    hdr_prefix = (f"[0:{_PRIMARY_VIDEO_STREAM}]copy,"
+                                  f"{cpu_upload['filter']}[up];")
+                    src = "[up]"
                 elif cpu_upload:
                     # Decoded on the CPU: convert to the encoder's depth there
                     # (the GPU scalers take no 4:2:2, and nv12 halves the upload
@@ -2115,10 +2181,10 @@ class FFmpegTranscoder(BaseTranscoder):
                 if backend == "nvenc" and not dv_software:
                     # NVENC has a minimum frame size; see nvenc_rung_target.
                     # It needs the frame the scaler is handed. ffmpeg autorotates
-                    # a software-decoded frame ahead of the graph, so the CPU
-                    # decode scales a portrait phone clip upright -- but it does
-                    # not rotate a CUDA frame, so the GPU decode scales the
-                    # stored size (measured on 7.1.5).
+                    # a frame in system memory ahead of the graph, so whatever
+                    # is uploaded -- a CPU decode, or a rotated source's GPU
+                    # decode -- is scaled upright. Only CUDA frames keep the
+                    # stored size, and no rotated source is decoded into those.
                     seen = (source_width, source_height)
                     if cpu_upload and round(display_rotation(_vid_stream)) % 180 == 90:
                         seen = (source_height, source_width)
@@ -2132,7 +2198,9 @@ class FFmpegTranscoder(BaseTranscoder):
                 )
 
                 ffmpeg_cmd = ["ffmpeg", "-y"]
-                if cpu_upload:
+                if memory_decode:
+                    ffmpeg_cmd += _MEMORY_DECODE_HWACCEL[backend]
+                elif cpu_upload:
                     ffmpeg_cmd += cpu_upload["args"]
                 elif not dv_software:
                     ffmpeg_cmd += _BACKEND_HWACCEL.get(backend, [])
@@ -2299,6 +2367,15 @@ class FFmpegTranscoder(BaseTranscoder):
                     f"{_vid_stream.get('codec_name')}/{_vid_stream.get('pix_fmt')}; "
                     f"decoding on the CPU and encoding on {encode_backend} "
                     f"for {job.input_s3_key}",
+                    flush=True,
+                )
+            elif encode_backend in _CPU_DECODE_UPLOAD and not dv_software and turned:
+                how = ("decoding into system memory" if encode_backend in _MEMORY_DECODE_HWACCEL
+                       else "decoding on the CPU")
+                print(
+                    f"[transcoder] {job.input_s3_key} has a display matrix "
+                    f"(rotation {display_rotation(_vid_stream):g}); {how} so ffmpeg "
+                    f"turns it upright, encoding on {encode_backend}",
                     flush=True,
                 )
 

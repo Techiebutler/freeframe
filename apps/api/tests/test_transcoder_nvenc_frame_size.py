@@ -314,15 +314,15 @@ def test_the_software_fallback_keeps_the_ladder_it_had():
 
 def test_a_rotated_source_is_sized_as_the_scaler_sees_it():
     # Stored 1920x720 with a 90-degree display matrix. ffmpeg autorotates a
-    # software-decoded frame before the graph and leaves a CUDA one alone, so
-    # the GPU-decode attempt scales 1920x720 (360p is 640x240, fine) and the
-    # CPU-decode attempt scales 720x1920 (360p would be 136x360).
+    # frame in system memory before the graph and leaves a CUDA one alone, so a
+    # rotated source is never decoded into CUDA frames: both attempts scale
+    # 720x1920, whose 360p fit (136x360) is under h264_nvenc's minimum.
     result, calls = _transcode(1920, 720, stream=ROTATED_90, failures=[NVDEC_REFUSAL])
 
     assert result.success is True
     gpu_decode, cpu_decode = calls
-    assert "-hwaccel" in gpu_decode
-    assert _boxes(gpu_decode) == {"720p": "1280:720", "360p": "640:360"}
+    assert "-hwaccel" in gpu_decode and "-hwaccel_output_format" not in gpu_decode
+    assert _boxes(gpu_decode) == {"720p": "1280:720", "360p": "146:390"}
     assert "hwupload_cuda" in cpu_decode[cpu_decode.index("-filter_complex") + 1]
     assert _boxes(cpu_decode) == {"720p": "1280:720", "360p": "146:390"}
 
