@@ -132,7 +132,8 @@ Reviewer approves / rejects ──▶ SSE: approval_updated
      the GPU can't decode (ProRes, 4:2:2, 10-bit H.264) is decoded on the CPU and uploaded,
      so the scale and encode stay on the GPU. HDR and
      Dolby Vision sources are tone-mapped to Rec.709, with the CRF adjusted either way.
-5. One thumbnail generated (`-vf thumbnail`, a single representative frame)
+5. One thumbnail generated (`-vf thumbnail`, a single representative frame), scaled to square
+   pixels so anamorphic sources aren't squeezed, and fit within 1280x1280 keeping its shape
 6. All outputs uploaded to S3 under `processed/{project_id}/{asset_id}/{version_id}/`
 7. `AssetVersion.processing_status` set to `ready`, `transcode_complete` published
 

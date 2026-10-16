@@ -9,6 +9,12 @@ export type TitleLines = '1' | '2' | '3'
 export type SortKey = 'custom' | 'date' | 'name' | 'status' | 'type'
 export type SortDirection = 'asc' | 'desc'
 
+/** The direction a sort starts in when picked: newest first for dates,
+ *  A-Z for everything else. */
+export function naturalSortDirection(key: SortKey): SortDirection {
+  return key === 'date' ? 'desc' : 'asc'
+}
+
 interface ViewSettings {
   layout: ViewLayout
   cardSize: CardSize
@@ -65,7 +71,7 @@ export const useViewStore = create<ViewStore>()(
       setFlattenFolders: (flatten) => set({ flattenFolders: flatten }),
       setShowFileSize: (show) => set({ showFileSize: show }),
       setShowUploader: (show) => set({ showUploader: show }),
-      setSortKey: (key) => set({ sortKey: key }),
+      setSortKey: (key) => set({ sortKey: key, sortDirection: naturalSortDirection(key) }),
       setSortDirection: (dir) => set({ sortDirection: dir }),
       toggleSortDirection: () =>
         set((s) => ({ sortDirection: s.sortDirection === 'asc' ? 'desc' : 'asc' })),

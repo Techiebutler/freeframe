@@ -53,6 +53,12 @@ const folder = {
   created_at: '2026-01-01T00:00:00Z',
 } as unknown as Folder
 
+const folders = [
+  folder,
+  { ...folder, id: 'f2', name: 'B-roll' } as Folder,
+  { ...folder, id: 'f3', name: 'Music' } as Folder,
+]
+
 /** The bulk action bar's count, or 0 when it isn't showing. */
 function selectedCount(): number {
   const bar = screen.queryByText(/items? selected/i)
@@ -61,6 +67,10 @@ function selectedCount(): number {
 
 function clip(n: number) {
   return screen.getByText(`Clip ${n}`)
+}
+
+function folderNamed(name: string) {
+  return screen.getByText(name)
 }
 
 beforeEach(() => {
@@ -246,6 +256,68 @@ describe.each(['grid', 'list'] as const)('AssetGrid selection shortcuts (%s view
     fireEvent.keyDown(screen.getByLabelText('search'), { key: 'a', metaKey: true })
 
     expect(selectedCount()).toBe(0)
+  })
+
+  it('⌘-click adds a folder to the selection and removes it again, without opening it', () => {
+    const onFolderOpen = vi.fn()
+    render(
+      <AssetGrid assets={assets} projectId="p1" folders={folders} selectionShortcuts onFolderOpen={onFolderOpen} />,
+    )
+
+    fireEvent.click(folderNamed('Selects'), { metaKey: true })
+    fireEvent.click(folderNamed('Music'), { ctrlKey: true })
+    expect(selectedCount()).toBe(2)
+
+    fireEvent.click(folderNamed('Selects'), { metaKey: true })
+    expect(selectedCount()).toBe(1)
+    expect(onFolderOpen).not.toHaveBeenCalled()
+  })
+
+  it('shift-click selects a range of folders', () => {
+    const onFolderOpen = vi.fn()
+    render(
+      <AssetGrid assets={assets} projectId="p1" folders={folders} selectionShortcuts onFolderOpen={onFolderOpen} />,
+    )
+
+    fireEvent.click(folderNamed('Selects'), { metaKey: true })
+    fireEvent.click(folderNamed('Music'), { shiftKey: true })
+
+    expect(selectedCount()).toBe(3)
+    expect(onFolderOpen).not.toHaveBeenCalled()
+  })
+
+  it('a shift-click range runs from a folder into the clips, in the order shown', () => {
+    render(<AssetGrid assets={assets} projectId="p1" folders={folders} selectionShortcuts />)
+
+    fireEvent.click(folderNamed('B-roll'), { metaKey: true })
+    fireEvent.click(clip(2), { shiftKey: true })
+
+    // B-roll, Music, Clip 1, Clip 2
+    expect(selectedCount()).toBe(4)
+  })
+
+  it('a shift-click range runs from a clip back into the folders', () => {
+    render(<AssetGrid assets={assets} projectId="p1" folders={folders} selectionShortcuts />)
+
+    fireEvent.click(clip(1))
+    fireEvent.click(folderNamed('Music'), { shiftKey: true })
+
+    // Music, Clip 1
+    expect(selectedCount()).toBe(2)
+  })
+
+  it('a modifier click on a folder does not reach the page as a click on empty space', () => {
+    const onBackgroundClick = vi.fn()
+    render(
+      <div onClick={onBackgroundClick}>
+        <AssetGrid assets={assets} projectId="p1" folders={folders} selectionShortcuts />
+      </div>,
+    )
+
+    fireEvent.click(folderNamed('Selects'), { metaKey: true })
+    fireEvent.click(folderNamed('Music'), { shiftKey: true })
+
+    expect(onBackgroundClick).not.toHaveBeenCalled()
   })
 
   it('does nothing extra where the shortcuts are not turned on', () => {

@@ -510,6 +510,43 @@ def _plan_attempts(
     attempts.append(("cpu", False))
     return attempts
 
+# Thumbnails are square-pixel and fit within a 1280x1280 box, keeping the
+# source's shape. JPEG carries no pixel aspect a browser honours, so an
+# anamorphic frame has to be de-squeezed here: the first scale shrinks the long
+# axis by the sample aspect ratio (`sar` is 1 when the source sets none), rather
+# than widening, so a 2x-squeezed 4K frame never passes through an 8K one. The
+# fit that follows needs that step first, because force_original_aspect_ratio
+# works on pixel dimensions and ignores SAR. Display rotation needs nothing
+# extra: autorotate's transpose flips the SAR too.
+#
+# The fit can leave a SAR a hair off 1 (PAL 16:9 lands on 3231:3232), so the
+# result is marked square again for anything that reads the JFIF density.
+_THUMB_BOX = 1280
+_THUMB_GEOMETRY = (
+    "scale=w='trunc(iw*min(1\\,sar)/2)*2':h='trunc(ih/max(1\\,sar)/2)*2',setsar=1,"
+    f"scale={_THUMB_BOX}:{_THUMB_BOX}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+    "setsar=1"
+)
+
+
+def _thumbnail_filter(is_hdr: bool, dv_software: bool) -> str:
+    """The -vf for the poster frame: pick, tone-map, de-squeeze, fit."""
+    vf = "thumbnail"
+    if dv_software:
+        vf += ",libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv,format=yuvj420p"
+    elif is_hdr:
+        # Match the HLS path's full zscale->tonemap->zscale chain so the
+        # thumbnail converts BOTH the HDR transfer (PQ/HLG->linear->bt709)
+        # AND the wide gamut (bt2020->bt709 primaries). The older short
+        # form (tonemap=mobius only) tone-mapped the curve but left
+        # bt2020 primaries, producing a washed-out "log on Rec709" look.
+        vf += (
+            ",format=p010,zscale=t=linear:npl=100,format=gbrpf32le,"
+            "zscale=p=bt709,tonemap=tonemap=" + _HDR_TONEMAP_ALGO + ":desat=0,"
+            "zscale=t=bt709:m=bt709:r=tv"
+        )
+    return f"{vf},{_THUMB_GEOMETRY},format=yuvj420p"
+
 # NVENC constant-quality (CQ) settings, keyed by output mode.
 # This ffmpeg/nvenc build has no "-rc cq" mode and ignores "-rc vbr -cq",
 # so constant quality is achieved via "-rc constqp -qp <value>"
@@ -1668,7 +1705,7 @@ class FFmpegTranscoder(BaseTranscoder):
         try:
             cmd = [
                 "ffmpeg", "-i", input_url, "-map", f"0:{_PRIMARY_VIDEO_STREAM}",
-                "-vf", "fps=0.1,format=yuvj420p",
+                "-vf", f"fps=0.1,{_THUMB_GEOMETRY},format=yuvj420p",
                 "-q:v", "2",
                 f"{thumb_dir}/thumb_%04d.jpg",
             ]
@@ -2275,21 +2312,7 @@ class FFmpegTranscoder(BaseTranscoder):
 
             # 6. Generate and upload thumbnail (using streaming URL)
             thumb_path = work_dir / "thumb_0001.jpg"
-            thumb_vf = "thumbnail"
-            if dv_software:
-                thumb_vf += ",libplacebo=tonemapping=bt.2446a:colorspace=bt709:color_trc=bt709:range=tv,format=yuvj420p"
-            elif is_hdr:
-                # Match the HLS path's full zscale->tonemap->zscale chain so the
-                # thumbnail converts BOTH the HDR transfer (PQ/HLG->linear->bt709)
-                # AND the wide gamut (bt2020->bt709 primaries). The older short
-                # form (tonemap=mobius only) tone-mapped the curve but left
-                # bt2020 primaries, producing a washed-out "log on Rec709" look.
-                thumb_vf += (
-                    ",format=p010,zscale=t=linear:npl=100,format=gbrpf32le,"
-                    "zscale=p=bt709,tonemap=tonemap=" + _HDR_TONEMAP_ALGO + ":desat=0,"
-                    "zscale=t=bt709:m=bt709:r=tv"
-                )
-            thumb_vf += ",format=yuvj420p"
+            thumb_vf = _thumbnail_filter(is_hdr, dv_software)
             thumb_cmd = [
                 "ffmpeg", "-y", "-i", input_url,
                 "-vf", thumb_vf, "-q:v", "2", "-frames:v", "1",

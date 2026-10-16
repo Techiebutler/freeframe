@@ -1,5 +1,5 @@
 from pydantic import AfterValidator, BaseModel, EmailStr, model_validator, Field
-from typing import Annotated
+from typing import Annotated, Literal
 import uuid
 from ..models.user import UserStatus
 from ..services.auth_service import BCRYPT_MAX_PASSWORD_BYTES
@@ -172,6 +172,18 @@ NotificationPreferences = Annotated[
 ]
 
 
+class ProjectsViewPreferences(BaseModel):
+    """Projects page appearance: grid or list, the grid's card size, whether
+    grid cards show their info row, and the sort order."""
+    model_config = {"extra": "forbid"}
+
+    layout: Literal["grid", "list"]
+    card_size: Literal["S", "M", "L"]
+    show_card_info: bool = True
+    sort_key: Literal["date", "name"] = "date"
+    sort_direction: Literal["asc", "desc"] = "desc"
+
+
 class PreferencesUpdate(BaseModel):
     """Schema-constrained preferences update.
 
@@ -187,4 +199,5 @@ class PreferencesUpdate(BaseModel):
 
     theme: _PreferenceString | None = None
     notifications: NotificationPreferences | None = None
+    projects_view: ProjectsViewPreferences | None = None
 

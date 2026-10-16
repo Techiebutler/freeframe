@@ -42,8 +42,8 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: 'Project',
     items: [
       { keys: ['⌘', 'A'], label: 'Select all' },
-      { keys: ['Shift', 'Click'], label: 'Select a range of assets' },
-      { keys: ['⌘', 'Click'], label: 'Add / remove an asset from the selection' },
+      { keys: ['Shift', 'Click'], label: 'Select a range of folders or assets' },
+      { keys: ['⌘', 'Click'], label: 'Add / remove a folder or asset from the selection' },
       { keys: ['Esc'], label: 'Deselect all' },
     ],
   },

@@ -506,3 +506,102 @@ def test_accept_invite_still_sets_password_and_activates(client, mock_db):
     assert user.status == UserStatus.active
     assert user.invite_token is None
     assert user.invite_token_expires_at is None
+
+
+# flag_modified needs a mapped instance; test_user is a MagicMock.
+_FLAG_MODIFIED = "sqlalchemy.orm.attributes.flag_modified"
+
+
+def test_update_preferences_projects_view_saved_and_merged(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — projects_view is stored alongside existing keys."""
+    test_user.preferences = {"theme": "light"}
+
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch(
+            "/auth/me/preferences",
+            json={"projects_view": {"layout": "list", "card_size": "L", "show_card_info": False}},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["preferences"] == {
+        "theme": "light",
+        "projects_view": {"layout": "list", "card_size": "L", "show_card_info": False},
+    }
+
+
+def test_update_preferences_projects_view_show_card_info_optional(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — show_card_info may be omitted (clients from before the
+    toggle). It is left unset rather than stored, and the web app reads a missing value as on."""
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch(
+            "/auth/me/preferences",
+            json={"projects_view": {"layout": "grid", "card_size": "M"}},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["preferences"]["projects_view"] == {"layout": "grid", "card_size": "M"}
+
+
+def test_update_preferences_projects_view_rejects_invalid_layout(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — an unknown layout value is a 422, not stored."""
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch(
+            "/auth/me/preferences",
+            json={"projects_view": {"layout": "carousel", "card_size": "M"}},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 422
+    assert test_user.preferences == {}
+
+
+def test_update_preferences_projects_view_rejects_unknown_key(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — projects_view only accepts the keys it models."""
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch(
+            "/auth/me/preferences",
+            json={"projects_view": {"layout": "grid", "card_size": "M", "aspect_ratio": "square"}},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 422
+    assert test_user.preferences == {}
+
+
+def test_update_preferences_projects_view_saves_sort(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — the Projects page sort order is stored with the rest."""
+    view = {"layout": "grid", "card_size": "M", "show_card_info": True,
+            "sort_key": "name", "sort_direction": "asc"}
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch("/auth/me/preferences", json={"projects_view": view}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["preferences"]["projects_view"] == view
+
+
+def test_update_preferences_projects_view_rejects_unknown_sort_key(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — only date and name sorts apply to projects."""
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch(
+            "/auth/me/preferences",
+            json={"projects_view": {"layout": "grid", "card_size": "M", "sort_key": "status"}},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 422
+    assert test_user.preferences == {}
+
+
+def test_update_preferences_projects_view_rejects_unknown_sort_direction(client, auth_headers, test_user):
+    """PATCH /auth/me/preferences — a sort runs ascending or descending, nothing else."""
+    with patch(_FLAG_MODIFIED):
+        resp = client.patch(
+            "/auth/me/preferences",
+            json={"projects_view": {"layout": "grid", "card_size": "M", "sort_direction": "up"}},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 422
+    assert test_user.preferences == {}
