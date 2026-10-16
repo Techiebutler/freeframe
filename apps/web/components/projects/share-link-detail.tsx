@@ -24,7 +24,7 @@ import {
   Globe,
   X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, dateInputValue, endOfDayISO } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
@@ -1006,17 +1006,11 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
                   <Calendar className="h-3.5 w-3.5 text-text-tertiary" />
                   <input
                     type="date"
-                    value={
-                      shareLink.expires_at
-                        ? new Date(shareLink.expires_at)
-                            .toISOString()
-                            .split("T")[0]
-                        : ""
-                    }
+                    value={dateInputValue(shareLink.expires_at)}
                     onChange={(e) => {
                       const val = e.target.value;
                       immediateUpdate({
-                        expires_at: val ? new Date(val).toISOString() : null,
+                        expires_at: val ? endOfDayISO(val) : null,
                       });
                     }}
                     className="w-[130px] rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary outline-none focus:border-accent/50 [color-scheme:auto]"

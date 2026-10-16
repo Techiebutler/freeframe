@@ -138,10 +138,32 @@ export function truncate(str: string, length: number): string {
   return str.slice(0, length) + '...'
 }
 
+/**
+ * The expiry instant for a day picked in an `<input type="date">`: the last
+ * millisecond of that day in the user's local time zone, as an ISO string.
+ *
+ * Every share-link path that turns a picked date into `expires_at` goes
+ * through here. Do not use `new Date('YYYY-MM-DD')`: a date-only string parses
+ * as UTC midnight, so west of UTC the link expired the evening before the
+ * picked day (and east of UTC, in the early morning of it).
+ */
 export function endOfDayISO(dateStr: string): string {
-  const d = new Date(dateStr)
-  d.setHours(23, 59, 59, 999)
-  return d.toISOString()
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString()
+}
+
+/**
+ * The value for an `<input type="date">` showing a stored `expires_at`: the
+ * calendar day that instant falls on in the user's local time zone. The
+ * inverse of `endOfDayISO`; reading it back with `toISOString()` would show
+ * the UTC day, which is the next day for anyone west of UTC.
+ */
+export function dateInputValue(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 /**

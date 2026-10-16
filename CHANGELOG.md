@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Picking a sort inside a project starts it in a sensible direction.** Date starts newest first and everything else A-Z; switching from Date to Name used to carry the direction over and list names Z-A. (#485 by @jdanna)
 - **Sorting by name orders numbers by value.** "Shot 2" now comes before "Shot 10". (#485 by @jdanna)
 - **The share links list shows each link's own title.** Asset and folder links were listed under the name of the asset or folder they share, so a link you had named "Client cut" on a folder called "F" showed up as "F", and searching for it by its name found the right row under the wrong label. Project links were not affected.
+- **A share link set to expire on a date lasts to the end of that day, in your time zone.** The picked date was read as midnight UTC, so west of UTC a link expired the evening before (picking 20 October in New York ended it at 8:00 PM on the 19th for a single item, 11:59 PM on the 19th for several), and east of UTC a single-item link expired in the early morning of the day itself. Every place you set an expiry now uses the same rule, and the date field shows the day you picked rather than the UTC one. Links saved before this keep the moment they were stored with, so one may now show the day before the date you picked.
 
 ## [1.17.1] - 2026-10-14
 

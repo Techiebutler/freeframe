@@ -24,7 +24,7 @@ import {
   LayoutGrid,
 } from 'lucide-react'
 import * as Switch from '@radix-ui/react-switch'
-import { cn, copyToClipboard, endOfDayISO } from '@/lib/utils'
+import { cn, copyToClipboard, dateInputValue, endOfDayISO } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -607,7 +607,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
       setAllowDownloads(data.allow_download)
       setPassphrase(data.has_password ?? false)
       setWatermark(data.show_watermark)
-      setExpiresAt(data.expires_at ? new Date(data.expires_at).toISOString().split('T')[0] : '')
+      setExpiresAt(dateInputValue(data.expires_at))
       setLayout((data.appearance as ShareLinkAppearance | null)?.layout || 'grid')
       setVisibility(data.visibility === 'secure' ? 'secure' : 'public')
     }).catch(() => {})
@@ -912,7 +912,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                   <input
                     type="date"
                     value={expiresAt}
-                    onChange={(e) => { setExpiresAt(e.target.value); patchLink({ expires_at: e.target.value ? new Date(e.target.value).toISOString() : null }) }}
+                    onChange={(e) => { setExpiresAt(e.target.value); patchLink({ expires_at: e.target.value ? endOfDayISO(e.target.value) : null }) }}
                     className="w-[120px] rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary outline-none focus:border-accent [color-scheme:dark]"
                   />
                   {expiresAt && (
@@ -1127,7 +1127,7 @@ export function ShareCreateDialog({
           show_watermark: config.watermark,
         }
         if (config.passphrase) patches.password = config.passphrase
-        if (config.expiresAt) patches.expires_at = new Date(config.expiresAt).toISOString()
+        if (config.expiresAt) patches.expires_at = endOfDayISO(config.expiresAt)
         await api.patch(`/share/${shareLink.token}`, patches)
       }
 
