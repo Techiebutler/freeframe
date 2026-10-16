@@ -15,6 +15,8 @@ export function ProjectPoster({ project, className }: { project: Pick<Project, '
       <img
         src={project.poster_url}
         alt={project.name}
+        loading="lazy"
+        decoding="async"
         className={cn('h-full w-full object-cover', className)}
       />
     )
