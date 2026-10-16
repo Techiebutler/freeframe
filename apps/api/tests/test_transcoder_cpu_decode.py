@@ -51,9 +51,11 @@ NO_DEVICE = (
     "Failed to set value '[0:V:0]format=nv12,hwupload_cuda[up];[up]split=2' for option "
     "'filter_complex': Generic error in an external library"
 )
-NVENC_TOO_SHORT = (
-    "[h264_nvenc] InitializeEncoder failed: invalid param (8): "
-    "Frame Dimension less than the minimum supported value."
+# A failure no hardware marker names. (NVENC refusing a rung as too small used to
+# be the example here; it is a recognised hardware failure since #477.)
+UNRECOGNISED = (
+    "Error reinitializing filters!\n"
+    "Failed to inject frame into filter network: Invalid argument"
 )
 
 
@@ -326,9 +328,9 @@ def test_a_missing_cuda_device_on_an_hdr_gpu_decode_skips_to_software():
 
 
 def test_an_unrecognised_failure_on_the_cpu_decode_falls_back_to_software():
-    # An 8448x480 source: NVDEC refuses the width, then NVENC refuses the 360p
-    # rung as too short. No marker names the second failure.
-    result, calls = _transcode(H264, "nvenc", failures=[NVDEC_REFUSAL, NVENC_TOO_SHORT])
+    # NVDEC refuses the source, then the CPU-decode attempt fails in a way no
+    # marker names.
+    result, calls = _transcode(H264, "nvenc", failures=[NVDEC_REFUSAL, UNRECOGNISED])
 
     assert result.success is True
     assert len(calls) == 3
@@ -337,7 +339,7 @@ def test_an_unrecognised_failure_on_the_cpu_decode_falls_back_to_software():
 
 
 def test_any_failure_on_a_cpu_decode_only_source_reaches_software():
-    result, calls = _transcode(PRORES, "nvenc", failures=[NVENC_TOO_SHORT])
+    result, calls = _transcode(PRORES, "nvenc", failures=[UNRECOGNISED])
 
     assert result.success is True
     assert len(calls) == 2
@@ -394,8 +396,8 @@ def test_the_fallback_log_shows_the_cause_not_the_teardown(capsys):
 
 
 def test_the_fallback_log_names_an_unrecognised_cpu_decode_failure(capsys):
-    _transcode(PRORES, "nvenc", failures=[NVENC_TOO_SHORT])
+    _transcode(PRORES, "nvenc", failures=[UNRECOGNISED])
 
     out = capsys.readouterr().out
     assert "unrecognised failure on the CPU-decode attempt" in out
-    assert "Frame Dimension less than the minimum" in out
+    assert "Invalid argument" in out

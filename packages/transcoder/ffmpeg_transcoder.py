@@ -965,6 +965,71 @@ def rung_is_source_size(target: str, width: int, height: int) -> bool:
     )
 
 
+def fitted_size(target: str, width: int, height: int) -> tuple[int, int]:
+    """The frame a rung's `w:h` box makes of a `width` x `height` one.
+
+    That is `scale=w:h:force_original_aspect_ratio=decrease:force_divisible_by=2`,
+    worked the way the worker image's ffmpeg (7.1) does it, for `scale` and
+    `scale_cuda` alike: each side is the other box side rescaled by the source's
+    shape and rounded to the nearest even number, the box side wins where it is
+    smaller, and that is rounded down to even. 720x1920 in `640:360` is 136x360.
+    """
+    target_width, target_height = (int(v) for v in target.split(":"))
+    w = min(target_width, (target_height * width + height) // (2 * height) * 2)
+    h = min(target_height, (target_width * height + width) // (2 * width) * 2)
+    return w // 2 * 2, h // 2 * 2
+
+
+# The smallest and largest frame each NVENC encoder opens for, as
+# ((min_w, min_h), (max_w, max_h)) in the even sizes the ladder produces.
+# Measured on an RTX 5070 Ti with the worker image's ffmpeg 7.1.5, the same with
+# CUDA or system-memory frames and with any preset: h264_nvenc refuses 144x360,
+# 640x48 and 4098 on either side, hevc_nvenc refuses 128x360, 640x32 and 8194.
+# Another GPU generation may differ. A rung outside its own card's range fails to
+# open the encoder, which falls back to software (_NVENC_ENCODER_REFUSALS), so a
+# figure here that is too generous costs a slower transcode, not a failed one.
+_NVENC_FRAME_LIMITS = {
+    "h264_nvenc": ((146, 50), (4096, 4096)),
+    "hevc_nvenc": ((130, 34), (8192, 8192)),
+}
+
+
+def nvenc_rung_target(target: str, width: int, height: int, encoder: str) -> str:
+    """A rung's box, enlarged where its fit would be too small for `encoder`.
+
+    The ladder's boxes are landscape, so a tall portrait source comes out of the
+    360p one narrower than NVENC encodes (720x1920 gives 136x360, under
+    h264_nvenc's 146), and a very wide one shorter (8000x480 gives 640x38). Such
+    a rung gets the smallest box of the source's own shape that the encoder
+    takes instead -- 146:390 and 834:50 for those two -- so the job stays on the
+    GPU rather than failing over to software. The rung is a little larger than
+    the software pipeline makes it, and keeps its shape.
+
+    `width` x `height` must be the frame the scaler is handed, which is not
+    always the stored one: see the call in transcode(). Returned unchanged when
+    the fit already suits the encoder, or when no box would without scaling the
+    source up or passing the encoder's maximum; the software fallback takes
+    those. Portrait rungs are still sized by their long side here (#452), so a
+    portrait 360p rung is 360 tall, not 360 wide; this only keeps it encodable.
+    """
+    limits = _NVENC_FRAME_LIMITS.get(encoder)
+    if not limits or not width or not height:
+        return target
+    (min_w, min_h), (max_w, max_h) = limits
+    fit_w, fit_h = fitted_size(target, width, height)
+    if fit_w >= min_w and fit_h >= min_h:
+        return target
+    # Whichever minimum the source's shape reaches last sets the size, and the
+    # other side follows it, rounded up to even.
+    if min_w * height >= min_h * width:
+        w, h = min_w, -(-height * min_w // (2 * width)) * 2
+    else:
+        w, h = -(-width * min_h // (2 * height)) * 2, min_h
+    if w > min(width, max_w) or h > min(height, max_h):
+        return target
+    return f"{w}:{h}"
+
+
 # The keyframe probe below reads this much of the source, and refuses a copy
 # whose sync samples are further apart than this. A copy cannot make keyframes,
 # so the master's own spacing *is* the segment length -- `-hls_time` is a floor
@@ -973,6 +1038,20 @@ def rung_is_source_size(target: str, width: int, height: int) -> bool:
 _COPY_PROBE_SECONDS = 30.0
 _MAX_COPY_SEGMENT_SECONDS = 12.0
 
+
+# NVENC would not open an encoder for this frame. A frame under the encoder's
+# minimum size fails in the driver ("InitializeEncoder failed: invalid param (8):
+# Frame Dimension less than the minimum supported value"), one over its maximum
+# fails ffmpeg's capability check ("Width 8000 exceeds 4096", then "Provided
+# device doesn't support required NVENC features"), and other settings the GPU
+# lacks fail one of the two the same way. Decoding on the CPU would hand NVENC
+# the same frame with the same settings, so these go straight to the software
+# pipeline, which has no such limits. The ladder avoids the size limits where it
+# can (see nvenc_rung_target); this is what catches the rest, on any GPU.
+_NVENC_ENCODER_REFUSALS = (
+    "initializeencoder failed",
+    "provided device doesn't support required nvenc features",
+)
 
 # Runtime hardware failures that should transparently fall back to software.
 # These are environmental (no/!busy device, exhausted VRAM, missing driver
@@ -991,6 +1070,9 @@ _HW_RUNTIME_FAILURES = (
     "cannot load libcuda",
     "openencodesessionex failed",
     "no free encoding sessions",
+    # Ahead of "function not implemented", which the size refusal also prints,
+    # so the fallback log names the encoder.
+    *_NVENC_ENCODER_REFUSALS,
     "function not implemented",
     "failed to create specified hw device",
     "device creation failed",
@@ -1024,6 +1106,9 @@ def _is_gpu_decode_failure(err: str) -> bool:
     # An NVDEC out-of-memory also logs "hwaccel initialisation returned error",
     # but it is the device that is full, and the encoder needs VRAM as well.
     if "out of memory" in lowered:
+        return False
+    # The size refusal ends in "Function not implemented" too.
+    if any(marker in lowered for marker in _NVENC_ENCODER_REFUSALS):
         return False
     return any(marker in lowered for marker in _GPU_DECODE_FAILURES)
 
@@ -2026,9 +2111,23 @@ class FFmpegTranscoder(BaseTranscoder):
                     # or format option; the libplacebo prefix already set the target
                     # bit depth and the software encoder sets -pix_fmt itself.
                     scale_extra = ""
+                targets = scale_targets
+                if backend == "nvenc" and not dv_software:
+                    # NVENC has a minimum frame size; see nvenc_rung_target.
+                    # It needs the frame the scaler is handed. ffmpeg autorotates
+                    # a software-decoded frame ahead of the graph, so the CPU
+                    # decode scales a portrait phone clip upright -- but it does
+                    # not rotate a CUDA frame, so the GPU decode scales the
+                    # stored size (measured on 7.1.5).
+                    seen = (source_width, source_height)
+                    if cpu_upload and round(display_rotation(_vid_stream)) % 180 == 90:
+                        seen = (source_height, source_width)
+                    encoder = "hevc_nvenc" if out_mode["family"] == "hevc" else "h264_nvenc"
+                    targets = {q: nvenc_rung_target(scale_targets[q], *seen, encoder)
+                               for q in qualities}
                 filter_complex = f"{hdr_prefix}{src}split={len(qualities)}{split_outputs};"
                 filter_complex += ";".join(
-                    f"[v{i}]{scale_filter}={scale_targets[q]}:force_original_aspect_ratio=decrease:force_divisible_by=2{scale_extra}[{q}]"
+                    f"[v{i}]{scale_filter}={targets[q]}:force_original_aspect_ratio=decrease:force_divisible_by=2{scale_extra}[{q}]"
                     for i, q in enumerate(qualities)
                 )
 
@@ -2187,9 +2286,10 @@ class FFmpegTranscoder(BaseTranscoder):
             # _plan_attempts for the ladder. Like a remux, that tier drops to
             # software on any error: the source decoding there is the one the
             # software pipeline decodes too, so what fails is the upload, the
-            # GPU scaler or the encoder, and no marker list covers them all (an
-            # 8448x480 source leaves a 360p rung NVENC refuses as too short).
-            # A truly corrupt file then fails once more in software.
+            # GPU scaler or the encoder, and no marker list covers them all.
+            # A truly corrupt file then fails once more in software. An encoder
+            # NVENC will not open skips the CPU-decode tier altogether, since it
+            # would be handed the same frame (_NVENC_ENCODER_REFUSALS).
             encode_backend = get_backend() if primary_backend == "copy" else primary_backend
             attempts = _plan_attempts(primary_backend, encode_backend, _vid_stream, dv_software)
             if encode_backend in _CPU_DECODE_UPLOAD and not dv_software \
