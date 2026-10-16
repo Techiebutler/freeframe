@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder
+from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, _THUMB_GEOMETRY
 from packages.transcoder.base import TranscodeJob
 
 
@@ -348,6 +348,7 @@ def test_thumbnail_command_maps_the_primary_video_stream():
 
     cmd = run.call_args.args[0]
     assert cmd[cmd.index("-map") + 1] == "0:V:0"
+    assert _THUMB_GEOMETRY in cmd[cmd.index("-vf") + 1]
     assert thumbnails == []
 
 
