@@ -16,6 +16,7 @@ const mockUser: User = {
   email: 'test@example.com',
   name: 'Test User',
   avatar_url: null,
+  avatar_color: null,
   status: 'active',
   is_superadmin: false,
   email_verified: true,
