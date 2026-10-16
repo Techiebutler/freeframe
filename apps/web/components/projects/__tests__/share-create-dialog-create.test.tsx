@@ -45,7 +45,7 @@ function sentExpiries(): unknown[] {
     .filter((v) => v !== undefined)
 }
 
-describe('ShareCreateDialog expiry', () => {
+describe('ShareCreateDialog creating a link', () => {
   let savedTZ: string | undefined
   beforeEach(() => {
     savedTZ = process.env.TZ
@@ -75,6 +75,29 @@ describe('ShareCreateDialog expiry', () => {
     await waitFor(() => expect(post).toHaveBeenCalled())
     expect(post.mock.calls[0][0]).toBe('/projects/p1/share/multi')
     expect(sentExpiries()).toEqual([NY_END_OF_OCT_20])
+  })
+
+  it('creates a single-item link with its settings in the one request', async () => {
+    renderDialog([{ type: 'folder', id: 'f1', name: 'F' }])
+    fireEvent.click(screen.getByText('Passphrase').parentElement!.parentElement!.querySelector('button')!)
+    fireEvent.change(screen.getByPlaceholderText('Enter passphrase'), { target: { value: 's3cret' } })
+    pickExpiryAndCreate('2026-10-20')
+    await waitFor(() => expect(post).toHaveBeenCalled())
+    expect(post.mock.calls).toEqual([[
+      '/folders/f1/share',
+      {
+        title: 'F',
+        permission: 'comment',
+        visibility: 'public',
+        allow_download: false,
+        show_watermark: false,
+        password: 's3cret',
+        expires_at: NY_END_OF_OCT_20,
+      },
+    ]])
+    // No follow-up PATCH that could fail after the link is already live.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(patch).not.toHaveBeenCalled()
   })
 
   it('the created-link settings show the stored day and save a new one the same way', async () => {
