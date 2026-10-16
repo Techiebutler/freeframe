@@ -9,7 +9,7 @@ describe('KeyboardShortcuts panel', () => {
 
     fireEvent.keyDown(document.body, { key: '?' })
     expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument()
-    expect(screen.getByText('Select a range of assets')).toBeInTheDocument()
+    expect(screen.getByText('Select a range of folders or assets')).toBeInTheDocument()
 
     fireEvent.keyDown(document.body, { key: '?' })
     expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument()
