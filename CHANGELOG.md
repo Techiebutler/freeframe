@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **The player's back arrow returns to the asset's folder.** It went to the project root from anywhere, so leaving an asset inside a folder dropped you out of that folder. A share link's back arrow already did this. (by @jdanna)
+- **The player's back arrow returns to the asset's folder.** It went to the project root from anywhere, so leaving an asset inside a folder dropped you out of that folder. A share link's back arrow already did this. (#503 by @jdanna)
 
 ## [1.18.0] - 2026-10-16
 
