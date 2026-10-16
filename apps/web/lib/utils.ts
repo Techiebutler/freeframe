@@ -167,53 +167,75 @@ export function dateInputValue(iso: string | null | undefined): string {
 }
 
 /**
- * Copy text to clipboard with modern API + fallback.
- * Handles iOS Safari where execCommand('copy') requires a selected editable element.
- * Returns true on success, false on failure.
+ * Copy text to the clipboard. Returns true only when the text was written.
+ *
+ * Uses the async Clipboard API when the page has it. Plain-HTTP origins (a LAN
+ * IP, a self-hosted box without TLS) are not secure contexts and have no
+ * `navigator.clipboard`, so the fallback runs `document.execCommand('copy')`
+ * and writes the text from inside the `copy` event it fires. Copying the
+ * selection of an off-screen textarea is not enough on its own: inside a Radix
+ * dialog the focus trap pulls focus back as soon as the textarea is selected,
+ * the selection is lost, and the copy succeeds with an empty string.
  */
 export async function copyToClipboard(text: string): Promise<boolean> {
-  // Modern async clipboard API
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text)
       return true
     } catch {
-      return false
+      // Refused (e.g. permissions policy, document not focused): try the
+      // execCommand route before reporting failure.
     }
   }
+  return copyWithExecCommand(text)
+}
 
-  // Fallback for older browsers (including iOS Safari < 13.4)
+function copyWithExecCommand(text: string): boolean {
+  let written = false
+  const onCopy = (e: ClipboardEvent) => {
+    if (!e.clipboardData) return
+    e.clipboardData.setData('text/plain', text)
+    e.preventDefault()
+    written = true
+  }
+
+  const previousFocus = document.activeElement as HTMLElement | null
+  // The selected textarea is still needed: Safari enables the copy command
+  // only when something is selected (or a beforecopy handler says otherwise).
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.contentEditable = 'true'
+  textarea.readOnly = false
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '-9999px'
+
+  document.addEventListener('copy', onCopy, true)
   try {
-    const textarea = document.createElement('textarea')
-    textarea.value = text
-    textarea.contentEditable = 'true'
-    textarea.readOnly = false
-    textarea.style.position = 'fixed'
-    textarea.style.left = '-9999px'
-    textarea.style.top = '-9999px'
     document.body.appendChild(textarea)
-
-    try {
+    if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
       // iOS Safari requires selection on editable elements
-      if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
-        const range = document.createRange()
-        range.selectNodeContents(textarea)
-        const selection = window.getSelection()
-        selection?.removeAllRanges()
-        selection?.addRange(range)
-        textarea.setSelectionRange(0, text.length)
-      } else {
-        textarea.select()
-        textarea.setSelectionRange(0, text.length)
-      }
-
-      return document.execCommand('copy')
-    } finally {
-      // Always remove the off-screen node, even if selection/execCommand throws.
-      textarea.remove()
+      const range = document.createRange()
+      range.selectNodeContents(textarea)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      textarea.setSelectionRange(0, text.length)
+    } else {
+      textarea.select()
+      textarea.setSelectionRange(0, text.length)
     }
+    // A true return only says the command ran; the listener says our text was
+    // what it put on the clipboard.
+    return document.execCommand('copy') && written
   } catch {
     return false
+  } finally {
+    document.removeEventListener('copy', onCopy, true)
+    textarea.remove()
+    if (previousFocus && previousFocus !== document.activeElement && document.contains(previousFocus)) {
+      previousFocus.focus?.()
+    }
   }
 }
 
