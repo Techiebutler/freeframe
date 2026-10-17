@@ -190,6 +190,20 @@ class ShareAssetVersionItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SharePreviewResponse(BaseModel):
+    """The only share data link crawlers may see (GET /share/{token}/preview).
+
+    Returned ONLY for links that pass the strict preview gate
+    (`_validate_share_link_for_preview`), so every field here is publishable:
+    no requires_password/requires_auth markers and no thumbnail/s3 keys —
+    just the card text and whether the image endpoint will serve a real
+    thumbnail (`has_image`; otherwise it streams the static fallback logo).
+    """
+    title: str
+    description: Optional[str] = None
+    has_image: bool = False
+
+
 class DirectShareCreate(BaseModel):
     permission: SharePermission = SharePermission.view
     user_id: Optional[uuid.UUID] = None

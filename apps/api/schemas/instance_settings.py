@@ -11,6 +11,9 @@ class InstanceSettingsUpdate(BaseModel):
     # Lets share-link visitors, public-project visitors and direct shares download
     # originals. Project members always can.
     allow_original_downloads: bool | None = None
+    # Thumbnail switch for share-link OG/Twitter cards (routers/share.py).
+    # None = leave the stored value untouched (the field is optional on PUT).
+    share_previews_enabled: bool | None = None
 
     @field_validator("upload_part_size_bytes")
     @classmethod
@@ -33,3 +36,5 @@ class InstanceSettingsResponse(BaseModel):
     # Admin only.
     upload_part_size_bytes: int | None = None
     allow_original_downloads: bool | None = None
+    # Default on; a null row (settings never written) still means enabled.
+    share_previews_enabled: bool = True

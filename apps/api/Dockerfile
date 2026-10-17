@@ -5,6 +5,7 @@ WORKDIR /workspace
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     imagemagick \
+    fonts-dejavu-core \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

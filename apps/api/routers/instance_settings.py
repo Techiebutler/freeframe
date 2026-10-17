@@ -45,6 +45,7 @@ def _build_response(db: Session, row: InstanceSettings | None, user: User) -> In
         allow_original_downloads=(
             (row.allow_original_downloads if row else False) if user.is_superadmin else None
         ),
+        share_previews_enabled=(bool(row.share_previews_enabled) if row else True),
     )
 
 
@@ -79,6 +80,8 @@ def update_instance_settings(
         row.upload_part_size_bytes = body.upload_part_size_bytes
     if body.allow_original_downloads is not None:
         row.allow_original_downloads = body.allow_original_downloads
+    if body.share_previews_enabled is not None:
+        row.share_previews_enabled = body.share_previews_enabled
     db.commit()
     db.refresh(row)
     return _build_response(db, row, current_user)

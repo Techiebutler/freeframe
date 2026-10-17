@@ -37,3 +37,5 @@ kombu==5.6.2
 # already present transitively, but nothing declared it, so a clean rebuild
 # could have dropped it and silently skipped the queue-topology guard.
 pyyaml==6.0.3
+# Public OG filename footer only, no changes to stored thumbnails or video.
+Pillow==12.3.0
