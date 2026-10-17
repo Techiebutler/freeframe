@@ -85,7 +85,7 @@ interface FolderCardProps {
   onSelect?: (e: React.MouseEvent) => void
   onRename?: (folderId: string, name: string) => Promise<void>
   onDelete?: (folderId: string) => Promise<void>
-  onShare?: (folderId: string, folderName: string) => Promise<void>
+  onShare?: (folderId: string, folderName: string) => void
   /** New Subfolder in the menu, with this folder as the parent. */
   onNewSubfolder?: (parentId: string) => void
   /** Shown on right-click instead of the folder's own menu: the grid passes the

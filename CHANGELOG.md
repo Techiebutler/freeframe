@@ -8,14 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Right-click menus on projects, assets, folders and share links.** Right-click (or long-press on a touch screen) opens the same menu as the item's ⋯ button: on project cards and rows, asset cards and rows, folders in the grid, the list and the sidebar tree, and share links in the sidebar and the Share Links table. Right-clicking an item that is one of several selected opens a menu for the whole selection, with the selection bar's Create Share Link, Download, Move to and Delete. (#502 by @jdanna)
+- **Right-click menus on projects, assets, folders and share links.** Right-click (or long-press on a touch screen) opens the same menu as the item's ⋯ button: on project cards and rows, asset cards and rows, folders in the grid, the list and the sidebar tree, and share links in the sidebar and the Share Links table. Right-clicking an item that is one of several selected opens a menu for the whole selection, with the selection bar's actions: Create Share Link (the bar's Share), Download, Move to and Delete. A project's menu also gains Open in New Tab and Copy Link, since it takes the place of the browser's. (#502 by @jdanna)
 
 ### Changed
-- **One folder menu everywhere.** A folder's menu is the same in the sidebar tree, the grid and the list: Create Share Link, New Subfolder, Rename, Delete. The tree gains Create Share Link, and the grid and list gain New Subfolder. (#502 by @jdanna)
+- **One folder menu everywhere.** A folder's menu is the same in the sidebar tree, the grid and the list: Create Share Link, New Subfolder, Rename, Delete. The tree gains Create Share Link, and the grid and list gain New Subfolder. Create Share Link and New Subfolder are offered to owners and editors only, as the toolbar's buttons are. (#502 by @jdanna)
 
 ### Fixed
 - **The sidebar tree's folder menu closes when you click elsewhere or press Esc.** It used to stay open until one of its items was picked. (#502 by @jdanna)
-- **The selection bar goes away after a bulk delete.** It used to stay up, counting the items that had just been deleted. (#502 by @jdanna)
+- **The selection bar goes away after a bulk delete.** Once the deleted items are gone from the page, they leave the selection too. It used to stay up, counting the items that had just been deleted. (#502 by @jdanna)
 - **Rename dialogs open ready to type.** The name field is focused with the whole name selected, so typing replaces it. Renaming an asset used to leave the cursor after the old name, and opening the dialog from a menu could leave focus outside the field. (#502 by @jdanna)
 - **Rename and Delete on a folder in list view.** Rename changed nothing (it sent back the folder's current name) and now asks for the new one, as the grid does. Delete removed the folder at once and now asks first. (#502 by @jdanna)
 

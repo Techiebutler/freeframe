@@ -109,6 +109,31 @@ describe('folder tree menu', () => {
     expect(h.onCreateFolder).toHaveBeenCalledWith('', 'episodes')
   })
 
+  it('leaves New Subfolder out when the role cannot create folders', async () => {
+    renderTree({ onCreateFolder: undefined })
+    fireEvent.contextMenu(screen.getByText('Episodes'))
+    const items = (await screen.findAllByRole('menuitem')).map((i) => i.textContent)
+    expect(items).toEqual(['Create Share Link', 'Rename', 'Delete'])
+  })
+
+  it('cancelling Delete gives focus back to the ⋯ button', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const h = renderTree()
+    const trigger = screen.getByRole('button', { name: 'Episodes menu' })
+    trigger.focus()
+    const u = user()
+    await u.keyboard('{Enter}')
+    await screen.findByRole('menu')
+    await waitFor(() => expect(document.activeElement?.getAttribute('role')).toBe('menuitem'))
+    await u.keyboard('{End}{Enter}')
+
+    await waitFor(() => expect(confirm).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(h.onDeleteFolder).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(trigger)
+    confirm.mockRestore()
+  })
+
   it('leaves Share out when sharing is not allowed', async () => {
     renderTree({ onShareFolder: undefined })
     fireEvent.contextMenu(screen.getByText('Episodes'))

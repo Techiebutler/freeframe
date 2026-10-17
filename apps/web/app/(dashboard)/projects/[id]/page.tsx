@@ -477,10 +477,14 @@ export default function ProjectDetailPage() {
               setShowShareLinks(false);
               setSelectedShareLink(null);
             }}
-            onCreateFolder={async (_name, parentId) => {
-              setFolderDialogParentId(parentId);
-              setFolderDialogOpen(true);
-            }}
+            onCreateFolder={
+              canCreateFolder
+                ? async (_name, parentId) => {
+                    setFolderDialogParentId(parentId);
+                    setFolderDialogOpen(true);
+                  }
+                : undefined
+            }
             onRenameFolder={async (id, name) => {
               await renameFolder(id, name);
               mutateSubfolders();
@@ -758,13 +762,17 @@ export default function ProjectDetailPage() {
                 mutateAssets();
                 mutateSubfolders();
               }}
-              onFolderShare={async (folderId, folderName) =>
-                openFolderShareDialog(folderId, folderName)
+              // Gated as in the tree and the toolbar, so a folder's menu is the
+              // same everywhere for every role.
+              onFolderShare={canShare ? openFolderShareDialog : undefined}
+              onFolderNewSubfolder={
+                canCreateFolder
+                  ? (parentId) => {
+                      setFolderDialogParentId(parentId);
+                      setFolderDialogOpen(true);
+                    }
+                  : undefined
               }
-              onFolderNewSubfolder={(parentId) => {
-                setFolderDialogParentId(parentId);
-                setFolderDialogOpen(true);
-              }}
               onDropFilesToFolder={canDropFiles ? handleDropFilesToFolder : undefined}
               onFileDragOverFolder={canDropFiles ? setFolderTarget : undefined}
               fileDragTarget={fileDragFolderId}

@@ -3,6 +3,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ProjectCard } from '../project-card'
 import { ShareLinksTable } from '../share-links-table'
+import { ShareLinkMenuItems } from '../menus/share-link-menu'
+import { DotsMenu } from '@/components/shared/item-menu'
 import type { Project, ShareLinkListItem } from '@/types'
 
 // Projects and share links get the same menu on right-click as from ⋯.
@@ -55,12 +57,26 @@ describe('ProjectCard', () => {
     render(<ProjectCard project={project} isOwner />)
     fireEvent.contextMenu(screen.getByText('Season 2'))
     const items = await menuItems()
-    expect(items).toEqual(['Project Settings', 'Delete'])
+    expect(items).toEqual(['Open in New Tab', 'Copy Link', 'Project Settings', 'Delete'])
     await user().keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
 
     await user().click(screen.getByRole('button', { name: 'Season 2 menu' }))
     expect(await menuItems()).toEqual(items)
+  })
+
+  it('keeps the link entries the browser menu had, since it replaces that menu', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    render(<ProjectCard project={project} isOwner />)
+
+    fireEvent.contextMenu(screen.getByText('Season 2'))
+    await user().click(await screen.findByRole('menuitem', { name: 'Open in New Tab' }))
+    expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/projects\/p1$/), '_blank')
+
+    fireEvent.contextMenu(screen.getByText('Season 2'))
+    await user().click(await screen.findByRole('menuitem', { name: 'Copy Link' }))
+    expect(mockCopy).toHaveBeenCalledWith(expect.stringMatching(/\/projects\/p1$/))
+    open.mockRestore()
   })
 
   it('gives everyone else the browser menu, as there is no ⋯ for them', () => {
@@ -110,5 +126,28 @@ describe('ShareLinksTable', () => {
     fireEvent.contextMenu(screen.getByText('Client cut'))
     await user().click(await screen.findByRole('menuitem', { name: 'Delete' }))
     expect(h.onDelete).toHaveBeenCalledWith('tok1')
+  })
+})
+
+describe('a pick that opens nothing', () => {
+  it('gives keyboard focus back to the ⋯ button (Disable Access)', async () => {
+    // Focus used to be left on <body>, so the keyboard had to start over.
+    const onToggleEnabled = vi.fn()
+    render(
+      <DotsMenu items={<ShareLinkMenuItems link={link} onToggleEnabled={onToggleEnabled} onDelete={() => {}} />}>
+        <button>Client cut menu</button>
+      </DotsMenu>,
+    )
+    const trigger = screen.getByRole('button', { name: 'Client cut menu' })
+    trigger.focus()
+    const u = user()
+    await u.keyboard('{Enter}')
+    await screen.findByRole('menu')
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Open Share' })))
+    await u.keyboard('{ArrowDown}{ArrowDown}{Enter}')
+
+    await waitFor(() => expect(onToggleEnabled).toHaveBeenCalledWith('tok1', false))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(document.activeElement).toBe(trigger)
   })
 })

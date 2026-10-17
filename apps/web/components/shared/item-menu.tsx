@@ -42,13 +42,14 @@ function useAfterClose() {
   const schedule = React.useCallback((action: () => void) => {
     pending.current = action
   }, [])
-  const onCloseAutoFocus = React.useCallback((e: Event) => {
+  const onCloseAutoFocus = React.useCallback(() => {
     const action = pending.current
     if (!action) return
     pending.current = null
-    // Focus is the dialog's (or the rename field's) to take now; handing it
-    // back to the trigger first would blur an inline field that just appeared.
-    e.preventDefault()
+    // Focus still goes back to the trigger afterwards. A dialog or a rename
+    // field the action opens mounts after that and takes it from there, and a
+    // pick that opens nothing (Disable Access, a cancelled confirm) leaves the
+    // keyboard where it was rather than on <body>.
     action()
   }, [])
   return { schedule, onCloseAutoFocus }
@@ -151,6 +152,13 @@ export function MenuAction({
 // clickable cards and rows: a pick must not also select or open what is behind.
 const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation()
 
+// The same for right-click in an open ⋯ menu: it would reach the row's
+// ContextMenuArea and open a second menu on top. The browser's is no use here.
+const swallowContextMenu = (e: React.MouseEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+}
+
 /** A ⋯ button's menu. `children` is the trigger. */
 export function DotsMenu({
   items,
@@ -173,6 +181,7 @@ export function DotsMenu({
           sideOffset={4}
           className={menuContentClass}
           onClick={stopPropagation}
+          onContextMenu={swallowContextMenu}
           onCloseAutoFocus={onCloseAutoFocus}
         >
           <MenuKindContext.Provider value="dropdown">

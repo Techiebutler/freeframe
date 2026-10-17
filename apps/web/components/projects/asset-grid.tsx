@@ -55,7 +55,8 @@ interface AssetGridProps {
   onFolderOpen?: (folder: Folder) => void
   onFolderRename?: (folderId: string, name: string) => Promise<void>
   onFolderDelete?: (folderId: string) => Promise<void>
-  onFolderShare?: (folderId: string, folderName: string) => Promise<void>
+  /** Create Share Link in a folder's menu. Absent = not offered. */
+  onFolderShare?: (folderId: string, folderName: string) => void
   /** New Subfolder in a folder's menu, with that folder as the parent. */
   onFolderNewSubfolder?: (parentId: string) => void
   onDropToFolder?: (targetFolderId: string, assetIds: string[], folderIds: string[]) => void

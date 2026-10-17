@@ -18,7 +18,11 @@ export interface AssetMenuHandlers {
   onDelete?: () => void
 }
 
-/** An asset's menu, for its ⋯ button and its right-click alike. */
+/**
+ * An asset's menu, for its ⋯ button and its right-click alike. As with the
+ * folder menu, an entry is shown only when its action is: Copy Asset URL
+ * always, the rest when the page passes a handler.
+ */
 export function AssetMenuItems({
   asset,
   onShare,
@@ -29,17 +33,22 @@ export function AssetMenuItems({
 }: AssetMenuHandlers & { asset: Pick<Asset, 'id' | 'project_id'> }) {
   return (
     <>
-      <MenuAction icon={Share2} onSelect={() => onShare?.()}>
-        Create Share Link
-      </MenuAction>
-      <MenuSeparator />
-      {loadDownloadOptions && onDownload ? (
-        <DownloadSubmenu load={loadDownloadOptions} onPick={onDownload} />
-      ) : (
-        <MenuAction icon={Download} onSelect={() => onDownload?.()} immediate>
-          Download
-        </MenuAction>
+      {onShare && (
+        <>
+          <MenuAction icon={Share2} onSelect={onShare}>
+            Create Share Link
+          </MenuAction>
+          <MenuSeparator />
+        </>
       )}
+      {onDownload &&
+        (loadDownloadOptions ? (
+          <DownloadSubmenu load={loadDownloadOptions} onPick={onDownload} />
+        ) : (
+          <MenuAction icon={Download} onSelect={() => onDownload()} immediate>
+            Download
+          </MenuAction>
+        ))}
       <MenuAction
         icon={LinkIcon}
         immediate
@@ -51,13 +60,17 @@ export function AssetMenuItems({
       >
         Copy Asset URL
       </MenuAction>
-      <MenuSeparator />
-      <MenuAction icon={Pencil} onSelect={() => onRename?.()}>
-        Rename
-      </MenuAction>
-      <MenuAction icon={Trash2} onSelect={() => onDelete?.()} danger>
-        Delete
-      </MenuAction>
+      {(onRename || onDelete) && <MenuSeparator />}
+      {onRename && (
+        <MenuAction icon={Pencil} onSelect={onRename}>
+          Rename
+        </MenuAction>
+      )}
+      {onDelete && (
+        <MenuAction icon={Trash2} onSelect={onDelete} danger>
+          Delete
+        </MenuAction>
+      )}
     </>
   )
 }

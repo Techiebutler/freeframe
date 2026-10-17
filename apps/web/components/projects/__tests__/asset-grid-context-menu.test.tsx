@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AssetGrid } from '../asset-grid'
-import type { Asset, Folder } from '@/types'
+import type { Asset, DownloadOption, Folder } from '@/types'
 
 // Right-click on an asset or a folder opens the same menu as its ⋯ button. On
 // an item that is one of several selected, it acts on the whole selection.
@@ -54,7 +54,7 @@ const folders = [
 const ASSET_ITEMS = ['Create Share Link', 'Download', 'Copy Asset URL', 'Rename', 'Delete']
 const FOLDER_ITEMS = ['Create Share Link', 'New Subfolder', 'Rename', 'Delete']
 
-function renderGrid() {
+function renderGrid(props: Record<string, unknown> = {}) {
   const h = {
     onAssetShare: vi.fn(),
     onAssetDownload: vi.fn(),
@@ -69,9 +69,14 @@ function renderGrid() {
     onBulkMove: vi.fn(),
     onCreateShareLink: vi.fn(),
   }
-  render(<AssetGrid assets={assets} folders={folders} projectId="p1" selectionShortcuts {...h} />)
+  render(<AssetGrid assets={assets} folders={folders} projectId="p1" selectionShortcuts {...h} {...props} />)
   return h
 }
+
+const downloadOptions: DownloadOption[] = [
+  { id: 'original', label: 'Original', format: 'MOV', size_bytes: 2048 },
+  { id: 'transcode', label: 'Transcode', format: 'MP4', size_bytes: 1024 },
+]
 
 const user = () => userEvent.setup({ pointerEventsCheck: 0 })
 
@@ -128,6 +133,37 @@ describe.each(['grid', 'list'] as const)('AssetGrid right-click (%s view)', (lay
     expect(onAssetOpen).not.toHaveBeenCalled()
   })
 
+  it('a pick does not select the asset either', async () => {
+    // The menu is portalled, but its click still bubbles through the React
+    // tree to the card or row it was opened from.
+    const onAssetSelect = vi.fn()
+    const onAssetRename = vi.fn()
+    render(<AssetGrid assets={assets} projectId="p1" onAssetSelect={onAssetSelect} onAssetRename={onAssetRename} />)
+    fireEvent.contextMenu(screen.getByText('Clip 1'))
+    await user().click(await screen.findByRole('menuitem', { name: 'Rename' }))
+    await waitFor(() => expect(onAssetRename).toHaveBeenCalledOnce())
+    expect(onAssetSelect).not.toHaveBeenCalled()
+  })
+
+  it('Download opens the choice of renditions on right-click', async () => {
+    // What the project page does: the right-click menu then holds a submenu,
+    // which must be built from the context menu's own parts.
+    const loadAssetDownloadOptions = vi.fn(async () => downloadOptions)
+    const h = renderGrid({ loadAssetDownloadOptions })
+    fireEvent.contextMenu(screen.getByText('Clip 2'))
+    await user().click(await screen.findByRole('menuitem', { name: 'Download' }))
+
+    await user().click(await screen.findByRole('menuitem', { name: /Transcode/ }))
+    expect(loadAssetDownloadOptions).toHaveBeenCalledWith(assets[1])
+    expect(h.onAssetDownload).toHaveBeenCalledWith(assets[1], 'transcode')
+  })
+
+  it('leaves out the entries that have no action, as on /assets', async () => {
+    render(<AssetGrid assets={assets} projectId="" />)
+    fireEvent.contextMenu(screen.getByText('Clip 1'))
+    expect(await menuItems()).toEqual(['Copy Asset URL'])
+  })
+
   it('shows the folder menu, with New Subfolder and Share', async () => {
     const h = renderGrid()
     fireEvent.contextMenu(screen.getByText('Selects'))
@@ -135,6 +171,13 @@ describe.each(['grid', 'list'] as const)('AssetGrid right-click (%s view)', (lay
 
     await user().click(screen.getByRole('menuitem', { name: 'New Subfolder' }))
     expect(h.onFolderNewSubfolder).toHaveBeenCalledWith('f1')
+  })
+
+  it('leaves New Subfolder and Share out for roles that cannot use them', async () => {
+    // Viewers and reviewers: the page passes neither, as for the tree.
+    renderGrid({ onFolderNewSubfolder: undefined, onFolderShare: undefined })
+    fireEvent.contextMenu(screen.getByText('Selects'))
+    expect(await menuItems()).toEqual(['Rename', 'Delete'])
   })
 
   it('renames a folder through a dialog, with the new name', async () => {
@@ -206,6 +249,25 @@ describe.each(['grid', 'list'] as const)('AssetGrid right-click (%s view)', (lay
 
     fireEvent.contextMenu(screen.getByText('Clip 1'))
     expect(await menuItems()).toEqual(ASSET_ITEMS)
+  })
+})
+
+describe('right-click inside an open ⋯ menu', () => {
+  beforeEach(() => {
+    mockViewState.layout = 'list'
+  })
+
+  it('does not open the row menu on top', async () => {
+    renderGrid()
+    await user().click(screen.getByRole('button', { name: 'Clip 2 menu' }))
+    const menu = await screen.findByRole('menu')
+
+    const event = fireEvent.contextMenu(within(menu).getByRole('menuitem', { name: 'Rename' }))
+    // The row's menu would take a render to appear.
+    await act(() => new Promise((r) => setTimeout(r, 50)))
+
+    expect(event).toBe(false)
+    expect(screen.getAllByRole('menu', { hidden: true })).toHaveLength(1)
   })
 })
 

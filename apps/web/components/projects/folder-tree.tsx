@@ -22,7 +22,8 @@ interface FolderTreeProps {
   showTrash: boolean
   onSelectFolder: (folderId: string | null) => void
   onShowTrash: () => void
-  onCreateFolder: (name: string, parentId: string | null) => Promise<void>
+  /** New Subfolder in a folder's menu. Absent = not offered. */
+  onCreateFolder?: (name: string, parentId: string | null) => Promise<void>
   onRenameFolder: (folderId: string, name: string) => Promise<void>
   onDeleteFolder: (folderId: string) => Promise<void>
   /** Create Share Link in a folder's menu. Absent = not offered. */
@@ -181,7 +182,7 @@ interface FolderNodeProps {
   depth: number
   currentFolderId: string | null
   onSelectFolder: (folderId: string | null) => void
-  onCreateFolder: (name: string, parentId: string | null) => Promise<void>
+  onCreateFolder?: (name: string, parentId: string | null) => Promise<void>
   onRenameFolder: (folderId: string, name: string) => Promise<void>
   onDeleteFolder: (folderId: string) => Promise<void>
   onShareFolder?: (folderId: string, folderName: string) => void
@@ -246,7 +247,7 @@ function FolderNode({
   const menuItems = (
     <FolderMenuItems
       onShare={onShareFolder ? () => onShareFolder(node.id, node.name) : undefined}
-      onNewSubfolder={() => onCreateFolder('', node.id)}
+      onNewSubfolder={onCreateFolder ? () => onCreateFolder('', node.id) : undefined}
       // Runs once the menu has closed (see item-menu), so the field that
       // appears keeps focus: blur would end the rename.
       onRename={() => {
