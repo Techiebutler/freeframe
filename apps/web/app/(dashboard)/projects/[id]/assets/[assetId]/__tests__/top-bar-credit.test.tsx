@@ -290,3 +290,25 @@ describe('prev/next in the top bar', () => {
     expect(screen.getByText('2 of 3')).toBeTruthy()
   })
 })
+
+// The back arrow went to the project root from anywhere, so leaving an asset
+// in a folder dropped you out of that folder. A share link's back arrow already
+// returned to the folder the asset was opened from.
+describe('the back arrow', () => {
+  it('returns to the folder the asset is in', () => {
+    asset.folder_id = 'f1'
+    assetsByFolder.f1 = [asset]
+
+    renderPage()
+
+    expect(screen.getByRole('link', { name: 'Back to folder' }).getAttribute('href'))
+      .toBe('/projects/p1?folder=f1')
+  })
+
+  it('returns to the project root for an asset outside any folder', () => {
+    renderPage()
+
+    expect(screen.getByRole('link', { name: 'Back to project' }).getAttribute('href'))
+      .toBe('/projects/p1')
+  })
+})

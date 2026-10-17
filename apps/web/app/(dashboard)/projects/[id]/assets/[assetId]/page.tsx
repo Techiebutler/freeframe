@@ -23,6 +23,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
 import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
+import { projectFolderHref } from '@/lib/project-links'
 import { useUploadStore } from '@/stores/upload-store'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { useViewStore } from '@/stores/view-store'
@@ -152,7 +153,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       : []
 
     setExtraCrumbs([
-      ...folderPath.map((f) => ({ label: f.name, href: `/projects/${projectId}?folder=${f.id}` })),
+      ...folderPath.map((f) => ({ label: f.name, href: projectFolderHref(projectId, f.id) })),
       { label: asset.name }, // asset name — no href (current page)
     ])
   }, [asset?.id, asset?.name, asset?.folder_id, folderTree, setExtraCrumbs])
@@ -527,8 +528,12 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       <div className="flex items-center justify-between border-b border-border px-3 h-12 bg-bg-secondary shrink-0">
         {/* Left: back + breadcrumb */}
         <div className="flex items-center gap-1 min-w-0 flex-1">
+          {/* Back to the folder the asset is in, as a share link's back arrow
+              does; it used to go to the project root from anywhere. */}
           <Link
-            href={`/projects/${asset.project_id}`}
+            href={projectFolderHref(asset.project_id, asset.folder_id)}
+            aria-label={asset.folder_id ? 'Back to folder' : 'Back to project'}
+            title={asset.folder_id ? 'Back to folder' : 'Back to project'}
             className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
           >
             <ArrowLeft className="h-4 w-4" />
