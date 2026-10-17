@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Comment counts on project thumbnails.** Assets in the project grid show how many comments their latest version has, with the same badge as a share link's grid, bottom-left on the thumbnail. Replies count, and internal comments do too, as the comment panel shows them to project members. The project asset list adds `comment_count` to each asset. (#504 by @jdanna)
 
+### Fixed
+- **The player's back arrow returns to the asset's folder.** It went to the project root from anywhere, so leaving an asset inside a folder dropped you out of that folder. A share link's back arrow already did this. (#503 by @jdanna)
+- **Project pictures in the Projects list view.** The list showed the same purple gradient for every project. Each row now shows the project's poster, or its own gradient, the same as the grid. (#505 by @jdanna)
+
 ## [1.18.0] - 2026-10-16
 
 Profile pictures, a choice of original or transcode on download, Projects page view options, larger upload parts with a Finalizing state and upload speed, and selection shortcuts. On NVIDIA GPUs, portrait phone videos now come out upright and very tall or wide videos no longer fail to transcode.

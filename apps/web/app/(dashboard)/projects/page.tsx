@@ -18,6 +18,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProjectCard } from "@/components/projects/project-card";
+import { ProjectPoster } from "@/components/projects/project-poster";
 import { ProjectsAppearancePopover } from "@/components/projects/projects-appearance-popover";
 import { ProjectsSortPopover } from "@/components/projects/projects-sort-popover";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -64,8 +65,9 @@ function ProjectListRow({
       href={`/projects/${project.id}`}
       className="flex items-center gap-4 px-4 py-3 hover:bg-bg-hover transition-colors border-b border-border last:border-b-0"
     >
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-fuchsia-500">
-        <FolderOpen className="h-4 w-4 text-white" />
+      {/* The card's picture, so a project looks the same in both views. */}
+      <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-lg">
+        <ProjectPoster project={project} />
       </div>
       <div className="flex-1 min-w-0">
         <span className="text-sm font-medium text-text-primary truncate block">
