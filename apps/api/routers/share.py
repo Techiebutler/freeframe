@@ -1,5 +1,6 @@
 import secrets
 import uuid
+from itertools import chain
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -49,6 +50,7 @@ from ..services.redis_service import create_share_session
 from ..services.search import escape_like
 from ..services.owned_keys import is_project_logo_key
 from ..services.avatar_keys import sign_avatar
+from ..services.share_preview_image import MAX_PREVIEW_IMAGE_BYTES, compose_preview_image
 from ..services.s3_service import (
     generate_presigned_get_url,
     build_download_filename,
@@ -240,7 +242,7 @@ def _validate_share_link_for_preview(db: Session, token: str) -> Optional[ShareL
         return None
     if link.expires_at and link.expires_at < datetime.now(timezone.utc):
         return None
-    if link.visibility == "secure":
+    if link.visibility != "public":
         return None
     if link.password_hash:
         return None
@@ -286,8 +288,13 @@ def _folder_assets_with_thumbnails(db: Session, folder_id: uuid.UUID):
     ).order_by(Asset.created_at.desc()).all()
 
 
-def _resolve_share_thumbnail_key(db: Session, link: ShareLink) -> Optional[str]:
-    """The S3 key of the thumbnail the share card should show.
+def _asset_thumbnail_preview(db: Session, asset: Asset) -> Optional[tuple[str, str]]:
+    key = _asset_thumbnail_key(db, asset)
+    return (key, asset.name) if key else None
+
+
+def _resolve_share_thumbnail(db: Session, link: ShareLink) -> Optional[tuple[str, str]]:
+    """The thumbnail key AND displayed name of the same selected asset.
 
     Asset shares use the latest ready version (the same rule the share page's
     player follows). Folder and project shares show their first item's
@@ -300,18 +307,18 @@ def _resolve_share_thumbnail_key(db: Session, link: ShareLink) -> Optional[str]:
             Asset.id == link.asset_id,
             Asset.deleted_at.is_(None),
         ).first()
-        return _asset_thumbnail_key(db, asset) if asset else None
+        return _asset_thumbnail_preview(db, asset) if asset else None
 
     if link.folder_id:
         for asset in _folder_assets_with_thumbnails(db, link.folder_id):
-            return _asset_thumbnail_key(db, asset)
+            return _asset_thumbnail_preview(db, asset)
         subfolders = db.query(Folder).filter(
             Folder.parent_id == link.folder_id,
             Folder.deleted_at.is_(None),
         ).order_by(Folder.name).all()
         for subfolder in subfolders:
             for asset in _folder_assets_with_thumbnails(db, subfolder.id):
-                return _asset_thumbnail_key(db, asset)
+                return _asset_thumbnail_preview(db, asset)
         return None
 
     if link.project_id:
@@ -329,11 +336,11 @@ def _resolve_share_thumbnail_key(db: Session, link: ShareLink) -> Optional[str]:
                         Asset.deleted_at.is_(None),
                     ).first()
                     if asset is not None:
-                        return _asset_thumbnail_key(db, asset)
+                        return _asset_thumbnail_preview(db, asset)
             for item in multi_items:
                 if item.folder_id:
                     for asset in _folder_assets_with_thumbnails(db, item.folder_id):
-                        return _asset_thumbnail_key(db, asset)
+                        return _asset_thumbnail_preview(db, asset)
             return None
         # Plain project-root share: root-level assets, then root subfolders —
         # what `get_folder_share_assets` shows at project root.
@@ -342,7 +349,7 @@ def _resolve_share_thumbnail_key(db: Session, link: ShareLink) -> Optional[str]:
             Asset.project_id == link.project_id,
             Asset.deleted_at.is_(None),
         ).order_by(Asset.created_at.desc()).all():
-            return _asset_thumbnail_key(db, asset)
+            return _asset_thumbnail_preview(db, asset)
         subfolders = db.query(Folder).filter(
             Folder.parent_id.is_(None),
             Folder.project_id == link.project_id,
@@ -350,8 +357,13 @@ def _resolve_share_thumbnail_key(db: Session, link: ShareLink) -> Optional[str]:
         ).order_by(Folder.name).all()
         for subfolder in subfolders:
             for asset in _folder_assets_with_thumbnails(db, subfolder.id):
-                return _asset_thumbnail_key(db, asset)
+                return _asset_thumbnail_preview(db, asset)
     return None
+
+
+def _resolve_share_thumbnail_key(db: Session, link: ShareLink) -> Optional[str]:
+    preview = _resolve_share_thumbnail(db, link)
+    return preview[0] if preview else None
 
 
 def _share_preview_title(db: Session, link: ShareLink) -> str:
@@ -406,20 +418,21 @@ def get_share_preview(token: str, db: Session = Depends(get_db)):
 def get_share_preview_image(token: str, db: Session = Depends(get_db)):
     """The share card's image, as a stable crawler-facing URL.
 
-    Streams the shared target's thumbnail (latest ready version; first item
-    for folder/project shares) straight from S3, so the never-leaving-server
-    presigned S3 URLs keep their 1-hour TTL without ever reaching a crawler.
+    Adds the selected asset's filename to its thumbnail, without changing
+    stored thumbnails or the share title. Composition failures serve the
+    original image. Storage keys and presigned URLs never reach the crawler.
     Gated, unknown or thumbnail-less links stream the static `logo-full.png`
     instead, indistinguishably. Cacheable for a few hours either way.
     """
     link = _validate_share_link_for_preview(db, token)
-    thumbnail_key = (
-        _resolve_share_thumbnail_key(db, link)
+    preview = (
+        _resolve_share_thumbnail(db, link)
         if link is not None and _preview_thumbnails_enabled(db) else None
     )
     headers = {"Cache-Control": f"public, max-age={PREVIEW_IMAGE_CACHE_SECONDS}"}
 
-    if thumbnail_key:
+    if preview:
+        thumbnail_key, filename = preview
         content_type, _ = get_content_type(thumbnail_key)
         if not content_type.startswith("image/"):
             content_type = "image/png"
@@ -430,8 +443,51 @@ def get_share_preview_image(token: str, db: Session = Depends(get_db)):
             # Storage hiccup, missing object — degrade to the fallback logo,
             # never to a 500 the unfurl would remember.
             return _preview_fallback_response(headers)
-        return StreamingResponse(obj["Body"], media_type=content_type, headers=headers)
+        return _preview_thumbnail_response(obj, filename, content_type, headers)
     return _preview_fallback_response(headers)
+
+
+def _preview_thumbnail_response(obj: dict, filename: str, content_type: str, headers: dict):
+    body = obj["Body"]
+    chunks = body.iter_chunks(chunk_size=65536) if hasattr(body, "iter_chunks") else iter(body)
+
+    def stream(parts):
+        try:
+            yield from parts
+        finally:
+            close = getattr(body, "close", None)
+            if close:
+                close()
+
+    # Large originals bypass decoding and buffering, but remain streamable.
+    if obj.get("ContentLength", 0) > MAX_PREVIEW_IMAGE_BYTES:
+        return StreamingResponse(stream(chunks), media_type=content_type, headers=headers)
+    buffered = []
+    size = 0
+    try:
+        for chunk in chunks:
+            buffered.append(chunk)
+            size += len(chunk)
+            if size > MAX_PREVIEW_IMAGE_BYTES:
+                return StreamingResponse(stream(chain(buffered, chunks)), media_type=content_type, headers=headers)
+        data = b"".join(buffered)
+    except Exception:
+        close = getattr(body, "close", None)
+        if close:
+            close()
+        return _preview_fallback_response(headers)
+    close = getattr(body, "close", None)
+    if close:
+        close()
+    try:
+        composed = compose_preview_image(data, filename)
+    except Exception:
+        composed = None
+    return StreamingResponse(
+        iter([composed if composed is not None else data]),
+        media_type="image/jpeg" if composed is not None else content_type,
+        headers=headers,
+    )
 
 
 def _preview_fallback_response(headers: dict) -> FileResponse:

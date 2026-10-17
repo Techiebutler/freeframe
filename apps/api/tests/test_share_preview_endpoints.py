@@ -311,7 +311,7 @@ def test_image_streams_thumbnail_from_storage(client, mock_db, monkeypatch):
     # (1) link, (2) settings → absent; the resolver (isolated below) is stubbed.
     _queue_first(mock_db, [link, MagicMock(), None])
     monkeypatch.setattr(
-        share_router, "_resolve_share_thumbnail_key", lambda db, link: "thumbnails/p/asset.webp"
+        share_router, "_resolve_share_thumbnail", lambda db, link: ("thumbnails/p/asset.webp", "asset.mp4")
     )
 
     body_stream = iter([b"FIF", b"0-frame"])
@@ -334,7 +334,7 @@ def test_image_falls_back_when_storage_hiccups(client, mock_db, monkeypatch):
     link = _link(project_id=uuid.uuid4())
     _queue_first(mock_db, [link, MagicMock(), None])
     monkeypatch.setattr(
-        share_router, "_resolve_share_thumbnail_key", lambda db, link: "thumbnails/p/asset.webp"
+        share_router, "_resolve_share_thumbnail", lambda db, link: ("thumbnails/p/asset.webp", "asset.mp4")
     )
 
     s3 = MagicMock()
@@ -352,7 +352,7 @@ def test_image_has_no_thumbnail_key_but_still_200_fallback(client, mock_db, monk
     link = _link(project_id=uuid.uuid4())
     _queue_first(mock_db, [link, MagicMock(), None])
     monkeypatch.setattr(
-        share_router, "_resolve_share_thumbnail_key", lambda db, link: None
+        share_router, "_resolve_share_thumbnail", lambda db, link: None
     )
     s3 = MagicMock()
     monkeypatch.setattr(share_router, "get_s3_client", lambda: s3)
@@ -371,7 +371,7 @@ def test_image_never_leaks_the_presign(client, mock_db, monkeypatch):
     link = _link(project_id=uuid.uuid4())
     _queue_first(mock_db, [link, MagicMock(), None])
     monkeypatch.setattr(
-        share_router, "_resolve_share_thumbnail_key", lambda db, link: "https://s3.x/obj?sig=1"
+        share_router, "_resolve_share_thumbnail", lambda db, link: ("https://s3.x/obj?sig=1", "asset.mp4")
     )
     s3 = MagicMock()
     s3.get_object.return_value = {"Body": iter([b"px"])}
