@@ -193,6 +193,8 @@ a folder, a project, or an explicit set of items, and may be password-protected;
 links apply transitively to the folder's contents. Guests commenting through a share link are
 recorded in the `GuestUser` table with email and name only, no account required.
 
+**Everything requires a live project.** A deleted project (one with `deleted_at` set) is treated as gone on every path: `require_project_role` and the project listings answer 404 *Project not found*, `can_access_asset` refuses its assets, and a share link resolves only while its project, its asset or folder, and every folder above that are live, answering 404 *Share link not found* like an unknown token otherwise. Deleting a folder or asset leaves its share links in place, so restoring it brings them back. See [GHSA-w8vh-2j74-m3hw](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-w8vh-2j74-m3hw).
+
 > **Note:** `AssetShare.shared_with_team_id` is still written by the two `share/team` endpoints
 > but is never read when resolving access, so a team share currently grants access to nobody.
 > Tracked separately; do not rely on it.
