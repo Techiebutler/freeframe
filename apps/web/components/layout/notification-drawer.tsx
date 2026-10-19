@@ -98,9 +98,12 @@ function NotificationItem({ notification, onClose }: { notification: Notificatio
 interface NotificationDrawerProps {
   open: boolean
   onClose: () => void
+  /** Whether the sidebar is the 52px rail or expanded to 220px. The drawer
+   *  opens against its right edge, so it has to know which. */
+  railCollapsed?: boolean
 }
 
-export function NotificationDrawer({ open, onClose }: NotificationDrawerProps) {
+export function NotificationDrawer({ open, onClose, railCollapsed = true }: NotificationDrawerProps) {
   const { notifications, isLoading, fetchNotifications, markAllRead, unreadCount } =
     useNotificationStore()
   const [tab, setTab] = React.useState<'all' | 'unread'>('all')
@@ -115,11 +118,24 @@ export function NotificationDrawer({ open, onClose }: NotificationDrawerProps) {
 
   return (
     <>
-      {/* Backdrop — offset to not cover sidebar */}
-      <div className="fixed top-0 right-0 bottom-0 left-[52px] z-40" onClick={onClose} />
+      {/* Backdrop — offset to not cover sidebar. Both widths are spelled out
+          because Tailwind only generates classes it can find whole. The
+          expanded offset is gated at `md` so a phone keeps the drawer on screen. */}
+      <div
+        className={cn(
+          'fixed top-0 right-0 bottom-0 left-[52px] z-40',
+          !railCollapsed && 'md:left-[220px]',
+        )}
+        onClick={onClose}
+      />
 
       {/* Drawer */}
-      <div className="fixed left-safe [--ff-left:52px] top-0 z-50 h-full w-[380px] border-r border-border bg-bg-primary shadow-2xl flex flex-col pb-safe animate-in slide-in-from-left-2 duration-150">
+      <div
+        className={cn(
+          'fixed left-safe [--ff-left:52px] top-0 z-50 h-full w-[380px] border-r border-border bg-bg-primary shadow-2xl flex flex-col pb-safe animate-in slide-in-from-left-2 duration-150',
+          !railCollapsed && 'md:[--ff-left:220px]',
+        )}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
           <span className="text-sm font-semibold text-text-primary">Notifications</span>

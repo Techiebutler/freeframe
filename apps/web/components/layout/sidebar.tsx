@@ -306,7 +306,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </aside>
 
       {/* Notification Drawer */}
-      <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
+      <NotificationDrawer
+        open={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        railCollapsed={collapsed}
+      />
     </>
   )
 }
