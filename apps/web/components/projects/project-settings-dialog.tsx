@@ -31,14 +31,16 @@ export function ProjectSettingsDialog({
   const [saving, setSaving] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
-  // Sync state when project changes
+  // Reset when the dialog opens or switches to another project. Keyed on the
+  // id rather than the object, so a background refetch of the list (which
+  // hands the card a new object) does not wipe unsaved edits or the poster.
   React.useEffect(() => {
     setName(project.name)
     setDescription(project.description || '')
     setIsPublic(project.is_public ?? false)
     setPosterPreview(project.poster_url ?? null)
     setPosterFile(null)
-  }, [project])
+  }, [project.id, open])
 
   const handlePosterSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
