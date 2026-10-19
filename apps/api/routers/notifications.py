@@ -4,6 +4,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
 from ..models.asset import Asset
+from ..models.project import Project
 from ..models.activity import Notification
 from ..models.comment import Comment
 from ..schemas.asset import NotificationResponse
@@ -18,7 +19,19 @@ def list_notifications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Notification).filter(Notification.user_id == current_user.id)
+    # Only notifications about live content. Each one names its asset and quotes
+    # its comment, so once the asset is in the trash or its project is deleted,
+    # the notification is left out with it.
+    query = (
+        db.query(Notification)
+        .join(Asset, Asset.id == Notification.asset_id)
+        .join(Project, Project.id == Asset.project_id)
+        .filter(
+            Notification.user_id == current_user.id,
+            Asset.deleted_at.is_(None),
+            Project.deleted_at.is_(None),
+        )
+    )
     if unread_only:
         query = query.filter(Notification.read == False)
     notifications = query.order_by(Notification.created_at.desc()).limit(50).all()

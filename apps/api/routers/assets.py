@@ -15,7 +15,7 @@ from ..models.activity import Mention, Notification, NotificationType
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
-from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
+from ..services.permissions import require_project_role, require_project_visible, require_asset_access
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.downloads import (
     describe_choices, download_choices, download_filename, may_download_original,
@@ -214,9 +214,7 @@ def list_assets(
     current_user: User = Depends(get_current_user),
 ):
     # Allow access if user is a project member OR the project is public
-    member = get_project_member(db, project_id, current_user.id)
-    if not member and not is_public_project(db, project_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a project member")
+    require_project_visible(db, project_id, current_user)
 
     query = db.query(Asset).filter(
         Asset.project_id == project_id,

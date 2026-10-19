@@ -96,6 +96,9 @@ def list_my_assets(
             )
         )
 
+    # Nothing from a project in the trash, whichever filter found it.
+    query = query.join(Project, Project.id == Asset.project_id).filter(Project.deleted_at.is_(None))
+
     # Apply search filter
     if q and q.strip():
         query = query.filter(Asset.name.ilike(f"%{escape_like(q.strip())}%"))
@@ -117,9 +120,10 @@ def search_my_folders(
         ProjectMember.deleted_at.is_(None),
     ).subquery()
 
-    query = db.query(Folder).filter(
+    query = db.query(Folder).join(Project, Project.id == Folder.project_id).filter(
         Folder.project_id.in_(project_ids),
         Folder.deleted_at.is_(None),
+        Project.deleted_at.is_(None),
     )
     if q and q.strip():
         query = query.filter(Folder.name.ilike(f"%{escape_like(q.strip())}%"))

@@ -49,6 +49,7 @@ from ..services import s3_service
 from ..services import comment_export
 from ..services.permissions import (
     require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
+    require_asset_project_live,
 )
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
@@ -627,6 +628,8 @@ def update_comment(
     comment = db.query(Comment).filter(Comment.id == comment_id, Comment.deleted_at.is_(None)).first()
     if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
+    # The author gets past with no access check, so this is what closes a deleted project.
+    require_asset_project_live(db, comment.asset_id)
     # Allow comment owner or project owner to edit
     if comment.author_id != current_user.id:
         asset = _get_asset(db, comment.asset_id)
@@ -654,6 +657,8 @@ def delete_comment(
     comment = db.query(Comment).filter(Comment.id == comment_id, Comment.deleted_at.is_(None)).first()
     if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
+    # The author gets past with no access check, so this is what closes a deleted project.
+    require_asset_project_live(db, comment.asset_id)
     # Allow comment owner or project owner to delete
     if comment.author_id != current_user.id:
         asset = _get_asset(db, comment.asset_id)
@@ -762,6 +767,7 @@ def delete_attachment(
 ):
     comment = _get_comment(db, comment_id)
     asset = _get_asset(db, comment.asset_id)
+    require_asset_project_live(db, asset.id)
 
     attachment = db.query(CommentAttachment).filter(
         CommentAttachment.id == attachment_id,

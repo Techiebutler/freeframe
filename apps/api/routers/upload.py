@@ -20,7 +20,9 @@ from ..services.s3_service import (
     list_upload_parts, head_object_size, UPLOAD_GONE_CODES,
     MultipartUploadGone, MultipartListingUnsupported,
 )
-from ..services.permissions import get_project_member, require_project_role
+from ..services.permissions import (
+    asset_project_is_live, get_project_member, require_asset_project_live, require_project_role,
+)
 from ..models.project import ProjectRole
 from ..schemas.upload import (
     InitiateUploadRequest, InitiateUploadResponse,
@@ -146,6 +148,15 @@ def initiate_upload(
     )
 
 
+def _require_upload_project_live(db: Session, version: AssetVersion) -> None:
+    """404 "Project not found" once the upload's project is deleted, so no more
+    bytes go into it and nothing in it is transcoded. Abort is left open: it is what
+    the client's Cancel sends, and it disposes of the upload's bytes now instead of
+    leaving them to the reaper. Abort never promotes an upload into a deleted
+    project either: it records it failed even when the object is assembled."""
+    require_asset_project_live(db, version.asset_id)
+
+
 @router.post("/presign-part", response_model=PresignPartResponse)
 def presign_part(
     body: PresignPartRequest,
@@ -176,6 +187,7 @@ def presign_part(
     # already in flight across the upgrade.
     if version.upload_id is not None and version.upload_id != body.upload_id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
+    _require_upload_project_live(db, version)
 
     url = presign_upload_part(body.s3_key, body.upload_id, body.part_number)
 
@@ -323,6 +335,7 @@ def list_held_parts(
         raise HTTPException(status_code=404, detail="Version not found")
     if version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
+    _require_upload_project_live(db, version)
     if version.processing_status != ProcessingStatus.uploading:
         # Nothing to resume: the version has either finished, been resolved as
         # failed, or been completed by another tab. The client shows the real
@@ -498,6 +511,7 @@ def complete_upload(
         raise HTTPException(status_code=404, detail="Version not found")
     if version.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized for this upload")
+    _require_upload_project_live(db, version)
 
     # Same reasoning as the key below, for the id nothing downstream questions:
     # `_trigger_processing` hands this straight to `process_asset`, which resolves
@@ -943,6 +957,15 @@ def abort_upload(
         # same consequence: `_reap_stale_uploads` sweeps `uploading` and `failed`
         # on identical criteria, so leaving it `uploading` saves no bytes and only
         # parks the row in the panel's Active tab instead of Failed.
+        # An assembled object in a deleted project is recorded failed too, as
+        # /upload/complete refuses it: nothing in a deleted project is transcoded,
+        # and the reaper or the purge removes it.
+        if assembled and not asset_project_is_live(db, version.asset_id):
+            logger.info(
+                "abort called for assembled upload %s in a deleted project; "
+                "recording it as failed", version.id,
+            )
+            assembled = False
         if assembled:
             logger.warning(
                 "abort called for upload %s but the object is already complete; "

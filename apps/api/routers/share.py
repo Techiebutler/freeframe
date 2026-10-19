@@ -38,7 +38,7 @@ from ..schemas.share import (
 )
 from ..services.permissions import (
     require_project_role, validate_share_link, validate_share_link_with_session,
-    validate_asset_in_share, enforce_share_link_visibility, _is_descendant_of,
+    validate_asset_in_share, enforce_share_link_visibility, _is_descendant_of, folder_chain_is_live,
 )
 from ..services.auth_service import bcrypt_password_bytes
 from ..services.redis_service import create_share_session
@@ -1355,7 +1355,7 @@ def get_folder_share_assets(
         if is_project_share:
             # Project share: validate folder belongs to this project
             f = db.query(Folder).filter(Folder.id == folder_id, Folder.deleted_at.is_(None)).first()
-            if not f or f.project_id != link.project_id:
+            if not f or f.project_id != link.project_id or not folder_chain_is_live(db, folder_id):
                 raise HTTPException(status_code=403, detail="Folder is not within the shared project")
             # Multi-share: only the shared folders and their descendants, the same rule
             # validate_asset_in_share applies to assets

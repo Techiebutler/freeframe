@@ -33,18 +33,43 @@ def create_hls_token(s3_prefix: str, expires_hours: int = 24) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def _verify_hls_token(token: str) -> str:
-    """Verify HLS token and return s3_prefix."""
+# The longest a segment URL is signed for: the lifetime create_hls_token gives a token.
+SEGMENT_URL_MAX_SECONDS = 86400
+
+
+def _decode_hls_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        if payload.get("sub") != "hls":
-            raise HTTPException(status_code=403, detail="Invalid token type")
-        return payload["pfx"]
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if payload.get("sub") != "hls":
+        raise HTTPException(status_code=403, detail="Invalid token type")
+    return payload
 
 
-def _rewrite_manifest(content: str, s3_prefix: str, manifest_path: str, token: str) -> str:
+def _verify_hls_token(token: str) -> str:
+    """Verify HLS token and return s3_prefix."""
+    return _decode_hls_token(token)["pfx"]
+
+
+def _segment_url_lifetime(payload: dict) -> int:
+    """Seconds a segment URL signed now may live: what is left of the token, never
+    more. The proxy checks only the token, so a segment URL that outlived it would
+    keep video playing past the token's expiry -- after access to the asset ended."""
+    exp = payload.get("exp")
+    if exp is None:
+        return SEGMENT_URL_MAX_SECONDS
+    remaining = int(exp - datetime.now(timezone.utc).timestamp())
+    return max(1, min(SEGMENT_URL_MAX_SECONDS, remaining))
+
+
+def _rewrite_manifest(
+    content: str,
+    s3_prefix: str,
+    manifest_path: str,
+    token: str,
+    segment_expires_in: int = SEGMENT_URL_MAX_SECONDS,
+) -> str:
     """Rewrite URLs in an m3u8 manifest.
 
     - .m3u8 references -> proxy URLs with token (appended as query param)
@@ -72,10 +97,11 @@ def _rewrite_manifest(content: str, s3_prefix: str, manifest_path: str, token: s
             # Variant playlist -> proxy URL with token
             result.append(f"{relative_key}?token={token}")
         elif stripped.endswith(".ts"):
-            # Segment -> presigned S3 URL (direct to S3, 24-hour expiry to
-            # match the outer token lifetime so pause-and-resume works)
+            # Segment -> presigned S3 URL (direct to S3), signed for what is
+            # left of the token, so pause-and-resume works for as long as the
+            # token does and no longer
             s3_key = f"{s3_prefix}/{relative_key}"
-            result.append(generate_presigned_get_url(s3_key, expires_in=86400))
+            result.append(generate_presigned_get_url(s3_key, expires_in=segment_expires_in))
         else:
             result.append(line)
 
@@ -85,7 +111,8 @@ def _rewrite_manifest(content: str, s3_prefix: str, manifest_path: str, token: s
 @router.get("/hls/{path:path}")
 def hls_proxy(path: str, token: str = Query(...)):
     """Proxy HLS manifests with URL rewriting for secure streaming."""
-    s3_prefix = _verify_hls_token(token)
+    payload = _decode_hls_token(token)
+    s3_prefix = payload["pfx"]
 
     # Only proxy m3u8 manifests
     if not path.endswith(".m3u8"):
@@ -112,7 +139,9 @@ def hls_proxy(path: str, token: str = Query(...)):
         logger.error("Failed to fetch HLS manifest %s: %s", s3_key, e)
         raise HTTPException(status_code=404, detail="Manifest not found")
 
-    rewritten = _rewrite_manifest(content, s3_prefix, normalised, token)
+    rewritten = _rewrite_manifest(
+        content, s3_prefix, normalised, token, _segment_url_lifetime(payload),
+    )
 
     return Response(
         content=rewritten,

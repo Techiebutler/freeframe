@@ -111,3 +111,52 @@ class TestHlsProxyEndpoint:
         with pytest.raises(Exception) as exc_info:
             hls_proxy("/etc/passwd.m3u8", token=token)
         assert exc_info.value.status_code == 400
+
+
+class TestSegmentUrlLifetime:
+    """A segment URL never outlives the token that the playlist was fetched with.
+
+    The proxy checks only the token's signature and expiry, never the asset, so
+    the token's lifetime is the bound on how long a player can keep fetching
+    video after access to it ended. Segment URLs signed for a fixed 24 hours at
+    each playlist fetch stretched that to about 48 hours from the token's issue.
+    """
+
+    def _token(self, seconds_left):
+        from apps.api.config import settings
+        from datetime import datetime, timedelta, timezone
+        return jwt.encode(
+            {"sub": "hls", "pfx": "hls/proj/ver",
+             "exp": datetime.now(timezone.utc) + timedelta(seconds=seconds_left)},
+            settings.jwt_secret, algorithm=settings.jwt_algorithm,
+        )
+
+    def _signed_expiries(self, token):
+        """Fetch a variant playlist through the proxy with real URL signing, and
+        return each segment URL's X-Amz-Expires."""
+        from urllib.parse import parse_qs, urlparse
+        from apps.api.routers.hls_proxy import hls_proxy
+
+        body = b"#EXTM3U\n#EXTINF:2.000,\nseg0.ts\n#EXTINF:2.000,\nseg1.ts\n#EXT-X-ENDLIST"
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=body))}
+        with patch("apps.api.routers.hls_proxy.get_s3_client", return_value=s3):
+            response = hls_proxy("720p/index.m3u8", token=token)
+        urls = [l for l in response.body.decode().split("\n") if l.startswith("http")]
+        assert len(urls) == 2
+        return [int(parse_qs(urlparse(u).query)["X-Amz-Expires"][0]) for u in urls]
+
+    def test_a_token_near_its_end_signs_segments_only_for_what_is_left(self):
+        for expires in self._signed_expiries(self._token(60)):
+            assert 1 <= expires <= 60
+
+    def test_a_fresh_token_signs_segments_for_its_full_lifetime(self):
+        from apps.api.routers.hls_proxy import create_hls_token
+        for expires in self._signed_expiries(create_hls_token("hls/proj/ver")):
+            assert 86400 - 60 <= expires <= 86400
+
+    def test_an_expired_token_signs_nothing(self):
+        from apps.api.routers.hls_proxy import hls_proxy
+        with pytest.raises(Exception) as exc_info:
+            hls_proxy("720p/index.m3u8", token=self._token(-5))
+        assert exc_info.value.status_code == 401
