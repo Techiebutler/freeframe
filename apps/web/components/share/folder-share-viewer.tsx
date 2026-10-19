@@ -26,6 +26,7 @@ import { useReview, type CreateCommentPayload } from '@/components/review/review
 import { useReviewStore } from '@/stores/review-store'
 import { fetchDownloadUrl, fetchShareDownloadOptions, handleDownload, triggerDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
+import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import { ShareReviewScreen } from './share-review-screen'
 import { useBranding } from '@/components/shared/branding-provider'
 import { Avatar } from '@/components/shared/avatar'
@@ -307,12 +308,7 @@ function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, 
         )}
 
         {/* Comment count badge — bottom left */}
-        {asset.comment_count > 0 && (
-          <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5">
-            <MessageSquare className="h-3 w-3 text-text-primary" />
-            <span className="text-[10px] font-medium text-text-primary">{asset.comment_count}</span>
-          </div>
-        )}
+        <CommentCountBadge count={asset.comment_count} />
 
         {/* Duration badge — bottom right (video/audio) */}
         {asset.duration_seconds != null && asset.duration_seconds > 0 && (

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, literal, select
 import os
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +12,7 @@ from ..models.asset import Asset, AssetVersion, MediaFile, AssetType, FileType, 
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.share import AssetShare
 from ..models.activity import Mention, Notification, NotificationType
+from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_asset_access, can_access_asset, is_public_project, get_project_member
@@ -79,6 +80,40 @@ def _playable_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
     )
 
 
+def _comment_counts(db: Session, version_ids: list) -> dict:
+    """Comments on each version, as its comment panel shows them, by version id.
+
+    The panel lists a version's live top-level comments, public and internal,
+    each with its live replies down to COMMENT_TREE_MAX_DEPTH; a reply under a
+    deleted comment is not shown and is not counted. One query for all the
+    versions, so a grid of assets costs one round trip, not one per card. The
+    share grid counts the same way with internal comments left out
+    (_latest_version_comment_count in routers/share.py).
+    """
+    if not version_ids:
+        return {}
+    tree = select(
+        Comment.id.label("id"),
+        Comment.version_id.label("version_id"),
+        literal(0).label("depth"),
+    ).where(
+        Comment.version_id.in_(version_ids),
+        Comment.parent_id.is_(None),
+        Comment.deleted_at.is_(None),
+    ).cte(name="panel_comments", recursive=True)
+    replies = select(
+        Comment.id,
+        tree.c.version_id,
+        (tree.c.depth + 1),
+    ).join(tree, Comment.parent_id == tree.c.id).where(
+        Comment.deleted_at.is_(None),
+        tree.c.depth < COMMENT_TREE_MAX_DEPTH,
+    )
+    tree = tree.union_all(replies)
+    rows = db.query(tree.c.version_id, func.count(tree.c.id)).group_by(tree.c.version_id).all()
+    return {version_id: count for version_id, count in rows}
+
+
 def _build_asset_response(asset: Asset, db: Session) -> AssetResponse:
     """Build AssetResponse with latest version and its files."""
     latest_version = _display_version(db, asset.id)
@@ -100,6 +135,8 @@ def _build_asset_response(asset: Asset, db: Session) -> AssetResponse:
     resp = AssetResponse.model_validate(asset)
     resp.latest_version = version_response
     resp.thumbnail_url = thumbnail_url
+    if latest_version:
+        resp.comment_count = _comment_counts(db, [latest_version.id]).get(latest_version.id, 0)
     return resp
 
 
@@ -139,6 +176,7 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
     # Bulk load media files for all those versions
     version_ids = [v.id for v in latest_versions]
     all_files = db.query(MediaFile).filter(MediaFile.version_id.in_(version_ids)).all() if version_ids else []
+    comment_counts = _comment_counts(db, version_ids)
     files_by_version: dict = {}
     for f in all_files:
         files_by_version.setdefault(f.version_id, []).append(f)
@@ -162,6 +200,7 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
         asset_resp = AssetResponse.model_validate(asset)
         asset_resp.latest_version = version_response
         asset_resp.thumbnail_url = thumbnail_url
+        asset_resp.comment_count = comment_counts.get(version.id, 0) if version else 0
         result.append(asset_resp)
     return result
 

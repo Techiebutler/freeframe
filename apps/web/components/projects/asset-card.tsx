@@ -1,10 +1,11 @@
 'use client'
 
 import * as React from 'react'
-import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal, Check } from 'lucide-react'
+import { Film, Music, Image as ImageIcon, Images, MoreHorizontal, Check } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import type { Asset, AssetType, DownloadOption, User } from '@/types'
 import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import { AssetMenuItems } from './menus/asset-menu'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
 
@@ -168,13 +169,8 @@ export function AssetCard({
           </span>
         )}
 
-        {/* Comment count badge — bottom-left */}
-        {commentCount != null && commentCount > 0 && (
-          <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white backdrop-blur-sm">
-            <MessageSquare className="h-3 w-3" />
-            {commentCount}
-          </span>
-        )}
+        {/* Comment count badge — bottom-left, as in a share link's grid */}
+        <CommentCountBadge count={commentCount} />
       </div>
 
       {/* Info section */}

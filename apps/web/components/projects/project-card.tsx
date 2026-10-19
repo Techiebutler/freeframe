@@ -4,8 +4,8 @@ import * as React from 'react'
 import Link from 'next/link'
 import { MoreHorizontal, ImagePlus, Globe, Lock } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
-import { getGradientForProject } from '@/lib/gradient-utils'
 import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { ProjectPoster } from './project-poster'
 import { useProjectMenu } from './menus/project-menu'
 import type { Project } from '@/types'
 
@@ -27,7 +27,6 @@ export function ProjectCard({
   className,
   onMutate,
 }: ProjectCardProps) {
-  const gradient = getGradientForProject(project.id)
   const assetCount = project.asset_count ?? 0
   const { items: menuItems, dialogs: menuDialogs } = useProjectMenu(project, { isOwner, onMutate })
 
@@ -41,18 +40,7 @@ export function ProjectCard({
         >
           {/* Square poster area */}
           <div className="relative aspect-square w-full overflow-hidden">
-            {project.poster_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={project.poster_url}
-                alt={project.name}
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div className={cn('h-full w-full bg-gradient-to-br', gradient)}>
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,255,255,0.1),transparent_60%)]" />
-              </div>
-            )}
+            <ProjectPoster project={project} />
 
             {/* Bottom gradient overlay for text */}
             <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 via-black/30 to-transparent" />
