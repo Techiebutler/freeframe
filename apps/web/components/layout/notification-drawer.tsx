@@ -100,10 +100,10 @@ interface NotificationDrawerProps {
   onClose: () => void
   /** Whether the sidebar is the 52px rail or expanded to 220px. The drawer
    *  opens against its right edge, so it has to know which. */
-  railCollapsed?: boolean
+  railCollapsed: boolean
 }
 
-export function NotificationDrawer({ open, onClose, railCollapsed = true }: NotificationDrawerProps) {
+export function NotificationDrawer({ open, onClose, railCollapsed }: NotificationDrawerProps) {
   const { notifications, isLoading, fetchNotifications, markAllRead, unreadCount } =
     useNotificationStore()
   const [tab, setTab] = React.useState<'all' | 'unread'>('all')

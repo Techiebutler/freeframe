@@ -22,15 +22,9 @@ vi.mock('@/stores/notification-store', () => ({
 
 import { NotificationDrawer } from '@/components/layout/notification-drawer'
 
-function render_(railCollapsed?: boolean) {
+function render_(railCollapsed: boolean) {
   const props = { open: true, onClose: () => {} }
-  return render(
-    railCollapsed === undefined ? (
-      <NotificationDrawer {...props} />
-    ) : (
-      <NotificationDrawer {...props} railCollapsed={railCollapsed} />
-    ),
-  )
+  return render(<NotificationDrawer {...props} railCollapsed={railCollapsed} />)
 }
 
 describe('the notification drawer beside the sidebar', () => {

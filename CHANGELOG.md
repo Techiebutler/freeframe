@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The notification drawer no longer covers an expanded sidebar.** (#513 by @jay23606)
+
 ## [1.19.0] - 2026-10-19
 
 Security release: fixes [GHSA-w8vh-2j74-m3hw](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-w8vh-2j74-m3hw), which left a deleted project reachable through its share links and to its members until the retention purge. Upgrading is strongly recommended. Also right-click menus on projects, assets, folders and share links, comment counts on project thumbnails, and fixes to the player's back arrow and the Projects list view.
