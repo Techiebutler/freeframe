@@ -35,11 +35,13 @@ export function ProjectSettingsDialog({
   // id rather than the object, so a background refetch of the list (which
   // hands the card a new object) does not wipe unsaved edits or the poster.
   React.useEffect(() => {
+    if (!open) return
     setName(project.name)
     setDescription(project.description || '')
     setIsPublic(project.is_public ?? false)
     setPosterPreview(project.poster_url ?? null)
     setPosterFile(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when the project changes or the dialog reopens, not when its object is refetched.
   }, [project.id, open])
 
   const handlePosterSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
