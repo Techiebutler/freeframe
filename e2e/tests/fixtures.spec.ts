@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { crc32 } from 'node:zlib'
 import { accessToken, json, primary, savedRefreshToken, secondary } from '../fixtures/accounts'
-import { countRequests, failInitiate, failParts, hangParts, partBodyBytes, throttleParts } from '../fixtures/faults'
+import { countRequests, failInitiate, failParts, hangParts, holdParts, partBodyBytes, throttleParts } from '../fixtures/faults'
 import { makeFiles, remove, rewrite, touch } from '../fixtures/files'
 import { apiUrl, createProject, dropFiles, openUploads, resetUploads, rows, signIn } from '../fixtures/stack'
 
@@ -156,6 +156,35 @@ test('remove() deletes a file, and is fine with one that is already gone', async
   await expect(remove(file)).resolves.toBeUndefined()
 })
 
+// ─── The uploads panel ─────────────────────────────────────────────────────────
+
+test('rows() reads data-status and data-detail, and throws for a row that has no status', async ({ page }, testInfo) => {
+  await openProject(page)
+  const hold = await holdParts(page)
+  const { name, file } = await pngFile(testInfo, 'rows')
+  await dropFiles(page, 'project', [file])
+  await openUploads(page)
+  await expect.poll(hold.held, { timeout: 30_000 }).toBeGreaterThan(0)
+
+  const mine = (await rows(page)).filter((r) => r.name === name)
+  expect(mine).toHaveLength(1)
+  expect(mine[0]).toMatchObject({ status: 'uploading', kind: 'uploading' })
+  expect(mine[0].detail).toMatch(/^Uploading \d+%/)
+  hold.release()
+
+  // A row the panel renders without its status hook must not read as "" and let
+  // a "no row is Starting" wait pass.
+  await page.evaluate(() => {
+    const panel = Array.from(document.querySelectorAll('h2'))
+      .find((h) => h.textContent?.startsWith('Uploads'))
+      ?.closest('div.fixed')
+    const row = document.createElement('div')
+    row.setAttribute('data-testid', 'upload-row')
+    panel?.appendChild(row)
+  })
+  await expect(rows(page)).rejects.toThrow(/no data-status/)
+})
+
 // ─── Dropping files ────────────────────────────────────────────────────────────
 
 test('dropFiles() uploads into the project root or into a folder, as the target says', async ({ page }, testInfo) => {
@@ -171,8 +200,8 @@ test('dropFiles() uploads into the project root or into a folder, as the target 
   await dropFiles(page, 'project', [atRoot.file])
 
   await openUploads(page)
-  await expect.poll(statusOf(page, inFolder.name), { timeout: 60_000 }).toBe('Ready')
-  await expect.poll(statusOf(page, atRoot.name), { timeout: 60_000 }).toBe('Ready')
+  await expect.poll(statusOf(page, inFolder.name), { timeout: 60_000 }).toBe('complete')
+  await expect.poll(statusOf(page, atRoot.name), { timeout: 60_000 }).toBe('complete')
 
   const names = async (where: string) =>
     (await json<Array<{ name: string }>>('GET', `/projects/${projectId}/assets?folder_id=${where}`, { token })).map((a) => a.name)
@@ -185,7 +214,7 @@ test('dropFiles() with several files starts one upload for each', async ({ page 
   const files = [await pngFile(testInfo, 'multi-a', 200_000), await pngFile(testInfo, 'multi-b', 300_000)]
   await dropFiles(page, 'project', files.map((f) => f.file))
   await openUploads(page)
-  for (const f of files) await expect.poll(statusOf(page, f.name), { timeout: 60_000 }).toBe('Ready')
+  for (const f of files) await expect.poll(statusOf(page, f.name), { timeout: 60_000 }).toBe('complete')
 })
 
 // ─── Faults ────────────────────────────────────────────────────────────────────
@@ -200,7 +229,7 @@ test('countRequests() counts the requests that match, and only those', async ({ 
   const { name, file } = await pngFile(testInfo, 'count')
   await dropFiles(page, 'project', [file])
   await openUploads(page)
-  await expect.poll(statusOf(page, name), { timeout: 60_000 }).toBe('Ready')
+  await expect.poll(statusOf(page, name), { timeout: 60_000 }).toBe('complete')
 
   expect(initiates.count()).toBe(1)
   expect(parts.count()).toBe(1) // one 3 MB part
@@ -215,7 +244,7 @@ test('failParts(page, status, times) answers that many part PUTs with the status
   const { name, file } = await pngFile(testInfo, 'failparts')
   await dropFiles(page, 'project', [file])
   await openUploads(page)
-  await expect.poll(statusOf(page, name), { timeout: 60_000 }).toBe('Ready')
+  await expect.poll(statusOf(page, name), { timeout: 60_000 }).toBe('complete')
 
   // The page saw the injected 500 (not a network error), then the app's retry got through.
   expect(statuses).toEqual([500, 200])
@@ -229,7 +258,7 @@ test('failParts(page, status) with no count fails every part PUT', async ({ page
   const { name, file } = await pngFile(testInfo, 'failall')
   await dropFiles(page, 'project', [file])
   await openUploads(page)
-  await expect.poll(async () => (await rowOf(page, name)())?.status, { timeout: 60_000 }).toMatch(/^(Failed|Interrupted)$/)
+  await expect.poll(async () => (await rowOf(page, name)())?.status, { timeout: 60_000 }).toMatch(/^(failed|interrupted)$/)
 
   expect(statuses.length).toBeGreaterThan(0)
   expect(new Set(statuses)).toEqual(new Set([403]))
@@ -248,22 +277,42 @@ test('hangParts() leaves a part PUT unanswered and the row uploading', async ({ 
 
   await page.waitForTimeout(4_000)
   expect(statuses, 'no part PUT was ever answered').toEqual([])
-  expect((await rowOf(page, name)())?.status).toBe('Uploading')
+  expect((await rowOf(page, name)())?.status).toBe('uploading')
+})
+
+test('holdParts() holds every part PUT until released, then lets them all through', async ({ page }, testInfo) => {
+  await openProject(page)
+  const statuses = partStatuses(page)
+  const hold = await holdParts(page)
+
+  const { name, file } = await pngFile(testInfo, 'holdparts')
+  await dropFiles(page, 'project', [file])
+  await openUploads(page)
+  await expect.poll(hold.held, { timeout: 30_000 }).toBeGreaterThan(0)
+  await page.waitForTimeout(3_000)
+  expect(statuses, 'no held part PUT was answered').toEqual([])
+  expect((await rowOf(page, name)())?.status).toBe('uploading')
+
+  hold.release()
+  await expect.poll(statusOf(page, name), { timeout: 60_000 }).toBe('complete')
+  expect(statuses).toEqual([200])
 })
 
 test('failInitiate() answers the initiate call with the reply, for as many calls as asked', async ({ page }, testInfo) => {
   await openProject(page)
-  await failInitiate(page, { status: 503, body: { detail: 'try later' }, headers: { 'retry-after': '7' } }, 1)
+  // A refusal (400): the row fails with the reason and the queue moves on. A 5xx
+  // would not fail the row, the queue holds and retries it (see queue.spec.ts, S1).
+  await failInitiate(page, { status: 400, body: { detail: 'not today' }, headers: { 'retry-after': '7' } }, 1)
 
   const first = await pngFile(testInfo, 'init-first')
   const second = await pngFile(testInfo, 'init-second')
   await dropFiles(page, 'project', [first.file])
   await openUploads(page)
-  await expect.poll(rowOf(page, first.name), { timeout: 30_000 }).toMatchObject({ status: 'Failed', detail: 'try later' })
+  await expect.poll(rowOf(page, first.name), { timeout: 30_000 }).toMatchObject({ status: 'failed', detail: 'not today' })
 
   // The second call is past `times`, so it reaches the API.
   await dropFiles(page, 'project', [second.file])
-  await expect.poll(statusOf(page, second.name), { timeout: 60_000 }).toBe('Ready')
+  await expect.poll(statusOf(page, second.name), { timeout: 60_000 }).toBe('complete')
 })
 
 test('failInitiate() delivers status, body and headers to the page intact', async ({ page }) => {
@@ -293,7 +342,7 @@ test('throttleParts() holds a part PUT for its size over the rate', async ({ pag
   const { name, file } = await pngFile(testInfo, 'throttle')
   await dropFiles(page, 'project', [file])
   await openUploads(page)
-  await expect.poll(statusOf(page, name), { timeout: 60_000 }).toBe('Ready')
+  await expect.poll(statusOf(page, name), { timeout: 60_000 }).toBe('complete')
 
   expect(tookMs).toBeGreaterThan(2_500)
   expect(tookMs).toBeLessThan(15_000)

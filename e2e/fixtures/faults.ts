@@ -144,6 +144,42 @@ export async function hangParts(page: Page): Promise<void> {
 }
 
 /**
+ * Hold every part PUT until `release()` is called, then let all of them (the
+ * held ones and every later one) through untouched.
+ *
+ * What `hangParts` is when it is never released, and a way to freeze a queue in
+ * a known state: the files that started sit in "Uploading" with their parts on
+ * hold, the rest wait, and the scenario can act, then let the run go on.
+ * `held()` is how many part PUTs have reached the hold so far. The hold ends
+ * with the page: do not keep one for longer than the app's part watchdog (90 s)
+ * once that exists, or the app will abort the held parts itself.
+ */
+export async function holdParts(page: Page): Promise<{ release: () => void; held: () => number }> {
+  let open = false
+  let held = 0
+  let waiting: Array<() => void> = []
+  await page.route(partUrl, async (route: Route, request: Request) => {
+    if (!isPartPut(request)) return route.fallback()
+    if (!open) {
+      held += 1
+      await new Promise<void>((resolve) => waiting.push(resolve))
+    }
+    // The page may have given up on this request while it was held (a Cancel
+    // aborts it), and a request that is gone cannot be continued.
+    await route.fallback().catch(() => {})
+  })
+  return {
+    release: () => {
+      open = true
+      const go = waiting
+      waiting = []
+      for (const resolve of go) resolve()
+    },
+    held: () => held,
+  }
+}
+
+/**
  * Answer the next `times` initiate calls (every one when omitted) with `reply`
  * instead of asking the API. `body` is sent as JSON.
  */

@@ -162,24 +162,73 @@ export async function openUploads(page: Page): Promise<void> {
 }
 
 /**
+ * Close the uploads panel, the way a person does: a click on the page beside it.
+ *
+ * While the panel is open a full-screen backdrop sits over the page (and the
+ * sidebar), so a link behind it cannot be clicked. The click lands on the
+ * backdrop's far right edge, well clear of the 380px panel.
+ */
+export async function closeUploads(page: Page): Promise<void> {
+  const panel = uploadsPanel(page)
+  if (!(await panel.isVisible())) return
+  const width = page.viewportSize()?.width ?? 1280
+  await page.mouse.click(width - 20, 300)
+  await panel.waitFor({ state: 'hidden' })
+}
+
+/** One row of the uploads panel, as `rows` reads it. */
+export type UploadRow = {
+  name: string
+  /**
+   * The row's `data-status`: queued, starting, uploading, processing, complete,
+   * failed, cancelled, interrupted or elsewhere. Not the badge's wording
+   * ("Ready" is `complete`, "Resuming" is `starting`).
+   */
+  status: string
+  /** The line under the progress bar, as written ("Waiting to start", an error message, ...). */
+  detail: string
+  /** The row's `data-detail`: which kind of line that is ("waiting-to-start", "resuming", "failed", ...), or '' for none. */
+  kind: string
+}
+
+/**
  * Every row of the uploads panel, top to bottom, as the panel shows it.
  *
- * `status` is the badge ("Queued", "Uploading", "Processing", "Ready",
- * "Failed", ...) and `detail` the line under the progress bar ("Uploading 40%",
- * an error message, ...). Open the panel first with `openUploads`.
+ * Rows are found by `data-testid="upload-row"` and their status read from
+ * `data-status`, so the badge's wording and the panel's classes do not matter.
+ * A row without a status throws: a read that quietly returned "" would let a
+ * scenario that waits for "no row is Starting" pass without looking at anything.
+ * Open the panel first with `openUploads`.
  */
-export async function rows(page: Page): Promise<Array<{ name: string; status: string; detail: string }>> {
+export async function rows(page: Page): Promise<UploadRow[]> {
   return uploadsPanel(page).evaluate((panel) =>
-    Array.from(panel.querySelectorAll('div.group.items-start')).map((row) => {
+    Array.from(panel.querySelectorAll('[data-testid="upload-row"]')).map((row) => {
       const text = (el: Element | null | undefined) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
       const editing = row.querySelector<HTMLInputElement>('input[aria-label="Asset name"]')
+      const name = editing ? editing.value : text(row.querySelector('p.font-medium, button[title="Rename"]'))
+      const status = row.getAttribute('data-status')
+      if (!status) throw new Error(`The uploads panel has a row ("${name}") with no data-status`)
       return {
-        name: editing ? editing.value : text(row.querySelector('p.font-medium, button[title="Rename"]')),
-        status: text(row.querySelector('span.rounded-full')),
+        name,
+        status,
         detail: text(row.querySelector('div.mt-1')),
+        kind: row.getAttribute('data-detail') ?? '',
       }
     }),
   )
+}
+
+/**
+ * The panel row of the upload named `name` (the asset name, which is the file's
+ * name without its extension). For clicking its actions: Cancel is the button
+ * titled "Cancel upload", Retry "Retry", Dismiss "Dismiss", Resume
+ * "Resume — pick <file> again". They fade in on hover, so hover the row first.
+ */
+export function uploadRow(page: Page, name: string): Locator {
+  const exact = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+  return uploadsPanel(page)
+    .getByTestId('upload-row')
+    .filter({ has: page.locator('button[title="Rename"]', { hasText: exact }) })
 }
 
 // ─── Dropping files ────────────────────────────────────────────────────────────
@@ -234,6 +283,14 @@ export async function dropFiles(
     if (typeof target === 'object') {
       // The grid fills in after the page loads, so the card may not be there yet.
       await page.waitForFunction((id) => !!(window as any).__e2eFolderCard(id), target.folderId)
+    } else {
+      // The server renders the drop region before React has hydrated it, and a drop
+      // that lands in that gap goes nowhere (seen in WebKit): React finds no handler
+      // on a node it has not hydrated. Hydrating gives the node its props.
+      await page.waitForFunction((region) => {
+        const found = document.querySelectorAll(region)
+        return found.length === 1 && Object.keys(found[0]).some((k) => k.startsWith('__reactProps$'))
+      }, PROJECT_DROP_REGION)
     }
     await page.locator(`#${inputId}`).setInputFiles(paths)
     await page.evaluate(
