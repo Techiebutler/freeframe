@@ -26,6 +26,10 @@ import { api, ApiError } from '@/lib/api'
 import { useUploadStore, uploadAllParts } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, fail, type PartHandler } from '@/test/xhr-fake'
+import { createPartBudget } from '@/lib/upload-budget'
+
+/** A budget of `n` slots for one file, which is what the old `concurrency` argument was. */
+const slots = (n: number) => ({ budget: createPartBudget(n), fileKey: 'f' })
 
 const MB = 1024 * 1024
 const CHUNK = 10 * MB
@@ -119,8 +123,8 @@ describe('uploadAllParts with parts already held', () => {
 
   it('does not send a part the backend already holds', async () => {
     await uploadAllParts(
-      makeFile(), 'key', 'u1', new AbortController(), () => {}, 5,
-      { chunkSize: CHUNK, alreadyHeld: [1, 2] },
+      makeFile(), 'key', 'u1', new AbortController(), () => {},
+      { ...slots(5), chunkSize: CHUNK, alreadyHeld: [1, 2] },
     )
 
     expect(partsSentTo(put)).toEqual([3])
@@ -132,8 +136,8 @@ describe('uploadAllParts with parts already held', () => {
     const onProgress = vi.fn()
 
     await uploadAllParts(
-      makeFile(), 'key', 'u1', new AbortController(), onProgress, 5,
-      { chunkSize: CHUNK, alreadyHeld: [1, 2] },
+      makeFile(), 'key', 'u1', new AbortController(), onProgress,
+      { ...slots(5), chunkSize: CHUNK, alreadyHeld: [1, 2] },
     )
 
     // 20 of 23 MB, in bytes rather than in parts.
@@ -146,8 +150,8 @@ describe('uploadAllParts with parts already held', () => {
     const onProgress = vi.fn()
 
     await uploadAllParts(
-      makeFile(), 'key', 'u1', new AbortController(), onProgress, 5,
-      { chunkSize: CHUNK, alreadyHeld: [3] },
+      makeFile(), 'key', 'u1', new AbortController(), onProgress,
+      { ...slots(5), chunkSize: CHUNK, alreadyHeld: [3] },
     )
 
     expect(onProgress.mock.calls[0][0]).toBe(Math.round((3 / 23) * 95))
@@ -157,8 +161,8 @@ describe('uploadAllParts with parts already held', () => {
     // Parts finish out of order once several are in flight, so what is held is a
     // set. Treating it as a prefix would re-send everything after the first hole.
     await uploadAllParts(
-      makeFile(), 'key', 'u1', new AbortController(), () => {}, 5,
-      { chunkSize: CHUNK, alreadyHeld: [1, 3] },
+      makeFile(), 'key', 'u1', new AbortController(), () => {},
+      { ...slots(5), chunkSize: CHUNK, alreadyHeld: [1, 3] },
     )
 
     expect(partsSentTo(put)).toEqual([2])
@@ -168,8 +172,8 @@ describe('uploadAllParts with parts already held', () => {
     // A release that changes CHUNK_SIZE must not move the byte ranges of an
     // upload whose earlier parts are already in the bucket.
     await uploadAllParts(
-      makeFile(TOTAL), 'key', 'u1', new AbortController(), () => {}, 5,
-      { chunkSize: 5 * MB },
+      makeFile(TOTAL), 'key', 'u1', new AbortController(), () => {},
+      { ...slots(5), chunkSize: 5 * MB },
     )
 
     // 23 MB at 5 MB per part is five parts, not three.
@@ -178,8 +182,8 @@ describe('uploadAllParts with parts already held', () => {
 
   it('returns only the parts it actually sent', async () => {
     const parts = await uploadAllParts(
-      makeFile(), 'key', 'u1', new AbortController(), () => {}, 5,
-      { chunkSize: CHUNK, alreadyHeld: [1, 2] },
+      makeFile(), 'key', 'u1', new AbortController(), () => {},
+      { ...slots(5), chunkSize: CHUNK, alreadyHeld: [1, 2] },
     )
 
     // Not a sparse array with holes where the skipped parts would be: that

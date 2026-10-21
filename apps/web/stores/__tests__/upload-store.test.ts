@@ -10,10 +10,17 @@ vi.mock('@/lib/api', () => ({
 import { api } from '@/lib/api'
 import { uploadAllParts } from '../upload-store'
 import { installXhrFake, ok, fail, type FakeXhr, type PartHandler } from '@/test/xhr-fake'
+import { createPartBudget, type PartBudget } from '@/lib/upload-budget'
 
 const CHUNK_SIZE = 10 * 1024 * 1024
 /** Mirrors the store's first backoff rung. */
 const PART_RETRY_BASE_MS = 2000
+
+/**
+ * A budget of `n` slots that only this upload uses, which is what the old
+ * `concurrency` argument was. The store passes its tab-wide one instead.
+ */
+const slots = (n = 5) => ({ budget: createPartBudget(n), fileKey: 'f' })
 
 /** Builds a File of `bytes` length; 15 MB spans two 10 MB parts. */
 function makeFile(bytes: number): File {
@@ -78,7 +85,7 @@ describe('uploadAllParts', () => {
     })
 
     const onProgress = vi.fn()
-    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 5_000_000), 'key', 'upload-1', controller, onProgress)
+    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 5_000_000), 'key', 'upload-1', controller, onProgress, slots())
     await vi.runAllTimersAsync()
 
     expect(completionOrder).toEqual([2, 1]) // the assertion below is only meaningful if this held
@@ -109,7 +116,7 @@ describe('uploadAllParts', () => {
     })
 
     // 3 parts, 3 workers — all three should be in flight simultaneously.
-    const promise = uploadAllParts(makeFile(2 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 3)
+    const promise = uploadAllParts(makeFile(2 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), slots(3))
     await vi.runAllTimersAsync()
     const parts = await promise
 
@@ -133,7 +140,7 @@ describe('uploadAllParts', () => {
       return fail(503)
     })
 
-    const promise = uploadAllParts(makeFile(2 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 3)
+    const promise = uploadAllParts(makeFile(2 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), slots(3))
     const settled = promise.then(() => 'resolved').catch((err: Error) => err.message)
     await vi.advanceTimersByTimeAsync(PART_RETRY_BASE_MS)
     await vi.runAllTimersAsync()
@@ -160,7 +167,7 @@ describe('uploadAllParts', () => {
     })
 
     // 5 parts, but only 2 workers.
-    const promise = uploadAllParts(makeFile(4 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 2)
+    const promise = uploadAllParts(makeFile(4 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), slots(2))
     await vi.runAllTimersAsync()
     const parts = await promise
 
@@ -175,7 +182,7 @@ describe('uploadAllParts', () => {
       .mockResolvedValueOnce(fail())
       .mockResolvedValueOnce(ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
 
     expect(await promise).toEqual([{ PartNumber: 1, ETag: '"etag-1"' }])
@@ -188,7 +195,7 @@ describe('uploadAllParts', () => {
       .mockResolvedValueOnce(fail())
       .mockResolvedValueOnce(ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
     await promise
 
@@ -200,7 +207,7 @@ describe('uploadAllParts', () => {
     const put = mockPut()
     put.mockResolvedValue(fail(500, 'Internal Server Error'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     const assertion = expect(promise).rejects.toThrow(/Part 1 failed/)
     await vi.runAllTimersAsync()
     await assertion
@@ -212,7 +219,7 @@ describe('uploadAllParts', () => {
     const put = mockPut()
     put.mockResolvedValue(fail(403, 'Forbidden'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     const assertion = expect(promise).rejects.toThrow(/Forbidden/)
     await vi.runAllTimersAsync()
     await assertion
@@ -226,7 +233,7 @@ describe('uploadAllParts', () => {
       .mockResolvedValueOnce(fail(429, 'Too Many Requests'))
       .mockResolvedValueOnce(ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
 
     expect(await promise).toEqual([{ PartNumber: 1, ETag: '"etag-1"' }])
@@ -245,7 +252,7 @@ describe('uploadAllParts', () => {
     })
 
     let settled = false
-    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 2)
+    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), slots(2))
     promise.catch(() => { settled = true })
 
     // Well past part 1's failure, and well short of part 2's 2s+jitter rung.
@@ -263,7 +270,7 @@ describe('uploadAllParts', () => {
       return new Promise(() => {})
     })
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     const assertion = expect(promise).rejects.toThrow(/cancelled/)
     await vi.runAllTimersAsync()
     await assertion
@@ -276,7 +283,7 @@ describe('uploadAllParts', () => {
     controller.abort()
 
     await expect(
-      uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn()),
+      uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots()),
     ).rejects.toThrow(/cancelled/)
 
     expect(put).not.toHaveBeenCalled()
@@ -312,7 +319,7 @@ describe('uploadAllParts progress', () => {
       return ok('"etag-1"')
     })
 
-    const promise = uploadAllParts(makeFile(1000), 'key', 'upload-1', controller, onProgress)
+    const promise = uploadAllParts(makeFile(1000), 'key', 'upload-1', controller, onProgress, slots())
     await vi.runAllTimersAsync()
     await promise
 
@@ -336,7 +343,8 @@ describe('uploadAllParts progress', () => {
     })
 
     // 38 parts, the last one short.
-    const promise = uploadAllParts(makeFile(37_500), 'key', 'upload-1', controller, onProgress, 5, {
+    const promise = uploadAllParts(makeFile(37_500), 'key', 'upload-1', controller, onProgress, {
+      ...slots(5),
       chunkSize: 1000,
     })
     await vi.runAllTimersAsync()
@@ -375,7 +383,8 @@ describe('uploadAllParts progress', () => {
       return ok(`"etag-${part}"`)
     })
 
-    const promise = uploadAllParts(makeFile(2000), 'key', 'upload-1', controller, onProgress, 2, {
+    const promise = uploadAllParts(makeFile(2000), 'key', 'upload-1', controller, onProgress, {
+      ...slots(2),
       chunkSize: 1000,
     })
     await vi.runAllTimersAsync()
@@ -396,7 +405,8 @@ describe('uploadAllParts progress', () => {
       return new Promise((resolve) => release.push(() => resolve(ok(`"etag-${part}"`))))
     })
 
-    const promise = uploadAllParts(makeFile(2100), 'key', 'upload-1', controller, onProgress, 3, {
+    const promise = uploadAllParts(makeFile(2100), 'key', 'upload-1', controller, onProgress, {
+      ...slots(3),
       chunkSize: 1000,
     })
     await vi.advanceTimersByTimeAsync(0)
@@ -414,7 +424,7 @@ describe('uploadAllParts progress', () => {
     const onProgress = vi.fn()
     mockPut(() => fail(403, 'Forbidden'))
 
-    const promise = uploadAllParts(makeFile(1000), 'key', 'upload-1', controller, onProgress)
+    const promise = uploadAllParts(makeFile(1000), 'key', 'upload-1', controller, onProgress, slots())
     const assertion = expect(promise).rejects.toThrow('Part 1 failed: Forbidden')
     await vi.runAllTimersAsync()
     await assertion
@@ -430,7 +440,7 @@ describe('uploadAllParts progress', () => {
       return ok('"etag-1"')
     })
 
-    const promise = uploadAllParts(makeFile(1000), 'key', 'upload-1', controller, onProgress)
+    const promise = uploadAllParts(makeFile(1000), 'key', 'upload-1', controller, onProgress, slots())
     await vi.runAllTimersAsync()
     await promise
 
@@ -463,7 +473,7 @@ describe('the part PUT', () => {
       return ok('"etag-1"')
     })
 
-    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 1)
+    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), slots(1))
     await vi.runAllTimersAsync()
     await promise
 
@@ -485,7 +495,7 @@ describe('the part PUT', () => {
       return ok('"etag-1"')
     })
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
     await promise
 
@@ -499,7 +509,7 @@ describe('the part PUT', () => {
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce(ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
 
     expect(await promise).toEqual([{ PartNumber: 1, ETag: '"etag-1"' }])
@@ -515,7 +525,7 @@ describe('the part PUT', () => {
       })
       .mockResolvedValueOnce(ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
 
     expect(await promise).toEqual([{ PartNumber: 1, ETag: '"etag-1"' }])
@@ -527,7 +537,7 @@ describe('the part PUT', () => {
     // failed"); the row shows this one instead.
     mockPut(() => Promise.reject(new Error('offline')))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     const assertion = expect(promise).rejects.toThrow(/^Part 1 failed: network error$/)
     await vi.runAllTimersAsync()
     await assertion
@@ -545,7 +555,7 @@ describe('the part PUT', () => {
       })
       .mockResolvedValueOnce(ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
 
     expect(await promise).toEqual([{ PartNumber: 1, ETag: '"etag-1"' }])
@@ -559,7 +569,7 @@ describe('the part PUT', () => {
       return new Promise(() => {})
     })
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     const assertion = expect(promise).rejects.toThrow(/^Part 1 failed: aborted$/)
     await vi.runAllTimersAsync()
     await assertion
@@ -572,7 +582,7 @@ describe('the part PUT', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockPut((url) => (partOf(url) === 1 ? { ...ok('"etag-1"'), exposeEtag: false } : ok('"etag-2"')))
 
-    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
 
     expect(await promise).toEqual([
@@ -588,7 +598,7 @@ describe('the part PUT', () => {
       .mockResolvedValueOnce({ status: 0 })
       .mockResolvedValueOnce(ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     await vi.runAllTimersAsync()
 
     expect(await promise).toEqual([{ PartNumber: 1, ETag: '"etag-1"' }])
@@ -604,7 +614,7 @@ describe('the part PUT', () => {
     )
     const put = mockPut(() => ok('"etag-1"'))
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     const settled = promise.catch((err: unknown) => err)
     await vi.advanceTimersByTimeAsync(0)
     controller.abort()
@@ -628,7 +638,7 @@ describe('the part PUT', () => {
       return new Promise(() => {})
     })
 
-    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn())
+    const promise = uploadAllParts(makeFile(1024), 'key', 'upload-1', controller, vi.fn(), slots())
     const settled = promise.catch((err: unknown) => err)
     await vi.advanceTimersByTimeAsync(0)
     expect(requests).toHaveLength(1)
@@ -683,11 +693,347 @@ describe('the part PUT', () => {
       return ok(`"etag-${part}"`)
     })
 
-    const promise = uploadAllParts(makeFile(4 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), 5)
+    const promise = uploadAllParts(makeFile(4 * CHUNK_SIZE + 1000), 'key', 'upload-1', controller, vi.fn(), slots(5))
     await vi.runAllTimersAsync()
     expect(await promise).toHaveLength(5)
 
     expect([2, 3, 4, 5].map((part) => attempts.get(part))).toEqual([2, 2, 2, 2])
     expect(live.size).toBe(0)
+  })
+})
+
+describe('uploadAllParts and the part budget', () => {
+  let controller: AbortController
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useFakeTimers()
+    controller = new AbortController()
+    mockPresignPerPart()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** The part numbers presigned so far, in the order they were asked for. */
+  const presigned = () =>
+    vi.mocked(api.post).mock.calls
+      .filter(([path]) => path === '/upload/presign-part')
+      .map(([, body]) => (body as { part_number: number }).part_number)
+
+  /** Settles later, when the test says so; the part stays on the wire until then. */
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((r) => {
+      resolve = r
+    })
+    return { promise, resolve }
+  }
+
+  /** How many of `acquires` have been granted so far. */
+  function grantCounter(acquires: Array<Promise<() => void>>) {
+    const count = { granted: 0, releases: [] as Array<() => void> }
+    acquires.forEach((p) =>
+      p.then(
+        (release) => {
+          count.granted += 1
+          count.releases.push(release)
+        },
+        () => {},
+      ),
+    )
+    return count
+  }
+
+  it('presign is requested only after a slot is held', async () => {
+    const finish: Array<() => void> = []
+    mockPut((url) => new Promise((resolve) => finish.push(() => resolve(ok(`"etag-${partOf(url)}"`)))))
+
+    const promise = uploadAllParts(makeFile(2000), 'key', 'upload-1', controller, vi.fn(), {
+      budget: createPartBudget(1),
+      fileKey: 'f',
+      chunkSize: 1000,
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    // Part 2 waits for the slot part 1 holds; it has not asked for a URL that
+    // could expire while it waits.
+    expect(presigned()).toEqual([1])
+
+    finish[0]()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(presigned()).toEqual([1, 2])
+
+    finish[1]()
+    await vi.runAllTimersAsync()
+    expect(await promise).toHaveLength(2)
+  })
+
+  it('a part in backoff releases its slot to another file but not to a fresh part of its own file', async () => {
+    // Presigned URLs that name the file as well as the part.
+    vi.mocked(api.post).mockImplementation((_path: string, body: unknown) => {
+      const { s3_key, part_number } = body as { s3_key: string; part_number: number }
+      return Promise.resolve({ presigned_url: `https://s3.example/${s3_key}/part-${part_number}` }) as never
+    })
+    const sent: string[] = []
+    const attempts = new Map<string, number>()
+    const a2 = deferred<void>()
+    mockPut(async (url) => {
+      const name = url.slice('https://s3.example/'.length)
+      const attempt = (attempts.get(name) ?? 0) + 1
+      attempts.set(name, attempt)
+      sent.push(`${name}#${attempt}`)
+      if (name === 'a/part-1' && attempt === 1) return fail(503)
+      if (name === 'a/part-2') await a2.promise
+      return ok(`"${name}"`)
+    })
+
+    const budget = createPartBudget(2)
+    // File a asks first, so it is served first while it may be.
+    const a = uploadAllParts(makeFile(3000), 'a', 'upload-a', controller, vi.fn(), {
+      budget, fileKey: 'a', chunkSize: 1000,
+    })
+    const b = uploadAllParts(makeFile(1000), 'b', 'upload-b', new AbortController(), vi.fn(), {
+      budget, fileKey: 'b', chunkSize: 1000,
+    })
+
+    // Well inside a/part-1's first backoff (2 s and jitter).
+    await vi.advanceTimersByTimeAsync(100)
+    expect(sent).toEqual(['a/part-1#1', 'a/part-2#1', 'b/part-1#1'])
+    await expect(b).resolves.toHaveLength(1)
+    // b is done and a slot is free, and still a/part-3 waits: file a has a
+    // part asleep, and a fresh part of its own may not take the slot it left.
+    await vi.advanceTimersByTimeAsync(100)
+    expect(sent).not.toContain('a/part-3#1')
+
+    await vi.advanceTimersByTimeAsync(PART_RETRY_BASE_MS + 300)
+    a2.resolve()
+    await vi.runAllTimersAsync()
+    expect(await a).toHaveLength(3)
+    expect(sent).toEqual(['a/part-1#1', 'a/part-2#1', 'b/part-1#1', 'a/part-1#2', 'a/part-3#1'])
+  })
+
+  it('with every PUT failing, presign calls stay within budget × 8', async () => {
+    // Storage is down. Each part fails and goes to sleep; if the slot it left
+    // went to the next part of the same file, that part would fail and sleep
+    // too, and within one ladder most of the 500 would be in backoff, each
+    // presigning again on every rung.
+    const put = mockPut(() => fail(503))
+    const file = new File([new Uint8Array(500 * 1024)], 'clip.mp4', { type: 'video/mp4' })
+
+    const promise = uploadAllParts(file, 'key', 'upload-1', controller, vi.fn(), {
+      budget: createPartBudget(5),
+      fileKey: 'f',
+      chunkSize: 1024,
+    })
+    const assertion = expect(promise).rejects.toThrow(/failed/)
+    await vi.runAllTimersAsync()
+    await assertion
+
+    // The ladder was climbed (one part made all 8 attempts) ...
+    expect(presigned().length).toBeGreaterThanOrEqual(8)
+    // ... by no more parts than the budget has slots.
+    expect(presigned().length).toBeLessThanOrEqual(5 * 8)
+    expect(new Set(presigned()).size).toBeLessThanOrEqual(5)
+    expect(put.mock.calls.length).toBeLessThanOrEqual(5 * 8)
+  })
+
+  it('aborting releases all slots and rejects waiters', async () => {
+    const budget = createPartBudget(2)
+    const other = new AbortController()
+    // Another file holds one slot from the start.
+    const first = grantCounter([budget.acquire('other', other.signal, 'fresh')])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(first.granted).toBe(1)
+
+    // This upload gets the other slot for part 1, which stays on the wire;
+    // parts 2 to 4 wait.
+    const put = mockPut(() => new Promise(() => {}))
+    let settled = false
+    const promise = uploadAllParts(makeFile(4000), 'key', 'upload-1', controller, vi.fn(), {
+      budget, fileKey: 'f', chunkSize: 1000,
+    })
+    const outcome = promise.then(
+      () => 'resolved',
+      (err: unknown) => err,
+    ).finally(() => {
+      settled = true
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(presigned()).toEqual([1])
+
+    // The other file now wants a second slot, and is ranked ahead of this one,
+    // so the slot part 1 gives up on the cancel goes to it. Nothing frees a
+    // slot for this upload's waiters after that: only the cancel can end them.
+    budget.setRank('other', 0)
+    const second = grantCounter([budget.acquire('other', other.signal, 'fresh')])
+
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(settled).toBe(true)
+    const err = await outcome
+    expect(err).toBeInstanceOf(DOMException)
+    expect((err as DOMException).name).toBe('AbortError')
+    expect(put.mock.calls[0][1].aborted).toBe(true)
+    // Part 1's slot came back and went to the other file.
+    expect(second.granted).toBe(1)
+    expect(presigned()).toEqual([1])
+
+    // With the other file done, the whole budget is free again.
+    first.releases.forEach((release) => release())
+    second.releases.forEach((release) => release())
+    const probe = grantCounter([
+      budget.acquire('probe', new AbortController().signal, 'fresh'),
+      budget.acquire('probe', new AbortController().signal, 'fresh'),
+    ])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(probe.granted).toBe(2)
+  })
+
+  it('onUnfinished counts in-flight and sleeping parts', async () => {
+    const attempts = new Map<number, number>()
+    const part2 = deferred<void>()
+    mockPut(async (url) => {
+      const part = partOf(url)
+      const attempt = (attempts.get(part) ?? 0) + 1
+      attempts.set(part, attempt)
+      if (part === 1 && attempt === 1) return fail(503)
+      if (part === 2) await part2.promise
+      return ok(`"etag-${part}"`)
+    })
+    const onUnfinished = vi.fn()
+
+    const promise = uploadAllParts(makeFile(3000), 'key', 'upload-1', controller, vi.fn(), {
+      budget: createPartBudget(2),
+      fileKey: 'f',
+      chunkSize: 1000,
+      onUnfinished,
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    // Part 1 asleep, part 2 on the wire, part 3 not yet sent: none finished.
+    expect(onUnfinished.mock.calls.map(([n]) => n)).toEqual([3])
+
+    part2.resolve()
+    await vi.advanceTimersByTimeAsync(100)
+    // Parts 2 and 3 are done; part 1 is still asleep, and still unfinished.
+    expect(attempts.get(1)).toBe(1)
+    expect(onUnfinished.mock.calls.map(([n]) => n)).toEqual([3, 2, 1])
+
+    await vi.runAllTimersAsync()
+    expect(await promise).toHaveLength(3)
+    expect(onUnfinished.mock.calls.map(([n]) => n)).toEqual([3, 2, 1, 0])
+  })
+
+  it('does not count parts the backend already holds as unfinished', async () => {
+    mockPut((url) => ok(`"etag-${partOf(url)}"`))
+    const onUnfinished = vi.fn()
+
+    const promise = uploadAllParts(makeFile(3000), 'key', 'upload-1', controller, vi.fn(), {
+      budget: createPartBudget(2),
+      fileKey: 'f',
+      chunkSize: 1000,
+      alreadyHeld: [1, 3],
+      onUnfinished,
+    })
+    await vi.runAllTimersAsync()
+    expect(await promise).toEqual([{ PartNumber: 2, ETag: '"etag-2"' }])
+    expect(onUnfinished.mock.calls.map(([n]) => n)).toEqual([1, 0])
+  })
+
+  it('a failing attempt goes to sleep before it gives its slot back, and asks again as it wakes', async () => {
+    // The budget grants on a microtask. A part that gave its slot back and only
+    // then said it was asleep -- a microtask later, in some outer catch -- would
+    // let the grant pass hand the slot to a fresh part of the same file, which
+    // is the storm the cap exists to stop. And a part that woke and asked again
+    // only later would let a fresh part slip in ahead of its retry.
+    const inner = createPartBudget(2)
+    const log: string[] = []
+    let wokeThisRun = false
+    const budget: PartBudget = {
+      size: inner.size,
+      acquire: async (fileKey, signal, kind) => {
+        log.push(kind === 'retry' && !wokeThisRun ? 'acquire retry, late' : `acquire ${kind}`)
+        const release = await inner.acquire(fileKey, signal, kind)
+        return () => {
+          log.push('release')
+          release()
+        }
+      },
+      sleeping: (fileKey) => {
+        log.push('sleeping')
+        inner.sleeping(fileKey)
+      },
+      woke: (fileKey) => {
+        log.push('woke')
+        wokeThisRun = true
+        void Promise.resolve().then(() => {
+          wokeThisRun = false
+        })
+        inner.woke(fileKey)
+      },
+      setRank: (fileKey, rank) => inner.setRank(fileKey, rank),
+      forget: (fileKey) => {
+        log.push('forget')
+        inner.forget(fileKey)
+      },
+    }
+    const put = mockPut()
+    put.mockResolvedValueOnce(fail()).mockResolvedValueOnce(ok('"etag-1"'))
+
+    const promise = uploadAllParts(makeFile(1000), 'key', 'upload-1', controller, vi.fn(), {
+      budget,
+      fileKey: 'f',
+      chunkSize: 1000,
+    })
+    await vi.runAllTimersAsync()
+    await promise
+
+    expect(log).toEqual([
+      'acquire fresh', 'sleeping', 'release', 'woke', 'acquire retry', 'release', 'forget',
+    ])
+  })
+
+  it('keeps the slots of parts still settling after a sibling fails for good', async () => {
+    // Part 1 is refused for good while part 2 is still waiting on its presign,
+    // which cannot be called back. Part 2 holds its slot until that answers:
+    // forgetting the file on the first error would count the slot free while
+    // the request is still out, and hand it to another file on top.
+    const presign2 = deferred<void>()
+    vi.mocked(api.post).mockImplementation(async (_path: string, body: unknown) => {
+      const part = (body as { part_number: number }).part_number
+      if (part === 2) await presign2.promise
+      return { presigned_url: `https://s3.example/part-${part}` } as never
+    })
+    const put = mockPut(() => fail(403, 'Forbidden'))
+    const budget = createPartBudget(2)
+
+    let settled = false
+    const promise = uploadAllParts(makeFile(2000), 'key', 'upload-1', controller, vi.fn(), {
+      budget, fileKey: 'f', chunkSize: 1000,
+    })
+    const outcome = promise.then(
+      () => 'resolved',
+      (err: Error) => err.message,
+    ).finally(() => {
+      settled = true
+    })
+    const other = new AbortController()
+    const others = grantCounter([
+      budget.acquire('other', other.signal, 'fresh'),
+      budget.acquire('other', other.signal, 'fresh'),
+    ])
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(put).toHaveBeenCalledTimes(1)
+    // Part 1's slot is free and went to the other file; part 2's is not.
+    expect(others.granted).toBe(1)
+    expect(settled).toBe(false)
+
+    presign2.resolve()
+    await vi.runAllTimersAsync()
+    expect(await outcome).toContain('Part 1 failed')
+    expect(put).toHaveBeenCalledTimes(1) // part 2 never went out
+    expect(others.granted).toBe(2)
   })
 })

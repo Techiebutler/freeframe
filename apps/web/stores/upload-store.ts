@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import { mutate as globalMutate } from 'swr'
 import { api, ApiError } from '@/lib/api'
 import { createSpeedMeter, type SpeedMeter } from '@/lib/upload-speed'
+import { createPartBudget, type PartBudget } from '@/lib/upload-budget'
 import { useUploadSpeedStore } from './upload-speed-store'
 import type { AssetResponse } from '@/types'
 
@@ -165,7 +166,7 @@ function liveUntil(lastActivity: string | null | undefined): number | undefined 
 const ELSEWHERE_MESSAGE = 'Still uploading in another tab or on another device'
 
 /**
- * Parts in flight per upload.
+ * Parts in flight across the whole tab, however many files are uploading.
  *
  * Five hides the per-part presign round-trip without opening more sockets than
  * a browser grants one origin (HTTP/1.1 allows six, and the SSE stream holds
@@ -181,6 +182,24 @@ const UPLOAD_CONCURRENCY = (() => {
   if (!Number.isFinite(configured) || configured < 1) return 5
   return Math.min(Math.floor(configured), 16)
 })()
+
+/**
+ * The slots every part of every upload in this tab takes turns on. One budget,
+ * so three files uploading at once send as many parts between them as one file
+ * did alone, rather than three times as many.
+ */
+const partBudget = createPartBudget(UPLOAD_CONCURRENCY)
+
+let partRuns = 0
+/**
+ * The key one run of an upload goes by in `partBudget`. A row can run more than
+ * once -- a resume after a stop -- and a call left over from the earlier run
+ * must not count against the later one, so the key names the run, not the row.
+ */
+function partRunKey(rowId: string): string {
+  partRuns += 1
+  return `${rowId}:${partRuns}`
+}
 
 /**
  * A failure that repeating cannot fix — a 4xx from the storage backend means the
@@ -201,7 +220,10 @@ function isPermanentStatus(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 429
 }
 
-/** Uploads one part exactly once. Returns its ETag. */
+/**
+ * Uploads one part exactly once. Returns its ETag. The caller holds a budget
+ * slot for the whole call.
+ */
 async function uploadPartOnce(
   file: File,
   s3Key: string,
@@ -211,6 +233,13 @@ async function uploadPartOnce(
   chunkSize: number,
   onBytes: (sent: number) => void,
 ): Promise<string> {
+  // A slot can be granted in the same turn as the upload stops: the grant is
+  // delivered on a microtask, and the abort that came first cannot take it back.
+  // Asking for a URL then would be a round trip for a part nothing will send.
+  if (controller.signal.aborted) {
+    throw new DOMException(`Part ${partNumber} cancelled`, 'AbortError')
+  }
+
   const start = (partNumber - 1) * chunkSize
   const chunk = file.slice(start, Math.min(start + chunkSize, file.size))
 
@@ -323,6 +352,14 @@ function putPart(
   })
 }
 
+/** Where a part takes its slots, and who hears that it got its first one. */
+interface PartSlots {
+  budget: PartBudget
+  fileKey: string
+  /** Runs once, when the part's first attempt is granted a slot. */
+  onFirstGrant?: () => void
+}
+
 /**
  * Uploads one part, retrying with exponential backoff and jitter.
  *
@@ -337,6 +374,24 @@ function putPart(
  *
  * Jitter keeps concurrent uploads from retrying in lockstep. A user-initiated
  * cancel is never retried.
+ *
+ * Every attempt holds a slot of the tab-wide budget from before its presign
+ * until it settles, and none is held during the backoff between attempts: a
+ * part waiting out a 2-minute rung would otherwise keep a slot that another
+ * file could be sending on. The order of the calls is the budget's contract
+ * (see lib/upload-budget.ts), and two of them are easy to break by moving a
+ * line, so they are written where they have to be:
+ *
+ * - `sleeping()` is called in the `catch` and `release()` in the `finally` of
+ *   the same attempt, so the part is counted asleep before its slot is free.
+ *   The budget grants on a microtask; a part that gave its slot back and said
+ *   it was asleep only a microtask later would let the grant pass hand the slot
+ *   to a fresh part of the same file, which is the retry storm the budget's cap
+ *   exists to stop.
+ * - `woke()` and the retry's `acquire()` follow each other with no `await`
+ *   between, so the pass sees the retry waiting when it sees the sleeper gone.
+ *   `woke()` runs however the sleep ended, a cancel included, because every
+ *   `sleeping()` has to be matched.
  */
 async function uploadPart(
   file: File,
@@ -346,33 +401,44 @@ async function uploadPart(
   controller: AbortController,
   chunkSize: number,
   onBytes: (sent: number) => void,
+  slots: PartSlots,
 ): Promise<string> {
+  const { budget, fileKey } = slots
+  const signal = controller.signal
   let lastError: unknown
 
-  for (let attempt = 1; attempt <= PART_MAX_ATTEMPTS; attempt++) {
+  // Rejects with an AbortError if the upload stops while this waits.
+  let release = await budget.acquire(fileKey, signal, 'fresh')
+  slots.onFirstGrant?.()
+
+  for (let attempt = 1; ; attempt++) {
     try {
       return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize, onBytes)
     } catch (err) {
       // The next attempt sends the part from its first byte again, so what
       // this one got across no longer counts.
       onBytes(0)
-      if (controller.signal.aborted) throw err
-      if (err instanceof DOMException && err.name === 'AbortError') throw err
+      if (signal.aborted) throw err
+      if (isAbortError(err)) throw err
       if ((err as PartUploadError)?.permanent) throw err
+      if (attempt === PART_MAX_ATTEMPTS) throw err
 
       lastError = err
-      if (attempt === PART_MAX_ATTEMPTS) break
-
-      const delay = PART_RETRY_BASE_MS * 2 ** (attempt - 1) + Math.random() * 250
-      await delayUnlessAborted(delay, controller.signal)
-      // Waking early means the upload is over — the user cancelled, or a sibling
-      // part failed for good. Another attempt would spend a presign round-trip
-      // and 10 MB of uplink on a part nothing will ever complete.
-      if (controller.signal.aborted) break
+      // Before `release()` below, in this same synchronous run. See above.
+      budget.sleeping(fileKey)
+    } finally {
+      release()
     }
-  }
 
-  throw lastError
+    const delay = PART_RETRY_BASE_MS * 2 ** (attempt - 1) + Math.random() * 250
+    await delayUnlessAborted(delay, signal)
+    budget.woke(fileKey)
+    // Waking early means the upload is over — the user cancelled, or a sibling
+    // part failed for good. Another attempt would spend a presign round-trip
+    // and 10 MB of uplink on a part nothing will ever complete.
+    if (signal.aborted) throw lastError
+    release = await budget.acquire(fileKey, signal, 'retry')
+  }
 }
 
 /**
@@ -404,16 +470,32 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * Uploads every part of a multipart upload and returns the part list for
  * /upload/complete. Exported for tests.
  *
- * Parts are sent by a small pool of workers rather than strictly one after the
+ * Several parts are in flight at once rather than strictly one after the
  * other. A single PUT does not saturate a connection — most of a sequential
  * upload is spent waiting on round-trips — so a handful in flight multiplies
  * throughput on exactly the long-haul links where large uploads hurt most.
+ *
+ * How many is not this upload's to decide. Every attempt at a part takes a slot
+ * from `opts.budget`, which every upload in the tab shares, before it asks for
+ * a presigned URL, and gives it back when the attempt settles; the budget also
+ * decides which file a free slot goes to (see lib/upload-budget.ts). This
+ * function keeps up to `budget.size` of its parts asking for their first slot,
+ * enough to take every slot the budget offers it at once, without queueing a
+ * request for each of the thousands of parts a large file can have.
+ *
+ * `opts.fileKey` names this run to the budget. It must be unique to the run,
+ * not just to the row -- the store uses `${rowId}:${n}`, with `n` counting runs
+ * -- so that a late call from a run that has ended can never land on a new run
+ * of the same row. The key is forgotten when this returns, for whatever reason,
+ * and not before: only once every attempt has settled and every part asleep in
+ * backoff has woken, because forgetting a key treats its slots as free, and a
+ * part still waiting on its presign is still using one.
  *
  * Ordering is preserved by writing each result to its own index: parts finish
  * out of order, but `parts` is indexed by part number, and progress counts
  * bytes sent rather than the highest number seen.
  *
- * When a part finally fails the whole upload is lost, so the other workers are
+ * When a part finally fails the whole upload is lost, so the other parts are
  * stopped rather than left to run their own retry ladders out: every error after
  * the first is discarded anyway, so cancelling them costs nothing and turns a
  * four-minute wait for an error that has already happened into an immediate one.
@@ -429,6 +511,12 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * heartbeat from #312, not a progress report: `onProgress` only fires when the
  * percent moves, and on a large file that can be many minutes apart, longer
  * than the window another tab gives a row before it offers Discard.
+ *
+ * `opts.onUnfinished` hears how many parts are not finished yet: waiting for a
+ * slot, in flight, or asleep in backoff. Held parts are finished. It is called
+ * once at the start and then each time a part finishes, which is every time
+ * the count changes; the queue reads it to judge how much of the budget this
+ * upload can still use.
  *
  * `opts.onAllSent` runs when the browser has handed over the file's last byte.
  * That is not the end of the transfer: each part still waits for storage to
@@ -449,30 +537,37 @@ export async function uploadAllParts(
   uploadId: string,
   controller: AbortController,
   onProgress: (percent: number) => void,
-  concurrency: number = UPLOAD_CONCURRENCY,
-  opts?: {
+  opts: {
+    budget: PartBudget
+    fileKey: string
     chunkSize?: number
     alreadyHeld?: readonly number[]
     onPartDone?: () => void
+    onUnfinished?: (n: number) => void
     onAllSent?: () => void
     onResend?: () => void
     onBytes?: (sent: number) => void
   },
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
-  const chunkSize = opts?.chunkSize ?? CHUNK_SIZE
-  const held = new Set(opts?.alreadyHeld ?? [])
+  const { budget, fileKey } = opts
+  const chunkSize = opts.chunkSize ?? CHUNK_SIZE
+  const held = new Set(opts.alreadyHeld ?? [])
   const totalChunks = Math.ceil(file.size / chunkSize)
   const parts: Array<{ PartNumber: number; ETag: string }> = new Array(totalChunks)
+  const toSend: number[] = []
+  for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
+    if (!held.has(partNumber)) toSend.push(partNumber)
+  }
 
-  // Workers run against their own signal, so a part failing for good can stop
+  // Parts run against their own signal, so a part failing for good can stop
   // its siblings without being mistaken for a user cancel: `controller` keeps
   // meaning "the user pressed Cancel", `pool` means "stop, for any reason".
+  // A part waiting for a slot is turned away by the same signal.
   const pool = new AbortController()
   const stopPool = () => pool.abort()
   if (controller.signal.aborted) stopPool()
   else controller.signal.addEventListener('abort', stopPool, { once: true })
 
-  let nextIndex = 0
   // Parts the backend already holds are done before this starts, and progress
   // has to say so: a resume that reports 0% and then jumps is indistinguishable
   // from one that is re-sending everything. They are a set, not a prefix, so
@@ -484,7 +579,6 @@ export async function uploadAllParts(
   held.forEach((partNumber) => {
     doneBytes += partLength(partNumber)
   })
-  let firstError: unknown = null
 
   // Progress is counted in bytes, so the bar moves while a part is in flight
   // rather than once per finished part, which on a slow uplink is minutes.
@@ -508,12 +602,12 @@ export async function uploadAllParts(
     // Before onBytes, so the drop is the first count a restarted meter sees.
     if (allSent && sent < file.size) {
       allSent = false
-      opts?.onResend?.()
+      opts.onResend?.()
     }
-    opts?.onBytes?.(sent)
+    opts.onBytes?.(sent)
     if (!allSent && sent >= file.size) {
       allSent = true
-      opts?.onAllSent?.()
+      opts.onAllSent?.()
     }
     const percent = Math.min(95, Math.round((sent / file.size) * 95))
     if (percent <= reported) return
@@ -522,57 +616,102 @@ export async function uploadAllParts(
   }
   if (doneBytes > 0) report()
 
-  async function worker(): Promise<void> {
-    while (true) {
-      if (controller.signal.aborted) {
-        throw new DOMException('Upload cancelled', 'AbortError')
-      }
-      if (firstError) return // another worker failed; stop taking new parts
+  let unfinished = toSend.length
+  opts.onUnfinished?.(unfinished)
 
-      const index = nextIndex++
-      if (index >= totalChunks) return
+  // The first error a part raised, and every error a part raised: a flag
+  // rather than `firstError !== null`, so a falsy rejection still counts.
+  let failed = false
+  let firstError: unknown = null
+  const raised: unknown[] = []
 
-      const partNumber = index + 1
-      if (held.has(partNumber)) continue
-      try {
-        const etag = await uploadPart(file, s3Key, uploadId, partNumber, pool, chunkSize, (sent) => {
+  let nextToSend = 0
+  /** Parts asking for their first slot. */
+  let waitingFirst = 0
+  /** Parts started and not yet settled, in any state: waiting, in flight, asleep. */
+  let running = 0
+  let allSettled!: () => void
+  const settled = new Promise<void>((resolve) => {
+    allSettled = resolve
+  })
+
+  // Tops the parts asking for a first slot back up to the budget's size, and
+  // says when there is nothing left to wait for. A part starts only here, so
+  // with none running after this, none ever will be.
+  function startParts() {
+    while (
+      !pool.signal.aborted &&
+      !failed &&
+      waitingFirst < budget.size &&
+      nextToSend < toSend.length
+    ) {
+      void sendPart(toSend[nextToSend++])
+    }
+    if (running === 0) allSettled()
+  }
+
+  async function sendPart(partNumber: number): Promise<void> {
+    running += 1
+    waitingFirst += 1
+    let granted = false
+    try {
+      const etag = await uploadPart(
+        file, s3Key, uploadId, partNumber, pool, chunkSize,
+        (sent) => {
           inFlightBytes.set(partNumber, sent)
           report()
-        })
-        parts[index] = { PartNumber: partNumber, ETag: etag }
-        inFlightBytes.delete(partNumber)
-        doneBytes += partLength(partNumber)
-        opts?.onPartDone?.()
-        report()
-      } catch (err) {
-        // Not `??=`: an error is only ever recorded once, since every worker
-        // returns immediately after, and assigning plainly means a falsy
-        // rejection can never leave `firstError` unset while a part is missing.
-        if (firstError === null) firstError = err
-        stopPool()
-        return
+        },
+        {
+          budget,
+          fileKey,
+          onFirstGrant: () => {
+            granted = true
+            waitingFirst -= 1
+            startParts()
+          },
+        },
+      )
+      parts[partNumber - 1] = { PartNumber: partNumber, ETag: etag }
+      inFlightBytes.delete(partNumber)
+      doneBytes += partLength(partNumber)
+      unfinished -= 1
+      opts.onUnfinished?.(unfinished)
+      opts.onPartDone?.()
+      report()
+    } catch (err) {
+      if (!granted) {
+        waitingFirst -= 1
+        // Turned away while it waited for its first slot, because the upload
+        // had already stopped. Nothing of it was sent, and the reason is
+        // whatever stopped the upload, not this.
+        if (isAbortError(err)) return
       }
+      raised.push(err)
+      if (!failed) {
+        failed = true
+        firstError = err
+      }
+      stopPool()
+    } finally {
+      running -= 1
+      startParts()
     }
   }
 
   try {
-    const workerCount = Math.max(1, Math.min(concurrency, totalChunks))
-    const results = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
+    startParts()
+    await settled
 
     // A user cancel outranks whatever errors it caused in the parts it
     // interrupted, so it is resolved before `firstError` rather than after —
     // otherwise cancelling shows the row flipping from Cancelled back to Failed.
     // The abort error a part actually raised is preferred over a synthesized
     // one, so its reason survives; the fallback covers a cancel that landed
-    // between parts, where no request was in flight to reject.
+    // while no part was in flight to reject.
     if (controller.signal.aborted) {
-      const raised = [firstError, ...results.map((r) => (r.status === 'rejected' ? r.reason : null))]
       throw raised.find(isAbortError) ?? new DOMException('Upload cancelled', 'AbortError')
     }
-    if (firstError !== null) throw firstError
-
-    const rejected = results.find((r) => r.status === 'rejected')
-    if (rejected && rejected.status === 'rejected') throw rejected.reason
+    if (failed) throw firstError
 
     // Dense, because a skipped part leaves its slot empty and a sparse array
     // serialises as nulls. On a resume this is therefore what was sent now, not
@@ -581,6 +720,9 @@ export async function uploadAllParts(
     return parts.filter(Boolean)
   } finally {
     controller.signal.removeEventListener('abort', stopPool)
+    // Every part has settled by now (`settled` waits for the last of them), so
+    // no slot of this run is still in use and no part is still asleep.
+    budget.forget(fileKey)
   }
 }
 
@@ -1165,8 +1307,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         const parts = await uploadAllParts(
           file, s3_key, upload_id, controller,
           (percent) => updateFile(id, { progress: percent, heartbeatAt: Date.now() }),
-          UPLOAD_CONCURRENCY,
           {
+            budget: partBudget,
+            fileKey: partRunKey(id),
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
             onBytes: watch.onBytes,
@@ -1312,8 +1455,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         const parts = await uploadAllParts(
           file, s3_key, upload_id, controller,
           (percent) => updateFile(id, { progress: percent, heartbeatAt: Date.now() }),
-          UPLOAD_CONCURRENCY,
           {
+            budget: partBudget,
+            fileKey: partRunKey(id),
             chunkSize: initRes.chunk_size_bytes,
             onPartDone: () => updateFile(id, { heartbeatAt: Date.now() }),
             onBytes: watch.onBytes,
@@ -1467,8 +1611,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           parts = await uploadAllParts(
             file, info.s3_key, info.upload_id, controller,
             (percent) => updateFile({ progress: percent, heartbeatAt: Date.now() }),
-            UPLOAD_CONCURRENCY,
             {
+              budget: partBudget,
+              fileKey: partRunKey(fileId),
               chunkSize: info.chunk_size_bytes,
               alreadyHeld: held,
               onPartDone: () => updateFile({ heartbeatAt: Date.now() }),
