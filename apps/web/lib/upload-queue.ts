@@ -37,8 +37,10 @@
  * "Parts in use" adds up what each file is expected to need:
  *
  * - an active file counts its `unfinishedParts`;
- * - an active file that is still initiating or resuming (`'unknown'`), and an
- *   entry chosen in this very call, count as the whole budget, because until the
+ * - an active file that is still initiating or resuming (`'unknown'`), one whose
+ *   `unfinishedParts` is not a finite number of at least 0 (a corrupt count must
+ *   not open the gate), and an entry chosen in this very call, count as the whole
+ *   budget, because until the
  *   server answers there is no telling how many parts the file will want. The one
  *   exception is a file of at most SINGLE_PART_BYTES: it is always one part, so
  *   it counts 1.
@@ -54,7 +56,10 @@
  * files. The probe is tracked only by `hold.probeId`: it is neither in the
  * waiting list nor counted as active while it waits for its retry, and the
  * store's retry re-runs it directly. Entries that arrive meanwhile, `'next'`
- * ones included, sit in the waiting list and start after the hold ends. If the
+ * ones included, sit in the waiting list and start after the hold ends. There is
+ * one probe at a time: when a second row fails while a probe is in charge,
+ * `hold.begin` answers false and the caller puts that row back with
+ * `enqueue([entry], 'next')`, so it runs again right after the probe succeeds. If the
  * probe is cancelled, `hold.handOff()` takes the first waiting entry out of the
  * list and makes it the new probe, with the delay the cancelled probe was
  * waiting on; when nothing is waiting it returns null and the caller calls
@@ -87,11 +92,15 @@ export interface QueueEntry {
 export interface ActiveInfo {
   id: string
   sizeBytes: number
+  /** A value that is not a finite number of at least 0 is counted like 'unknown'. */
   unfinishedParts: number | 'unknown'
 }
 
 export interface UploadQueue {
-  /** Entries already waiting, and the current probe, are skipped. */
+  /**
+   * Entries already waiting, and the current probe, are skipped. Enqueueing an id again (a retry, a
+   * row sent back to the queue) gives it a new queueSeq, so its position in the panel moves.
+   */
   enqueue(entries: QueueEntry[], where: 'back' | 'next'): void
   /** A not-yet-started entry; false if absent. */
   remove(id: string): boolean
@@ -99,7 +108,8 @@ export interface UploadQueue {
   nextToStart(active: readonly ActiveInfo[], budget: number): string[]
   /**
    * Leaves the waiting list and returns its startSeq: monotonic, assigned here, the PartBudget rank.
-   * An id that is not waiting (a handed-off probe, say) still gets a fresh startSeq.
+   * Call it once per run: a second call returns a later rank, and handing that to the PartBudget
+   * would demote the runner. An id that is not waiting (a handed-off probe, say) still gets one.
    */
   markStarted(id: string): number
   /** Assigned at enqueue, monotonic; panel order within a drop only. -1 for an id never enqueued. */
@@ -110,10 +120,14 @@ export interface UploadQueue {
     readonly probeId: string | null
     readonly reason: 'connection' | 'storage' | null
     /**
-     * Starts a hold with `probeId` as its probe. While another probe is in charge this is ignored,
-     * unless it is the same probe again: then the reason, and a retry-after if given, are updated.
+     * Starts a hold with `probeId` as its probe; if it already is the probe, updates the reason and,
+     * when given, the retry-after for its next wait. Returns true when `probeId` is now (or still) the
+     * probe. Returns false, and changes nothing, when another probe is in charge: the caller must then
+     * `enqueue([entry], 'next')` that row, so it runs again right after the probe succeeds (first come,
+     * first served with the other nexts), and must NOT call `nextDelayMs()` for it or show a hold
+     * reason on it.
      */
-    begin(probeId: string, reason: 'connection' | 'storage', retryAfterMs: number | undefined): void
+    begin(probeId: string, reason: 'connection' | 'storage', retryAfterMs: number | undefined): boolean
     /** Backoff for the probe: honours retryAfter, doubles otherwise, cap 60_000. */
     nextDelayMs(): number
     end(): void
@@ -179,12 +193,13 @@ export function createUploadQueue(): UploadQueue {
     },
 
     begin(id, why, retryAfterMs) {
-      if (probeId !== null && probeId !== id) return
+      if (probeId !== null && probeId !== id) return false
       probeId = id
       reason = why
       removeWaiting(id)
       const given = usableRetryAfter(retryAfterMs)
       if (given !== undefined) pendingDelay = given
+      return true
     },
 
     nextDelayMs() {
@@ -254,7 +269,8 @@ export function createUploadQueue(): UploadQueue {
 
       let partsInUse = 0
       for (const a of active) {
-        if (a.unfinishedParts !== 'unknown') partsInUse += a.unfinishedParts
+        const parts = a.unfinishedParts
+        if (typeof parts === 'number' && Number.isFinite(parts) && parts >= 0) partsInUse += parts
         else partsInUse += a.sizeBytes <= SINGLE_PART_BYTES ? 1 : budget
       }
 
