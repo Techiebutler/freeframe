@@ -104,6 +104,7 @@ passes would hide the races they exist to catch. A failure keeps a trace:
 | `E2E_PRIMARY_EMAIL`     | unset                   | Only for a stack that already has a superadmin and no `.accounts.json`: an existing superadmin to use as `primary`. |
 | `E2E_PRIMARY_PASSWORD`  | unset                   | Its password. |
 | `E2E_FORCE_LOGIN`       | unset                   | Set to `1` to sign both accounts in through the form even if their saved sessions still work. |
+| `E2E_UPLOAD_CONCURRENCY` | `5`                    | The part budget of the stack under test (its `NEXT_PUBLIC_UPLOAD_CONCURRENCY`). `queue.spec.ts` uses it for the start-rule check (Q1) and the presign bound (S2); set it when the stack's value is not 5. |
 
 ## How it works
 

@@ -194,9 +194,10 @@ export type UploadRow = {
 /**
  * Every row of the uploads panel, top to bottom, as the panel shows it.
  *
- * Rows are found by `data-testid="upload-row"` and their status read from
- * `data-status`, so the badge's wording and the panel's classes do not matter.
- * A row without a status throws: a read that quietly returned "" would let a
+ * Rows are found by `data-testid="upload-row"`, and `status` and `kind` are read from the
+ * row's `data-status` and `data-detail`, so the badge's wording does not matter. `name` and
+ * `detail` still come from the markup (the row's name element and its first `div.mt-1`), so a
+ * change to those classes breaks them, here and only here. A row without a status throws: a read that quietly returned "" would let a
  * scenario that waits for "no row is Starting" pass without looking at anything.
  * Open the panel first with `openUploads`.
  */

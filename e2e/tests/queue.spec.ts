@@ -186,6 +186,19 @@ const summary = (list: UploadRow[]) => list.map((r) => `${r.name}:${r.status}${r
 const count = (list: UploadRow[], ...statuses: string[]) => list.filter((r) => statuses.includes(r.status)).length
 const FINISHED_UPLOADING = ['processing', 'complete']
 
+/** The exact line the panel shows for each kind of waiting row (the design's copy; `detail` is the text as written). */
+const WAITING_COPY: Record<string, string> = {
+  'waiting-to-start': 'Waiting to start',
+  'waiting-for-connection': 'Waiting for connection',
+  'waiting-for-storage': 'Waiting for storage',
+  'waiting-to-resume': 'Waiting to resume',
+  starting: 'Starting…',
+  resuming: 'Resuming…',
+}
+/** Rows whose line is not the copy for their kind, as strings for a failure message. Rows of other kinds are not looked at. */
+const wrongCopy = (list: UploadRow[]) =>
+  list.filter((r) => r.kind in WAITING_COPY && r.detail !== WAITING_COPY[r.kind]).map((r) => `${r.name}: ${r.kind} reads "${r.detail}"`)
+
 /**
  * Wait until `ok` holds for the rows of `files`, and return them. On a timeout
  * the error says what the panel did show, which `expect.poll` would not.
@@ -294,6 +307,8 @@ test('Q1: 50 mixed files start in drop order, at most three at a time', async ({
 
     const failed = mine.filter((r) => ['failed', 'interrupted', 'cancelled'].includes(r.status))
     expect(failed.map((r) => `${r.name}:${r.status} ${r.detail}`), 'no file fails on the way').toEqual([])
+    // Whatever a row says it is waiting for, it says in the design's words.
+    expect(wrongCopy(mine), `sample ${samples}: waiting lines`).toEqual([])
     final = mine
     if (count(mine, ...FINISHED_UPLOADING) === 50) break
     if (Date.now() > deadline) throw new Error(`Q1 did not finish in 25 minutes. ${summary(mine)}`)
@@ -361,6 +376,11 @@ test('Q3: the second of two drops 2 s apart starts after the first', async ({ pa
   const { project } = await openProject(page, 'Q3')
   const traffic = recordTraffic(page)
   const hold = await holdParts(page)
+  // Each initiate answers 1.2 s late, so a file that has begun and has no ids yet stays in "Starting…" long enough to read.
+  await page.route(INITIATE, async (route, request) => {
+    if (request.method() === 'POST') await new Promise((resolve) => setTimeout(resolve, 1_200))
+    await route.fallback()
+  })
   const first = await pngs(testInfo, 'q3a', Array(6).fill(1 * MB))
   const second = await pngs(testInfo, 'q3b', Array(4).fill(1 * MB))
   const all = [...first, ...second]
@@ -368,13 +388,18 @@ test('Q3: the second of two drops 2 s apart starts after the first', async ({ pa
   await dropFiles(page, 'project', first.map((f) => f.file))
   const droppedAt = Date.now()
   await openUploads(page)
+  // A file that has begun but is waiting on its initiate says "Starting…"; the rest of the drop says "Waiting to start".
+  const beginning = await until(page, first, 'a file Starting…', (m) => m.some((r) => r.status === 'starting'))
+  const starting = beginning.filter((r) => r.status === 'starting')
+  expect(starting.map((r) => `${r.kind}: ${r.detail}`)).toEqual(starting.map(() => 'starting: Starting…'))
+  expect(wrongCopy(beginning)).toEqual([])
   await until(page, first, '3 of the first drop uploading and 3 queued', (m) => count(m, 'uploading') === 3 && count(m, 'queued') === 3)
   await page.waitForTimeout(Math.max(0, 2_000 - (Date.now() - droppedAt)))
 
   await dropFiles(page, 'project', second.map((f) => f.file))
   // The second drop joins the back of the line: every one of its files waits.
   const queued = await until(page, second, 'the second drop queued', (m) => m.length === 4)
-  expect(queued.map((r) => `${r.status}/${r.kind}`)).toEqual(Array(4).fill('queued/waiting-to-start'))
+  expect(queued.map((r) => `${r.status}/${r.kind}: ${r.detail}`)).toEqual(Array(4).fill('queued/waiting-to-start: Waiting to start'))
   // Nothing of the second drop has asked the server for anything.
   expect(initiatesOf(traffic, second)).toEqual([])
   // The panel lists the newest drop first, and each drop in the order its files start.
@@ -546,7 +571,9 @@ test('S1: a storage outage at initiate holds the queue, retries no sooner than 5
   expect(probe.name).toBe(files[0].name)
   expect(probe.detail).toBe('Waiting for storage')
   expect(probe.status).toBe('queued')
-  expect(held.filter((r) => r.name !== probe.name).map((r) => `${r.status}/${r.kind}`)).toEqual(['queued/waiting-to-start', 'queued/waiting-to-start'])
+  expect(held.filter((r) => r.name !== probe.name).map((r) => `${r.status}/${r.kind}: ${r.detail}`)).toEqual(
+    Array(2).fill('queued/waiting-to-start: Waiting to start'),
+  )
 
   // Through the whole outage no row fails.
   const failures: string[] = []
@@ -554,6 +581,8 @@ test('S1: a storage outage at initiate holds the queue, retries no sooner than 5
   for (;;) {
     const mine = mineOf(await rows(page), files)
     failures.push(...mine.filter((r) => r.status === 'failed').map((r) => `${r.name}: ${r.detail}`))
+    // At every sample of the outage each waiting line (the probe's between tries, "Starting…" during one) reads as designed.
+    failures.push(...wrongCopy(mine))
     if (mine.length === 3 && count(mine, ...FINISHED_UPLOADING) === 3) break
     if (Date.now() > deadline) throw new Error(`S1 did not finish: ${summary(mine)}`)
     await page.waitForTimeout(500)
@@ -581,8 +610,10 @@ test('S2: every part PUT refused for 60 s makes no more presign requests than bu
   const puts = countRequests(page, PART)
   await failParts(page, 503) // every part PUT, for as long as the page lives
 
-  // Six parts of 10 MB: one more than the budget, so the budget is what holds the rest back.
-  const [file] = await pngs(testInfo, 's2', [60 * MB])
+  // Twenty parts of 10 MB, four times the budget: only the rule that keeps a file with a part in backoff from
+  // starting fresh ones holds the count down. (With six parts the bound could not be exceeded even without it.)
+  const PARTS = 20
+  const [file] = await pngs(testInfo, 's2', [PARTS * 10 * MB])
   await dropFiles(page, 'project', [file.file])
   await openUploads(page)
   const startedAt = Date.now()
@@ -593,10 +624,10 @@ test('S2: every part PUT refused for 60 s makes no more presign requests than bu
   const inWindow = presigns.count()
   testInfo.annotations.push({ type: 'presigns', description: `${inWindow} presign requests and ${puts.count()} part PUTs in 60 s` })
 
-  // The retry ladder ran (more presigns than parts, and PUTs were made) ...
+  // The retry ladder ran: PUTs were made and refused, and some parts were tried again ...
   expect(before).toBeGreaterThan(0)
   expect(puts.count()).toBeGreaterThan(0)
-  expect(inWindow).toBeGreaterThan(6)
+  expect(inWindow).toBeGreaterThan(2 * BUDGET)
   // ... and stayed inside the budget: at most BUDGET parts working or sleeping, each on an 8-step ladder.
   expect(inWindow).toBeLessThanOrEqual(BUDGET * 8)
   // Still trying: the ladder is minutes long, so the row has neither failed nor given up.
@@ -747,11 +778,13 @@ test('R3: cancelling during Resuming returns the row to Interrupted and sends no
   const traffic = recordTraffic(page2)
   const aborts = countRequests(page2, /\/upload\/abort$/)
   const puts = countRequests(page2, PART)
-  // The resume's call for the parts it holds answers after 6 s: the row sits in Resuming until then.
+  // The resume's call for the parts it holds is not answered until the test lets it: the row sits in Resuming until then.
   let listCalls = 0
+  let answerParts!: () => void
+  const mayAnswer = new Promise<void>((resolve) => (answerParts = resolve))
   await page2.route(PARTS_LIST, async (route) => {
     listCalls += 1
-    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    await mayAnswer
     await route.fallback().catch(() => {})
   })
   await openUploads(page2)
@@ -771,18 +804,23 @@ test('R3: cancelling during Resuming returns the row to Interrupted and sends no
   const back = await until(page2, [file], 'back to Interrupted', (m) => m.length === 1 && m[0].status === 'interrupted' && m[0].kind === 'interrupted', 10_000)
   expect(back[0].detail).not.toMatch(/Resuming|Waiting/)
 
-  // Let the listing answer, and then some: the row must stay put and nothing may be torn down.
-  await expect.poll(() => listCalls, { timeout: 10_000 }).toBe(1)
-  await page2.waitForTimeout(9_000)
+  // The cancelled run is still waiting for its answer, so Resume is not offered yet; the row is Interrupted and nothing is torn down.
+  expect(listCalls).toBe(1)
+  await expect(uploadRow(page2, file.name).locator('button[title^="Resume"]')).toHaveCount(0)
+  expect(aborts.count()).toBe(0)
+
+  // Now let the listing answer. The run ends when it does, which is when Resume comes back: wait for that, not for a clock.
+  const answered = page2.waitForResponse((r) => PARTS_LIST.test(r.url()))
+  answerParts()
+  await answered
+  await expect(uploadRow(page2, file.name).locator('button[title^="Resume"]')).toHaveCount(1)
+  await page2.waitForTimeout(500) // anything the run would still send after its answer goes out in this time
   expect(aborts.count(), 'no abort: the parts already on the server are the point').toBe(0)
   expect(traffic.aborts).toEqual([])
   expect(puts.count(), 'no part was sent after the cancel').toBe(0)
   const settled = (await rows(page2)).find((r) => r.name === file.name)
   expect(settled).toMatchObject({ status: 'interrupted', kind: 'interrupted' })
   expect(await savedRow(page2, saved.id)).toMatchObject({ status: 'interrupted', queuedResume: false })
-  // Resume is on offer again.
-  await uploadRow(page2, file.name).hover()
-  await expect(uploadRow(page2, file.name).locator('button[title^="Resume"]')).toHaveCount(1)
   // And the upload itself was never touched on the server: it still has its version.
   const token = await accessToken(await primary())
   const state = await json<{ state: string }>('GET', `/upload/${saved.versionId}/parts`, { token })
@@ -857,8 +895,8 @@ type InstanceSettings = { storage_limit_bytes: number; storage_used_bytes: numbe
 test('P1: a storage cap that fits about 3 of 10 files refuses the rest with Retry and none hangs', async ({ page }, testInfo) => {
   test.setTimeout(10 * 60_000)
   const account = await primary()
-  const token = await accessToken(account)
-  const settings = () => json<InstanceSettings>('GET', '/instance/settings', { token })
+  // Every call takes the token afresh (`accessToken` caches one for ten minutes, a token lives fifteen): this test can run long.
+  const settings = async () => json<InstanceSettings>('GET', '/instance/settings', { token: await accessToken(account) })
   const before = await settings()
   expect(before.storage_limit_bytes, 'a cap is already set: a run that crashed left it, reset it by hand').toBe(0)
 
@@ -872,7 +910,7 @@ test('P1: a storage cap that fits about 3 of 10 files refuses the rest with Retr
   await throttleParts(page, 5 * MB) // a 5 MiB part takes 1 s
 
   try {
-    await json('PUT', '/instance/settings', { token, body: { storage_limit_bytes: cap, upload_part_size_bytes: 5 * MB } })
+    await json('PUT', '/instance/settings', { token: await accessToken(account), body: { storage_limit_bytes: cap, upload_part_size_bytes: 5 * MB } })
     await dropFiles(page, 'project', files.map((f) => f.file))
     await openUploads(page)
     const ended = await until(
@@ -911,8 +949,9 @@ test('P1: a storage cap that fits about 3 of 10 files refuses the rest with Retr
     expect(after.storage_used_bytes - cap, 'bytes over the cap').toBeLessThanOrEqual(FILE)
     expect(await assetNames(project.id)).toHaveLength(accepted.length)
   } finally {
+    // A token taken afresh: one from the start of a slow run may have expired, and a failed restore leaves the cap set.
     await json('PUT', '/instance/settings', {
-      token,
+      token: await accessToken(account),
       body: { storage_limit_bytes: before.storage_limit_bytes, upload_part_size_bytes: before.upload_part_size_bytes ?? 0 },
     })
   }
