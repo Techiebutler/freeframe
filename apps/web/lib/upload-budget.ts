@@ -19,9 +19,16 @@
  *   }
  *   // ... sleep, with no slot held ...
  *   budget.woke(fileKey)                         // always, even if the sleep was aborted
- *   const again = await budget.acquire(fileKey, signal, 'retry')
+ *   const again = await budget.acquire(fileKey, signal, 'retry')   // no await before this
  *
- * and, when the file's runner ends for any reason, `budget.forget(fileKey)`.
+ * and, when the file's runner ends for any reason, `budget.forget(fileKey)`:
+ * only once every part attempt of the run has settled and every sleeper has
+ * woken or been aborted, never at the first error while siblings are still in
+ * flight, because `forget` counts the slots it takes back as free.
+ *
+ * `fileKey` names one run of a file, not the file: a caller passes a key unique
+ * to the run (for example `${rowId}:${runCounter}`), so that a late call from a
+ * run that has ended can never land on a new run of the same row.
  *
  * Words used below:
  *
@@ -48,11 +55,20 @@
  * 3. Within that file, a `retry` goes before a `fresh` request, and requests of
  *    the same kind go first come, first served.
  *
- * Grants are made on a microtask, not inside the call that freed the slot. That
- * is what makes `release()` followed by `sleeping()`, or `woke()` followed by
- * `acquire(..., 'retry')`, behave the same whichever way round they are written
- * in one synchronous run: the grant pass sees both. Each pass scans every
- * waiter once per grant, which is fine for tens of files.
+ * Grants are made on a microtask, not inside the call that freed the slot. Two
+ * orders matter all the same, because a caller's own `await` lets that
+ * microtask run in between:
+ *
+ * - call `sleeping()` before `release()`, inside the attempt that holds the
+ *   slot (the `catch` and `finally` above). A `sleeping()` made a microtask
+ *   after the release, in some outer catch, comes after a grant pass that has
+ *   already handed the slot to a fresh part of the same file: the storm the
+ *   cap exists to stop;
+ * - call `woke()` and `acquire(..., 'retry')` back to back, with no `await`
+ *   between, so the pass that sees the sleeper gone also sees its retry
+ *   waiting, and a fresh part of the same file cannot slip in ahead of it.
+ *
+ * Each pass scans every waiter once per grant, which is fine for tens of files.
  */
 
 export type PartKind = 'fresh' | 'retry'
@@ -66,7 +82,11 @@ export interface PartBudget {
   woke(fileKey: string): void
   /** Lower rank = served first. Called by the queue when a file becomes active. */
   setRank(fileKey: string, rank: number): void
-  /** Drop all state for a file whose runner ended; rejects its waiters with AbortError. */
+  /**
+   * Drop all state for a file whose runner ended; rejects its waiters with AbortError.
+   * Its slots still dispatched count as free from here, so call it only once
+   * every attempt of the run has settled.
+   */
   forget(fileKey: string): void
 }
 
