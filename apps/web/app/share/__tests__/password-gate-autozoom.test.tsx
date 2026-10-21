@@ -34,7 +34,17 @@ describe('the share-link password gate', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
   it('sizes its autofocused input at the 16px iOS zoom threshold, compact only under a hover query', async () => {
-    render(<SharePage params={{ token: 't' }} />)
+    // Route params arrive as a promise in Next 16; one that already carries
+    // `status` and `value` is unwrapped synchronously by `use()`.
+    const routeParams = { token: 't' }
+    render(
+      <SharePage
+        params={Object.assign(Promise.resolve(routeParams), {
+          status: 'fulfilled' as const,
+          value: routeParams,
+        })}
+      />,
+    )
 
     const input = await screen.findByPlaceholderText('Enter password…')
     const classes = input.className.split(/\s+/)

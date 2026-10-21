@@ -19,7 +19,7 @@ export function setTokens(access: string, refresh: string): void {
   if (typeof window === 'undefined') return
   localStorage.setItem(ACCESS_TOKEN_KEY, access)
   localStorage.setItem(REFRESH_TOKEN_KEY, refresh)
-  // Set cookies so middleware can check auth on server side
+  // Set cookies so the proxy can check auth on server side
   document.cookie = `${ACCESS_TOKEN_KEY}=${access}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
   document.cookie = `${REFRESH_TOKEN_KEY}=${refresh}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
 }

@@ -183,7 +183,7 @@ For the full guide including **SSL setup**, **bring-your-own infrastructure** (e
 
 | Component    | Technology                                       |
 |--------------|--------------------------------------------------|
-| Frontend     | Next.js 14, React 18, Tailwind CSS, Zustand      |
+| Frontend     | Next.js 16, React 19, Tailwind CSS, Zustand      |
 | Backend      | FastAPI, SQLAlchemy, Pydantic                    |
 | Database     | PostgreSQL 15                                     |
 | Queue        | Celery + Redis                                    |

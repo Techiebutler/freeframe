@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { use, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import { ReviewProvider, useReview } from '@/components/review/review-provider'
@@ -788,9 +788,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 export default function ReviewPage({
   params,
 }: {
-  params: { id: string; assetId: string }
+  params: Promise<{ id: string; assetId: string }>
 }) {
-  const { id: projectId, assetId } = params
+  const { id: projectId, assetId } = use(params)
 
   return (
     <ReviewProvider assetId={assetId}>

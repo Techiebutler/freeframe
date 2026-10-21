@@ -3,7 +3,7 @@
  *
  * Only for navigations the framework does not rewrite for us: raw
  * `window.location` assignments, plain `<a href>` elements, and
- * `NextResponse.redirect` in middleware. Next's router and `<Link>` add the
+ * `NextResponse.redirect` in the proxy. Next's router and `<Link>` add the
  * basePath themselves, so passing their targets through here would double it.
  *
  * Deployments mounted at a sub-path (e.g. /freeframe/) otherwise bounce to a

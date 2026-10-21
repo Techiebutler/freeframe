@@ -39,7 +39,7 @@ const DEFAULT_FIXED_PART_BYTES = 10 * MB;
 /** A "Saved" flag that clears itself after 2s; a second save restarts the clock. */
 function useSavedFlash(): [boolean, () => void] {
   const [saved, setSaved] = React.useState(false);
-  const timer = React.useRef<ReturnType<typeof setTimeout>>();
+  const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   React.useEffect(() => () => clearTimeout(timer.current), []);
   const flash = React.useCallback(() => {
     clearTimeout(timer.current);

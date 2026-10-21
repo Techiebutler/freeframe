@@ -23,7 +23,7 @@ function Harness() {
   return (
     <div>
       <video ref={videoRef} />
-      <VideoFrameConstraint videoRef={videoRef as React.RefObject<HTMLVideoElement>}>
+      <VideoFrameConstraint videoRef={videoRef as React.RefObject<HTMLVideoElement | null>}>
         <div data-testid="child" />
       </VideoFrameConstraint>
     </div>

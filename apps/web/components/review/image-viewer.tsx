@@ -77,7 +77,7 @@ function ZoomControls() {
 interface SingleImageProps {
   url: string
   alt: string
-  containerRef: React.RefObject<HTMLDivElement>
+  containerRef: React.RefObject<HTMLDivElement | null>
   onImageLoad: (width: number, height: number) => void
 }
 

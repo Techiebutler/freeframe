@@ -245,9 +245,9 @@ function ErrorState({ expired }: ErrorStateProps) {
 export default function SharePage({
   params,
 }: {
-  params: { token: string }
+  params: Promise<{ token: string }>
 }) {
-  const { token } = params
+  const { token } = React.use(params)
 
   type PageState =
     | { stage: 'loading' }

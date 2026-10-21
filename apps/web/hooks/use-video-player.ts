@@ -43,7 +43,7 @@ export interface VideoPlayerState {
 }
 
 export interface UseVideoPlayerReturn extends VideoPlayerControls, VideoPlayerState {
-  videoRef: React.RefObject<HTMLVideoElement>
+  videoRef: React.RefObject<HTMLVideoElement | null>
   hlsRef: React.RefObject<Hls | null>
 }
 

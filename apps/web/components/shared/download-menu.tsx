@@ -50,7 +50,7 @@ export function useDownloadOptions(load: () => Promise<DownloadOption[] | null>)
  * is still on the menu, so a pointer or arrow key that already chose is left be.
  */
 function useFocusFirstItemWhenLoaded(
-  contentRef: React.RefObject<HTMLDivElement>,
+  contentRef: React.RefObject<HTMLDivElement | null>,
   state: LoadState,
 ) {
   React.useEffect(() => {

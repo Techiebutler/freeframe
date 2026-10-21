@@ -53,7 +53,7 @@ export function VideoFrameConstraint({
   videoRef,
   children,
 }: {
-  videoRef: React.RefObject<HTMLVideoElement>;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   children: React.ReactNode;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);

@@ -68,7 +68,7 @@ freeframe/
 │   │   ├── middleware/     # auth deps, share-link auth, rate limiting, setup guard
 │   │   ├── alembic/        # database migrations
 │   │   └── tests/          # pytest suite (mock-DB based — see Gotchas)
-│   └── web/                # Next.js 14 App Router frontend
+│   └── web/                # Next.js 16 App Router frontend
 │       ├── app/            # routes/pages
 │       ├── components/     # React components
 │       ├── hooks/          # React hooks
