@@ -67,11 +67,14 @@
  *
  * Backoff. `hold.nextDelayMs()` is the wait before the probe's next try:
  *
- * - a retry-after passed to `begin` is used for the first try, clamped to
- *   HOLD_MAX_DELAY_MS; a negative or NaN value counts as absent;
+ * - a retry-after passed to `begin` is used for the first try, kept between
+ *   HOLD_INITIAL_DELAY_MS and HOLD_MAX_DELAY_MS; a negative or NaN value counts
+ *   as absent. The floor matters because `begin` runs again on every failed
+ *   try: a server that answers `Retry-After: 0` each time would otherwise
+ *   be asked again at once, for as long as it keeps answering;
  * - otherwise the first wait is HOLD_INITIAL_DELAY_MS;
- * - every later wait doubles the previous one, never below HOLD_INITIAL_DELAY_MS
- *   (so a retry-after of 0 does not become a retry storm), up to HOLD_MAX_DELAY_MS.
+ * - every later wait doubles the previous one, never below HOLD_INITIAL_DELAY_MS,
+ *   up to HOLD_MAX_DELAY_MS.
  *
  * With no retry-after the waits are 2 s, 4 s, 8 s, 16 s, 32 s, 60 s, 60 s, ...
  * With a retry-after of 5 s they are 5 s, 10 s, 20 s, 40 s, 60 s, 60 s, ...
@@ -143,10 +146,13 @@ export const HOLD_INITIAL_DELAY_MS = 2_000
 /** No wait between two tries of the probe is longer than this, whatever the server asks. */
 export const HOLD_MAX_DELAY_MS = 60_000
 
-/** A retry-after the server gave, made safe to use as a wait: undefined when it is unusable. */
+/**
+ * A retry-after the server gave, made safe to use as a wait: undefined when it is unusable, and
+ * never shorter than HOLD_INITIAL_DELAY_MS, so a repeated `Retry-After: 0` cannot become a loop.
+ */
 function usableRetryAfter(retryAfterMs: number | undefined): number | undefined {
   if (typeof retryAfterMs !== 'number' || Number.isNaN(retryAfterMs) || retryAfterMs < 0) return undefined
-  return Math.min(retryAfterMs, HOLD_MAX_DELAY_MS)
+  return Math.max(HOLD_INITIAL_DELAY_MS, Math.min(retryAfterMs, HOLD_MAX_DELAY_MS))
 }
 
 export function createUploadQueue(): UploadQueue {
