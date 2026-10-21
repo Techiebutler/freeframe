@@ -628,5 +628,16 @@ the app's own Resume or New Version button, which works too and is what R1 and V
 **Fast resume flow** (to start a Resume inside the 30 s window): prepare the interrupted row (drop with `hold()`, wait for the row
 to be saved with its ids), `navigate_page reload`, run `ffq-all.js`, `take_snapshot` (small, the panel is closed), `upload_file` the
 file into `ffq-pick` and the queue into `ffq-drop-input`, then one `evaluate_script` that drops, waits for the queue to settle, sets
-`pickNext`, clicks Resume and releases. About 20 to 25 s from the reload in phase 2.
+`pickNext`, clicks Resume and releases. That was written as "about 20 to 25 s from the reload", but five separate tool calls took **69 s** in the
+phase 2 R1 re-run, and the click must land within 30 s of the row's last heartbeat (`OWN_STOP_GRACE_MS`), so count on one or two calls only.
+
+**Fast resume flow, one call after the reload** (verified in the R1 re-run: 7.7 s from the heartbeat to the click). Do everything that needs a tool call
+*before* the reload: create an `<input type=file multiple>`, `upload_file` the interrupted file and the queue into it, and store those `File`s in IndexedDB
+(`indexedDB.open('ffq-pool', 1)`, an object store `f`, `store.put(file, file.name)`; a `File` comes back with its name, size, type and `lastModified`).
+Then drop the interrupted file with `hold()`, wait for the row to be saved with its ids, wait for its **next heartbeat write** and call `location.reload()` from the page
+(so the heartbeat is under a second old), and run **one** `evaluate_script` (`sourcePath` of one file: `ffq-probe.js`, `ffq-extras.js`, `ffq-helpers.js` and `ffq-fast.js`
+concatenated, then your scenario) that reads the files back from IndexedDB, builds the inputs `ffq-pick` and `ffq-drop-input` with `new DataTransfer()`, drops the queue, waits for
+3 Uploading and the rest queued, sets `pickNext` and clicks Resume. Record the heartbeat age at the click (`Date.now() - row.heartbeatAt` from `ff-uploads`).
+To exercise APP-BUG-1 hold the queue for more than 30 s after the click. **Do not pass `File`s between tabs** (a second tab and a `BroadcastChannel`
+crashed the renderer and took both tabs with it).
 
