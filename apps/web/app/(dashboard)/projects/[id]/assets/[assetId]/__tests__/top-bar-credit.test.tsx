@@ -106,7 +106,8 @@ vi.mock('@/stores/review-store', () => ({
   }),
 }))
 vi.mock('@/stores/upload-store', () => ({
-  useUploadStore: storeHook({ startVersionUpload: vi.fn() }),
+  // `files` is read by the page to say a new version is queued; none are.
+  useUploadStore: storeHook({ startVersionUpload: vi.fn(), files: [], versionsRevision: 0 }),
 }))
 vi.mock('@/stores/view-store', () => ({ useViewStore: storeHook(viewState) }))
 vi.mock('@/stores/breadcrumb-store', () => ({

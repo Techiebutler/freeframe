@@ -19,7 +19,7 @@ import {
   Pencil,
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime, formatTimeLeft } from '@/lib/utils'
-import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
+import { useUploadStore, isOnItsWay, type UploadFile } from '@/stores/upload-store'
 import { useUploadSpeedStore } from '@/stores/upload-speed-store'
 import { carriesFiles } from '@/lib/drag'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -35,19 +35,41 @@ function getFileIcon(fileType: string) {
 
 type FilterTab = 'all' | 'active' | 'complete' | 'failed'
 
-function matchesFilter(status: UploadStatus, filter: FilterTab): boolean {
+/** A resume the user asked for, waiting for its turn: `interrupted` in storage, on its way in the panel. */
+const isWaitingResume = (f: UploadFile) => f.status === 'interrupted' && f.queuedResume === true
+
+function matchesFilter(f: UploadFile, filter: FilterTab): boolean {
   switch (filter) {
     case 'all': return true
     // `interrupted` is deliberately not active: nothing is being transferred, so
     // listing it here would put a row that cannot move next to ones that are.
     // `elsewhere` is: bytes are moving, just not from this tab. So are rows
-    // waiting in the queue: they are on their way.
-    case 'active':
-      return status === 'queued' || status === 'starting' || status === 'uploading' ||
-        status === 'processing' || status === 'elsewhere'
-    case 'complete': return status === 'complete'
-    case 'failed': return status === 'failed' || status === 'cancelled' || status === 'interrupted'
+    // waiting in the queue, a resume among them: they are on their way.
+    case 'active': return isOnItsWay(f) || f.status === 'elsewhere'
+    case 'complete': return f.status === 'complete'
+    case 'failed':
+      return f.status === 'failed' || f.status === 'cancelled' ||
+        (f.status === 'interrupted' && !isWaitingResume(f))
   }
+}
+
+/**
+ * The order rows are listed in: the way they will start.
+ *
+ * Drops newest first, and within a drop the first to start at the top. A Resume
+ * or a Retry is a drop of its own, so it lists first. Rows with no place in the
+ * queue (history, and anything saved by an earlier page load, whose numbers
+ * mean nothing against this one's) follow, newest first.
+ */
+function byQueueOrder(a: UploadFile, b: UploadFile): number {
+  const aQueued = a.dropSeq !== undefined
+  const bQueued = b.dropSeq !== undefined
+  if (aQueued !== bQueued) return aQueued ? -1 : 1
+  if (aQueued && bQueued) {
+    if (a.dropSeq !== b.dropSeq) return b.dropSeq! - a.dropSeq!
+    return (a.queueSeq ?? 0) - (b.queueSeq ?? 0)
+  }
+  return b.createdAt - a.createdAt
 }
 
 function groupByDate(files: UploadFile[]): { label: string; items: UploadFile[] }[] {
@@ -78,12 +100,17 @@ function groupByDate(files: UploadFile[]): { label: string; items: UploadFile[] 
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
 
-function StatusBadge({ status, finalizing }: { status: UploadStatus; finalizing?: boolean }) {
+function StatusBadge({ upload }: { upload: UploadFile }) {
+  const { status, finalizing } = upload
+  // A resume waiting for its turn reads like any other file waiting for one.
+  if (isWaitingResume(upload)) {
+    return <span className="inline-flex items-center rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-tertiary">Queued</span>
+  }
   switch (status) {
     case 'queued':
       return <span className="inline-flex items-center rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-tertiary">Queued</span>
     case 'starting':
-      return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><Loader2 className="h-2.5 w-2.5 animate-spin" />Starting</span>
+      return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><Loader2 className="h-2.5 w-2.5 animate-spin" />{upload.resuming ? 'Resuming' : 'Starting'}</span>
     case 'uploading':
       return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><Loader2 className="h-2.5 w-2.5 animate-spin" />{finalizing ? 'Finalizing' : 'Uploading'}</span>
     case 'processing':
@@ -98,6 +125,53 @@ function StatusBadge({ status, finalizing }: { status: UploadStatus; finalizing?
       return <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"><PauseCircle className="h-2.5 w-2.5" />Interrupted</span>
     case 'elsewhere':
       return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><MonitorUp className="h-2.5 w-2.5" />Elsewhere</span>
+  }
+}
+
+// ─── What a row says it is doing ──────────────────────────────────────────────
+
+/** The kind of line under a row, as a stable name for tests and the e2e suite. */
+type DetailKind =
+  | 'waiting-to-start' | 'waiting-for-connection' | 'waiting-for-storage' | 'waiting-to-resume'
+  | 'starting' | 'resuming'
+  | 'uploading' | 'finalizing' | 'processing' | 'complete' | 'failed' | 'elsewhere' | 'interrupted'
+
+/**
+ * The line a row that has not begun, or has only just, shows (spec, "Row
+ * lifecycle", "Panel shows"). Null for every other row: their lines are drawn
+ * from their own progress and errors.
+ *
+ * A row that is the hold's probe says why the queue is waiting; the rest
+ * simply wait their turn.
+ */
+function waitingLine(upload: UploadFile): { kind: DetailKind; text: string } | null {
+  if (upload.status === 'queued' || isWaitingResume(upload)) {
+    if (upload.holdReason === 'connection') return { kind: 'waiting-for-connection', text: 'Waiting for connection' }
+    if (upload.holdReason === 'storage') return { kind: 'waiting-for-storage', text: 'Waiting for storage' }
+    return upload.status === 'queued'
+      ? { kind: 'waiting-to-start', text: 'Waiting to start' }
+      : { kind: 'waiting-to-resume', text: 'Waiting to resume' }
+  }
+  if (upload.status === 'starting') {
+    return upload.resuming
+      ? { kind: 'resuming', text: 'Resuming…' }
+      : { kind: 'starting', text: 'Starting…' }
+  }
+  return null
+}
+
+/** The `data-detail` of a row: the kind of line it shows, or undefined for none. */
+function detailKind(upload: UploadFile): DetailKind | undefined {
+  const waiting = waitingLine(upload)
+  if (waiting) return waiting.kind
+  switch (upload.status) {
+    case 'uploading': return upload.finalizing ? 'finalizing' : 'uploading'
+    case 'processing': return 'processing'
+    case 'complete': return 'complete'
+    case 'failed': return upload.error ? 'failed' : undefined
+    case 'elsewhere': return 'elsewhere'
+    case 'interrupted': return 'interrupted'
+    default: return undefined
   }
 }
 
@@ -210,13 +284,24 @@ function UploadName({
 // ─── Upload Item ──────────────────────────────────────────────────────────────
 
 function UploadItem({ upload }: { upload: UploadFile }) {
-  const { cancelUpload, removeFile, resumeUpload, discardUpload } = useUploadStore()
+  const { cancelUpload, removeFile, resumeUpload, discardUpload, retryUpload } = useUploadStore()
+  // Asked of the store rather than guessed from the row: both depend on what
+  // this tab holds in memory (the `File` behind a refused row; a run still
+  // settling, a Discard still out), which a row read from storage cannot say.
+  const canRetry = useUploadStore((s) => s.canRetry(upload.id))
+  const canResume = useUploadStore((s) => s.canResume(upload.id))
   const [renameError, setRenameError] = React.useState<string | null>(null)
+  const waitingResume = isWaitingResume(upload)
   // Cancel is offered from the moment the row is added: before its turn it
-  // only gives up its place.
-  const isUploading = upload.status === 'queued' || upload.status === 'starting' || upload.status === 'uploading'
+  // only gives up its place. A resume's Cancel puts it back to `interrupted`,
+  // whether it waits for its turn or has just begun it, and aborts nothing.
+  const isUploading = upload.status === 'queued' || upload.status === 'starting' || upload.status === 'uploading' ||
+    waitingResume
   const isProcessing = upload.status === 'processing'
-  const isInterrupted = upload.status === 'interrupted'
+  // A stopped transfer nobody has asked to carry on. One waiting for its turn
+  // is `interrupted` in the store but is on its way: it offers Cancel instead.
+  const isInterrupted = upload.status === 'interrupted' && !waitingResume
+  const waiting = waitingLine(upload)
   // Every byte is across and storage is assembling the parts. Nothing is left
   // for a cancel to stop, and one now would race the completion.
   const isFinalizing = upload.status === 'uploading' && !!upload.finalizing
@@ -245,7 +330,14 @@ function UploadItem({ upload }: { upload: UploadFile }) {
   }
 
   return (
-    <div className="group flex items-start gap-3 px-4 py-3 hover:bg-bg-hover/50 transition-colors">
+    <div
+      className="group flex items-start gap-3 px-4 py-3 hover:bg-bg-hover/50 transition-colors"
+      // Stable hooks for tests, and for the e2e suite, which must not select on
+      // classes: what the row is, and which kind of line it shows.
+      data-testid="upload-row"
+      data-status={upload.status}
+      data-detail={detailKind(upload)}
+    >
       {/* Icon */}
       <div className="h-10 w-10 shrink-0 rounded-md bg-bg-tertiary flex items-center justify-center text-text-tertiary overflow-hidden">
         {getFileIcon(upload.fileType)}
@@ -255,7 +347,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <UploadName upload={upload} onError={setRenameError} />
-          <StatusBadge status={upload.status} finalizing={upload.finalizing} />
+          <StatusBadge upload={upload} />
         </div>
         <p className="text-xs text-text-tertiary truncate mt-0.5">
           {/* The file, whenever it is not simply the asset's name. Uploading a
@@ -270,7 +362,14 @@ function UploadItem({ upload }: { upload: UploadFile }) {
 
         {/* Progress bar */}
         {showProgress && (
-          <div className="mt-2 h-1.5 w-full rounded-full bg-bg-tertiary overflow-hidden">
+          <div
+            role="progressbar"
+            aria-label={isProcessing ? 'Processing progress' : 'Upload progress'}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressValue}
+            className="mt-2 h-1.5 w-full rounded-full bg-bg-tertiary overflow-hidden"
+          >
             <div
               className={cn(
                 'h-full rounded-full transition-all duration-300',
@@ -283,6 +382,9 @@ function UploadItem({ upload }: { upload: UploadFile }) {
 
         {/* Detail line */}
         <div className="flex items-center gap-1 mt-1">
+          {waiting && (
+            <span className="text-[11px] text-text-secondary truncate">{waiting.text}</span>
+          )}
           {upload.status === 'uploading' && (
             <span className="text-[11px] text-text-secondary">
               {isFinalizing ? 'Finalizing...' : `Uploading ${upload.progress}%`}
@@ -315,7 +417,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
               Still uploading in another tab or on another device
             </span>
           )}
-          {upload.status === 'interrupted' && (
+          {isInterrupted && (
             // The reason gets the whole line, and red when there is one. A
             // rejected file is the case that matters: it is the only outcome the
             // user caused and can correct, and it read as a shrug when it shared
@@ -347,20 +449,26 @@ function UploadItem({ upload }: { upload: UploadFile }) {
       <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         {isInterrupted && (
           <>
-            <input
-              ref={filePicker}
-              type="file"
-              accept={upload.fileType || undefined}
-              className="hidden"
-              onChange={onPicked}
-            />
-            <button
-              onClick={() => filePicker.current?.click()}
-              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
-              title={`Resume — pick ${upload.fileName} again`}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            {/* Resume only while the store would take it up: not while a run
+                of the row is still settling or a Discard of it is out. */}
+            {canResume && (
+              <>
+                <input
+                  ref={filePicker}
+                  type="file"
+                  accept={upload.fileType || undefined}
+                  className="hidden"
+                  onChange={onPicked}
+                />
+                <button
+                  onClick={() => filePicker.current?.click()}
+                  className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
+                  title={`Resume — pick ${upload.fileName} again`}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
             <button
               onClick={() => { setDiscardError(null); setConfirmingDiscard(true) }}
               className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-status-error hover:bg-bg-hover transition-colors"
@@ -368,6 +476,17 @@ function UploadItem({ upload }: { upload: UploadFile }) {
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
+            {/* A Discard that could not finish keeps the row. If it goes on
+                failing, nothing else would ever remove it. */}
+            {upload.discardFailed && (
+              <button
+                onClick={() => removeFile(upload.id)}
+                className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                title="Dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </>
         )}
         <ConfirmDialog
@@ -406,13 +525,27 @@ function UploadItem({ upload }: { upload: UploadFile }) {
           </button>
         )}
         {upload.status === 'failed' && (
-          <button
-            onClick={() => removeFile(upload.id)}
-            className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
-            title="Dismiss"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <>
+            {/* Only while this tab still holds the `File`: not after a reload,
+                and not for a file it can no longer read. */}
+            {canRetry && (
+              <button
+                onClick={() => retryUpload(upload.id)}
+                className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
+                title="Retry"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {/* Every failed row can be dismissed, whatever the reason. */}
+            <button
+              onClick={() => removeFile(upload.id)}
+              className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+              title="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </>
         )}
       </div>
     </div>
@@ -428,7 +561,7 @@ export function UploadsPanel({
    *  opens against its right edge, so it has to know which. */
   railCollapsed?: boolean
 } = {}) {
-  const { files, panelOpen, setPanelOpen, clearCompleted, fetchHistory, fetchMoreHistory, historyHasMore, historyLoading } = useUploadStore()
+  const { files, panelOpen, setPanelOpen, clearCompleted, cancelAllQueued, fetchHistory, fetchMoreHistory, historyHasMore, historyLoading } = useUploadStore()
   const [filter, setFilter] = React.useState<FilterTab>('active')
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const sentinelRef = React.useRef<HTMLDivElement>(null)
@@ -461,17 +594,21 @@ export function UploadsPanel({
 
   if (!panelOpen) return null
 
-  // Sort descending by createdAt
-  const sorted = [...files].sort((a, b) => b.createdAt - a.createdAt)
-  const filtered = sorted.filter((f) => matchesFilter(f.status, filter))
+  // The way rows will start, not the time they were added: see `byQueueOrder`.
+  const sorted = [...files].sort(byQueueOrder)
+  const filtered = sorted.filter((f) => matchesFilter(f, filter))
   const groups = groupByDate(filtered)
 
   const counts = {
     all: files.length,
-    active: files.filter((f) => matchesFilter(f.status, 'active')).length,
+    active: files.filter((f) => matchesFilter(f, 'active')).length,
     complete: files.filter((f) => f.status === 'complete').length,
-    failed: files.filter((f) => matchesFilter(f.status, 'failed')).length,
+    failed: files.filter((f) => matchesFilter(f, 'failed')).length,
   }
+  // Rows still waiting for their turn: a new file, the hold's probe, or a resume.
+  // `cancelAllQueued` applies each one's own Cancel and never touches a row whose
+  // turn has begun, so the action is offered exactly while it has someone to act on.
+  const anyQueued = files.some((f) => f.status === 'queued' || isWaitingResume(f))
 
   const tabs: { id: FilterTab; label: string; count: number }[] = [
     { id: 'all', label: 'All', count: counts.all },
@@ -528,6 +665,14 @@ export function UploadsPanel({
             )}
           </h2>
           <div className="flex items-center gap-1">
+            {anyQueued && (
+              <button
+                onClick={cancelAllQueued}
+                className="text-xs text-text-tertiary hover:text-text-secondary transition-colors px-2 py-1 rounded hover:bg-bg-hover"
+              >
+                Cancel all queued
+              </button>
+            )}
             {counts.complete > 0 && (
               <button
                 onClick={clearCompleted}

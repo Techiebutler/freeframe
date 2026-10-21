@@ -941,6 +941,30 @@ export interface UploadFile {
   failedBeforeStart?: true
   /** A `failedBeforeStart` row this tab can start again. Never saved: the `File` is not. */
   retryable?: boolean
+  /**
+   * A Discard of this row could not finish, and the row was kept saying why.
+   * The panel then offers Dismiss as well as Discard: a Discard that keeps
+   * failing (storage down, an abort the server keeps refusing) must not leave
+   * a row that can neither be resumed nor removed. Cleared when a Resume takes
+   * the row up.
+   */
+  discardFailed?: true
+}
+
+/**
+ * A row that is on its way without another click: waiting for its turn (a new
+ * file, or a resume the user asked for), starting, sending, or being processed.
+ * The sidebar's badge counts exactly these; the panel's Active tab adds the rows
+ * another tab is sending.
+ *
+ * A resume waiting for its turn is `interrupted` as far as storage and the
+ * server are concerned, which is why it needs saying here.
+ */
+export function isOnItsWay(f: UploadFile): boolean {
+  return (
+    f.status === 'queued' || f.status === 'starting' || f.status === 'uploading' ||
+    f.status === 'processing' || (f.status === 'interrupted' && f.queuedResume === true)
+  )
 }
 
 /** POST /upload/initiate and POST /assets/{id}/versions — both answer with this.
@@ -1080,6 +1104,13 @@ interface UploadStore {
    *  A counter and not a timestamp: two discards inside one millisecond are a
    *  real thing, and `Date.now()` reports them as no change at all. */
   versionsRevision: number
+  /**
+   * Bumped when a run ends and when a Discard starts or ends, and for nothing
+   * else. `canResume` reads those (the runs, the Discards in flight), which no
+   * row field mirrors, so a view that selects `canResume(id)` is only told it
+   * changed when something is set; this is that something. Never saved.
+   */
+  runsRevision: number
   panelOpen: boolean
   historyLoaded: boolean
   historyHasMore: boolean
@@ -1114,6 +1145,8 @@ interface UploadStore {
   retryUpload: (fileId: string) => void
   /** Whether `retryUpload` would start this row again. */
   canRetry: (fileId: string) => boolean
+  /** Whether `resumeUpload` would take this row up now; the panel offers Resume only then. */
+  canResume: (fileId: string) => boolean
   /** Rename the asset a row is uploading. Resolves to an error message, or
    *  null when the new name is stored. */
   renameUpload: (fileId: string, name: string) => Promise<string | null>
@@ -1265,7 +1298,7 @@ function reportDiscardFailure(
 ): string {
   const message = err instanceof Error ? err.message : 'Discard failed'
   set((s) => ({
-    files: s.files.map((f) => (f.id === fileId ? { ...f, error: message } : f)),
+    files: s.files.map((f) => (f.id === fileId ? { ...f, error: message, discardFailed: true as const } : f)),
     versionsRevision: s.versionsRevision + 1,
   }))
   return message
@@ -1344,6 +1377,24 @@ const discarding = new Map<string, number>()
 /** A row refused before it started, whose `File` this tab still holds. */
 function retryable(row: UploadFile): boolean {
   return row.status === 'failed' && row.failedBeforeStart === true && row.retryable === true && fileRefs.has(row.id)
+}
+
+/**
+ * Whether a Resume of this row would be taken up now: it is a stopped upload
+ * with a version to come back to, it is not already waiting for its turn, no
+ * run of it is still settling, and no Discard of it is out. The one definition
+ * `resumeUpload` refuses on and the panel's `canResume` offers on.
+ */
+function resumableNow(row: UploadFile | undefined): row is UploadFile {
+  return (
+    row !== undefined && row.status === 'interrupted' && !!row.versionId && !row.queuedResume &&
+    !runners.has(row.id) && !discarding.has(row.id)
+  )
+}
+
+/** Tells every view of `canResume` to look again; see `UploadStore.runsRevision`. */
+function noteRunsChanged(): void {
+  useUploadStore.setState((s) => ({ runsRevision: s.runsRevision + 1 }))
 }
 
 /** A row id. Two drops of the same `File` are two rows. */
@@ -1445,6 +1496,7 @@ function endRun(id: string, runner: Runner, runKey: string): void {
   // A run that never reached its parts left only its rank behind.
   partBudget.forget(runKey)
   if (runners.get(id) === runner) runners.delete(id)
+  noteRunsChanged()
   // Cancelled while starting: whatever the initiate created has been thrown
   // away by now, so there is nothing left for the row to say.
   if (runner.removeWhenSettled) {
@@ -1670,6 +1722,11 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
       // A cancel made while the initiate was out stands.
       ...(cancelled ? {} : { status: 'uploading' as const }),
     })
+    // A new version exists on the server from this answer, and a screen
+    // showing the asset's versions is told now rather than guessing at when.
+    if (target.kind === 'version') {
+      useUploadStore.setState((s) => ({ versionsRevision: s.versionsRevision + 1 }))
+    }
     pump()
     // Cancelled while the initiate was out: what it created is thrown away below.
     if (cancelled) throw new DOMException('Upload cancelled', 'AbortError')
@@ -2076,6 +2133,7 @@ function enqueueNew(
 const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = (set, get) => ({
   files: [],
   versionsRevision: 0,
+  runsRevision: 0,
   panelOpen: false,
   historyLoaded: false,
   historyHasMore: true,
@@ -2105,10 +2163,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     // broke is still asking the server what became of it, and its answer
     // would land on the row a second run is sending. Nor while a Discard of
     // it is waiting on the server, which is about to abort what it would send.
-    if (
-      !row || row.status !== 'interrupted' || !row.versionId || row.queuedResume ||
-      runners.has(fileId) || discarding.has(fileId)
-    ) return
+    if (!resumableNow(row)) return
     fileRefs.set(fileId, file)
     // A Resume goes ahead of every file not yet started, behind the ones
     // already running, and takes its turn like them -- so it never sends
@@ -2116,7 +2171,14 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     queue.enqueue([queueEntry(row, 'resume')], 'next')
     set((s) => ({
       files: s.files.map((f) => (f.id === fileId
-        ? { ...f, queuedResume: true as const, dropSeq: ++dropSeqs, queueSeq: queue.queueSeq(fileId), error: undefined }
+        ? {
+            ...f,
+            queuedResume: true as const,
+            dropSeq: ++dropSeqs,
+            queueSeq: queue.queueSeq(fileId),
+            error: undefined,
+            discardFailed: undefined,
+          }
         : f)),
     }))
     pump()
@@ -2125,6 +2187,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   discardUpload: async (fileId) => {
     // Counted for as long as the server is being asked: see `resumeUpload`.
     discarding.set(fileId, (discarding.get(fileId) ?? 0) + 1)
+    noteRunsChanged()
     try {
       // The counterpart to no longer aborting on failure. Without it the only way
       // to be rid of an upload the user does not want back is to wait for the
@@ -2233,6 +2296,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       const left = (discarding.get(fileId) ?? 1) - 1
       if (left > 0) discarding.set(fileId, left)
       else discarding.delete(fileId)
+      noteRunsChanged()
     }
   },
 
@@ -2327,6 +2391,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     const row = get().files.find((f) => f.id === fileId)
     return row !== undefined && retryable(row)
   },
+
+  canResume: (fileId) => resumableNow(get().files.find((f) => f.id === fileId)),
 
   renameUpload: async (fileId, name) => {
     const row = get().files.find((f) => f.id === fileId)
@@ -2587,13 +2653,19 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
  *   no `File` to retry with, so it offers Dismiss only.
  * - `processing` and `complete` come back from history instead.
  *
- * The queue's in-memory markers are never saved.
+ * The queue's in-memory markers are never saved, nor its sequence numbers: the
+ * panel lists a row that has one before any that has none, and a number from an
+ * earlier page load means nothing against this load's.
  */
 function savedRow(f: UploadFile): UploadFile | null {
   const kept: UploadFile = { ...f }
   delete kept.queuedResume
   delete kept.resuming
   delete kept.holdReason
+  // Sequence numbers are counters of this page load: a saved one would outrank
+  // the first drop of the next load, which counts from 1 again.
+  delete kept.dropSeq
+  delete kept.queueSeq
   switch (f.status) {
     case 'starting':
       return f.versionId ? { ...kept, status: 'interrupted' } : null
