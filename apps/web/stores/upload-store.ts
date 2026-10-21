@@ -160,6 +160,7 @@ function activeElsewhere(
   info: ResumeInfo,
   now: number,
   attempt?: AbortController,
+  requestedAt?: number,
 ): boolean {
   // `attempt` is the caller's own controller, where the caller is the one
   // trying to start a transfer: `resumeUpload` registers it before it asks the
@@ -172,13 +173,43 @@ function activeElsewhere(
   // exemption below, because a row this tab sent until a moment ago may have
   // been taken up by another tab since.
   if (beatingInAnotherTab(row.id, now)) return true
-  const ownAndRecent =
-    row.ownerTab === currentTabId() &&
-    row.heartbeatAt !== undefined &&
-    now - row.heartbeatAt < OWN_STOP_GRACE_MS
-  if (ownAndRecent) return false
+  if (ownAndRecentAt(row, now)) return false
+  // A Resume this tab queued waits for its turn, and nothing stamps the row
+  // while it waits, so judged at the turn a click made inside the grace was
+  // refused as soon as the wait outlasted it: the tab's own last parts read as
+  // somebody else's. It is judged as of the click instead, as it would have
+  // been with nothing ahead of it, and only if the server has seen nothing
+  // move since: a device that took the upload up during the wait has
+  // presigned, which moves `last_activity_at` past the click.
+  if (
+    requestedAt !== undefined &&
+    ownAndRecentAt(row, requestedAt) &&
+    !movedSince(info.last_activity_at, requestedAt)
+  ) {
+    return false
+  }
   const until = liveUntil(info.last_activity_at)
   return until !== undefined && now < until
+}
+
+/** Whether this tab stopped sending the row less than the grace before `at`. */
+function ownAndRecentAt(row: UploadFile, at: number): boolean {
+  return (
+    row.ownerTab === currentTabId() &&
+    row.heartbeatAt !== undefined &&
+    at - row.heartbeatAt < OWN_STOP_GRACE_MS
+  )
+}
+
+/**
+ * Whether the server saw the upload move after `at`, a time on this browser's
+ * clock. The same comparison of a server stamp with the local clock that
+ * `liveUntil` makes; a stamp that cannot be read says nothing moved.
+ */
+function movedSince(lastActivity: string | null | undefined, at: number): boolean {
+  if (!lastActivity) return false
+  const moved = Date.parse(lastActivity)
+  return !Number.isNaN(moved) && moved > at
 }
 
 /** Until when an upload that last moved at `lastActivity` counts as running. */
@@ -1374,6 +1405,13 @@ let dropSeqs = 0
  */
 const discarding = new Map<string, number>()
 
+/**
+ * When the user clicked Resume in this tab, for a row whose resume is waiting
+ * for its turn. Tab memory, like the `File`: a reload ends the wait anyway.
+ * `activeElsewhere` judges the tab's own grace from it; see there.
+ */
+const resumeRequestedAt = new Map<string, number>()
+
 /** A row refused before it started, whose `File` this tab still holds. */
 function retryable(row: UploadFile): boolean {
   return row.status === 'failed' && row.failedBeforeStart === true && row.retryable === true && fileRefs.has(row.id)
@@ -1915,7 +1953,10 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
 
     // Two tabs sending the same part numbers into one multipart upload leave
     // the completing tab with ETags that no longer match what is stored.
-    if (activeElsewhere(row, info, Date.now(), controller)) {
+    // Judged as of the click that queued it, which this turn now uses up.
+    const elsewhere = activeElsewhere(row, info, Date.now(), controller, resumeRequestedAt.get(id))
+    resumeRequestedAt.delete(id)
+    if (elsewhere) {
       const refusedAt = info.last_activity_at
       info = undefined
       if (rowById(id)?.status !== 'cancelled') {
@@ -2165,6 +2206,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     // it is waiting on the server, which is about to abort what it would send.
     if (!resumableNow(row)) return
     fileRefs.set(fileId, file)
+    resumeRequestedAt.set(fileId, Date.now())
     // A Resume goes ahead of every file not yet started, behind the ones
     // already running, and takes its turn like them -- so it never sends
     // beside three active files or outside the part budget.
@@ -2854,6 +2896,7 @@ export const __uploadQueueTesting = {
     queue = createUploadQueue()
     runners.clear()
     discarding.clear()
+    resumeRequestedAt.clear()
     fileRefs.clear()
     startTargets.clear()
     for (const id of Object.keys(abortControllers)) delete abortControllers[id]
