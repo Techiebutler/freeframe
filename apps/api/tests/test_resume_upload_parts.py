@@ -189,6 +189,48 @@ def test_it_reports_the_activity_from_before_it_asked(
     assert version.last_activity_at > earlier
 
 
+def test_it_reports_its_own_clock_as_it_answers(
+    client, auth_headers, resumable, monkeypatch
+):
+    """The client judges "moved since the click" from durations, not stamps.
+
+    `last_activity_at` is on the server's clock and the click on the browser's.
+    Comparing them directly is off by however far the clocks disagree, so the
+    answer carries the server's time and the client measures the activity's
+    age on this clock alone.
+    """
+    from datetime import datetime, timedelta, timezone
+    version, _ = resumable
+    monkeypatch.setattr(upload_module, "list_upload_parts", lambda k, u: [])
+
+    before = datetime.now(timezone.utc)
+    resp = client.get(_url(version), headers=auth_headers)
+    after = datetime.now(timezone.utc)
+
+    reported = datetime.fromisoformat(resp.json()["server_time"])
+    assert reported.tzinfo is not None
+    assert before - timedelta(seconds=1) <= reported <= after + timedelta(seconds=1)
+
+
+def test_an_assembled_answer_reports_its_own_clock_too(
+    client, auth_headers, resumable, monkeypatch
+):
+    from datetime import datetime, timedelta, timezone
+    version, _ = resumable
+
+    def _gone(key, upload_id):
+        raise MultipartUploadGone(key)
+
+    monkeypatch.setattr(upload_module, "list_upload_parts", _gone)
+    monkeypatch.setattr(upload_module, "head_object_size", lambda k: TOTAL)
+
+    resp = client.get(_url(version), headers=auth_headers)
+
+    assert resp.json()["state"] == "assembled"
+    reported = datetime.fromisoformat(resp.json()["server_time"])
+    assert abs(datetime.now(timezone.utc) - reported) < timedelta(seconds=5)
+
+
 def test_asking_about_an_upload_that_just_moved_does_not_count_as_moving_it(
     client, auth_headers, mock_db, resumable, monkeypatch
 ):

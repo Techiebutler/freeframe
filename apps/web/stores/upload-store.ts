@@ -147,7 +147,10 @@ const OWN_STOP_GRACE_MS = HEARTBEAT_MS * 2
  * So: this tab is sending it now, or it stopped sending it just now. Both are
  * read from this browser's own clock (`heartbeatAt` is written here, by the
  * tab doing the work), so no server timestamp is compared against a local one
- * and the skew in `liveUntil` is not made worse.
+ * and the skew in `liveUntil` is not made worse. A Resume that waited in the
+ * queue is judged as of its click, and whether the server saw the upload move
+ * after that click is read from two durations, each on one clock (see
+ * `movedSinceClick`), so that adds no comparison across clocks either.
  *
  * What this cannot do is tell "my own transfer dropped five seconds ago" from
  * "my transfer dropped and another device has already taken over", because
@@ -160,7 +163,7 @@ function activeElsewhere(
   info: ResumeInfo,
   now: number,
   attempt?: AbortController,
-  requestedAt?: number,
+  click?: ResumeClick,
 ): boolean {
   // `attempt` is the caller's own controller, where the caller is the one
   // trying to start a transfer: `resumeUpload` registers it before it asks the
@@ -182,9 +185,9 @@ function activeElsewhere(
   // move since: a device that took the upload up during the wait has
   // presigned, which moves `last_activity_at` past the click.
   if (
-    requestedAt !== undefined &&
-    ownAndRecentAt(row, requestedAt) &&
-    !movedSince(info.last_activity_at, requestedAt)
+    click !== undefined &&
+    ownAndRecentAt(row, click.requestedAt) &&
+    !movedSinceClick(info, click)
   ) {
     return false
   }
@@ -201,15 +204,48 @@ function ownAndRecentAt(row: UploadFile, at: number): boolean {
   )
 }
 
+/** A queued Resume's click, and the `/parts` request its turn made, all on this browser's clock. */
+interface ResumeClick {
+  /** When the user clicked Resume. */
+  requestedAt: number
+  /** When the turn sent `GET /parts`. */
+  askedAt: number
+  /** How long `/parts` took to answer. */
+  rtt: number
+}
+
 /**
- * Whether the server saw the upload move after `at`, a time on this browser's
- * clock. The same comparison of a server stamp with the local clock that
- * `liveUntil` makes; a stamp that cannot be read says nothing moved.
+ * Whether the server saw the upload move after the Resume click.
+ *
+ * `last_activity_at` is on the server's clock and the click on this one, and
+ * the two need not agree: a VM clock left behind by a host's sleep is off by
+ * minutes, and comparing the stamps directly would move the line between
+ * "before the click" and "after it" by that much. So two durations are
+ * compared, each read on one clock: how long before its answer the server last
+ * saw the upload move (`server_time - last_activity_at`), and how long before
+ * the answer arrived the click was (`askedAt - requestedAt + rtt`). The server
+ * may have read its clock at any moment of the round trip; counting the whole
+ * round trip takes the latest, where an activity after the click is hardest
+ * to see, so a doubt reads as moved.
+ *
+ * Anything missing or unreadable also reads as moved, which leaves the
+ * decision to `liveUntil` as before: an older server sends no `server_time`.
+ * Nothing on record means nothing moved.
+ *
+ * One case reads as moved that is not: a `/parts` of this tab's own that timed
+ * out here after the server, idle for `RESUME_TOUCH_INTERVAL` (5 min), had
+ * already recorded it as activity. The row goes `elsewhere` for the window,
+ * which is the safe way to be wrong, and it is rare.
  */
-function movedSince(lastActivity: string | null | undefined, at: number): boolean {
-  if (!lastActivity) return false
-  const moved = Date.parse(lastActivity)
-  return !Number.isNaN(moved) && moved > at
+function movedSinceClick(info: ResumeInfo, click: ResumeClick): boolean {
+  if (!info.last_activity_at) return false
+  if (!info.server_time) return true
+  const moved = Date.parse(info.last_activity_at)
+  const serverNow = Date.parse(info.server_time)
+  if (Number.isNaN(moved) || Number.isNaN(serverNow)) return true
+  const sinceMoved = serverNow - moved
+  const sinceClick = click.askedAt - click.requestedAt + click.rtt
+  return sinceMoved < sinceClick
 }
 
 /** Until when an upload that last moved at `lastActivity` counts as running. */
@@ -1029,6 +1065,8 @@ interface ResumeInfo {
   held_part_numbers: number[]
   /** When the upload last moved before this request; see `activeElsewhere`. */
   last_activity_at?: string | null
+  /** The server's clock as it answered; see `movedSinceClick`. Absent from an older server. */
+  server_time?: string | null
 }
 
 /**
@@ -1924,6 +1962,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     // Everything needed to carry on comes from the server, including the key
     // and the upload id: this row may have been rehydrated from history in a
     // browser that never saw them.
+    const askedAt = Date.now()
     try {
       info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`)
     } catch (err) {
@@ -1954,7 +1993,10 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     // Two tabs sending the same part numbers into one multipart upload leave
     // the completing tab with ETags that no longer match what is stored.
     // Judged as of the click that queued it, which this turn now uses up.
-    const elsewhere = activeElsewhere(row, info, Date.now(), controller, resumeRequestedAt.get(id))
+    const answeredAt = Date.now()
+    const requestedAt = resumeRequestedAt.get(id)
+    const click = requestedAt === undefined ? undefined : { requestedAt, askedAt, rtt: answeredAt - askedAt }
+    const elsewhere = activeElsewhere(row, info, answeredAt, controller, click)
     resumeRequestedAt.delete(id)
     if (elsewhere) {
       const refusedAt = info.last_activity_at
@@ -2242,6 +2284,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       if (row.queuedResume) {
         forgetQueued(fileId)
         fileRefs.delete(fileId)
+        resumeRequestedAt.delete(fileId)
         set((s) => ({
           files: s.files.map((f) => (f.id === fileId ? { ...f, queuedResume: undefined, holdReason: undefined } : f)),
         }))
@@ -2362,6 +2405,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     if (row.status === 'interrupted') {
       if (row.queuedResume) {
         fileRefs.delete(fileId)
+        resumeRequestedAt.delete(fileId)
         set((s) => ({
           files: s.files.map((f) => (f.id === fileId ? { ...f, queuedResume: undefined, holdReason: undefined } : f)),
         }))
@@ -2374,6 +2418,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     // Its run keeps its place until `/parts` answers, then ends quietly.
     if (row.status === 'starting' && row.resuming && runner) {
       runner.stoodDown = true
+      resumeRequestedAt.delete(fileId)
       set((s) => ({
         files: s.files.map((f) => (f.id === fileId
           ? { ...f, status: 'interrupted' as const, resuming: undefined, holdReason: undefined }

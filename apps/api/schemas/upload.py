@@ -221,3 +221,10 @@ class ResumeUploadResponse(BaseModel):
     # still be running somewhere else -- another tab, another device -- and a
     # discard or a second resume there would destroy it.
     last_activity_at: Optional[datetime] = None
+    # The server's clock as it answers. A client compares `last_activity_at`
+    # with a moment on its own clock -- when the user clicked Resume -- and a
+    # server stamp and a local one are on clocks that need not agree. With this
+    # it compares two durations instead, each read on one clock: how long ago
+    # the upload last moved, by this field, and how long ago the click was, by
+    # its own.
+    server_time: Optional[datetime] = None

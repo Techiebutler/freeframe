@@ -280,19 +280,26 @@ describe('a resume at its turn', () => {
 describe('a resume that waits its turn', () => {
   /**
    * This tab was sending the upload until it stopped `stoppedAgo` ms before
-   * the Resume click, and the server last saw it move then too: its own final
-   * part. Three files hold every place, so the Resume waits `waitMs` for its
-   * turn. `serverActivity` is what `/parts` reports as the last movement, when
-   * it should differ from the tab's own stop.
+   * the Resume click. Three files hold every place, so the Resume waits
+   * `waitMs` for its turn. Times are given on this browser's clock:
+   * `lastMoved` is when the server last saw the upload move (by default this
+   * tab's own stop), and the server's clock reads `serverSkew` ms ahead of
+   * this one, in both `last_activity_at` and `server_time`. `/parts` answers
+   * `partsMs` after it is asked and reads its clock as it answers.
    */
   async function resumeAfterWaiting(opts: {
     stoppedAgo: number
     waitMs: number
-    serverActivity?: (turn: number) => number
+    lastMoved?: (t: { clicked: number; turn: number; stoppedAt: number }) => number
+    serverSkew?: number
+    partsMs?: number
+    noServerTime?: boolean
+    serverTimeText?: string
     atTurn?: () => void
   }) {
     vi.useFakeTimers()
     const server = fakeServer(() => 'wait', 'hang')
+    const skew = opts.serverSkew ?? 0
     const clicked = Date.now()
     const stoppedAt = clicked - opts.stoppedAgo
     useUploadStore.setState({
@@ -306,16 +313,35 @@ describe('a resume that waits its turn', () => {
 
     await vi.advanceTimersByTimeAsync(opts.waitMs)
     const turn = Date.now()
-    const lastMoved = opts.serverActivity ? opts.serverActivity(turn) : stoppedAt
-    vi.mocked(api.get).mockImplementation(
-      () => Promise.resolve(resumable({ last_activity_at: new Date(lastMoved).toISOString() })) as never,
-    )
+    const lastMoved = opts.lastMoved ? opts.lastMoved({ clicked, turn, stoppedAt }) : stoppedAt
+    vi.mocked(api.get).mockImplementation(() => new Promise((resolve) => {
+      setTimeout(() => {
+        const answer: Record<string, unknown> = resumable({
+          last_activity_at: new Date(lastMoved + skew).toISOString(),
+          server_time: new Date(Date.now() + skew).toISOString(),
+        })
+        if (opts.noServerTime) delete answer.server_time
+        if (opts.serverTimeText !== undefined) answer.server_time = opts.serverTimeText
+        resolve(answer)
+      }, opts.partsMs ?? 0)
+    }) as never)
     opts.atTurn?.()
     // A place frees up: the Resume's turn.
     server.initiates[0].reject(new ApiError(400, 'No'))
     await flush()
+    await vi.advanceTimersByTimeAsync(opts.partsMs ?? 0)
+    await flush()
     expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
     return server
+  }
+
+  const resumed = (server: ReturnType<typeof fakeServer>) => {
+    expect(rowOf('r').status).toBe('uploading')
+    expect(server.calls).toContain('presign ru')
+  }
+  const refused = (server: ReturnType<typeof fakeServer>) => {
+    expect(rowOf('r').status).toBe('elsewhere')
+    expect(server.calls).not.toContain('presign ru')
   }
 
   afterEach(() => {
@@ -329,25 +355,19 @@ describe('a resume that waits its turn', () => {
     // Clicked 10 s after the stop, started 50 s after it: past the two
     // heartbeats a stopped upload stays this tab's own, inside the server's
     // live window. Nobody but this tab ever touched it.
-    const server = await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000 })
-
-    expect(rowOf('r').status).toBe('uploading')
-    expect(server.calls).toContain('presign ru')
+    resumed(await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000 }))
   })
 
   it('is refused when the server saw the upload move after the click: another device took it up meanwhile', async () => {
-    const server = await resumeAfterWaiting({
+    refused(await resumeAfterWaiting({
       stoppedAgo: 10_000,
       waitMs: 40_000,
-      serverActivity: (turn) => turn - 2_000,
-    })
-
-    expect(rowOf('r').status).toBe('elsewhere')
-    expect(server.calls).not.toContain('presign ru')
+      lastMoved: ({ turn }) => turn - 2_000,
+    }))
   })
 
   it('is refused when another tab of this browser is stamping the row at its turn', async () => {
-    const server = await resumeAfterWaiting({
+    refused(await resumeAfterWaiting({
       stoppedAgo: 10_000,
       waitMs: 40_000,
       atTurn: () => {
@@ -359,17 +379,55 @@ describe('a resume that waits its turn', () => {
         ))
         window.localStorage.setItem('ff-uploads', JSON.stringify(saved))
       },
-    })
-
-    expect(rowOf('r').status).toBe('elsewhere')
-    expect(server.calls).not.toContain('presign ru')
+    }))
   })
 
   it('a Resume clicked after the grace had already passed is judged as before: refused while the server window runs', async () => {
-    const server = await resumeAfterWaiting({ stoppedAgo: 35_000, waitMs: 20_000 })
+    refused(await resumeAfterWaiting({ stoppedAgo: 35_000, waitMs: 20_000 }))
+  })
 
-    expect(rowOf('r').status).toBe('elsewhere')
-    expect(server.calls).not.toContain('presign ru')
+  it('a stamp exactly at the click resumes', async () => {
+    resumed(await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000, lastMoved: ({ clicked }) => clicked }))
+  })
+
+  it('a stamp one second after the click is refused', async () => {
+    refused(await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000, lastMoved: ({ clicked }) => clicked + 1_000 }))
+  })
+
+  it('with this clock 60 s ahead of the server, another sender that presigned 10 s after the click is still refused', async () => {
+    // Read as stamps, the sender's presign is 50 s before the click on this
+    // clock, and would pass for this tab's own last part.
+    refused(await resumeAfterWaiting({
+      stoppedAgo: 10_000,
+      waitMs: 40_000,
+      serverSkew: -60_000,
+      lastMoved: ({ clicked }) => clicked + 10_000,
+    }))
+  })
+
+  it("with the server's clock 60 s ahead and nobody else sending, the tab's own Resume carries on", async () => {
+    // Read as stamps, this tab's own last part is 50 s after the click.
+    resumed(await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000, serverSkew: 60_000 }))
+  })
+
+  it('counts the whole /parts round trip: a server that read its clock as it answered does not hide a move after the click', async () => {
+    // Asked 50 s after the click, answered 5 s later. Another sender moved it
+    // 2 s after the click: 48 s before the server's answer, while the click
+    // was 50 s before the request went out.
+    refused(await resumeAfterWaiting({
+      stoppedAgo: 10_000,
+      waitMs: 50_000,
+      partsMs: 5_000,
+      lastMoved: ({ clicked }) => clicked + 2_000,
+    }))
+  })
+
+  it('a server that sends no server_time leaves the decision as it was: refused after the grace', async () => {
+    refused(await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000, noServerTime: true }))
+  })
+
+  it('a server_time that cannot be read is treated the same way', async () => {
+    refused(await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000, serverTimeText: 'not a time' }))
   })
 })
 
