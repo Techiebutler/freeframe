@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The web app moves to Next.js 16.3.8 and React 19.** It was on Next 14.2.35 and React 18. `middleware.ts` is now `proxy.ts` (Next 16 renamed the file; the checks are unchanged), route `params` are read as promises, and `next lint` is replaced by `eslint .` with an ESLint 9 flat config (`apps/web/eslint.config.mjs`), because Next 16 removed `next lint`. No API, environment variable or Docker setting changes. Node 20.9 or newer is required; the Docker images and CI already use Node 20.
+
 ### Fixed
 - **The database URL pins the psycopg2 driver.** SQLAlchemy 2.1 changed the default driver for a bare `postgresql://` URL from psycopg2 to psycopg (v3), which is not installed; the API now names `psycopg2` explicitly, so the connection keeps working across the upgrade. A `DATABASE_URL` that already names a driver (for example `postgresql+psycopg://` for psycopg v3) is left as is. (#544)
+
+### Security
+- **The web app leaves the Next.js 14 line, which no longer gets security fixes.** 14.2.35 is affected by [GHSA-2xp9-vwfh-vxw4](https://github.com/advisories/GHSA-2xp9-vwfh-vxw4) and [GHSA-p293-qw3h-jr36](https://github.com/advisories/GHSA-p293-qw3h-jr36) (both critical), which are fixed only in 15.5.24 and 16.3.3. 16.3.8 is the current patched 16.3 release; the 16.x advisories published since 16.3.3 are fixed in it.
 
 ## [1.20.0] - 2026-10-23
 
