@@ -91,16 +91,33 @@ function standingOfStoredRow(f: UploadFile, now: number): UploadFile {
   return { ...f, status: 'interrupted', error: undefined }
 }
 
-/** The heartbeat the row carries in shared storage right now, as the tab doing
- *  the work last wrote it -- not the copy this tab read when it loaded. */
-function storedHeartbeat(fileId: string): number | undefined {
+/** Who is sending the row, as shared storage holds it right now: what the tab
+ *  doing the work last wrote, not the copy this tab read when it loaded. */
+function storedRow(fileId: string): { ownerTab?: string; heartbeatAt?: number } | undefined {
   try {
     const raw = window.localStorage.getItem('ff-uploads')
     const files = (JSON.parse(raw ?? '{}') as { state?: { files?: UploadFile[] } }).state?.files
-    return files?.find((f) => f.id === fileId)?.heartbeatAt
+    const found = files?.find((f) => f.id === fileId)
+    return found ? { ownerTab: found.ownerTab, heartbeatAt: found.heartbeatAt } : undefined
   } catch {
     return undefined
   }
+}
+
+/** The heartbeat the row carries in shared storage right now. */
+function storedHeartbeat(fileId: string): number | undefined {
+  return storedRow(fileId)?.heartbeatAt
+}
+
+/** Whether shared storage says another tab of this browser is sending the row now. */
+function beatingInAnotherTab(fileId: string, now: number): boolean {
+  const stored = storedRow(fileId)
+  return (
+    stored?.ownerTab !== undefined &&
+    stored.ownerTab !== currentTabId() &&
+    stored.heartbeatAt !== undefined &&
+    now - stored.heartbeatAt < LIVE_WINDOW_MS
+  )
 }
 
 /**
@@ -149,6 +166,12 @@ function activeElsewhere(
   // server anything, so without excluding it here every resume would count as
   // this tab already sending and the guard would never refuse.
   if (isSendingHere(row.id, attempt)) return false
+  // Another tab of this browser is stamping it. The server's
+  // `last_activity_at` cannot say so: it records that bytes moved, and a tab
+  // that has just taken the upload up has not moved any yet. Read before the
+  // exemption below, because a row this tab sent until a moment ago may have
+  // been taken up by another tab since.
+  if (beatingInAnotherTab(row.id, now)) return true
   const ownAndRecent =
     row.ownerTab === currentTabId() &&
     row.heartbeatAt !== undefined &&
@@ -1078,7 +1101,19 @@ interface UploadStore {
   resumeUpload: (fileId: string, file: File) => void
   /** Resolves to a message saying why nothing was discarded, or null. */
   discardUpload: (fileId: string) => Promise<string | null>
+  /**
+   * Cancels a row by where it stands (spec, "Row lifecycle"): one not yet
+   * started leaves the list; one whose initiate is out is thrown away when it
+   * answers; a resume that has sent nothing goes back to plain `interrupted`;
+   * one already sending is aborted and discarded.
+   */
   cancelUpload: (fileId: string) => void
+  /** Cancels every row still waiting for its turn, never one whose turn has begun. */
+  cancelAllQueued: () => void
+  /** Puts a refused row back in the queue, next, while this tab still holds its `File`. */
+  retryUpload: (fileId: string) => void
+  /** Whether `retryUpload` would start this row again. */
+  canRetry: (fileId: string) => boolean
   /** Rename the asset a row is uploading. Resolves to an error message, or
    *  null when the new name is stored. */
   renameUpload: (fileId: string, name: string) => Promise<string | null>
@@ -1277,6 +1312,10 @@ interface Runner {
   sizeBytes: number
   /** Parts not yet finished; 'unknown' until the initiate or `/parts` answers. */
   unfinished: number | 'unknown'
+  /** Cancelled while its initiate was out: the row leaves the list once the run has settled. */
+  removeWhenSettled?: true
+  /** A resume cancelled while it asked `/parts`: it sends nothing and aborts nothing. */
+  stoodDown?: true
 }
 
 const runners = new Map<string, Runner>()
@@ -1295,6 +1334,17 @@ const startTargets = new Map<string, StartTarget>()
 let probeTimer: ReturnType<typeof setTimeout> | null = null
 
 let dropSeqs = 0
+
+/**
+ * Rows whose Discard is waiting on the server, counted per call. A Resume of
+ * one would start sending into the upload the Discard is about to abort.
+ */
+const discarding = new Map<string, number>()
+
+/** A row refused before it started, whose `File` this tab still holds. */
+function retryable(row: UploadFile): boolean {
+  return row.status === 'failed' && row.failedBeforeStart === true && row.retryable === true && fileRefs.has(row.id)
+}
 
 /** A row id. Two drops of the same `File` are two rows. */
 const newRowId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -1395,6 +1445,11 @@ function endRun(id: string, runner: Runner, runKey: string): void {
   // A run that never reached its parts left only its rank behind.
   partBudget.forget(runKey)
   if (runners.get(id) === runner) runners.delete(id)
+  // Cancelled while starting: whatever the initiate created has been thrown
+  // away by now, so there is nothing left for the row to say.
+  if (runner.removeWhenSettled) {
+    useUploadStore.setState((s) => ({ files: s.files.filter((f) => f.id !== id) }))
+  }
   const row = rowById(id)
   const stillWaiting = turnKind(row) !== null || queue.hold.probeId === id
   if (!stillWaiting && !row?.retryable) {
@@ -1778,6 +1833,13 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`)
     } catch (err) {
       const outcome = isAbortError(err) || isFinalRefusal(err) ? null : classifyInitiateError(err)
+      // Cancelled while it asked: the row is already plain `interrupted` again,
+      // whatever this answer says. Only the hold has to hear it.
+      if (runner.stoodDown) {
+        if (outcome?.kind === 'hold' && queue.hold.probeId === id) passOnProbe()
+        else endHoldIfProbe(id)
+        return
+      }
       if (outcome?.kind === 'hold' && rowById(id)?.status === 'starting') {
         if (!(err instanceof ApiError) && queue.hold.probeId !== id) {
           console.warn('Upload could not resume; waiting for the connection.', err)
@@ -1790,6 +1852,9 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       throw err
     }
     endHoldIfProbe(id)
+    // Cancelled while it asked. Nothing has been sent and nothing is thrown
+    // away: the parts on the server are what a later Resume carries on from.
+    if (runner.stoodDown) return
 
     // Two tabs sending the same part numbers into one multipart upload leave
     // the completing tab with ETags that no longer match what is stored.
@@ -2038,8 +2103,12 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     const row = get().files.find((f) => f.id === fileId)
     // Not while a run of this row is still settling: a run whose transfer
     // broke is still asking the server what became of it, and its answer
-    // would land on the row a second run is sending.
-    if (!row || row.status !== 'interrupted' || !row.versionId || row.queuedResume || runners.has(fileId)) return
+    // would land on the row a second run is sending. Nor while a Discard of
+    // it is waiting on the server, which is about to abort what it would send.
+    if (
+      !row || row.status !== 'interrupted' || !row.versionId || row.queuedResume ||
+      runners.has(fileId) || discarding.has(fileId)
+    ) return
     fileRefs.set(fileId, file)
     // A Resume goes ahead of every file not yet started, behind the ones
     // already running, and takes its turn like them -- so it never sends
@@ -2054,126 +2123,163 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   },
 
   discardUpload: async (fileId) => {
-    // The counterpart to no longer aborting on failure. Without it the only way
-    // to be rid of an upload the user does not want back is to wait for the
-    // reaper, and the row would keep offering a resume in the meantime.
-    const row = get().files.find((f) => f.id === fileId)
-    if (!row) return null
-    // A queued resume gives up its turn first, before any round trip: its turn
-    // coming while this asks the server would start sending into the upload
-    // this is about to abort.
-    if (row.queuedResume) {
-      forgetQueued(fileId)
-      fileRefs.delete(fileId)
-      set((s) => ({
-        files: s.files.map((f) => (f.id === fileId ? { ...f, queuedResume: undefined, holdReason: undefined } : f)),
-      }))
-    }
-    const drop = () => {
-      forgetQueued(fileId)
-      fileRefs.delete(fileId)
-      startTargets.delete(fileId)
-      set((s) => ({ files: s.files.filter((f) => f.id !== fileId) }))
-    }
-    if (!row.versionId) {
-      drop()
-      return null
-    }
-
-    let info: ResumeInfo
+    // Counted for as long as the server is being asked: see `resumeUpload`.
+    discarding.set(fileId, (discarding.get(fileId) ?? 0) + 1)
     try {
-      info = await api.get<ResumeInfo>(`/upload/${row.versionId}/parts`)
-    } catch (err) {
-      // 404 or 409: the version is gone or no longer uploading, so the row has
-      // nothing to offer. The multipart upload behind it may still be open --
-      // `/parts` answering 404 says nothing about storage -- and leaving it to
-      // the reaper holds every part already sent until then. A row that
-      // recorded its key and upload id can abort without being told them.
-      if (isFinalRefusal(err)) {
-        if (row.s3Key && row.uploadId) {
-          try {
-            await api.post('/upload/abort', {
-              s3_key: row.s3Key,
-              upload_id: row.uploadId,
-              version_id: row.versionId,
-              discard: true,
-            })
-          } catch (abortErr) {
-            // The upload is already gone too: the same answer from the other
-            // side, and what Discard wanted to happen has happened.
-            if (!(abortErr instanceof ApiError && abortErr.status === 404)) {
-              return reportDiscardFailure(set, fileId, abortErr)
-            }
-          }
-        }
-        drop()
-        set((s) => ({ versionsRevision: s.versionsRevision + 1 }))
-        return null
-      }
-      return reportDiscardFailure(set, fileId, err)
-    }
-
-    // The server has seen this upload move within the window, and this tab is
-    // not the one moving it. Discard succeeds on every check the server can
-    // make -- the version really is still uploading -- and the tab doing the
-    // transfer gets NoSuchUpload on its next part.
-    if (activeElsewhere(row, info, Date.now())) {
-      set((s) => ({
-        files: s.files.map((f) => (f.id === fileId
-          // Held until the server's window runs out rather than for a fresh
-          // one from now: the poll then offers the row again the moment a
-          // second attempt can succeed.
-          ? { ...f, status: 'elsewhere' as const, elsewhereUntil: liveUntil(info.last_activity_at) }
-          : f)),
-      }))
-      return ELSEWHERE_MESSAGE
-    }
-
-    try {
-      // `discard` and not a plain abort. A plain abort marks the version
-      // `failed`, which leaves a red badge in the version switcher for an
-      // upload somebody deliberately threw away -- and it takes its own branch
-      // when the object is already whole, promoting the version and dispatching
-      // the transcode, so the one control that exists to throw an upload away
-      // published it instead. A discard says which of the two this is, and the
-      // server disposes of it the way the reaper disposes of a stale upload:
-      // bytes gone, version gone, and the asset with it if that was its only
-      // version.
-      await api.post('/upload/abort', {
-        s3_key: info.s3_key,
-        upload_id: info.upload_id,
-        version_id: info.version_id,
-        discard: true,
-      })
-    } catch (err) {
-      return reportDiscardFailure(set, fileId, err)
-    }
-    // Only now. The row used to leave the list before the request and every
-    // failure was swallowed, so a 503 from unreachable storage left no row, no
-    // error, and a version the reaper would not touch for a day.
-    drop()
-    // Said after the server has answered: a screen showing this asset's
-    // versions has to refetch, and refetching while the delete is in flight
-    // would fetch the version back.
-    set((s) => ({ versionsRevision: s.versionsRevision + 1 }))
-    return null
-  },
-
-  cancelUpload: (fileId) => {
-    const row = get().files.find((f) => f.id === fileId)
-    // Not started, so nothing to stop: it only gives up its place. A queued
-    // resume goes back to plain `interrupted`, still resumable.
-    forgetQueued(fileId)
-    if (row?.status === 'interrupted') {
+      // The counterpart to no longer aborting on failure. Without it the only way
+      // to be rid of an upload the user does not want back is to wait for the
+      // reaper, and the row would keep offering a resume in the meantime.
+      const row = get().files.find((f) => f.id === fileId)
+      if (!row) return null
+      // A queued resume gives up its turn first, before any round trip: its turn
+      // coming while this asks the server would start sending into the upload
+      // this is about to abort.
       if (row.queuedResume) {
+        forgetQueued(fileId)
         fileRefs.delete(fileId)
         set((s) => ({
           files: s.files.map((f) => (f.id === fileId ? { ...f, queuedResume: undefined, holdReason: undefined } : f)),
         }))
       }
+      const drop = () => {
+        forgetQueued(fileId)
+        fileRefs.delete(fileId)
+        startTargets.delete(fileId)
+        set((s) => ({ files: s.files.filter((f) => f.id !== fileId) }))
+      }
+      if (!row.versionId) {
+        drop()
+        return null
+      }
+
+      let info: ResumeInfo
+      try {
+        info = await api.get<ResumeInfo>(`/upload/${row.versionId}/parts`)
+      } catch (err) {
+        // 404 or 409: the version is gone or no longer uploading, so the row has
+        // nothing to offer. The multipart upload behind it may still be open --
+        // `/parts` answering 404 says nothing about storage -- and leaving it to
+        // the reaper holds every part already sent until then. A row that
+        // recorded its key and upload id can abort without being told them.
+        if (isFinalRefusal(err)) {
+          if (row.s3Key && row.uploadId) {
+            try {
+              await api.post('/upload/abort', {
+                s3_key: row.s3Key,
+                upload_id: row.uploadId,
+                version_id: row.versionId,
+                discard: true,
+              })
+            } catch (abortErr) {
+              // The upload is already gone too: the same answer from the other
+              // side, and what Discard wanted to happen has happened.
+              if (!(abortErr instanceof ApiError && abortErr.status === 404)) {
+                return reportDiscardFailure(set, fileId, abortErr)
+              }
+            }
+          }
+          drop()
+          set((s) => ({ versionsRevision: s.versionsRevision + 1 }))
+          return null
+        }
+        return reportDiscardFailure(set, fileId, err)
+      }
+
+      // The server has seen this upload move within the window, and this tab is
+      // not the one moving it. Discard succeeds on every check the server can
+      // make -- the version really is still uploading -- and the tab doing the
+      // transfer gets NoSuchUpload on its next part.
+      if (activeElsewhere(row, info, Date.now())) {
+        set((s) => ({
+          files: s.files.map((f) => (f.id === fileId
+            // Held until the server's window runs out rather than for a fresh
+            // one from now: the poll then offers the row again the moment a
+            // second attempt can succeed.
+            ? { ...f, status: 'elsewhere' as const, elsewhereUntil: liveUntil(info.last_activity_at) }
+            : f)),
+        }))
+        return ELSEWHERE_MESSAGE
+      }
+
+      try {
+        // `discard` and not a plain abort. A plain abort marks the version
+        // `failed`, which leaves a red badge in the version switcher for an
+        // upload somebody deliberately threw away -- and it takes its own branch
+        // when the object is already whole, promoting the version and dispatching
+        // the transcode, so the one control that exists to throw an upload away
+        // published it instead. A discard says which of the two this is, and the
+        // server disposes of it the way the reaper disposes of a stale upload:
+        // bytes gone, version gone, and the asset with it if that was its only
+        // version.
+        await api.post('/upload/abort', {
+          s3_key: info.s3_key,
+          upload_id: info.upload_id,
+          version_id: info.version_id,
+          discard: true,
+        })
+      } catch (err) {
+        return reportDiscardFailure(set, fileId, err)
+      }
+      // Only now. The row used to leave the list before the request and every
+      // failure was swallowed, so a 503 from unreachable storage left no row, no
+      // error, and a version the reaper would not touch for a day.
+      drop()
+      // Said after the server has answered: a screen showing this asset's
+      // versions has to refetch, and refetching while the delete is in flight
+      // would fetch the version back.
+      set((s) => ({ versionsRevision: s.versionsRevision + 1 }))
+      return null
+    } finally {
+      const left = (discarding.get(fileId) ?? 1) - 1
+      if (left > 0) discarding.set(fileId, left)
+      else discarding.delete(fileId)
+    }
+  },
+
+  cancelUpload: (fileId) => {
+    const row = get().files.find((f) => f.id === fileId)
+    if (!row) return
+    const runner = runners.get(fileId)
+
+    // Not started, or the hold's probe between tries: nothing is on the
+    // server, so the row only leaves. A probe passes the hold on as it goes.
+    if (row.status === 'queued' && !runner) {
+      fileRefs.delete(fileId)
+      startTargets.delete(fileId)
+      set((s) => ({ files: s.files.filter((f) => f.id !== fileId) }))
+      forgetQueued(fileId)
       return
     }
-    if (!runners.has(fileId)) {
+
+    // A queued or held resume goes back to plain `interrupted`, still
+    // resumable. Nothing is aborted: its parts on the server are the point.
+    if (row.status === 'interrupted') {
+      if (row.queuedResume) {
+        fileRefs.delete(fileId)
+        set((s) => ({
+          files: s.files.map((f) => (f.id === fileId ? { ...f, queuedResume: undefined, holdReason: undefined } : f)),
+        }))
+        forgetQueued(fileId)
+      }
+      return
+    }
+
+    // A resume whose turn has begun and that has sent nothing yet: the same.
+    // Its run keeps its place until `/parts` answers, then ends quietly.
+    if (row.status === 'starting' && row.resuming && runner) {
+      runner.stoodDown = true
+      set((s) => ({
+        files: s.files.map((f) => (f.id === fileId
+          ? { ...f, status: 'interrupted' as const, resuming: undefined, holdReason: undefined }
+          : f)),
+      }))
+      return
+    }
+
+    // Initiating: what the initiate creates is thrown away when it answers
+    // (see `runNew`), and only then does the row leave.
+    if (row.status === 'starting' && runner) runner.removeWhenSettled = true
+    if (!runner) {
       fileRefs.delete(fileId)
       startTargets.delete(fileId)
     }
@@ -2183,6 +2289,43 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         f.id === fileId ? { ...f, status: 'cancelled' as const, progress: 0 } : f,
       ),
     }))
+  },
+
+  cancelAllQueued: () => {
+    // Each row by its own rule. A held probe hands the hold down the line as
+    // it goes, and the last one out finds nobody waiting and ends it.
+    const waiting = get().files.filter(
+      (f) => (f.status === 'queued' || (f.status === 'interrupted' && f.queuedResume)) && !runners.has(f.id),
+    )
+    for (const f of waiting) get().cancelUpload(f.id)
+  },
+
+  retryUpload: (fileId) => {
+    const row = get().files.find((f) => f.id === fileId)
+    if (!row || !retryable(row) || runners.has(fileId)) return
+    // Next, like a Resume: ahead of every file not yet started, and during a
+    // hold behind the probe.
+    queue.enqueue([queueEntry(row, 'new')], 'next')
+    set((s) => ({
+      files: s.files.map((f) => (f.id === fileId
+        ? {
+            ...f,
+            status: 'queued' as const,
+            progress: 0,
+            error: undefined,
+            failedBeforeStart: undefined,
+            retryable: undefined,
+            dropSeq: ++dropSeqs,
+            queueSeq: queue.queueSeq(fileId),
+          }
+        : f)),
+    }))
+    pump()
+  },
+
+  canRetry: (fileId) => {
+    const row = get().files.find((f) => f.id === fileId)
+    return row !== undefined && retryable(row)
   },
 
   renameUpload: async (fileId, name) => {
@@ -2491,8 +2634,9 @@ function savedRow(f: UploadFile): UploadFile | null {
  *    answers with the display version, which skips `uploading`, so a second
  *    version's upload has no row anywhere and no offer to resume.
  *
- * A row this tab owns is always written as this tab has it: nobody else is in a
- * position to know better.
+ * A row this tab owns is written as this tab has it: nobody else is in a
+ * position to know better -- unless another tab has stamped it more recently,
+ * which means that tab took the upload up after this one stopped.
  */
 function mergeWithStored(name: string, outgoing: string): string {
   try {
@@ -2514,7 +2658,16 @@ function mergeWithStored(name: string, outgoing: string): string {
         if (row.ownerTab && row.ownerTab !== mine && beating) byId.set(row.id, row)
         continue
       }
-      if (here.ownerTab === mine) continue
+      if (here.ownerTab === mine) {
+        // Unless another tab has stamped it since this one last did: that tab
+        // took the upload up after this one stopped, and this copy is the
+        // stale one. Written back over it, the other tab's stamp would be gone
+        // by the time this tab's Resume asks who is sending it.
+        const takenUp = row.ownerTab !== undefined && row.ownerTab !== mine &&
+          (row.heartbeatAt ?? 0) > (here.heartbeatAt ?? 0)
+        if (takenUp) byId.set(row.id, row)
+        continue
+      }
       if ((row.heartbeatAt ?? 0) >= (here.heartbeatAt ?? 0)) byId.set(row.id, row)
     }
 
@@ -2628,6 +2781,7 @@ export const __uploadQueueTesting = {
     probeTimer = null
     queue = createUploadQueue()
     runners.clear()
+    discarding.clear()
     fileRefs.clear()
     startTargets.clear()
     for (const id of Object.keys(abortControllers)) delete abortControllers[id]
