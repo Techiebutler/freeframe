@@ -1,15 +1,16 @@
 import { expect, test } from '@playwright/test'
 import { primary } from '../fixtures/accounts'
 import { makeFiles } from '../fixtures/files'
-import { createProject, dropFiles, openUploads, resetUploads, rows, signIn } from '../fixtures/stack'
+import { createProject, dropFiles, openUploads, rows, signInThroughForm } from '../fixtures/stack'
 
 test('a dropped 3 MB file uploads and shows up as one asset', async ({ page }, testInfo) => {
   const account = await primary()
   const stamp = `${Date.now()}`
   const name = `smoke-${stamp}`
 
-  await signIn(page, account)
-  await resetUploads(page)
+  // The one place the login form is exercised on every run (the setup project
+  // reuses saved sessions): a real POST /auth/login, ending on /projects.
+  await signInThroughForm(page, account)
   const project = await createProject(account, `E2E smoke ${stamp}`)
   // A PNG, so the transcoder can read it and the row finishes instead of
   // sitting in "Processing" (see makeFiles).

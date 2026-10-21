@@ -109,27 +109,42 @@ passes would hide the races they exist to catch. A failure keeps a trace:
 `secondary` an ordinary member invited by it. If the database is wiped (the instance reports
 `needs_setup` again) the cache is dropped and both are recreated.
 
-**Sessions.** The `setup` project (`tests/auth.setup.ts`) signs each account in through the real
-login form, in password mode, and saves the session to `e2e/.auth/<account>.json`. Tests call
-`signIn(page, account)`, which loads that file, so a suite of any size makes two `/auth/login`
-calls, against a limit of 10 per 600 s. A session whose refresh token still works is kept
-rather than replaced, so back-to-back runs make none. Every browser project depends on `setup`,
-which always runs in Chromium; a saved session is plain cookies and localStorage and loads in
-any engine.
+**Sessions.** Two things sign in, for two different reasons.
+
+- The `setup` project (`tests/auth.setup.ts`) signs each account in through the login form and
+  saves the session to `e2e/.auth/<account>.json`. Every other test calls `signIn(page, account)`,
+  which loads that file, so a suite of any size makes no `/auth/login` calls of its own. A
+  session whose refresh token still works is kept, and its setup test is reported as **skipped**,
+  not passed. Every browser project depends on `setup`, which always runs in Chromium; a saved
+  session is plain cookies and localStorage and loads in any engine. `E2E_FORCE_LOGIN=1` signs
+  in again regardless.
+- The smoke scenario (`tests/smoke.spec.ts`) logs in through the real form with
+  `signInThroughForm` on every run, so a regression in the form fails a test even when the
+  setup project skipped it.
+
+That is about one `POST /auth/login` per browser project per run (the limit is 10 per 600 s per
+IP), and three on a run that signs in afresh. If a burst of runs trips it, the counter is one
+key in the stack's Redis: `docker exec <redis container> redis-cli del rl:login:<your ip>`.
 
 **Fixtures** (`fixtures/`):
 
 | File          | Gives you |
 | ------------- | --------- |
-| `stack.ts`    | `apiUrl()`, `signIn`, `createProject`, `resetUploads`, `openUploads`, `dropFiles`, `rows` |
+| `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm`, `createProject`, `resetUploads`, `openUploads`, `dropFiles`, `rows` |
 | `files.ts`    | `makeFiles` (real random-content files on disk), `touch`, `remove`, `rewrite`, `liveFilesDir` |
-| `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `failInitiate`, `countRequests`, all on `page.route` |
+| `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `failInitiate`, `countRequests`, all on `page.route` (`throttleParts` also reads part sizes the page records) |
 | `accounts.ts` | `primary()`, `secondary()` and the `Account` type |
 
 `dropFiles` cannot drag from the desktop, so it builds the `DataTransfer` a browser would: real
 `File` objects read from disk, delivered as `dragenter`, `dragover` and `drop`. `rows` reads the
 uploads panel's DOM. Both depend on how those parts of the page are built, and the selectors
 are kept in `fixtures/stack.ts`.
+
+`tests/fixtures.spec.ts` checks each fixture's observable effect (a throttled part really is
+slow, an injected 500 reaches the page, a folder drop lands in the folder, ...) on every engine.
+Run it after touching anything in `fixtures/`. One of its tests is marked `test.fail()`: it
+passes by failing, because `throttleParts` must stop a test, not pass through, when it cannot
+tell how big a part is. The list reporter draws such a pass as a red cross, but counts it as passed.
 
 ## Traps
 

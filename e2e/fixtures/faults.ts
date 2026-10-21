@@ -71,27 +71,49 @@ async function recordPartSizes(page: Page): Promise<void> {
   await page.evaluate(install).catch(() => {}) // the page that is already open, if any
 }
 
-/** Bytes in a part PUT's body, from whichever source this engine offers. */
-async function bodyBytes(page: Page, request: Request): Promise<number> {
+/**
+ * Bytes in a part PUT's body, from whichever source this engine offers.
+ *
+ * Throws when none of them knows the size (or it is zero). `throttleParts`
+ * needs it to compute a delay, and a part passed through undelayed would make
+ * every scenario built on a throttle pass without a slow transfer ever having
+ * happened. A throw inside a route handler fails the running test at once.
+ */
+export async function partBodyBytes(page: Page, request: Request): Promise<number> {
   const buffered = request.postDataBuffer()
-  if (buffered) return buffered.length
-  const declared = Number(request.headers()['content-length'])
-  if (Number.isFinite(declared) && declared > 0) return declared
-  const u = new URL(request.url())
-  const key = `${u.searchParams.get('uploadId')}:${u.searchParams.get('partNumber')}`
-  return page.evaluate((k) => (window as any).__e2ePartSizes?.[k] ?? 0, key).catch(() => 0)
+  let bytes = buffered ? buffered.length : 0
+  if (!bytes) {
+    const declared = Number(request.headers()['content-length'])
+    if (Number.isFinite(declared)) bytes = declared
+  }
+  if (!bytes) {
+    const u = new URL(request.url())
+    const key = `${u.searchParams.get('uploadId')}:${u.searchParams.get('partNumber')}`
+    bytes = await page.evaluate((k) => (window as any).__e2ePartSizes?.[k] ?? 0, key).catch(() => 0)
+  }
+  if (!(bytes > 0)) {
+    throw new Error(
+      `throttleParts: cannot determine the size of the body of ${request.method()} ${request.url().split('?')[0]}` +
+        ' (no postData, no content-length, and the page recorded none), so it cannot be throttled.' +
+        ' Passing it through unthrottled would make the scenario pass without a slow transfer.',
+    )
+  }
+  return bytes
 }
 
 /**
  * Delay every part PUT by its body size over `bytesPerSec`, so a transfer takes
  * the time a slow link would. Each PUT is held, then sent: parts run in
  * parallel, so the link modelled is one that is slow per request.
+ *
+ * A part whose size cannot be determined fails the test (see `partBodyBytes`)
+ * rather than going through unthrottled.
  */
 export async function throttleParts(page: Page, bytesPerSec: number): Promise<void> {
   await recordPartSizes(page)
   await page.route(partUrl, async (route: Route, request: Request) => {
     if (!isPartPut(request)) return route.fallback()
-    const bytes = await bodyBytes(page, request)
+    const bytes = await partBodyBytes(page, request)
     await sleep((bytes / bytesPerSec) * 1000)
     await route.fallback()
   })

@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import { type Account, accessToken, json, savedRefreshToken } from './accounts'
 import { authFile } from './env'
@@ -37,6 +37,55 @@ export async function signIn(page: Page, account: Account): Promise<void> {
   await page.evaluate((entries) => {
     for (const { name, value } of entries) window.localStorage.setItem(name, value)
   }, items)
+}
+
+/**
+ * Sign `page` in as `account` the way a person does: through the real login
+ * form, in password mode, ending on `/projects`.
+ *
+ * Each call is one `POST /auth/login`, which allows 10 per 600 s per IP, so
+ * use it where the form is the thing under test (the smoke scenario, and the
+ * `setup` project when it has no session to reuse) and `signIn` everywhere else.
+ */
+export async function signInThroughForm(page: Page, account: Account): Promise<void> {
+  await page.goto('/login')
+  // The form opens in magic-code mode unless the instance defaults to a password.
+  const toPassword = page.getByRole('button', { name: 'Sign in with password instead' })
+  const password = page.getByPlaceholder('Your password')
+  await expect(toPassword.or(password)).toBeVisible()
+  // Let React hydrate before typing: a controlled input is reset to '' when it does.
+  await page.waitForLoadState('networkidle')
+  if (await toPassword.isVisible()) await toPassword.click()
+
+  await page.getByPlaceholder('you@example.com').fill(account.email)
+  await password.fill(account.password)
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page).toHaveURL(/\/projects/)
+  await settleOn(page, '/projects')
+}
+
+/**
+ * Load `path` for real, and be sure nothing is still on its way to the page.
+ *
+ * The app gets from the login form to /projects by a client-side navigation
+ * that, on a dev server still compiling the page, fails (`ChunkLoadError`) and
+ * falls back to a full page load of /projects a moment after the URL has
+ * already changed. A `page.goto` made in that moment is interrupted by it
+ * ("interrupted by another navigation to /projects"); seen in WebKit in half
+ * of a series of runs. Loading the page ourselves replaces whatever the router
+ * had pending, and an interruption means the fallback got there first, which is
+ * the same place.
+ */
+async function settleOn(page: Page, path: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await page.goto(path)
+      return
+    } catch (error) {
+      if (attempt >= 2 || !/interrupted by another navigation/.test(String(error))) throw error
+      await page.waitForLoadState('load')
+    }
+  }
 }
 
 /** Whether an account's saved session still works: its refresh token buys a new access token. */
@@ -80,6 +129,15 @@ export async function resetUploads(page: Page): Promise<void> {
 
 // ─── The uploads panel ─────────────────────────────────────────────────────────
 
+/**
+ * The sidebar's Uploads button. Titled "Uploads" in the narrow rail, labelled by
+ * a span in the wide sidebar; a badge with the active count replaces the
+ * accessible name in the rail, so neither can be found by role.
+ */
+function uploadsButton(page: Page): Locator {
+  return page.locator('button[title="Uploads"], button:has(span:text-is("Uploads"))').first()
+}
+
 /** The uploads panel: the fixed column that holds the "Uploads" heading. */
 function uploadsPanel(page: Page): Locator {
   return page.locator('div.fixed', { has: page.getByRole('heading', { name: /^Uploads/ }) })
@@ -96,13 +154,7 @@ function uploadsPanel(page: Page): Locator {
 export async function openUploads(page: Page): Promise<void> {
   const panel = uploadsPanel(page)
   if (!(await panel.isVisible())) {
-    // Titled "Uploads" in the narrow rail, labelled by a span in the wide
-    // sidebar. A badge with the active count replaces the accessible name in
-    // the rail, so neither can be found by role.
-    await page
-      .locator('button[title="Uploads"], button:has(span:text-is("Uploads"))')
-      .first()
-      .click()
+    await uploadsButton(page).click()
     await panel.waitFor({ state: 'visible' })
   }
   // The tab's name is "All" followed by its count with no space, "All1".
