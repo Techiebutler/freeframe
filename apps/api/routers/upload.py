@@ -2,7 +2,10 @@ import logging
 import math
 import os
 import time
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import (
+    BotoCoreError, ClientError, HTTPClientError, SSLError,
+    ConnectionError as BotoConnectionError,
+)
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 import uuid
@@ -113,7 +116,14 @@ def initiate_upload(
     s3_key = f"raw/{body.project_id}/{asset.id}/{version.id}/original{ext}"
 
     # Initiate S3 multipart upload
-    upload_id = create_multipart_upload(s3_key, body.mime_type)
+    try:
+        upload_id = create_multipart_upload(s3_key, body.mime_type)
+    except Exception as exc:  # noqa: BLE001 - classified by storage_initiate_error
+        err = storage_initiate_error(exc)
+        if err is None:
+            raise
+        db.rollback()
+        raise err from exc
 
     # Record which S3 upload backs this version. Without it nothing server-side can
     # map a version to its multipart upload, so the reaper has to sweep the whole
@@ -197,6 +207,59 @@ def presign_part(
     db.commit()
 
     return PresignPartResponse(presigned_url=url, part_number=body.part_number)
+
+
+# Codes S3 and its clones use for "try again shortly". Some stores answer them with
+# a 4xx, so the code is checked as well as the status.
+_TRANSIENT_STORAGE_CODES = frozenset({"SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout"})
+
+
+def storage_initiate_error(exc: Exception) -> HTTPException | None:
+    """The coded answer for a storage failure while an upload is being started.
+
+    503 `storage_unavailable` (with `Retry-After`) when waiting could help: storage
+    could not be reached, timed out, or is shedding load. 500 `storage_error` when
+    it answered and refused, or its certificate does not validate: waiting will not
+    fix either, and the admin has to. None for everything else, which the caller
+    re-raises: a bad argument or a bug is not a storage outage and must stay loud.
+
+    The web queue keys off `code` to decide between backing off and giving up.
+    """
+    transient = False
+    if isinstance(exc, SSLError):
+        # botocore files SSLError under ConnectionError, so this has to come first.
+        pass
+    elif isinstance(exc, (BotoConnectionError, HTTPClientError)):
+        transient = True
+    elif isinstance(exc, ClientError):
+        status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        code = exc.response.get("Error", {}).get("Code")
+        transient = (
+            (isinstance(status_code, int) and status_code >= 500)
+            or code in _TRANSIENT_STORAGE_CODES
+        )
+    else:
+        return None
+
+    # Handled here, so nothing else will record why storage failed.
+    logger.warning("Storage failed while starting an upload: %r", exc)
+    if transient:
+        return HTTPException(
+            status_code=503,
+            detail={
+                "code": "storage_unavailable",
+                "message": "Could not reach storage to start this upload. Please retry.",
+                "retry_after": 5,
+            },
+            headers={"Retry-After": "5"},
+        )
+    return HTTPException(
+        status_code=500,
+        detail={
+            "code": "storage_error",
+            "message": "Storage refused the upload. Ask your admin to check the storage settings.",
+        },
+    )
 
 
 def _storage_unreachable(what: str = "check") -> HTTPException:

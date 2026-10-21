@@ -29,6 +29,7 @@ from ..schemas.upload import (
 from ..services.storage import choose_part_size, upload_guard_error
 from ..services.versions import next_version_number
 from ..services.s3_service import create_multipart_upload
+from .upload import storage_initiate_error
 
 router = APIRouter(tags=["assets"])
 
@@ -461,7 +462,14 @@ def initiate_new_version(
 
     ext = os.path.splitext(body.original_filename)[1].lower()
     s3_key = f"raw/{asset.project_id}/{asset_id}/{version.id}/original{ext}"
-    upload_id = create_multipart_upload(s3_key, body.mime_type)
+    try:
+        upload_id = create_multipart_upload(s3_key, body.mime_type)
+    except Exception as exc:  # noqa: BLE001 - classified by storage_initiate_error
+        err = storage_initiate_error(exc)
+        if err is None:
+            raise
+        db.rollback()
+        raise err from exc
 
     # Record which S3 upload backs this version. Without it nothing server-side can
     # map a version to its multipart upload, so the reaper has to sweep the whole
