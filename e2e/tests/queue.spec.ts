@@ -376,9 +376,10 @@ test('Q3: the second of two drops 2 s apart starts after the first', async ({ pa
   const { project } = await openProject(page, 'Q3')
   const traffic = recordTraffic(page)
   const hold = await holdParts(page)
-  // Each initiate answers 1.2 s late, so a file that has begun and has no ids yet stays in "Starting…" long enough to read.
+  // Each initiate answers 2.5 s late, so a file that has begun and has no ids yet stays in "Starting…" long enough to read
+  // (at 1.2 s the panel poll could miss it on a slow machine).
   await page.route(INITIATE, async (route, request) => {
-    if (request.method() === 'POST') await new Promise((resolve) => setTimeout(resolve, 1_200))
+    if (request.method() === 'POST') await new Promise((resolve) => setTimeout(resolve, 2_500))
     await route.fallback()
   })
   const first = await pngs(testInfo, 'q3a', Array(6).fill(1 * MB))
@@ -768,6 +769,47 @@ test('R1: a Resume made while ten files are queued starts next, and stays saved 
   expect(throughout.filter((w) => w.has !== true), 'writes that lost the row').toEqual([])
   // It went from saved as Interrupted (while it waited) to saved as Uploading (while it sent).
   expect(new Set(throughout.map((w) => w.status))).toEqual(new Set(['interrupted', 'uploading']))
+})
+
+/**
+ * KNOWN BUG, found by the phase 2 live Chrome pass (live-runs/2026-10-22-phase-2.md, R1 and APP-BUG-1), so
+ * marked `test.fail()`: it passes while the bug is there and fails ("expected to fail") the day it is fixed.
+ * The fix's author removes the marker.
+ *
+ * A Resume that has to wait in the queue is read as "Still uploading in another tab or on another
+ * device" when its turn comes, if its turn comes more than 30 s (OWN_STOP_GRACE_MS) after the page that was
+ * sending it stopped. `activeElsewhere` keeps the user's control of their own upload only for that grace,
+ * measured from the row's last heartbeat, and nothing refreshes that heartbeat while the Resume waits.
+ * R1 does not see it because its Resume starts within seconds of the page closing. A Resume clicked
+ * inside the grace and started after it ends as Elsewhere, with no part sent and no Resume or Discard on
+ * the row, for what is left of the 150 s live window.
+ */
+test('R1b: a Resume that waits in the queue past the own-stop grace still resumes', async ({ context, page }, testInfo) => {
+  test.fail(true, 'APP-BUG-1: a queued Resume that starts more than 30 s after the page stopped reads Elsewhere')
+  test.setTimeout(4 * 60_000)
+  const { project, file, saved } = await interruptedUpload(context, page, testInfo, 'R1b')
+
+  const page2 = await reopen(context, project.id, saved.tab, saved.id)
+  const hold = await holdParts(page2)
+  const queue = await pngs(testInfo, 'r1bq', Array(8).fill(1 * MB))
+  await dropFiles(page2, 'project', queue.map((f) => f.file))
+  await openUploads(page2)
+  await until(page2, queue, '3 uploading and 5 queued', (m) => m.length === 8 && count(m, 'uploading') === 3 && count(m, 'queued') === 5)
+
+  // Resume at once: the click is well inside the grace. The queue is frozen, so the Resume waits.
+  const row = uploadRow(page2, file.name)
+  await row.hover()
+  const chooser = page2.waitForEvent('filechooser')
+  await row.locator('button[title^="Resume"]').click()
+  await (await chooser).setFiles(file.file)
+  await until(page2, [file], 'Waiting to resume', (m) => m.length === 1 && m[0].kind === 'waiting-to-resume')
+
+  // Its turn comes after the grace: the last heartbeat is older than 15 s when the page closed, plus this wait.
+  await page2.waitForTimeout(35_000)
+  hold.release()
+
+  // It should carry on from the parts the server holds, like the rest of the queue.
+  await until(page2, [file, ...queue], 'everything uploaded', (m) => m.length === 9 && count(m, ...FINISHED_UPLOADING) === 9, 60_000)
 })
 
 test('R3: cancelling during Resuming returns the row to Interrupted and sends no abort', async ({ context, page }, testInfo) => {

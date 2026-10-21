@@ -24,7 +24,7 @@ layout, and the first person to use it should check it before relying on it.
 | --- | --- | --- |
 | `chrome-devtools` MCP (`chrome-devtools-mcp` 1.11.0 here) | `new_page` (with `isolatedContext`), `navigate_page` (`initScript`, `handleBeforeUnload`), `take_snapshot`, `upload_file`, `click`, `fill`, `type_text`, `press_key`, `emulate`, `list_network_requests`, `get_network_request`, `list_console_messages`, `evaluate_script`, `take_screenshot`, `performance_start_trace` / `performance_stop_trace`, `handle_dialog`, `close_page` | verified, except `handle_dialog` and `screencast_*` (`get_network_request` returns headers and status but no timing) |
 | `claude-in-chrome` tools with `gif_creator` | A recording of the user-visible flow, in the person's own Chrome. Use it for any failing scenario | not exercised |
-| `docker` | storage stop/start and network black hole (section 4) | not exercised |
+| `docker` | storage stop/start and network black hole (section 4) | `stop`/`start` of `ffe2e-minio-1` verified in phase 2 (S1); black hole not exercised |
 
 Limits of the DevTools MCP that shape the protocol:
 
@@ -120,6 +120,13 @@ backend task changes). Record the commit in the report: `git rev-parse --short H
 
    click "Sign in", and clear the clipboard: `printf '' | pbcopy`. (`press_key` `Meta+V` does
    not paste; `fill` works but writes the password into the tool-call log.)
+
+   **In a fresh isolated context `readText()` hangs** (`navigator.permissions.query({name:'clipboard-read'})` says
+   `prompt`, and the browser's permission bubble cannot be answered through the MCP; the call times out). Then use a file:
+   write the password to a mode-0600 file **inside the workspace** (`e2e/.live-files/pw.txt`; the MCP refuses paths outside
+   it), inject `<input type=file id=pwin>` with `evaluate_script`, `upload_file` the file into it, read it in the page
+   (`await document.getElementById('pwin').files[0].text()`), set the password box exactly as above, click "Sign in", and `rm`
+   the file at once. The password is in the file and in the page, never in a tool call. (Verified in phase 2.)
 4. Create a project through the UI with a name no earlier run used ("New Project", type the
    name, Enter). The uploads panel lists the account's earlier uploads too, so unique file
    names matter as much as a unique project.
@@ -186,7 +193,8 @@ by kind, tracks how many are in flight at once, samples the Uploads panel rows, 
 long tasks. It matches by method and path only, so it works on any port.
 
 Install it by passing the script below as `initScript` to `navigate_page` (type `reload` on
-the project page):
+the project page), or, once the page has loaded, with `evaluate_script` `sourcePath` on `live-tools/ffq-probe.js` (the same
+script as a file; keep the two in sync; the requests the app makes later go through the patched `XMLHttpRequest` and `fetch`):
 
 ```js
 (() => {
@@ -415,7 +423,7 @@ change after the drop is exactly what those scenarios want. Not exercised.
 | Throttle | `emulate` with `networkConditions: "Fast 4G"` (or `Slow 4G`, `Fast 3G`, `Slow 3G`; rates in section 1) on the page, before the drop. Lift: `emulate` with no `networkConditions`. | verified (Fast 4G; lifting it mid-run: the last `complete` started 2.6 s later) |
 | Offline | `emulate` with `networkConditions: "Offline"`; back online with a bare `emulate`. Check: `navigator.onLine` is `false` and a `fetch` rejects with "Failed to fetch"; DevTools lists the request as `net::ERR_INTERNET_DISCONNECTED`. | verified (outputs in the baseline report, "Tooling checks") |
 | Block a request class | `window.__ffq.block('/upload/initiate')` or `window.__ffq.block(/:19000/)` (a string is matched literally, a RegExp as given); `window.__ffq.unblock()`. The stand-in for DevTools' "Network request blocking", which the MCP lacks. Matching `fetch` calls reject at once with `TypeError: Failed to fetch (blocked by __ffq)`; matching `XMLHttpRequest`s are re-pointed at `http://127.0.0.1:9/blocked-by-ffq`, a port Chromium refuses to connect to (`net::ERR_UNSAFE_PORT`, so nothing is sent; to the app it is the same as any network error, status 0). The probe records them as `blocked` (fetch) and `network-error` (XHR). **Counting: for a blocked class the probe's `report()` is the authoritative count.** A blocked `fetch` never reaches DevTools; a blocked XHR is listed by `list_network_requests` under the substitute URL (a `PUT` and its `OPTIONS` preflight, both `ERR_UNSAFE_PORT`), not under the original. **Limits:** the block is lost on reload or navigation (so is the probe: reinstall with `initScript`); it does not change `navigator.onLine` or fire `offline` / `online` events, so N1 and N2 need `emulate` `Offline`; it covers page-level `fetch` and `XMLHttpRequest` only (not workers, `sendBeacon` or `EventSource`); and it fails requests instantly, never as a hang or a timeout (use the throttle or the docker faults for those). | verified on a fetch and on an XHR, with the DevTools side (outputs in the baseline report, "Tooling checks") |
-| Storage down | `STORAGE=$($E2E_COMPOSE ps -q minio)`; `docker stop $STORAGE`; later `docker start $STORAGE`. (ffe2e: container `ffe2e-minio-1`.) The browser's part PUTs fail, and so does `/upload/initiate` (the API creates the multipart upload in storage); presigning signs locally, so expect it to keep answering. | not exercised |
+| Storage down | `STORAGE=$($E2E_COMPOSE ps -q minio)`; `docker stop $STORAGE`; later `docker start $STORAGE`. (ffe2e: container `ffe2e-minio-1`.) The browser's part PUTs fail, and so does `/upload/initiate` (the API creates the multipart upload in storage); presigning signs locally, so expect it to keep answering. | verified in phase 2 (S1): with the container stopped, `/upload/initiate` answered the coded `503` (`storage_unavailable`, `retry_after` 5) in about 150 ms, seven times in 30 s; `docker start` and the container was healthy in 6 s and the next try went through |
 | Storage black hole | `NET=$(docker inspect $STORAGE --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')` (ffe2e: `ffe2e_default`), then `docker network disconnect $NET $STORAGE`. Reconnect with `docker network connect --alias minio $NET $STORAGE` (the compose service name must come back as an alias or the API cannot resolve the host). Requests hang instead of being refused. | not exercised; check the reconnect before relying on it |
 | Files changed mid-queue | `touch` / `rm` / rewrite on the files in `e2e/.live-files/` (section 3). | not exercised |
 | Second tab, same account | `new_page` with the **same** `isolatedContext` name. It shares localStorage and cookies with the first tab (verified: a second tab opened in the same context was already signed in; a page in a differently named context was not). Probe it too: `navigate_page` with the `initScript`. | verified (baseline report, "Tooling checks") |
@@ -423,6 +431,11 @@ change after the drop is exactly what those scenarios want. Not exercised.
 | `beforeunload` dialog (L1) | `navigate_page` takes `handleBeforeUnload` (`accept` or `dismiss`); for a dialog that is already open, `handle_dialog`. | not exercised |
 | Laptop sleep (wake and resume cases) | Close the lid for 2 minutes with the queue running, open it, and record what the rows show. `pmset sleepnow` does the same from a terminal. A person has to be present; the DevTools session may need `list_pages` afterwards to find its tab. | not exercised |
 | Busy main thread (Q2) | Optional: `emulate` with `cpuThrottlingRate: 4`. Report it if used. | not exercised |
+
+The DevTools MCP can hold, delay and answer nothing, so the Playwright faults that scenarios use have in-page stand-ins
+(section 9): `hold()` / `release()` for part PUTs, `pace(rate)`, `delayInitiateMs`, `failInitiate = n` (a coded 503),
+`delayPartsMs` and a stand-in file chooser. Say in the report which ones a scenario used and what they are not (a blocked
+part PUT is a network error, not an HTTP 503).
 
 ## 5. Evidence per scenario
 
@@ -440,7 +453,10 @@ report.
      page's own GETs, so count the `upload/initiate`, `upload/presign-part`, `upload/complete`
      and `upload/abort` lines. Do this before any navigation.
 
-   For a normal run the two must agree (the baseline's did, count for count). **For a request
+   For a normal run the two must agree (the baseline's did, count for count). **The DevTools list is a rolling window over
+   the whole session, and SPA navigation does not clear it**: after a long run its oldest requests are gone (phase 2's Q1
+   listed 50 to 52 of 62 part PUTs, the probe 62). Read it right after the scenario, the last page first (`pageIdx`), or
+   count with the probe. **For a request
    class you blocked with `__ffq.block`, they cannot, and the probe's count is authoritative:**
    a blocked `fetch` is rejected in the page and never appears in `list_network_requests`, and a
    blocked XHR appears as `PUT` and `OPTIONS http://127.0.0.1:9/blocked-by-ffq
@@ -569,3 +585,48 @@ in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section)
 - The grid refetches assets and folders after every completion; after a burst of completions
   the network log is mostly those GETs.
 - An injected file input that stays on the page ends up in screenshots. Remove it first.
+- **Never `take_snapshot` with the Uploads panel open**: it lists every row of the account's history (about 400 lines
+  after a few runs). Close the panel first (a click on the page beside it), or read the panel with `evaluate_script`.
+  A drop opens the panel by itself, and so does starting an upload.
+- **A reload is how a transfer is interrupted.** `navigate_page` `reload` keeps the tab's `sessionStorage`, so the row comes
+  back Interrupted at once; a closed and reopened page is another tab and reads Elsewhere for 150 s. The reload drops the probe:
+  reinstall it (section 9) and mind the clock, see the next point.
+- **Resume has a 30 s window**: a row this tab stopped sending is "own" only for `OWN_STOP_GRACE_MS` (30 s) after its last
+  heartbeat (up to 15 s old when the page died); a Resume that starts later and within 150 s of the server's last activity on the
+  upload reads "Elsewhere" and sends nothing. Drive the click and the start inside it (the fast flow in section 9), or you are
+  testing the guard, not the scenario (and the queue makes it reachable: phase 2's APP-BUG-1).
+- **The Uploads panel's tabs**: Interrupted and Cancelled rows are in **Failed**, not Active. `rows()` and `q.rows()` read
+  whichever tab is selected; pick All.
+- A file named like an earlier run's file (the same set dropped twice) puts two rows of that name in the panel; give each run's
+  files their own prefix, as the Playwright specs do.
+
+## 9. Phase 2 stand-ins (`live-tools/`)
+
+Four scripts, loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
+the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript` is only needed for a page that sends at load):
+
+| File | Gives you |
+| --- | --- |
+| `live-tools/ffq-probe.js` | the probe of section 2.4 (same code; keep the two in sync) |
+| `live-tools/ffq-extras.js` | `hold()` / `release()` / `held()`, `pace(bytesPerSecond)`, `delayInitiateMs`, `failInitiate`, `initiates` (name, file, bytes, status, `uploadId`, `chunk`, `code`, `retryAfter`), `partLog`, `presignLog`, `watch(rowId)` / `saved` (every write of `ff-uploads` and whether the row is in it), `rows()`, `tally()`, `openAll()`, `addInput()`, `drop()`, `summary()` |
+| `live-tools/ffq-helpers.js` | `newProject(name)` (through the UI, SPA navigation, the probe survives), `clickRow(name, title)`, `dropFrom(inputId)`, `addInput2(id, offset)`, `assets()`, `waitRows()`, `closePanel()` |
+| `live-tools/ffq-fast.js` | a stand-in file chooser for Resume (`pickNext = true` then click Resume: the next file input the app clicks gets the files of `#ffq-pick`) and `delayPartsMs` (a deferred `/parts` answer, R3's route) |
+
+After a reload, one script reinstalls everything and adds the two inputs (`ffq-drop-input` and `ffq-pick`) and the hold:
+
+```bash
+cd e2e && cat live-tools/ffq-probe.js live-tools/ffq-extras.js live-tools/ffq-helpers.js live-tools/ffq-fast.js | sed 's/^(() => {$/;(() => {/' > .live-files/ffq-all.js
+echo ";(() => { const q = window.__ffq; q.addInput2('ffq-drop-input', 8); q.addInput2('ffq-pick', 44); q.hold(); return 'ready' })()" >> .live-files/ffq-all.js
+```
+
+What each stand-in is not: `hold` and `pace` act on the part PUT at `XMLHttpRequest.send` (nothing reaches the network; an `abort()` of
+an unsent part ends with `abort` and `loadend` events, as the browser would deliver); `pace` waits `size / rate` per part, it does not
+share a bandwidth; `block()` makes a request fail at once (a network error), never a hang or an HTTP status; `failInitiate` answers
+from the page, so the server never sees that call; the chooser stand-in skips the browser's picker (the real one is `upload_file` on
+the app's own Resume or New Version button, which works too and is what R1 and V1 used).
+
+**Fast resume flow** (to start a Resume inside the 30 s window): prepare the interrupted row (drop with `hold()`, wait for the row
+to be saved with its ids), `navigate_page reload`, run `ffq-all.js`, `take_snapshot` (small, the panel is closed), `upload_file` the
+file into `ffq-pick` and the queue into `ffq-drop-input`, then one `evaluate_script` that drops, waits for the queue to settle, sets
+`pickNext`, clicks Resume and releases. About 20 to 25 s from the reload in phase 2.
+
