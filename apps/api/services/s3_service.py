@@ -25,6 +25,15 @@ _STARTUP_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"max_at
 # abandoned than waited on.
 _PROBE_S3_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2})
 
+# CreateMultipartUpload is the one storage call a user waits on before a single
+# byte is sent, so a store that cannot answer must fail in seconds, not in boto3's
+# default ~60 s per attempt. It must also be sent exactly once: `max_attempts`
+# counts retries *after* the first request, so any value of it would resend a
+# non-idempotent call and could leave a second multipart upload behind. Only
+# `total_max_attempts` (the first request included) pins it to one. The caller
+# turns the failure into a coded 503 and the browser decides whether to retry.
+_INITIATE_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 1})
+
 # S3 Content-Type and Cache-Control mappings
 CONTENT_TYPE_MAP = {
     ".m3u8": ("application/vnd.apple.mpegurl", "no-cache"),
@@ -93,6 +102,16 @@ def _get_probe_client():
     off would turn a working upload into a failure.
     """
     return _build_s3_client(_PROBE_S3_CONFIG)
+
+@lru_cache(maxsize=1)
+def _get_initiate_client():
+    """Client for starting a multipart upload (see _INITIATE_S3_CONFIG).
+
+    Separate from `get_s3_client` for the same reason as the probe client: its
+    short, single-shot settings would be wrong for the calls that legitimately take
+    minutes, such as completing a large multipart upload.
+    """
+    return _build_s3_client(_INITIATE_S3_CONFIG)
 
 @lru_cache(maxsize=1)
 def _get_presign_client():
@@ -267,7 +286,7 @@ def get_content_type(key: str) -> tuple[str, str]:
 
 def create_multipart_upload(s3_key: str, content_type: str) -> str:
     """Initiate a multipart upload and return the upload_id."""
-    s3 = get_s3_client()
+    s3 = _get_initiate_client()
     response = s3.create_multipart_upload(
         Bucket=settings.s3_bucket,
         Key=s3_key,
