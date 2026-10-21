@@ -6,6 +6,7 @@ import { createSpeedMeter, type SpeedMeter } from '@/lib/upload-speed'
 import { createPartBudget, type PartBudget } from '@/lib/upload-budget'
 import { createUploadQueue, type ActiveInfo, type QueueEntry } from '@/lib/upload-queue'
 import { classifyInitiateError, type InitiateOutcome } from '@/lib/upload-initiate-outcome'
+import { assertReadable, FileUnreadableError, FILE_UNREADABLE_MESSAGE } from '@/lib/upload-readable'
 import { useUploadSpeedStore } from './upload-speed-store'
 import type { AssetResponse } from '@/types'
 
@@ -484,6 +485,19 @@ interface PartSlots {
  *   between, so the pass sees the retry waiting when it sees the sleeper gone.
  *   `woke()` runs however the sleep ended, a cancel included, because every
  *   `sleeping()` has to be matched.
+ *
+ * Every retry reads one byte of the file before it asks for a URL (see
+ * lib/upload-readable.ts): a file that changed or moved while the part backed
+ * off makes `xhr.send` hang in WebKit, so a retry must find that out first.
+ * The read is the first step of the attempt, after `acquire()` and before the
+ * presign, so the rules above hold untouched: the slot is taken before the
+ * presign as ever, and the read holds it for a few milliseconds, as the
+ * presign that follows does. Reading before `acquire()` would put an `await`
+ * between `woke()` and `acquire()`, which the contract forbids. A file that
+ * fails the read is not retried: the attempt ends, the `finally` gives the
+ * slot back, and `sleeping()` is not called because there is no sleep to
+ * match. The first attempt is not read; a first attempt that hangs is for the
+ * part watchdog, and its retry reads.
  */
 async function uploadPart(
   file: File,
@@ -507,6 +521,7 @@ async function uploadPart(
       // Inside the attempt, so the `finally` below gives the slot back even if
       // the hook throws.
       if (attempt === 1) slots.onFirstGrant?.()
+      if (attempt > 1) await assertReadable(file)
       return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize, onBytes)
     } catch (err) {
       // The next attempt sends the part from its first byte again, so what
@@ -514,6 +529,8 @@ async function uploadPart(
       onBytes(0)
       if (signal.aborted) throw err
       if (isAbortError(err)) throw err
+      // The handle stays stale however often it is tried.
+      if (err instanceof FileUnreadableError) throw err
       if ((err as PartUploadError)?.permanent) throw err
       if (attempt === PART_MAX_ATTEMPTS) throw err
 
@@ -1726,6 +1743,47 @@ function onInitiateFailed(id: string, err: unknown): void {
 }
 
 /**
+ * A run that ends before it has asked the server anything cannot say the way to
+ * the server is open, so a hold it was probing passes to the next waiting row,
+ * as when its probe is cancelled. Left alone, the hold would keep a probe that
+ * never tries again and no row would start.
+ */
+function handOffProbe(id: string): void {
+  if (queue.hold.probeId === id) passOnProbe()
+}
+
+/**
+ * A new file whose turn came cannot be read (spec goal 5). Nothing was created,
+ * so the row fails as any refusal at initiate does, except that Retry is not
+ * offered: the `File` handle stays stale, and only adding the file again helps.
+ * A row cancelled while it was read is removed when its run ends, whatever it
+ * says until then.
+ */
+function failUnreadableBeforeStart(id: string): void {
+  handOffProbe(id)
+  patchRow(id, {
+    status: 'failed',
+    failedBeforeStart: true,
+    retryable: false,
+    holdReason: undefined,
+    progress: 0,
+    error: FILE_UNREADABLE_MESSAGE,
+  })
+}
+
+/**
+ * A queued resume's file cannot be read at its turn. The upload on the server
+ * is untouched, so the row goes back to `interrupted` with the reason, and the
+ * user can Resume it by picking the file again. A cancel made while it was
+ * read already put the row back, and stands.
+ */
+function stopUnreadableResume(id: string, runner: Runner): void {
+  handOffProbe(id)
+  if (runner.stoodDown) return
+  patchRow(id, { status: 'interrupted', resuming: undefined, progress: 0, error: FILE_UNREADABLE_MESSAGE })
+}
+
+/**
  * A new upload's turn: initiate (or create the version), then send every part
  * and complete. Everything that announces a transfer starts here, at the turn,
  * and not when the row was added.
@@ -1764,6 +1822,21 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
     const startRow = rowById(id)
     const sentName = startRow?.assetName ?? file.name
     const projectId = startRow?.projectId ?? ''
+
+    // Before the server hears of the file, so a file that changed or moved
+    // while it waited creates nothing (goal 4) and the queue moves on.
+    try {
+      await assertReadable(file)
+    } catch (err) {
+      if (!(err instanceof FileUnreadableError)) throw err
+      failUnreadableBeforeStart(id)
+      return
+    }
+    // Cancelled while it was read: nothing has been sent, and nothing will be.
+    if (controller.signal.aborted) {
+      handOffProbe(id)
+      throw new DOMException('Upload cancelled', 'AbortError')
+    }
 
     let initRes: InitiateResponse
     try {
@@ -1963,6 +2036,23 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       status: 'starting', resuming: true, queuedResume: undefined, holdReason: undefined,
       progress: 0, error: undefined, finalizing: false,
     })
+
+    // Before `/parts`, so a file that changed or moved while the Resume waited
+    // is not even asked about. (An upload whose parts are all on the server
+    // never reads the file; one still fails here, and picking a readable file
+    // again finishes it.)
+    try {
+      await assertReadable(file)
+    } catch (err) {
+      if (!(err instanceof FileUnreadableError)) throw err
+      stopUnreadableResume(id, runner)
+      return
+    }
+    // Cancelled while it was read: nothing was asked, nothing was sent.
+    if (runner.stoodDown) {
+      handOffProbe(id)
+      return
+    }
 
     // Everything needed to carry on comes from the server, including the key
     // and the upload id: this row may have been rehydrated from history in a

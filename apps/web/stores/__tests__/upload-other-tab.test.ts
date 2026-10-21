@@ -475,6 +475,10 @@ describe('a tab that is sending', () => {
     expect(rowOf(second).ownerTab).toBeUndefined()
     expect(rowOf(second).heartbeatAt).toBeUndefined()
 
+    // The initiate follows the readability probe (spec goal 5), so it leaves a
+    // moment after the turn rather than in the same tick.
+    await vi.waitFor(() => expect(answerFirst).toBeTypeOf('function'))
+
     // Five parts of 10 MB once the first answers: a part slot is still not
     // free, so the second keeps waiting, unclaimed.
     answerFirst({
