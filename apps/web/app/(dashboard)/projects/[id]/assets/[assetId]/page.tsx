@@ -231,6 +231,19 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     refetchVersions()
   }, [versionsRevision, refetchVersions])
 
+  // A New Version file waits for its turn behind the other uploads. Until its
+  // initiate has answered there is no version to show, so the page says what
+  // is going on instead of looking as if nothing was picked. The same counter
+  // as above is bumped when the version exists, which is when the list is
+  // refetched: no guess at how long the wait is.
+  //
+  // Only this asset's own version rows: a queued new asset has no `assetId`.
+  const assetIdForQueue = asset?.id
+  const versionQueued = useUploadStore(
+    (s) => assetIdForQueue !== undefined &&
+      s.files.some((f) => f.status === 'queued' && f.assetId === assetIdForQueue),
+  )
+
   // Deep-link to a specific comment from notification (?commentId=...)
   // Runs once after comments are loaded — seeks to timecode, focuses comment, shows annotation
   useEffect(() => {
@@ -611,10 +624,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               if (!file || !asset) return
               startVersionUpload(file, asset.id, asset.name, asset.project_id, project?.name)
               e.target.value = ''
-              // Surface the newly-created version (starts as "uploading") quickly;
-              // SSE transcode events then drive it through processing → ready (#118).
-              setTimeout(() => refetchVersions(), 800)
-              setTimeout(() => refetchVersions(), 2500)
+              // The new version (it starts as "uploading") is fetched when the
+              // upload store says it exists, through `versionsRevision`; SSE
+              // transcode events then drive it through processing → ready (#118).
             }}
           />
           <VersionSwitcher versions={versions} />
@@ -681,6 +693,19 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
         ref={reviewRootRef}
         className={cn("relative flex flex-1 overflow-hidden min-h-0", useSheet && "pb-14")}
       >
+        {/* Over the media rather than above it: a line that took room would
+            move the stage's size cap (`--ff-stage-max`), which is measured once
+            per layout and not when something appears. */}
+        {versionQueued && (
+          <div
+            role="status"
+            className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-3"
+          >
+            <span className="rounded-md border border-border bg-bg-secondary/95 px-3 py-1.5 text-xs text-text-secondary shadow-lg">
+              New version queued, waiting for other uploads.
+            </span>
+          </div>
+        )}
         {/* Left: viewer column */}
         <div
           className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0"
