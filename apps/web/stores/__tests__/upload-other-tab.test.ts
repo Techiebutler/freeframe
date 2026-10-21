@@ -30,9 +30,12 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api } from '@/lib/api'
-import { useUploadStore, currentTabId, LIVE_WINDOW_MS } from '../upload-store'
+import { useUploadStore, currentTabId, LIVE_WINDOW_MS, __uploadQueueTesting } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, type PartHandler } from '@/test/xhr-fake'
+
+// The upload queue is tab-wide module state: start every test from an empty one.
+beforeEach(() => __uploadQueueTesting.reset())
 
 const MB = 1024 * 1024
 const VERSION_ID = 'version-1'
@@ -443,15 +446,42 @@ describe('a tab that is sending', () => {
     }
   }, 30_000)
 
-  it('claims the row and stamps it', async () => {
-    vi.mocked(api.post).mockImplementation(() => new Promise(() => {}) as never)
+  it('claims the row and stamps it at its turn, and not before', async () => {
+    // A row waiting in the queue has nothing on the server for another tab to
+    // be told about. The claim comes with the turn: here the first file is
+    // still starting, and until its initiate answers it counts as the whole
+    // part budget, so the second waits.
+    let answerFirst!: (value: unknown) => void
+    vi.mocked(api.post).mockImplementation(((path: string) => {
+      if (path === '/upload/initiate' && !answerFirst) {
+        return new Promise((resolve) => {
+          answerFirst = resolve
+        })
+      }
+      return new Promise(() => {})
+    }) as never)
+    const big = (name: string) => {
+      const file = new File([new Uint8Array(10)], name, { type: 'video/mp4' })
+      Object.defineProperty(file, 'size', { value: 50 * MB })
+      return file
+    }
 
-    const id = useUploadStore.getState().startUpload(
-      new File([new Uint8Array(10)], 'clip.mp4', { type: 'video/mp4' }), 'project-1', 'clip',
-    )
+    const first = useUploadStore.getState().startUpload(big('a.mp4'), 'project-1', 'a')
+    const second = useUploadStore.getState().startUpload(big('b.mp4'), 'project-1', 'b')
 
-    expect(rowOf(id).ownerTab).toBe(currentTabId())
-    expect(rowOf(id).heartbeatAt).toBeGreaterThan(Date.now() - 1000)
+    expect(rowOf(first).ownerTab).toBe(currentTabId())
+    expect(rowOf(first).heartbeatAt).toBeGreaterThan(Date.now() - 1000)
+    expect(rowOf(second).status).toBe('queued')
+    expect(rowOf(second).ownerTab).toBeUndefined()
+    expect(rowOf(second).heartbeatAt).toBeUndefined()
+
+    // Five parts of 10 MB once the first answers: a part slot is still not
+    // free, so the second keeps waiting, unclaimed.
+    answerFirst({
+      upload_id: 'u1', s3_key: 'raw/k', asset_id: ASSET_ID, version_id: VERSION_ID, chunk_size_bytes: 10 * MB,
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(rowOf(second).ownerTab).toBeUndefined()
   })
 })
 

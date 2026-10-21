@@ -15,9 +15,12 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api } from '@/lib/api'
-import { useUploadStore } from '../upload-store'
+import { useUploadStore, __uploadQueueTesting } from '../upload-store'
 import { useUploadSpeedStore } from '../upload-speed-store'
 import { installXhrFake, ok, fail, type PartReply } from '@/test/xhr-fake'
+
+// The upload queue is tab-wide module state: start every test from an empty one.
+beforeEach(() => __uploadQueueTesting.reset())
 
 function makeFile(): File {
   return new File([new Uint8Array(1024)], 'clip.mp4', { type: 'video/mp4' })

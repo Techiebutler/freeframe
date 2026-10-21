@@ -29,7 +29,9 @@ import { useSSE } from '@/hooks/use-sse'
  */
 export function pollIntervalFor(files: UploadFile[]): number {
   if (files.some((f) => f.status === 'processing' && f.assetId)) return 5000
-  if (files.some((f) => (f.status === 'interrupted' && f.assetId) || f.status === 'elsewhere')) {
+  // A queued resume is left out: it asks the server itself at its turn. Rows
+  // that have not started (`queued`, `starting`) have nothing to reconcile.
+  if (files.some((f) => (f.status === 'interrupted' && f.assetId && !f.queuedResume) || f.status === 'elsewhere')) {
     return 30000
   }
   return 0

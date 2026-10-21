@@ -23,10 +23,13 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api, ApiError } from '@/lib/api'
-import { useUploadStore, uploadAllParts } from '../upload-store'
+import { useUploadStore, uploadAllParts, __uploadQueueTesting } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, fail, type PartHandler } from '@/test/xhr-fake'
 import { createPartBudget } from '@/lib/upload-budget'
+
+// The upload queue is tab-wide module state: start every test from an empty one.
+beforeEach(() => __uploadQueueTesting.reset())
 
 /** A budget of `n` slots for one file, which is what the old `concurrency` argument was. */
 const slots = (n: number) => ({ budget: createPartBudget(n), fileKey: 'f' })

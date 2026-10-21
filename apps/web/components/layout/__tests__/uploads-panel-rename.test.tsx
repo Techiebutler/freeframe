@@ -153,7 +153,7 @@ describe('a row that has not reached the server yet', () => {
     // The pencil is there from the moment the row appears. There is no asset
     // to PATCH while it says "Queued", but the row is what initiate reads for
     // the name, so the edit is not lost -- it is just not a request yet.
-    open(row({ status: 'pending', assetId: undefined }))
+    open(row({ status: 'queued', assetId: undefined }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename A047C012' }))
     fireEvent.change(field(), { target: { value: 'Ep04' } })

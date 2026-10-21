@@ -31,6 +31,14 @@ describe('pollIntervalFor', () => {
     expect(pollIntervalFor([rowAt('elsewhere', null)])).toBe(30000)
   })
 
+  it('does not poll for rows waiting in the queue or starting', () => {
+    expect(pollIntervalFor([rowAt('queued', null), rowAt('starting', null)])).toBe(0)
+    // A version upload's row has its asset from the start; still nothing to ask.
+    expect(pollIntervalFor([rowAt('queued'), rowAt('starting')])).toBe(0)
+    // A queued resume asks the server itself at its turn.
+    expect(pollIntervalFor([{ ...rowAt('interrupted'), queuedResume: true }])).toBe(0)
+  })
+
   it('leaves out a row with no asset to ask about', () => {
     expect(pollIntervalFor([rowAt('interrupted', null)])).toBe(0)
   })
