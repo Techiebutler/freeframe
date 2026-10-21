@@ -6,7 +6,7 @@ browser, uploads that outlive a page, two tabs sharing one `localStorage`, an S3
 that misbehaves.
 
 For the hands-on pass in a real, headed Chrome driven through DevTools (not run by `pnpm test`),
-see [`LIVE-CHROME.md`](LIVE-CHROME.md); its results are in `live-runs/`.
+see [`LIVE-CHROME.md`](LIVE-CHROME.md); its results are in `live-runs/` and the scripts it loads into the page are in `live-tools/`.
 
 This is a standalone package with its own `package.json` and lockfile. Nothing in `apps/web`
 depends on it, and `pnpm install` at the repo root does not touch it.
@@ -90,6 +90,15 @@ pnpm test                                   # every project
 pnpm test:chromium                          # one engine
 pnpm test:webkit -- tests/smoke.spec.ts     # one file
 ```
+
+**Check the disk before a run.** Uploaded objects stay in the stack's MinIO (about 0.5 to 1 GB per full run), and the
+Docker VM's disk is shared with everything else on the machine. At about 99% full MinIO answers part PUTs with 507 and
+every scenario that completes an upload stalls in the retry ladder. Run
+`docker exec ffe2e-minio-1 df -h /data` first (the container of the `-p ffe2e` stack; use the name of yours) and clear the
+bucket past about 90%: either empty this stack's objects
+(`docker exec ffe2e-minio-1 sh -c 'rm -rf /data/freeframe/raw/* /data/freeframe/processed/*'`, objects of this stack only; the
+database rows that point at them go stale and nothing reads them) or recreate the stack (`down -v`, then `up -d --build`; the
+accounts and sessions are recreated by `accounts.ts`).
 
 `workers` is 1 and `retries` is 0 on purpose: the scenarios share one backend and a retry that
 passes would hide the races they exist to catch. A failure keeps a trace:
