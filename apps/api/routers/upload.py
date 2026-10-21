@@ -519,6 +519,7 @@ def list_held_parts(
             mime_type=media_file.mime_type,
             held_part_numbers=[],
             last_activity_at=previous_activity,
+            server_time=datetime.now(timezone.utc),
         )
     except MultipartListingUnsupported:
         # No listing, so nothing is known to be held and every part is sent
@@ -562,6 +563,7 @@ def list_held_parts(
         mime_type=media_file.mime_type,
         held_part_numbers=held,
         last_activity_at=previous_activity,
+        server_time=datetime.now(timezone.utc),
     )
 
 
