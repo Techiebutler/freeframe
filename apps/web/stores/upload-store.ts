@@ -1384,7 +1384,10 @@ function startRun(row: UploadFile, kind: 'new' | 'resume'): void {
   runners.set(row.id, runner)
   // On the key `uploadAllParts` will use, so this run's parts are served in turn order.
   partBudget.setRank(runKey, rank)
-  void (kind === 'new' ? runNew(row.id, runner, runKey) : runResume(row.id, runner, runKey))
+  // A run settles its own failures and always ends through `endRun`; anything
+  // still thrown is a bug, and is reported rather than left unhandled.
+  const run = kind === 'new' ? runNew(row.id, runner, runKey) : runResume(row.id, runner, runKey)
+  run.catch((err: unknown) => console.error('Upload run ended with an error', err))
 }
 
 /** What every run does as it ends, however it ends. */
@@ -1554,10 +1557,18 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
   let asset_id: string | undefined
   let completionAttempted = false
 
-  retainWakeLock()
-  const stopBeat = beatFor((patch) => patchRow(id, patch))
-  const watch = transferWatch(id, file.size, (patch) => patchRow(id, patch))
+  // Everything the run takes is taken inside the `try`, so the `finally` gives
+  // it all back and ends the run whatever throws. Even the first heartbeat is a
+  // write to shared storage, which can throw (a full quota), and a run that
+  // threw before its `try` kept its place, its wake lock and, for a large file,
+  // the whole part budget for the life of the tab.
+  let stopBeat = () => {}
+  let watch: ReturnType<typeof transferWatch> | null = null
   try {
+    retainWakeLock()
+    stopBeat = beatFor((patch) => patchRow(id, patch))
+    const runWatch = transferWatch(id, file.size, (patch) => patchRow(id, patch))
+    watch = runWatch
     patchRow(id, { status: 'starting', holdReason: undefined, error: undefined, progress: 0 })
 
     // What the asset will be called: the row's name now, at the turn, so a
@@ -1648,9 +1659,9 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
           runner.unfinished = n
           pump()
         },
-        onBytes: watch.onBytes,
-        onAllSent: watch.onAllSent,
-        onResend: watch.onResend,
+        onBytes: runWatch.onBytes,
+        onAllSent: runWatch.onAllSent,
+        onResend: runWatch.onResend,
       },
     )
 
@@ -1724,7 +1735,7 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
       await abortCancelled(useUploadStore.setState, { s3_key, upload_id, version_id })
     }
   } finally {
-    watch.stop()
+    watch?.stop()
     stopBeat()
     releaseWakeLock()
     if (abortControllers[id] === controller) delete abortControllers[id]
@@ -1751,8 +1762,9 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
   let completionAttempted = false
   let stopBeat = () => {}
   let watch: ReturnType<typeof transferWatch> | null = null
-  retainWakeLock()
   try {
+    // Inside the `try`, as in `runNew`, so the `finally` always balances it.
+    retainWakeLock()
     // A resumed row may have stopped while finalizing.
     updateFile({
       status: 'starting', resuming: true, queuedResume: undefined, holdReason: undefined,
@@ -1961,6 +1973,7 @@ function enqueueNew(
   projectId: string,
   projectName: string | undefined,
 ): string[] {
+  if (items.length === 0) return []
   const dropSeq = ++dropSeqs
   const createdAt = Date.now()
   const rows: UploadFile[] = items.map(({ file, assetName, target }) => {
@@ -1985,9 +1998,13 @@ function enqueueNew(
   })
   queue.enqueue(rows.map((r) => queueEntry(r, 'new')), 'back')
   for (const r of rows) r.queueSeq = queue.queueSeq(r.id)
-  // Newest first, as rows have always been listed.
-  set((s) => ({ files: [...rows.slice().reverse(), ...s.files], panelOpen: true }))
-  pump()
+  try {
+    // Newest first, as rows have always been listed.
+    set((s) => ({ files: [...rows.slice().reverse(), ...s.files], panelOpen: true }))
+  } finally {
+    // The rows are in state even when saving them threw: they still get their turn.
+    pump()
+  }
   return rows.map((r) => r.id)
 }
 
@@ -2019,7 +2036,10 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
 
   resumeUpload: (fileId, file) => {
     const row = get().files.find((f) => f.id === fileId)
-    if (!row || row.status !== 'interrupted' || !row.versionId || row.queuedResume) return
+    // Not while a run of this row is still settling: a run whose transfer
+    // broke is still asking the server what became of it, and its answer
+    // would land on the row a second run is sending.
+    if (!row || row.status !== 'interrupted' || !row.versionId || row.queuedResume || runners.has(fileId)) return
     fileRefs.set(fileId, file)
     // A Resume goes ahead of every file not yet started, behind the ones
     // already running, and takes its turn like them -- so it never sends
@@ -2039,6 +2059,16 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     // reaper, and the row would keep offering a resume in the meantime.
     const row = get().files.find((f) => f.id === fileId)
     if (!row) return null
+    // A queued resume gives up its turn first, before any round trip: its turn
+    // coming while this asks the server would start sending into the upload
+    // this is about to abort.
+    if (row.queuedResume) {
+      forgetQueued(fileId)
+      fileRefs.delete(fileId)
+      set((s) => ({
+        files: s.files.map((f) => (f.id === fileId ? { ...f, queuedResume: undefined, holdReason: undefined } : f)),
+      }))
+    }
     const drop = () => {
       forgetQueued(fileId)
       fileRefs.delete(fileId)
@@ -2605,5 +2635,7 @@ export const __uploadQueueTesting = {
     wakeLockHolders = 0
   },
   hasAbortController: (id: string): boolean => abortControllers[id] !== undefined,
+  /** Rows whose run has begun and not yet ended. */
+  runningIds: (): string[] => Array.from(runners.keys()),
   wakeLockHolders: (): number => wakeLockHolders,
 }

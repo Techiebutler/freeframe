@@ -152,7 +152,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   testing.reset()
   window.localStorage.clear()
-  useUploadStore.setState({ files: [], versionsRevision: 0 })
+  useUploadStore.setState({ files: [], versionsRevision: 0, panelOpen: false })
   signInAs('user-1')
 })
 
@@ -373,6 +373,28 @@ describe('an initiate the server refuses', () => {
     expect(server.names()).toEqual(['a.mov', 'b.mov'])
   })
 
+  it('a coded 500 storage_error fails the row with its message and the queue continues', async () => {
+    const server = fakeServer((_, i) =>
+      i === 0 ? new ApiError(500, 'Storage refused: AccessDenied', { code: 'storage_error' }) : 'wait',
+    )
+
+    const [a, b] = drop([fileOf('a.mov'), fileOf('b.mov')])
+    await settle()
+
+    expect(rowOf(a)).toMatchObject({
+      status: 'failed', failedBeforeStart: true, retryable: true, error: 'Storage refused: AccessDenied',
+    })
+    expect(rowOf(a).holdReason).toBeUndefined()
+    expect(rowOf(b).status).toBe('starting')
+    expect(server.names()).toEqual(['a.mov', 'b.mov'])
+  })
+
+  it('an empty drop adds nothing and opens nothing', () => {
+    expect(useUploadStore.getState().startUploads([], 'p1')).toEqual([])
+    expect(files()).toEqual([])
+    expect(useUploadStore.getState().panelOpen).toBe(false)
+  })
+
   it('a refusal with no message still says why', async () => {
     fakeServer(() => new ApiError(403, '  '))
 
@@ -543,6 +565,42 @@ describe('an initiate that cannot get through', () => {
   })
 })
 
+// ---------------------------------------------------------------- a run that throws
+
+describe('a run that throws before it reaches the server', () => {
+  it('ends, gives back its place and its wake lock, and a later drop still starts', async () => {
+    // Saving the row can throw (a full quota), and the first save of a run is
+    // its first heartbeat. Here the 2nd and 3rd writes fail: the heartbeat, then
+    // the row's own failure, so the run itself ends by throwing.
+    const server = fakeServer(() => 'wait')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const realSetItem = Storage.prototype.setItem
+    let writes = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === 'ff-uploads') {
+        writes += 1
+        if (writes === 2 || writes === 3) throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+      }
+      return realSetItem.call(this, key, value)
+    })
+
+    const [a] = drop([fileOf('a.mov')])
+    await settle()
+
+    expect(rowOf(a).status).toBe('failed')
+    expect(server.names()).toEqual([])
+    expect(testing.runningIds()).toEqual([])
+    expect(testing.hasAbortController(a)).toBe(false)
+    expect(testing.wakeLockHolders()).toBe(0)
+    // Not left as an unhandled rejection.
+    expect(errors).toHaveBeenCalled()
+
+    drop([fileOf('b.mov')])
+    await settle()
+    expect(server.names()).toEqual(['b.mov'])
+  })
+})
+
 // ---------------------------------------------------------------- resume and saving
 
 describe('a resume', () => {
@@ -612,6 +670,76 @@ describe('a resume', () => {
     await vi.advanceTimersByTimeAsync(2_000)
     expect(api.get).toHaveBeenCalledTimes(2)
     expect(rowOf('r')).toMatchObject({ status: 'starting', resuming: true })
+  })
+
+  it('that is discarded gives up its turn before Discard asks the server anything', async () => {
+    const server = fakeServer(() => 'wait')
+    useUploadStore.setState({
+      files: [row({ id: 'r', status: 'interrupted', fileSize: 1 * MB, assetId: 'ra', versionId: 'rv', uploadId: 'ru', s3Key: 'rk' })],
+    })
+    let answerParts!: (value: unknown) => void
+    vi.mocked(api.get).mockImplementation(() => new Promise((resolve) => {
+      answerParts = resolve
+    }) as never)
+
+    drop([small('s0.jpg'), small('s1.jpg'), small('s2.jpg')])
+    await settle()
+    useUploadStore.getState().resumeUpload('r', small('clip.mp4'))
+    const discarding = useUploadStore.getState().discardUpload('r')
+    expect(api.get).toHaveBeenCalledTimes(1) // Discard's own /parts
+
+    // A place frees up while Discard waits on the server: the row must not take it.
+    server.initiates[0].reject(new ApiError(400, 'No'))
+    await settle()
+    expect(api.get).toHaveBeenCalledTimes(1)
+    expect(rowOf('r').status).toBe('interrupted')
+    expect(rowOf('r').queuedResume).toBeUndefined()
+
+    answerParts({
+      state: 'resumable', upload_id: 'ru', s3_key: 'rk', asset_id: 'ra', version_id: 'rv',
+      chunk_size_bytes: CHUNK, file_size_bytes: MB, original_filename: 'clip.mp4', mime_type: 'video/mp4',
+      held_part_numbers: [], last_activity_at: null,
+    })
+    expect(await discarding).toBeNull()
+    expect(server.calls).toContain('abort ru')
+    expect(files().find((f) => f.id === 'r')).toBeUndefined()
+  })
+
+  it('is not queued while a run of the same row is still settling', async () => {
+    // The run's transfer broke after its completion was sent, and it is still
+    // asking the server whether the object is whole. A second run started now
+    // would have its row rewritten by the first run's answer.
+    let answerParts!: (value: unknown) => void
+    vi.mocked(api.post).mockImplementation(((path: string) => {
+      if (path === '/upload/initiate') {
+        return Promise.resolve({ upload_id: 'u1', s3_key: 'k1', asset_id: 'a1', version_id: 'v1', chunk_size_bytes: CHUNK })
+      }
+      if (path === '/upload/presign-part') return Promise.resolve({ presigned_url: 'https://s3.test/u1/1' })
+      if (path === '/upload/complete') return Promise.reject(new TypeError('Failed to fetch'))
+      return Promise.resolve({})
+    }) as never)
+    vi.mocked(api.get).mockImplementation(((path: string) => {
+      if (path.startsWith('/assets/')) return Promise.resolve({ id: 'a1', latest_version: null })
+      return new Promise((resolve) => {
+        answerParts = resolve
+      })
+    }) as never)
+    installXhrFake(() => ok('"e"'))
+
+    const [a] = drop([small('a.jpg')])
+    await vi.waitFor(() => expect(rowOf(a).status).toBe('interrupted'))
+    await settle()
+    expect(testing.runningIds()).toEqual([a])
+
+    useUploadStore.getState().resumeUpload(a, small('a.jpg'))
+    await settle()
+    expect(rowOf(a).queuedResume).toBeUndefined()
+    expect(api.get).toHaveBeenCalledTimes(2) // the asset read and the run's own /parts
+
+    answerParts({ state: 'resumable' })
+    await settle()
+    expect(testing.runningIds()).toEqual([])
+    expect(rowOf(a).status).toBe('interrupted')
   })
 
   it('a resuming or queued resume row is saved as plain interrupted', () => {
