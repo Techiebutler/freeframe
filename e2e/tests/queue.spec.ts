@@ -772,20 +772,16 @@ test('R1: a Resume made while ten files are queued starts next, and stays saved 
 })
 
 /**
- * KNOWN BUG, found by the phase 2 live Chrome pass (live-runs/2026-10-22-phase-2.md, R1 and APP-BUG-1), so
- * marked `test.fail()`: it passes while the bug is there and fails ("expected to fail") the day it is fixed.
- * The fix's author removes the marker.
+ * Regression test for APP-BUG-1, found by the phase 2 live Chrome pass (live-runs/2026-10-22-phase-2.md, R1).
  *
- * A Resume that has to wait in the queue is read as "Still uploading in another tab or on another
- * device" when its turn comes, if its turn comes more than 30 s (OWN_STOP_GRACE_MS) after the page that was
- * sending it stopped. `activeElsewhere` keeps the user's control of their own upload only for that grace,
- * measured from the row's last heartbeat, and nothing refreshes that heartbeat while the Resume waits.
- * R1 does not see it because its Resume starts within seconds of the page closing. A Resume clicked
- * inside the grace and started after it ends as Elsewhere, with no part sent and no Resume or Discard on
- * the row, for what is left of the 150 s live window.
+ * A Resume that had to wait in the queue was read as "Still uploading in another tab or on another
+ * device" when its turn came, if its turn came more than 30 s (OWN_STOP_GRACE_MS) after the page that was
+ * sending it stopped: `activeElsewhere` measured the user's control of their own upload from the row's
+ * last heartbeat, and nothing refreshes that heartbeat while the Resume waits. It now judges a queued
+ * Resume as of the click, provided the server has seen nothing move since. R1 does not cover this because
+ * its Resume starts within seconds of the page closing.
  */
 test('R1b: a Resume that waits in the queue past the own-stop grace still resumes', async ({ context, page }, testInfo) => {
-  test.fail(true, 'APP-BUG-1: a queued Resume that starts more than 30 s after the page stopped reads Elsewhere')
   test.setTimeout(4 * 60_000)
   const { project, file, saved } = await interruptedUpload(context, page, testInfo, 'R1b')
 

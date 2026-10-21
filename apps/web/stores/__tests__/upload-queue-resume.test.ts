@@ -21,7 +21,7 @@ vi.mock('@/lib/api', async (orig) => ({
 vi.mock('swr', () => ({ mutate: vi.fn() }))
 
 import { api, ApiError } from '@/lib/api'
-import { useUploadStore, __uploadQueueTesting as testing } from '../upload-store'
+import { useUploadStore, currentTabId, __uploadQueueTesting as testing } from '../upload-store'
 import { signInAs, row } from '@/test/upload-session'
 import { installXhrFake } from '@/test/xhr-fake'
 import {
@@ -274,6 +274,102 @@ describe('a resume at its turn', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     expect(api.get).toHaveBeenCalledTimes(2)
     expect(server.names()).toEqual([])
+  })
+})
+
+describe('a resume that waits its turn', () => {
+  /**
+   * This tab was sending the upload until it stopped `stoppedAgo` ms before
+   * the Resume click, and the server last saw it move then too: its own final
+   * part. Three files hold every place, so the Resume waits `waitMs` for its
+   * turn. `serverActivity` is what `/parts` reports as the last movement, when
+   * it should differ from the tab's own stop.
+   */
+  async function resumeAfterWaiting(opts: {
+    stoppedAgo: number
+    waitMs: number
+    serverActivity?: (turn: number) => number
+    atTurn?: () => void
+  }) {
+    vi.useFakeTimers()
+    const server = fakeServer(() => 'wait', 'hang')
+    const clicked = Date.now()
+    const stoppedAt = clicked - opts.stoppedAgo
+    useUploadStore.setState({
+      files: [interrupted({ ownerTab: currentTabId(), heartbeatAt: stoppedAt })],
+    })
+    drop([small('s0.jpg'), small('s1.jpg'), small('s2.jpg')])
+    await flush()
+    useUploadStore.getState().resumeUpload('r', small('clip.mp4'))
+    await flush()
+    expect(api.get).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(opts.waitMs)
+    const turn = Date.now()
+    const lastMoved = opts.serverActivity ? opts.serverActivity(turn) : stoppedAt
+    vi.mocked(api.get).mockImplementation(
+      () => Promise.resolve(resumable({ last_activity_at: new Date(lastMoved).toISOString() })) as never,
+    )
+    opts.atTurn?.()
+    // A place frees up: the Resume's turn.
+    server.initiates[0].reject(new ApiError(400, 'No'))
+    await flush()
+    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
+    return server
+  }
+
+  afterEach(() => {
+    // Stop any transfer the test left running, so its heartbeat does not outlive it.
+    if (useUploadStore.getState().files.some((f) => f.id === 'r' && f.status === 'uploading')) {
+      useUploadStore.getState().cancelUpload('r')
+    }
+  })
+
+  it('a Resume clicked just after this tab stopped still resumes when its turn comes after the grace', async () => {
+    // Clicked 10 s after the stop, started 50 s after it: past the two
+    // heartbeats a stopped upload stays this tab's own, inside the server's
+    // live window. Nobody but this tab ever touched it.
+    const server = await resumeAfterWaiting({ stoppedAgo: 10_000, waitMs: 40_000 })
+
+    expect(rowOf('r').status).toBe('uploading')
+    expect(server.calls).toContain('presign ru')
+  })
+
+  it('is refused when the server saw the upload move after the click: another device took it up meanwhile', async () => {
+    const server = await resumeAfterWaiting({
+      stoppedAgo: 10_000,
+      waitMs: 40_000,
+      serverActivity: (turn) => turn - 2_000,
+    })
+
+    expect(rowOf('r').status).toBe('elsewhere')
+    expect(server.calls).not.toContain('presign ru')
+  })
+
+  it('is refused when another tab of this browser is stamping the row at its turn', async () => {
+    const server = await resumeAfterWaiting({
+      stoppedAgo: 10_000,
+      waitMs: 40_000,
+      atTurn: () => {
+        // Another tab has just taken it up: stamped, but no byte moved yet,
+        // so the server's last movement is still this tab's own.
+        const saved = JSON.parse(window.localStorage.getItem('ff-uploads')!)
+        saved.state.files = saved.state.files.map((f: { id: string }) => (
+          f.id === 'r' ? { ...f, ownerTab: 'tab-other', heartbeatAt: Date.now() } : f
+        ))
+        window.localStorage.setItem('ff-uploads', JSON.stringify(saved))
+      },
+    })
+
+    expect(rowOf('r').status).toBe('elsewhere')
+    expect(server.calls).not.toContain('presign ru')
+  })
+
+  it('a Resume clicked after the grace had already passed is judged as before: refused while the server window runs', async () => {
+    const server = await resumeAfterWaiting({ stoppedAgo: 35_000, waitMs: 20_000 })
+
+    expect(rowOf('r').status).toBe('elsewhere')
+    expect(server.calls).not.toContain('presign ru')
   })
 })
 
