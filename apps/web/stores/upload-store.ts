@@ -777,6 +777,20 @@ function isFinalRefusal(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 404 || err.status === 409)
 }
 
+const ASSET_GONE_MESSAGE = 'This file is no longer available.'
+
+/**
+ * An answer to `GET /assets/{id}` that will not change.
+ *
+ * An asset in the trash answers 404, and one in a deleted project answers 403
+ * (since v1.19.0). Both say the file is not there for this user, which no amount
+ * of asking again alters, so the row is finished. Anything else -- a dropped
+ * connection, a 5xx -- says nothing about the asset and is simply asked again.
+ */
+function isAssetGone(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 403 || err.status === 404)
+}
+
 // AbortControllers for cancellation
 const abortControllers: Record<string, AbortController> = {}
 
@@ -1802,9 +1816,12 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     )
     if (!watched.length) return
     try {
+      // `null` is "no answer, ask again"; `'gone'` is an answer that is final.
       const results = await Promise.all(
         watched.map((f) =>
-          api.get<AssetResponse>(`/assets/${f.assetId}`).catch(() => null),
+          api.get<AssetResponse>(`/assets/${f.assetId}`).catch((err): 'gone' | null =>
+            isAssetGone(err) ? 'gone' : null,
+          ),
         ),
       )
       set((s) => ({
@@ -1814,7 +1831,13 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           // asset -- an interrupted v2 and a processing v3 -- and on the asset
           // they both read the first one's answer.
           const idx = watched.findIndex((pf) => pf.id === f.id)
-          const asset = idx >= 0 ? results[idx] : null
+          const answer = idx >= 0 ? results[idx] : null
+          // Failed is neither polled nor counted as active, so this is what
+          // takes the row off the timer; the panel still offers Dismiss on it.
+          if (answer === 'gone') {
+            return { ...f, status: 'failed' as const, error: ASSET_GONE_MESSAGE }
+          }
+          const asset = answer
           if (!asset?.latest_version) return f
           // `GET /assets/{id}` answers with `_display_version`, which excludes
           // `uploading`, so for an interrupted second version it hands back the
