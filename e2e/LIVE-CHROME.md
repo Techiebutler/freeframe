@@ -206,8 +206,11 @@ the project page):
     if (method === 'POST' && /\/assets\/[^/]+\/versions$/.test(p)) return 'new-version'
     return null
   }
-  // The uploads panel, as stack.ts finds it. If the panel's markup changes, change these two.
-  const ROW = 'div.group.items-start'
+  // The uploads panel, as stack.ts finds it: a row is `[data-testid="upload-row"]` and its status is its
+  // `data-status` (queued, starting, uploading, processing, complete, failed, cancelled, interrupted,
+  // elsewhere). The class selectors are the fallback for a build without those hooks (main, before the
+  // queue): its badge text ("Uploading", "Ready", ...) is the status. If the panel's markup changes, change these.
+  const ROW = '[data-testid="upload-row"], div.group.items-start'
   const BADGE = 'span.rounded-full'
 
   const q = (window.__ffq = {
@@ -263,7 +266,7 @@ the project page):
         if (!panel) return
         const counts = {}
         for (const row of panel.querySelectorAll(ROW)) {
-          const s = (row.querySelector(BADGE)?.textContent ?? '?').replace(/\s+/g, ' ').trim()
+          const s = (row.getAttribute('data-status') ?? row.querySelector(BADGE)?.textContent ?? '?').replace(/\s+/g, ' ').trim()
           counts[s] = (counts[s] ?? 0) + 1
         }
         q.rowSamples.push({ t: q.rel(), counts })
@@ -337,7 +340,7 @@ API (all on `window.__ffq`):
 | --- | --- |
 | `mark(label)` | Start a measurement window: zero the clock, forget everything recorded before. Call it in the same tick as the drop. |
 | `report()` | `kinds` (per `initiate`, `presign`, `part-put`, `complete`, `abort`, `parts-list`, `new-version`: started, finished, failed, status counts, first and last start in ms since `mark`), `initiatesStartedWithin` (1 s, 5 s, 30 s), `peakInFlight`, `longtasks`. A request the app cancels (an XHR `abort()`, as in C3 and R3) ends with status 0 and is counted as `network-error`, so a cancelled part PUT looks like a network failure in `report()`; tell them apart by what the scenario did. |
-| `sampleRows(ms)` / `stopRows()` | Every `ms` (default 500) count the panel's rows by badge text into `rowSamples`. Counts only the rows the panel's current tab shows: the "Active" tab hides finished rows, "All" shows everything. |
+| `sampleRows(ms)` / `stopRows()` | Every `ms` (default 500) count the panel's rows by status (the row's `data-status`; the badge text on a build without the hooks) into `rowSamples`. Counts only the rows the panel's current tab shows: the "Active" tab hides finished rows, "All" shows everything. |
 | `block(match)` / `unblock()` | In-page request blocking (section 4). |
 | `rowSamples`, `events`, `open` | Raw data. |
 
@@ -461,9 +464,10 @@ report.
    () => {
      const panel = Array.from(document.querySelectorAll('div.fixed')).find(d => d.querySelector('h1,h2,h3,h4,h5,h6')?.textContent?.trim().startsWith('Uploads'))
      Array.from(panel.querySelectorAll('button')).find(b => /^All/.test(b.textContent.trim())).click()
-     return Array.from(panel.querySelectorAll('div.group.items-start')).map(row => ({
+     return Array.from(panel.querySelectorAll('[data-testid="upload-row"]')).map(row => ({
        name: (row.querySelector('p.font-medium, button[title="Rename"]')?.textContent || '').trim(),
-       status: (row.querySelector('span.rounded-full')?.textContent || '').trim(),
+       status: row.getAttribute('data-status'),   // queued | starting | uploading | processing | complete | failed | cancelled | interrupted | elsewhere
+       kind: row.getAttribute('data-detail'),     // waiting-to-start, waiting-for-storage, resuming, finalizing, ...
        detail: (row.querySelector('div.mt-1')?.textContent || '').replace(/\s+/g, ' ').trim(),
      }))
    }

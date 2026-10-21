@@ -45,7 +45,7 @@ version.
 | L2 | Log out with files queued | in-app confirm "N uploads will stop. Log out anyway?"; confirming navigates with no beforeunload dialog | Chromium, WebKit, Firefox | 5 | — | — | — | — |
 | L3 | Expired session (clear both tokens, then trigger a request) | redirect to /login, no dialog | Chromium, WebKit, Firefox | 5 | — | — | — | — |
 | V1 | New Version during a long queue | the asset page shows "New version queued, waiting for other uploads."; the version appears without reload | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | — | — | — |
-| P1 | A storage cap that fits only about 3 of 10 files | at least one row Failed "Storage limit reached …" with Retry; every row ends Complete/Processing or Failed; none stays Queued or Starting; committed bytes exceed the cap by at most one file (the cap counts only committed media) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | — | — | — |
+| P1 | A storage cap that fits only about 3 of 10 files | at least one row Failed "Storage limit reached …" with Retry; every row ends Complete/Processing or Failed; none stays Queued or Starting; committed bytes exceed the cap by at most one file (with at most two files in flight; the cap counts only committed media) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | — | — | — |
 | P2 | Project deleted while 5 files are queued for it, plus 2 queued for another project | the 5 fail with 404; the 2 upload | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | — | — | — |
 | M | Manual, **real Safari and real Firefox**, every phase: the phase's scenarios from this table, plus "hard reload, then drop from Finder without clicking, then reload". By the end, every scenario above has a real Safari and a real Firefox result | record the result in `SCENARIOS.md` with browser versions, before that phase's PR merges | Safari, Firefox (manual) | every phase | — | — | — | — |
 
@@ -61,8 +61,9 @@ at `8a0411aa`) on the e2e stack. The whole suite per engine, 2026-10-21: setup, 
 | WebKit (Playwright 1.59) | 35 passed, 2 skipped; every queue scenario passes | 3.7 min |
 | Firefox (Playwright's Firefox 1511) | **does not launch on this macOS machine** (Darwin 27): `browserType.launch: Timeout 180000ms exceeded`, the known gap in `README.md`. Not run. The scenarios are engine-neutral; run `pnpm test:firefox` wherever it launches, and do the manual real-Firefox pass | n/a |
 
-Per scenario (seconds, Chromium / WebKit): Q1 46 / 44, Q3 5 / 5, Q4 3 / 3, C1 2 / 3, C2 2 / 2, C3 4 / 5,
-S1 18 / 18, S2 62 / 62, R1 6 / 6, R3 12 / 12, V1 4 / 4, P1 11 / 10, P2 4 / 5.
+Per scenario (seconds, Chromium / WebKit; commit `97d30912`): Q1 46 / 44, Q3 5 / 5, Q4 3 / 3, C1 2 / 3, C2 2 / 2,
+C3 4 / 5, S1 18 / 18, S2 62 / 62, R1 6 / 6, R3 12 / 12, V1 4 / 4, P1 11 / 10, P2 4 / 5. After the fix round, R3
+(deferred `/parts` answer) takes 4 / 7 s and S2 (20 parts) about 65 s on both.
 
 What each one observed (both engines gave the same numbers unless noted):
 
@@ -74,8 +75,10 @@ What each one observed (both engines gave the same numbers unless noted):
   "Waiting for storage", the two behind it "Waiting to start"; four tries at least 5 s apart; no row fails.
   The files are over 5 MiB on purpose: a file of 5 MiB or less counts as one part while it initiates, so
   three of them ask at once and the three refusals land on three different files.
-- **S2** one 60 MB file, every part PUT answered 503 for 60 s: 25 presign requests and 25 part PUTs
-  (bound: budget 5 x 8 = 40). The row is still Uploading at the end.
+- **S2** one 200 MB file (20 parts, four times the budget), every part PUT answered 503 for 60 s: 25
+  presign requests and 25 part PUTs (bound: budget 5 x 8 = 40). The row is still Uploading at the end.
+  (With a 60 MB file of 6 parts the bound could not be exceeded even without the anti-storm rule, and the
+  test survived removing it; with 20 parts that mutation gives 100 presigns and fails.)
 - **R1** the interrupted row is a closed page reopened with its sessionStorage (so it is the same tab:
   a different tab would show the row as "Elsewhere" for 150 s). 13 files dropped (3 start, 10 wait), Resume:
   "Waiting to resume", and its parts listing is requested before the fourth file's initiate. Its `ff-uploads`
@@ -95,9 +98,16 @@ and failed for the intended reason: active cap 4 (Q1), a last-in-first-out queue
 (C1), "Cancel all queued" that does nothing (C2), no pump when a run ends (C3), the server's retry-after
 ignored (S1), a Resume that goes to the back (R1), Cancel during Resuming that falls through (R3), no
 queued line on the asset page (V1), initiate sending the file name instead of the renamed asset name (Q4),
-a 404 treated as a hold (P2). Not mutation-checked: S2 and P1. Removing the part-budget gate from the start
-rule made Q1 end by its 25 minute limit (the mutated app never finished the drop), so the start-rule
-assertion at each initiate was not itself exercised.
+a 404 treated as a hold (P2); the start rule's part-budget check relaxed by 3 parts (Q1: seven files started
+with 5 or 7 parts unfinished, within Q1's normal 50 s); the anti-storm rule in the part budget removed (S2, with
+20 parts). Not yet mutation-checked: P1.
+
+Removing the part-budget check from the start rule outright made Q1 stall once, for 25 minutes. That was the
+stack, not the mutation or the app: the Docker VM's disk was at 99%, so the e2e MinIO answered part PUTs with
+507 Insufficient Storage, and every file then sat in the part retry ladder (about four minutes) holding its
+place. The same mutation completes in 42 s when storage works (4 of 4 runs), and the unmutated app in the same
+condition behaves the same way (13 minutes: 7 complete, 5 Interrupted after their ladders, 2 retrying, 36
+queued). If a run stalls with 507s in the browser log, free space in the e2e MinIO first.
 
 ## Already covered
 
