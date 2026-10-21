@@ -925,6 +925,25 @@ describe('uploadAllParts and the part budget', () => {
     expect(onUnfinished.mock.calls.map(([n]) => n)).toEqual([3, 2, 1, 0])
   })
 
+  it('reports nothing unfinished once a run that failed has settled', async () => {
+    // The parts the run never finished are not going to be sent by it, so the
+    // queue must stop counting them against the budget while the row settles.
+    mockPut((url) => (partOf(url) === 1 ? fail(403, 'Forbidden') : new Promise(() => {})))
+    const onUnfinished = vi.fn()
+
+    const promise = uploadAllParts(makeFile(3000), 'key', 'upload-1', controller, vi.fn(), {
+      budget: createPartBudget(3),
+      fileKey: 'f',
+      chunkSize: 1000,
+      onUnfinished,
+    })
+    const settled = promise.catch((err: unknown) => err)
+    await vi.runAllTimersAsync()
+
+    expect(await settled).toBeInstanceOf(Error)
+    expect(onUnfinished.mock.calls.map(([n]) => n)).toEqual([3, 0])
+  })
+
   it('does not count parts the backend already holds as unfinished', async () => {
     mockPut((url) => ok(`"etag-${partOf(url)}"`))
     const onUnfinished = vi.fn()

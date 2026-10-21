@@ -567,21 +567,32 @@ describe('hold backoff', () => {
     },
   )
 
-  it('honours a retry-after of 0 once, then backs off from 2 s instead of staying at 0', () => {
+  it('waits at least 2 s on a retry-after of 0, then doubles', () => {
     const queue = createUploadQueue()
     queue.hold.begin('p', 'storage', 0)
 
-    expect(queue.hold.nextDelayMs()).toBe(0)
     expect(queue.hold.nextDelayMs()).toBe(2_000)
     expect(queue.hold.nextDelayMs()).toBe(4_000)
   })
 
-  it('never doubles below 2 s after a short retry-after', () => {
+  it('never waits less than 2 s on a short retry-after', () => {
     const queue = createUploadQueue()
     queue.hold.begin('p', 'storage', 500)
 
-    expect(queue.hold.nextDelayMs()).toBe(500)
     expect(queue.hold.nextDelayMs()).toBe(2_000)
+    expect(queue.hold.nextDelayMs()).toBe(4_000)
+  })
+
+  it('a server answering Retry-After: 0 to every try is not asked again at once', () => {
+    // `begin` runs again after each failed try, with the fresh retry-after.
+    const queue = createUploadQueue()
+    const delays: number[] = []
+    for (let i = 0; i < 5; i++) {
+      queue.hold.begin('p', 'storage', 0)
+      delays.push(queue.hold.nextDelayMs())
+    }
+
+    expect(Math.min(...delays)).toBeGreaterThanOrEqual(2_000)
   })
 
   it('a fresh retry-after for the same probe replaces the next delay but keeps the ladder', () => {
@@ -702,16 +713,16 @@ describe('hold handOff', () => {
     expect(queue.hold.nextDelayMs()).toBe(9_000)
   })
 
-  it('passes on a delay of 0 as 0, then backs off from 2 s', () => {
+  it('passes on a retry-after of 0 as the 2 s floor, then doubles', () => {
     const queue = createUploadQueue()
     queue.enqueue([entry('a')], 'back')
     queue.hold.begin('old', 'storage', 0)
-    expect(queue.hold.nextDelayMs()).toBe(0)
+    expect(queue.hold.nextDelayMs()).toBe(2_000)
 
     queue.hold.handOff()
 
-    expect(queue.hold.nextDelayMs()).toBe(0)
     expect(queue.hold.nextDelayMs()).toBe(2_000)
+    expect(queue.hold.nextDelayMs()).toBe(4_000)
   })
 
   it('starts the new probe at the 60 s cap if the old one had reached it', () => {

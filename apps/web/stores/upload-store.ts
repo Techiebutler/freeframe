@@ -409,10 +409,12 @@ async function uploadPart(
 
   // Rejects with an AbortError if the upload stops while this waits.
   let release = await budget.acquire(fileKey, signal, 'fresh')
-  slots.onFirstGrant?.()
 
   for (let attempt = 1; ; attempt++) {
     try {
+      // Inside the attempt, so the `finally` below gives the slot back even if
+      // the hook throws.
+      if (attempt === 1) slots.onFirstGrant?.()
       return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize, onBytes)
     } catch (err) {
       // The next attempt sends the part from its first byte again, so what
@@ -723,6 +725,13 @@ export async function uploadAllParts(
     // Every part has settled by now (`settled` waits for the last of them), so
     // no slot of this run is still in use and no part is still asleep.
     budget.forget(fileKey)
+    // And none will be sent: a run that stopped part-way leaves parts it never
+    // finished, but it is not going to use the budget for them. Said, so the
+    // queue does not go on counting them while the row settles.
+    if (unfinished !== 0) {
+      unfinished = 0
+      opts.onUnfinished?.(0)
+    }
   }
 }
 
@@ -838,6 +847,12 @@ export interface UploadFile {
    */
   s3Key?: string
   createdAt: number // timestamp for grouping
+  /**
+   * The account that added the row: the access token's `sub` when it was
+   * added. Views and starts are scoped to it (spec goal 9); until that lands
+   * it is recorded by tests only.
+   */
+  ownerId?: string
   /** The tab that is transferring this row, see `currentTabId`. */
   ownerTab?: string
   /** When that tab last said it still is, see `HEARTBEAT_MS`. */
