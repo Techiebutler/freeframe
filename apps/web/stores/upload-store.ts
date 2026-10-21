@@ -16,6 +16,20 @@ const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
 const HISTORY_PAGE_SIZE = 20
 const PART_MAX_ATTEMPTS = 8 // per part, including the first try
 const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per part
+/**
+ * The part watchdog (spec goal 5). A part PUT is aborted, and retried, when no
+ * upload progress has come for `PART_STALL_MS` while bytes remain to send, or
+ * when `PART_RESPONSE_WAIT_MS` has passed since its last byte with no answer.
+ *
+ * In WebKit a part whose file changed on disk after it was picked hangs with no
+ * event at all, so only a clock can tell. A browser reports upload progress
+ * every 50 ms or so while bytes move, so 90 s of silence is not a slow uplink
+ * but a stopped one. The wait after the last byte is longer because a large
+ * part can legitimately sit with storage, or with a proxy that buffers the
+ * whole body, before the answer comes.
+ */
+const PART_STALL_MS = 90_000
+const PART_RESPONSE_WAIT_MS = 300_000
 
 /**
  * How often a tab that is transferring says so, and how long that is believed.
@@ -305,6 +319,19 @@ interface PartUploadError extends Error {
   permanent?: boolean
 }
 
+/**
+ * A part PUT the watchdog gave up on (see `PART_STALL_MS`). Retryable: the
+ * next attempt reads the file first, so a file that changed fails clearly
+ * there, and a connection that merely stopped gets a fresh request. Not an
+ * `AbortError`, which the caller would take for a user cancel.
+ */
+export class PartStalledError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PartStalledError'
+  }
+}
+
 /** A cancellation, as opposed to a failure: the caller reports the two differently. */
 function isAbortError(err: unknown): err is DOMException {
   return err instanceof DOMException && err.name === 'AbortError'
@@ -379,13 +406,19 @@ function etagOf(xhr: XMLHttpRequest): string {
  *   `uploadPart` and `uploadAllParts` tell a cancel from a failure;
  * - a network error, a timeout or an abort the browser started itself rejects
  *   with a plain error, which is retried, as fetch's TypeError was;
+ * - a part that stops moving is aborted by the watchdog and rejects with a
+ *   `PartStalledError`, which is retried too. The clock runs `PART_STALL_MS`
+ *   from the send and from every progress event while bytes remain, and
+ *   `PART_RESPONSE_WAIT_MS` from the progress event that reports the last
+ *   byte. Progress is measured against the chunk's own size, since a
+ *   progress event's `total` is 0 when the length is not computable;
  * - a non-2xx rejects with `permanent` set for a 4xx, so a status of 0 never
  *   counts as one;
  * - no Content-Type is set. `chunk` is a slice taken without a type, so the
  *   browser sends none, and the presigned URL signs none.
  *
  * The pool signal lives for the whole upload, so the abort listener is removed
- * again whichever way the request settles.
+ * again whichever way the request settles, and the watchdog's timer with it.
  */
 function putPart(
   url: string,
@@ -402,9 +435,38 @@ function putPart(
 
     const xhr = new XMLHttpRequest()
     const abort = () => xhr.abort()
-    const settle = () => signal.removeEventListener('abort', abort)
+    let watchdog: ReturnType<typeof setTimeout> | undefined
+    // Set only by the watchdog, just before its own abort, so `onabort` can
+    // tell that abort from a cancel and from one the browser started.
+    let stalled: PartStalledError | null = null
+    const settle = () => {
+      clearTimeout(watchdog)
+      signal.removeEventListener('abort', abort)
+    }
+    // Every byte sent re-arms the stall clock; the last one swaps it for the
+    // longer wait on the answer.
+    const arm = (sent: number) => {
+      clearTimeout(watchdog)
+      const done = sent >= chunk.size
+      watchdog = setTimeout(() => {
+        stalled = new PartStalledError(
+          done
+            ? `Part ${partNumber} failed: no answer ${PART_RESPONSE_WAIT_MS / 60_000} min after its last byte`
+            : `Part ${partNumber} failed: no progress for ${PART_STALL_MS / 1000} s`,
+        )
+        xhr.abort()
+        // `abort` fires synchronously on the hung request (measured in
+        // WebKit), and `onabort` rejects with `stalled`. Rejecting here too
+        // keeps the part from hanging should some browser not fire it.
+        settle()
+        reject(stalled)
+      }, done ? PART_RESPONSE_WAIT_MS : PART_STALL_MS)
+    }
 
-    xhr.upload.onprogress = (event) => onBytes(event.loaded)
+    xhr.upload.onprogress = (event) => {
+      onBytes(event.loaded)
+      arm(event.loaded)
+    }
     xhr.onload = () => {
       settle()
       if (xhr.status >= 200 && xhr.status < 300) {
@@ -420,9 +482,11 @@ function putPart(
       reject(new TypeError(`Part ${partNumber} failed: network error`))
     }
     // No timeout is set, as fetch had none: a 10 MB part on a slow uplink can
-    // take minutes and must not be cut off. The handler stays so that one set
-    // later, here or by a browser, fails the part retryably instead of leaving
-    // the promise unsettled, since a timeout fires neither load nor error.
+    // take minutes and must not be cut off, and `timeout` bounds the whole
+    // request, not the silence in it -- that is the watchdog's job. The
+    // handler stays so that one set later, here or by a browser, fails the
+    // part retryably instead of leaving the promise unsettled, since a timeout
+    // fires neither load nor error.
     xhr.ontimeout = () => {
       settle()
       reject(new TypeError(`Part ${partNumber} failed: timed out`))
@@ -432,18 +496,27 @@ function putPart(
     // where fetch rejected with a TypeError and the part was retried. Only an
     // abort of the signal may come out as an AbortError: the caller takes that
     // for a user cancel and discards every part the backend holds.
+    //
+    // The watchdog's own abort is a failure too, and comes out as the
+    // `PartStalledError` it set. A cancel wins over it.
     xhr.onabort = () => {
       settle()
       reject(
         signal.aborted
           ? new DOMException(`Part ${partNumber} cancelled`, 'AbortError')
-          : new TypeError(`Part ${partNumber} failed: aborted`),
+          : stalled ?? new TypeError(`Part ${partNumber} failed: aborted`),
       )
     }
 
     xhr.open('PUT', url)
     signal.addEventListener('abort', abort, { once: true })
-    xhr.send(chunk)
+    arm(0)
+    try {
+      xhr.send(chunk)
+    } catch (err) {
+      settle()
+      reject(err)
+    }
   })
 }
 

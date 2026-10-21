@@ -44,19 +44,43 @@ function isStaleHandle(err: unknown): boolean {
 }
 
 /**
+ * How long the one-byte read may take before it counts as failed.
+ *
+ * A stale handle rejects within milliseconds, so this is not for that. It is
+ * for a read that never answers -- a network share that dropped, say -- which
+ * would otherwise hold the slot it was read in for good, the hang goal 5 of the
+ * upload queue spec is there to end. A slow but working disk or share gives one
+ * byte in seconds, so the bound is generous: it matches the part watchdog's
+ * 90 s, past which a part sent from the same file would be given up on anyway.
+ */
+const READ_PROBE_TIMEOUT_MS = 90_000
+
+/**
  * Reads the first byte of `file`. Resolves when it can be read, rejects with
  * `FileUnreadableError` when the handle is stale, and rethrows anything else
  * as it came: a failure that says nothing about the file must not be told as if
  * it did.
  *
+ * A read that has not answered in `READ_PROBE_TIMEOUT_MS` rejects with a plain
+ * error that says `FILE_READ_FAILED_MESSAGE`. It is not a `FileUnreadableError`:
+ * a read that hangs says nothing about whether the file changed, so every
+ * caller treats it as retryable. The read itself cannot be called off and is
+ * left to settle on its own.
+ *
  * One byte from the start, whatever the file's size, so it costs the same for
  * a text file and a 50 GB one.
  */
 export async function assertReadable(file: Blob): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(FILE_READ_FAILED_MESSAGE)), READ_PROBE_TIMEOUT_MS)
+  })
   try {
-    await file.slice(0, 1).arrayBuffer()
+    await Promise.race([file.slice(0, 1).arrayBuffer(), timedOut])
   } catch (err) {
     if (isStaleHandle(err)) throw new FileUnreadableError()
     throw err
+  } finally {
+    clearTimeout(timer)
   }
 }
