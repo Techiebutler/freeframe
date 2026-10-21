@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Project settings preserve unsaved edits when closed, then reset when reopened.** Closing the dialog no longer discards the current name or poster preview; reopening starts from the saved project values. (#465)
+- **Project settings retain unsaved edits and a selected poster when the project list refreshes in the background.** (#512 by @jay23606; fixes #465)
 
 ## [1.19.0] - 2026-10-19
 
