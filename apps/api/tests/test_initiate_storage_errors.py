@@ -17,6 +17,7 @@ from botocore.exceptions import (
 
 import apps.api.routers.assets as assets_module
 import apps.api.routers.upload as upload_module
+from apps.api.config import settings
 from apps.api.services import s3_service
 
 
@@ -203,3 +204,17 @@ def test_rollback_called_before_coded_error(client, auth_headers, mock_db, monke
 
     assert _detail(resp) is not None
     mock_db.rollback.assert_called_once()
+
+
+# -- the browser can read Retry-After -----------------------------------------
+
+def test_retry_after_is_exposed_cross_origin(client):
+    # A GET, not a preflight: a preflight response never carries this header.
+    # An origin the middleware allows, whatever FRONTEND_URL / CORS_ALLOW_ORIGINS say.
+    origin = "http://localhost:3000" if settings.cors_allows_any_origin else settings.cors_origins[0]
+    resp = client.get("/health", headers={"Origin": origin})
+
+    exposed = resp.headers["access-control-expose-headers"].lower()
+    assert "retry-after" in exposed
+    # The header the download filename already depends on must survive the edit.
+    assert "content-disposition" in exposed
