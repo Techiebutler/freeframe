@@ -685,6 +685,16 @@ export interface UploadFile {
   assetId?: string
   versionId?: string
   uploadId?: string
+  /**
+   * The storage key of the multipart upload, recorded wherever `uploadId` is.
+   *
+   * `/upload/abort` needs it beside the upload id, and Discard used to learn
+   * both from `/upload/{version}/parts` -- which answers 404 once the version
+   * is gone, at exactly the moment the multipart upload still needs aborting.
+   * Absent on rows written before it was recorded and on rows rebuilt from
+   * history, which never see it.
+   */
+  s3Key?: string
   createdAt: number // timestamp for grouping
   /** The tab that is transferring this row, see `currentTabId`. */
   ownerTab?: string
@@ -1109,7 +1119,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         version_id = initRes.version_id
         asset_id = initRes.asset_id
 
-        updateFile(id, { uploadId: upload_id, assetId: asset_id, versionId: version_id })
+        updateFile(id, { uploadId: upload_id, s3Key: s3_key, assetId: asset_id, versionId: version_id })
 
         // The round trip is the window that does exist, and the only place a
         // rename can be lost: the panel offers the pencil from the moment the
@@ -1283,7 +1293,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         upload_id = initRes.upload_id
         s3_key = initRes.s3_key
         version_id = initRes.version_id
-        updateFile(id, { uploadId: upload_id, versionId: version_id })
+        updateFile(id, { uploadId: upload_id, s3Key: s3_key, versionId: version_id })
 
         const parts = await uploadAllParts(
           file, s3_key, upload_id, controller,
@@ -1403,9 +1413,11 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         //
         // The version and asset ids go with it, for the same reason: the two
         // fresh upload paths record all three in one call and this one
-        // recorded none of them.
+        // recorded none of them. So does the storage key, which Discard needs
+        // to abort after `/parts` has stopped answering.
         updateFile({
           uploadId: info.upload_id,
+          s3Key: info.s3_key,
           versionId: info.version_id,
           assetId: info.asset_id,
         })
@@ -1548,9 +1560,28 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     try {
       info = await api.get<ResumeInfo>(`/upload/${row.versionId}/parts`)
     } catch (err) {
-      // 404 or 409: the version is gone or no longer uploading, so there is
-      // nothing left to discard and the row has nothing to offer.
+      // 404 or 409: the version is gone or no longer uploading, so the row has
+      // nothing to offer. The multipart upload behind it may still be open --
+      // `/parts` answering 404 says nothing about storage -- and leaving it to
+      // the reaper holds every part already sent until then. A row that
+      // recorded its key and upload id can abort without being told them.
       if (isFinalRefusal(err)) {
+        if (row.s3Key && row.uploadId) {
+          try {
+            await api.post('/upload/abort', {
+              s3_key: row.s3Key,
+              upload_id: row.uploadId,
+              version_id: row.versionId,
+              discard: true,
+            })
+          } catch (abortErr) {
+            // The upload is already gone too: the same answer from the other
+            // side, and what Discard wanted to happen has happened.
+            if (!(abortErr instanceof ApiError && abortErr.status === 404)) {
+              return reportDiscardFailure(set, fileId, abortErr)
+            }
+          }
+        }
         drop()
         set((s) => ({ versionsRevision: s.versionsRevision + 1 }))
         return null
