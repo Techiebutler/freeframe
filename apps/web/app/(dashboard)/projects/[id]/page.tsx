@@ -125,7 +125,7 @@ export default function ProjectDetailPage() {
   const [assetToRename, setAssetToRename] = React.useState<AssetResponse | null>(null);
   const [assetToDelete, setAssetToDelete] = React.useState<AssetResponse | null>(null);
 
-  const startUpload = useUploadStore((s) => s.startUpload);
+  const startUploads = useUploadStore((s) => s.startUploads);
   const { user } = useAuthStore();
 
   const {
@@ -380,22 +380,20 @@ export default function ProjectDetailPage() {
 
   const startDroppedUploads = React.useCallback(
     (folderId: string | null, files: File[]) => {
-      files.forEach((file) =>
-        startUpload(
-          file,
-          projectId,
-          // Straight to startUpload rather than through the dialog. Dragging a
-          // file onto the project has already said everything the dialog asks:
-          // which file, which folder, and the name comes from the file. The
-          // single-file rename field is skipped; the row in the uploads panel
-          // takes the rename while the file is still going up.
-          assetNameFromFile(file.name),
-          project?.name,
-          folderId,
-        ),
+      // Straight to the queue rather than through the dialog. Dragging a file
+      // onto the project has already said everything the dialog asks: which
+      // file, which folder, and the name comes from the file. The single-file
+      // rename field is skipped; the row in the uploads panel takes the rename
+      // while the file waits or goes up. One call for the whole drop, so the
+      // files keep their order and start in turn.
+      startUploads(
+        files.map((file) => ({ file, assetName: assetNameFromFile(file.name) })),
+        projectId,
+        project?.name,
+        folderId,
       );
     },
-    [startUpload, projectId, project?.name],
+    [startUploads, projectId, project?.name],
   );
 
   const {
@@ -412,12 +410,15 @@ export default function ProjectDetailPage() {
   });
 
   const handleStartUpload = () => {
-    pendingFiles.forEach((file) => {
-      const name = uploadNameForFile(file.name, assetName, pendingFiles.length);
-      // Note: startUpload does not yet accept folderId — assets will upload to root.
-      // Upload store needs to be updated in a future task to support folder placement.
-      startUpload(file, projectId, name, project?.name, currentFolderId);
-    });
+    startUploads(
+      pendingFiles.map((file) => ({
+        file,
+        assetName: uploadNameForFile(file.name, assetName, pendingFiles.length),
+      })),
+      projectId,
+      project?.name,
+      currentFolderId,
+    );
     setPendingFiles([]);
     setAssetName("");
     setUploadOpen(false);

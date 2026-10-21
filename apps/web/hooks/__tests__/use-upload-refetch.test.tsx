@@ -78,9 +78,32 @@ describe('useRefetchOnUploadStatus', () => {
     expect(refetch).toHaveBeenCalledTimes(1)
 
     act(() => {
-      useUploadStore.setState((s) => ({ files: [...s.files, row('new', 'pending')] }))
+      useUploadStore.setState((s) => ({ files: [...s.files, { ...row('new', 'uploading'), assetId: 'a-new' }] }))
     })
     expect(refetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('a 10-file queue moving from queued to starting triggers no refetch', () => {
+    // Nothing exists on the server for a file until its initiate answers, so a
+    // drop waiting and starting changes nothing the grid could show.
+    useUploadStore.setState({ files: [row('done', 'complete')] })
+    const refetch = vi.fn()
+    renderHook(() => useRefetchOnUploadStatus('p', refetch))
+    refetch.mockClear()
+
+    const queued = Array.from({ length: 10 }, (_, i) => row(`q${i}`, 'queued'))
+    act(() => {
+      useUploadStore.setState((s) => ({ files: [...queued, ...s.files] }))
+    })
+    for (const f of queued) patch(f.id, { status: 'starting' })
+    // Still starting once the initiate has answered with its ids: the row turns
+    // `uploading` in the same write, and that is the one that counts.
+    patch('q0', { versionId: 'v0', uploadId: 'u0' })
+
+    expect(refetch).not.toHaveBeenCalled()
+
+    patch('q0', { status: 'uploading', assetId: 'a0' })
+    expect(refetch).toHaveBeenCalledTimes(1)
   })
 
   it("ignores other projects' uploads", () => {

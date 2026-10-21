@@ -15,9 +15,12 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 }))
 
 import { api, ApiError } from '@/lib/api'
-import { useUploadStore } from '../upload-store'
+import { useUploadStore, __uploadQueueTesting } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake } from '@/test/xhr-fake'
+
+// The upload queue is tab-wide module state: start every test from an empty one.
+beforeEach(() => __uploadQueueTesting.reset())
 
 const VERSION_ID = 'version-1'
 const ASSET_ID = 'asset-1'

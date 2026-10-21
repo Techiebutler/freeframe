@@ -152,7 +152,7 @@ describe('renaming a row that has not reached the server yet', () => {
     // `/upload/initiate` is what creates the asset and hands back its id.
     // Until it answers, the row is the only record of the name -- and it is
     // the record initiate reads, so nothing is lost by keeping it here.
-    seed(row({ status: 'pending', assetId: undefined }))
+    seed(row({ status: 'queued', assetId: undefined }))
 
     const error = await useUploadStore.getState().renameUpload('row-1', 'Ep04')
 

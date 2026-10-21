@@ -17,8 +17,11 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api } from '@/lib/api'
-import { useUploadStore } from '../upload-store'
+import { useUploadStore, __uploadQueueTesting } from '../upload-store'
 import { installXhrFake, ok } from '@/test/xhr-fake'
+
+// The upload queue is tab-wide module state: start every test from an empty one.
+beforeEach(() => __uploadQueueTesting.reset())
 
 const ASSET_ID = 'asset-1'
 const VERSION_ID = 'version-2'
@@ -70,9 +73,9 @@ function rowOf(id: string) {
   return useUploadStore.getState().files.find((f) => f.id === id)!
 }
 
-/** Resolves once the upload has stopped moving. */
+/** Resolves once the upload has stopped moving: no longer waiting, starting or sending. */
 async function settled(id: string) {
-  await vi.waitFor(() => expect(rowOf(id).status).not.toBe('uploading'))
+  await vi.waitFor(() => expect(['queued', 'starting', 'uploading']).not.toContain(rowOf(id).status))
 }
 
 describe('an upload whose completion request threw', () => {

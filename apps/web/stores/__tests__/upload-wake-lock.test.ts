@@ -85,9 +85,9 @@ describe('upload wake lock', () => {
     expect(() => releaseWakeLock()).not.toThrow()
   })
 
-  // Dropping several files calls startUpload once per file, and each runs
-  // synchronously as far as retainWakeLock() before its first await. Selecting
-  // N files therefore means N retains before the first request has resolved.
+  // Several files can take their turn in the same tick (up to three), and each
+  // runs synchronously as far as retainWakeLock() before its first await. So
+  // there are several retains before the first request has resolved.
   it('requests a single sentinel when several uploads start in the same tick', async () => {
     const acquired: ReturnType<typeof makeSentinel>[] = []
     request.mockImplementation(async () => {

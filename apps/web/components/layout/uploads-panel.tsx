@@ -40,8 +40,11 @@ function matchesFilter(status: UploadStatus, filter: FilterTab): boolean {
     case 'all': return true
     // `interrupted` is deliberately not active: nothing is being transferred, so
     // listing it here would put a row that cannot move next to ones that are.
-    // `elsewhere` is: bytes are moving, just not from this tab.
-    case 'active': return status === 'pending' || status === 'uploading' || status === 'processing' || status === 'elsewhere'
+    // `elsewhere` is: bytes are moving, just not from this tab. So are rows
+    // waiting in the queue: they are on their way.
+    case 'active':
+      return status === 'queued' || status === 'starting' || status === 'uploading' ||
+        status === 'processing' || status === 'elsewhere'
     case 'complete': return status === 'complete'
     case 'failed': return status === 'failed' || status === 'cancelled' || status === 'interrupted'
   }
@@ -77,8 +80,10 @@ function groupByDate(files: UploadFile[]): { label: string; items: UploadFile[] 
 
 function StatusBadge({ status, finalizing }: { status: UploadStatus; finalizing?: boolean }) {
   switch (status) {
-    case 'pending':
+    case 'queued':
       return <span className="inline-flex items-center rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-text-tertiary">Queued</span>
+    case 'starting':
+      return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><Loader2 className="h-2.5 w-2.5 animate-spin" />Starting</span>
     case 'uploading':
       return <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"><Loader2 className="h-2.5 w-2.5 animate-spin" />{finalizing ? 'Finalizing' : 'Uploading'}</span>
     case 'processing':
@@ -207,7 +212,9 @@ function UploadName({
 function UploadItem({ upload }: { upload: UploadFile }) {
   const { cancelUpload, removeFile, resumeUpload, discardUpload } = useUploadStore()
   const [renameError, setRenameError] = React.useState<string | null>(null)
-  const isUploading = upload.status === 'pending' || upload.status === 'uploading'
+  // Cancel is offered from the moment the row is added: before its turn it
+  // only gives up its place.
+  const isUploading = upload.status === 'queued' || upload.status === 'starting' || upload.status === 'uploading'
   const isProcessing = upload.status === 'processing'
   const isInterrupted = upload.status === 'interrupted'
   // Every byte is across and storage is assembling the parts. Nothing is left
@@ -216,7 +223,8 @@ function UploadItem({ upload }: { upload: UploadFile }) {
   // Only the tab doing the transfer measures it, so a row from another tab or
   // from before a reload has no rate and shows none.
   const rate = useUploadSpeedStore((s) => s.rates[upload.id])
-  const showProgress = isUploading || isProcessing
+  // A file that has not started has no progress to show.
+  const showProgress = upload.status === 'uploading' || isProcessing
 
   // Discard is the one control here whose effect cannot be taken back: the
   // parts are deleted the moment it returns, and there is no version restore.

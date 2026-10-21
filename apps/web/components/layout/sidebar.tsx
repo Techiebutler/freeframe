@@ -50,7 +50,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const panelOpen = useUploadStore((s) => s.panelOpen)
   // A count, not the rows, so progress writes don't re-render the sidebar.
   const activeUploads = useUploadStore(
-    (s) => s.files.filter((f) => f.status === 'uploading' || f.status === 'pending' || f.status === 'processing').length,
+    (s) => s.files.filter((f) =>
+      f.status === 'queued' || f.status === 'starting' || f.status === 'uploading' || f.status === 'processing',
+    ).length,
   )
   const { unreadCount, fetchNotifications } = useNotificationStore()
   const { orgName, orgLogoDark, orgLogoLight } = useBranding()

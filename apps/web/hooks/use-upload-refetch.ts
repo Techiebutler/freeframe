@@ -1,11 +1,28 @@
 'use client'
 
 import * as React from 'react'
-import { useUploadStore } from '@/stores/upload-store'
+import { useUploadStore, type UploadFile } from '@/stores/upload-store'
 
 /**
- * Calls `refetch` when one of this project's uploads changes status while one of
- * them is complete, which is when the project's asset grid can be out of date.
+ * The part of a row's status the asset grid can see, or null for none.
+ *
+ * The grid shows assets, and an asset exists from the moment initiate answers:
+ * a row that is `uploading` with an `assetId` has one, and `processing` and
+ * `complete` change what the grid shows for it. Rows that are waiting or
+ * starting have nothing on the server yet, so their moves -- every file of a
+ * 500-file drop passes through both -- must not refetch the project.
+ */
+function gridState(f: UploadFile): string | null {
+  if (f.status === 'uploading') return f.assetId ? 'uploading' : null
+  if (f.status === 'processing' || f.status === 'complete') return f.status
+  return null
+}
+
+/**
+ * Calls `refetch` when one of this project's uploads changes what the asset
+ * grid shows while one of them is complete, which is when the grid can be out
+ * of date. A row leaving one of those states (a cancel, an interruption)
+ * changes it too.
  *
  * It subscribes to strings derived from the rows, not to the rows. Progress writes
  * (up to ~100 an upload, and every transcode progress event) leave both unchanged,
@@ -17,7 +34,10 @@ export function useRefetchOnUploadStatus(projectId: string, refetch: () => void)
   const statusKey = useUploadStore((s) =>
     s.files
       .filter((f) => f.projectId === projectId)
-      .map((f) => `${f.id}:${f.status}`)
+      .flatMap((f) => {
+        const state = gridState(f)
+        return state ? [`${f.id}:${state}`] : []
+      })
       .join('\n'),
   )
   const anyComplete = useUploadStore((s) =>

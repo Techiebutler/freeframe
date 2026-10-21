@@ -3,22 +3,28 @@
  *
  * The panel offers the pencil from the moment the row appears, which is before
  * `/upload/initiate` has answered and therefore before there is anything on the
- * server to PATCH. There is exactly one window to get right, and it is not the
- * one it looks like: `startUpload` runs synchronously until its first await, so
- * initiate is already dispatched by the time the row is on screen. What can be
- * edited is the round trip -- and an edit made there went into the row while
- * the request carrying the old name had already left.
+ * server to PATCH. There are two windows. While the row waits in the queue,
+ * nothing has been sent, and initiate reads the name from the row at its turn
+ * (`upload-queue-store.test.ts` covers that). Once its turn has come -- at once
+ * here, since nothing else is uploading -- initiate is already out, and an edit
+ * made during the round trip went into the row while the request carrying the
+ * old name had already left. That second window is what these tests are about.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: { post: vi.fn(), get: vi.fn(), patch: vi.fn() },
 }))
 vi.mock('swr', () => ({ mutate: vi.fn() }))
 
 import { api } from '@/lib/api'
-import { useUploadStore } from '../upload-store'
+import { useUploadStore, __uploadQueueTesting } from '../upload-store'
 import { installXhrFake, ok } from '@/test/xhr-fake'
+import { signInAs } from '@/test/upload-session'
+
+// The upload queue is tab-wide module state: start every test from an empty one.
+beforeEach(() => __uploadQueueTesting.reset())
 
 /** A promise the test decides when to resolve. */
 function gate<T>() {
@@ -34,6 +40,7 @@ const INITIATE = {
   s3_key: 'projects/p1/a1.mov',
   asset_id: 'a1',
   version_id: 'v1',
+  chunk_size_bytes: 10 * 1024 * 1024,
 }
 
 /** Records what initiate was told, and lets the test hold it open. */
@@ -64,6 +71,7 @@ describe('a rename made while initiate is in flight', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useUploadStore.setState({ files: [] })
+    signInAs('user-1')
   })
 
   it('is applied to the asset as soon as there is one', async () => {
@@ -75,6 +83,8 @@ describe('a rename made while initiate is in flight', () => {
     const id = useUploadStore.getState().startUpload(
       file(), 'p1', 'A047C012_230815_R1AB', 'Season 2', null,
     )
+    // Its turn came at once: nothing else is uploading.
+    expect(useUploadStore.getState().files.find((f) => f.id === id)?.status).toBe('starting')
     await settle()
     expect(sent[0].asset_name).toBe('A047C012_230815_R1AB')
 
