@@ -137,6 +137,18 @@ describe('nextToStart', () => {
     expect(queue.nextToStart([], budget)).toEqual([])
   })
 
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    'counts an active file with %s unfinished parts as the whole budget',
+    (unfinishedParts) => {
+      const queue = createUploadQueue()
+      queue.enqueue([entry('a'), entry('b')], 'back')
+
+      // A corrupt count must not leave the gate open: nothing starts beside it.
+      expect(queue.nextToStart([active('bad', unfinishedParts)], 5)).toEqual([])
+      expect(queue.nextToStart([active('bad', unfinishedParts, MB)], 5)).toEqual(['a'])
+    },
+  )
+
   it('is pure: it neither removes entries nor changes its answer', () => {
     const queue = createUploadQueue()
     queue.enqueue([entry('a'), entry('b')], 'back')
@@ -368,6 +380,43 @@ describe('sequence numbers', () => {
 })
 
 describe('hold', () => {
+  it('begin answers true for the probe, now and on a repeat, and false for any other row', () => {
+    const queue = createUploadQueue()
+
+    expect(queue.hold.begin('A', 'connection', undefined)).toBe(true)
+    expect(queue.hold.begin('A', 'storage', 4_000)).toBe(true)
+    expect(queue.hold.begin('B', 'connection', undefined)).toBe(false)
+    expect(queue.hold.begin('C', 'storage', 1_000)).toBe(false)
+    expect(queue.hold.probeId).toBe('A')
+    expect(queue.hold.reason).toBe('storage')
+
+    queue.hold.end()
+
+    expect(queue.hold.begin('B', 'connection', undefined)).toBe(true)
+  })
+
+  it('a row refused as a second probe is queued as next and runs right after the hold ends', () => {
+    const queue = createUploadQueue()
+    queue.enqueue([entry('later', MB), entry('last', MB)], 'back')
+    expect(queue.hold.begin('A', 'connection', undefined)).toBe(true)
+
+    // B and C failed together with A; the caller queues each one again as 'next', in failure order.
+    expect(queue.hold.begin('B', 'connection', undefined)).toBe(false)
+    queue.enqueue([entry('B', MB)], 'next')
+    expect(queue.hold.begin('C', 'connection', undefined)).toBe(false)
+    queue.enqueue([entry('C', MB)], 'next')
+
+    expect(queue.hold.probeId).toBe('A')
+    expect(ids(queue.waiting())).toEqual(['B', 'C', 'later', 'last'])
+    expect(queue.nextToStart([], 5)).toEqual([])
+    // The refused rows did not touch A's ladder.
+    expect(queue.hold.nextDelayMs()).toBe(2_000)
+
+    queue.hold.end()
+
+    expect(queue.nextToStart([], 5)).toEqual(['B', 'C', 'later'])
+  })
+
   it('starts out with no probe and no reason', () => {
     const queue = createUploadQueue()
 
@@ -429,9 +478,11 @@ describe('hold', () => {
 
   it('a second begin while another probe is in charge changes nothing', () => {
     const queue = createUploadQueue()
+    queue.enqueue([entry('second')], 'back')
     queue.hold.begin('first', 'connection', 7_000)
-    queue.hold.begin('second', 'storage', 30_000)
+    expect(queue.hold.begin('second', 'storage', 30_000)).toBe(false)
 
+    expect(ids(queue.waiting())).toEqual(['second'])
     expect(queue.hold.probeId).toBe('first')
     expect(queue.hold.reason).toBe('connection')
     expect(queue.hold.nextDelayMs()).toBe(7_000)
