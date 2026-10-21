@@ -59,10 +59,14 @@ function openPanel(tab: 'Active' | 'All' | 'Failed' = 'Active') {
   return view
 }
 
+/** The date headings of the open panel, top to bottom. */
+const headings = () => screen.queryAllByTestId('upload-group').map((h) => h.textContent)
+
 const cancelAllQueued = () => screen.queryByRole('button', { name: 'Cancel all queued' })
 const resumeButton = () => screen.queryByTitle(/^Resume/)
 const retryButton = (scope: HTMLElement | Document = document) => within(scope as HTMLElement).queryByTitle('Retry')
 const dismissButton = (scope: HTMLElement) => within(scope).queryByTitle('Dismiss')
+const KEPT_DISMISS = 'Dismiss (the partial upload stays on the server until it is cleaned up)'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -268,6 +272,56 @@ describe('the order of the rows', () => {
   })
 })
 
+describe('the date headings follow the order of the list', () => {
+  const DAY = 86_400_000
+  const oldLabel = (at: number) => new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+
+  it('an old row resumed now lists under Today, ahead of a drop made before it', async () => {
+    fakeServer(() => 'wait')
+    const old = Date.now() - 3 * DAY
+    useUploadStore.setState({
+      files: [
+        row({
+          id: 'r', assetName: 'r', status: 'interrupted', createdAt: old,
+          assetId: 'ra', versionId: 'rv', uploadId: 'ru', s3Key: 'rk', fileSize: 50 * MB,
+        }),
+        row({ id: 'h', assetName: 'h', status: 'complete', createdAt: old, fromHistory: true }),
+      ],
+    })
+    // a is starting and b waits; the resume is a drop of its own, so it lists
+    // first -- although the row is three days old.
+    drop([fileOf('a.mov'), fileOf('b.mov')])
+    await settle()
+    act(() => useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4', 50 * MB)))
+    openPanel('All')
+
+    expect(names()).toEqual(['r', 'a', 'b', 'h'])
+    // One Today heading above everything that was queued or started this load,
+    // and the older day below it: never the old date above the newest drop.
+    expect(headings()).toEqual(['Today', oldLabel(old)])
+    // And each row sits under the heading of its own group.
+    const groups = screen.getAllByTestId('upload-group').map((h) => h.parentElement!.parentElement!)
+    expect(within(groups[0]).getAllByTestId('upload-row').map(nameOf)).toEqual(['r', 'a', 'b'])
+    expect(within(groups[1]).getAllByTestId('upload-row').map(nameOf)).toEqual(['h'])
+  })
+
+  it('rows that are not part of the queue keep their own days, newest first', () => {
+    const now = Date.now()
+    useUploadStore.setState({
+      files: [
+        row({ id: 'old', assetName: 'old', status: 'complete', createdAt: now - 5 * DAY, fromHistory: true }),
+        row({ id: 'yesterday', assetName: 'yesterday', status: 'complete', createdAt: now - DAY, fromHistory: true }),
+        row({ id: 'today', assetName: 'today', status: 'complete', createdAt: now, fromHistory: true }),
+        row({ id: 'q', assetName: 'q', status: 'queued', createdAt: now, dropSeq: 1, queueSeq: 1 }),
+      ],
+    })
+    openPanel('All')
+
+    expect(names()).toEqual(['q', 'today', 'yesterday', 'old'])
+    expect(headings()).toEqual(['Today', 'Yesterday', oldLabel(now - 5 * DAY)])
+  })
+})
+
 // ---------------------------------------------------------------- Cancel all queued
 
 describe('Cancel all queued', () => {
@@ -445,6 +499,24 @@ describe('Resume', () => {
   })
 })
 
+// ---------------------------------------------------------------- keyboard
+
+describe('the actions of a row', () => {
+  it('show on keyboard focus as well as on hover', () => {
+    useUploadStore.setState({
+      files: [row({ id: 'x', assetName: 'x', status: 'failed', failedBeforeStart: true, error: 'No' })],
+    })
+    openPanel('All')
+
+    // Hidden until the row is hovered, which a keyboard user never does: the
+    // buttons are tab stops, and one that is focused must not stay invisible.
+    // jsdom applies no CSS, so what can be pinned is the classes.
+    const actions = within(rowNamed('x')).getByTitle('Dismiss').parentElement!
+    expect(actions.className).toContain('group-hover:opacity-100')
+    expect(actions.className).toContain('focus-within:opacity-100')
+  })
+})
+
 // ---------------------------------------------------------------- Retry and Dismiss
 
 describe('a row that failed before it started', () => {
@@ -542,9 +614,19 @@ describe('a row that failed before it started', () => {
     const kept = rowNamed('r')
     expect(within(kept).getByText('Storage is down')).toBeInTheDocument()
     expect(screen.getByTitle('Discard this upload and free the space it is holding')).toBeInTheDocument()
-    expect(dismissButton(kept)).toBeInTheDocument()
+    // Unlike the Dismiss of a failed row, this one leaves something behind, and
+    // says so: the parts the server holds stay until it cleans them up.
+    const dismiss = within(kept).getByTitle(KEPT_DISMISS)
+    expect(dismiss).toHaveAttribute('aria-label', KEPT_DISMISS)
+    expect(dismissButton(kept)).toBeNull()
 
-    fireEvent.click(dismissButton(kept)!)
+    // It only takes the row off the list: no request of any kind.
+    vi.mocked(api.get).mockClear()
+    vi.mocked(api.post).mockClear()
+    fireEvent.click(dismiss)
     expect(panelRows()).toHaveLength(0)
+    expect(api.get).not.toHaveBeenCalled()
+    expect(api.post).not.toHaveBeenCalled()
+    expect(api.patch).not.toHaveBeenCalled()
   })
 })

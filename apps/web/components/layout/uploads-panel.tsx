@@ -72,6 +72,15 @@ function byQueueOrder(a: UploadFile, b: UploadFile): number {
   return b.createdAt - a.createdAt
 }
 
+/**
+ * Groups an already sorted list under date headings, keeping its order.
+ *
+ * A row with a `dropSeq` was dropped, picked, resumed or retried in this page
+ * load, so it belongs under Today whatever its `createdAt` says: a Resume of a
+ * three-day-old row is a new drop, and it lists first. Bucketing it by the
+ * row's own date would put "Oct 18" above the newest drop. The rows without a
+ * `dropSeq` follow in `createdAt` order, so their days are already in order.
+ */
 function groupByDate(files: UploadFile[]): { label: string; items: UploadFile[] }[] {
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -81,7 +90,7 @@ function groupByDate(files: UploadFile[]): { label: string; items: UploadFile[] 
 
   for (const f of files) {
     let label: string
-    if (f.createdAt >= today) {
+    if (f.dropSeq !== undefined || f.createdAt >= today) {
       label = 'Today'
     } else if (f.createdAt >= yesterday) {
       label = 'Yesterday'
@@ -283,6 +292,8 @@ function UploadName({
 
 // ─── Upload Item ──────────────────────────────────────────────────────────────
 
+const DISMISS_KEPT = 'Dismiss (the partial upload stays on the server until it is cleaned up)'
+
 function UploadItem({ upload }: { upload: UploadFile }) {
   const { cancelUpload, removeFile, resumeUpload, discardUpload, retryUpload } = useUploadStore()
   // Asked of the store rather than guessed from the row: both depend on what
@@ -446,7 +457,7 @@ function UploadItem({ upload }: { upload: UploadFile }) {
       </div>
 
       {/* Actions */}
-      <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {isInterrupted && (
           <>
             {/* Resume only while the store would take it up: not while a run
@@ -482,7 +493,10 @@ function UploadItem({ upload }: { upload: UploadFile }) {
               <button
                 onClick={() => removeFile(upload.id)}
                 className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
-                title="Dismiss"
+                // Unlike a failed row's Dismiss this leaves something behind,
+                // and the user is the one choosing to.
+                title={DISMISS_KEPT}
+                aria-label={DISMISS_KEPT}
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -739,7 +753,10 @@ export function UploadsPanel({
               {groups.map((group) => (
                 <div key={group.label}>
                   <div className="px-4 pt-4 pb-1">
-                    <span className="text-[10px] font-medium text-text-tertiary uppercase tracking-wider">
+                    <span
+                      data-testid="upload-group"
+                      className="text-[10px] font-medium text-text-tertiary uppercase tracking-wider"
+                    >
                       {group.label}
                     </span>
                   </div>

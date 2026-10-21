@@ -240,6 +240,71 @@ describe('a new version waiting in the upload queue', () => {
     expect(screen.queryByText(QUEUED_LINE)).toBeNull()
   })
 
+  it('says why instead while the version row is the one the queue is holding on', () => {
+    useUploadStore.setState({
+      files: [row({ id: 'mine', status: 'queued', assetId: 'a2', assetName: 'mine', holdReason: 'storage' })],
+    })
+    renderPage()
+
+    // The probe row is the one that says why the queue is waiting, on the page
+    // as in the panel; "waiting for other uploads" would not be true of it.
+    expect(screen.getByText('Waiting for storage')).toBeInTheDocument()
+    expect(screen.queryByText(QUEUED_LINE)).toBeNull()
+
+    act(() => {
+      useUploadStore.setState((s) => ({ files: s.files.map((f) => ({ ...f, holdReason: 'connection' as const })) }))
+    })
+    expect(screen.getByText('Waiting for connection')).toBeInTheDocument()
+    expect(screen.queryByText('Waiting for storage')).toBeNull()
+
+    act(() => {
+      useUploadStore.setState((s) => ({ files: s.files.map((f) => ({ ...f, holdReason: undefined })) }))
+    })
+    expect(screen.getByText(QUEUED_LINE)).toBeInTheDocument()
+    expect(screen.queryByText('Waiting for connection')).toBeNull()
+  })
+
+  it('keeps one live region mounted, whose text is what changes', () => {
+    const { container } = renderPage()
+    // A region that is created together with its text is not reliably
+    // announced. This one is there before anything is queued, empty.
+    const region = screen.getByRole('status')
+    expect(region).toBeEmptyDOMElement()
+
+    act(() => {
+      useUploadStore.setState({ files: [row({ id: 'mine', status: 'queued', assetId: 'a2', assetName: 'mine' })] })
+    })
+    expect(screen.getByRole('status')).toBe(region)
+    expect(region).toHaveTextContent(QUEUED_LINE)
+
+    act(() => {
+      useUploadStore.setState((s) => ({ files: s.files.map((f) => ({ ...f, holdReason: 'storage' as const })) }))
+    })
+    expect(screen.getByRole('status')).toBe(region)
+    expect(region).toHaveTextContent('Waiting for storage')
+
+    act(() => {
+      useUploadStore.setState({ files: [] })
+    })
+    expect(screen.getByRole('status')).toBe(region)
+    expect(region).toBeEmptyDOMElement()
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1)
+  })
+
+  it('sits over the media, not over the comments column or the whole review area', () => {
+    useUploadStore.setState({ files: [row({ id: 'mine', status: 'queued', assetId: 'a2', assetName: 'mine' })] })
+    renderPage()
+
+    // The viewer column is the one that holds the media. The comments column is
+    // its sibling, so a line placed on their common parent would run across both.
+    const column = screen.getByRole('status').closest('.min-w-0')!
+    expect(column).toHaveClass('bg-bg-primary')
+    expect(column.parentElement).toHaveClass('relative', 'flex')
+    // It takes no room of its own: a zero-height anchor, so the media keeps its
+    // size and the stage cap measured for it stays right.
+    expect(screen.getByRole('status').parentElement).toHaveClass('h-0')
+  })
+
   it('shows the line for this asset\'s version row while it waits, and not after', () => {
     useUploadStore.setState({ files: [row({ id: 'mine', status: 'queued', assetId: 'a2', assetName: 'mine' })] })
 
