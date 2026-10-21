@@ -35,7 +35,7 @@ version.
 | S2 | `failParts(503)` on every PUT for 60 s | presign requests ≤ budget × 8 over the window (`countRequests`) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#s2-failparts503-for-60-s-pass-stand-in-network-errors) | — | — |
 | S3 | Infra: `docker stop` storage mid-queue, start after 60 s | queued files hold; the sending file ends Interrupted (as today) or recovers | Chromium | 6 | — | — | — | — |
 | S4 | Infra: black-hole storage (`docker network disconnect`) | "Waiting for storage" within 20 s of the next file's turn | Chromium | 6 | — | — | — | — |
-| R1 | Interrupt an upload (close the page), reopen, Resume while 10 files are queued | the Resume starts next; its `ff-uploads` entry exists throughout | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` (R1, and R1b, the APP-BUG-1 regression test, fixed 2026-10-22) | [FAIL, APP-BUG-1](live-runs/2026-10-22-phase-2.md#r1-interrupt-reopen-resume-while-files-are-queued-fail-app-bug-1) | — | — |
+| R1 | Interrupt an upload (close the page), reopen, Resume while 10 files are queued | the Resume starts next; its `ff-uploads` entry exists throughout | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` (R1, and R1b, the APP-BUG-1 regression test, fixed 2026-10-22) | [PASS after the fix, 2026-10-22](live-runs/2026-10-22-phase-2.md#r1-re-run-after-app-bug-1-fix-pass) (first run: [FAIL, APP-BUG-1](live-runs/2026-10-22-phase-2.md#r1-interrupt-reopen-resume-while-files-are-queued-fail-app-bug-1)) | — | — |
 | R2 | Two tabs, Resume the same interrupted row in both | exactly one tab presigns | Chromium, WebKit, Firefox | 4 | — | — | — | — |
 | R3 | Cancel during Resuming | the row returns to Interrupted; no `/upload/abort` | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#r3-cancel-during-resuming-pass) | — | — |
 | A1 | Two pages, one context: log out in B with files queued in A | A redirects to /login; after signing back in, A's queued files show as Failed with the signed-out message | Chromium, WebKit, Firefox | 4 | — | — | — | — |
@@ -127,8 +127,8 @@ Per scenario in that full Chromium run (s): Q1 43.8, Q3 7.9, Q4 2.0, C1 3.3, C2 
 P1 9.6, P2 3.6; WebKit: Q1 41.5, Q3 8.4, Q4 2.1, C1 2.0, C2 2.3, C3 3.7, S1 16.8, S2 60, R1 4.2, R3 3.0, V1 3.4, P1 9.5, P2 4.0.
 After the live Chrome pass, Q3's initiate delay went from 1.2 s to 2.5 s (a margin for reading "Starting…"; Q3 then passed 8 of 8
 repeats on Chromium and once on WebKit, 12 to 13 s each; one earlier Chromium run failed at its first wait and did not recur in 11 more
-runs, its artifacts overwritten) and R1b was added: it reproduces APP-BUG-1 (below) and is marked `test.fail()`, so it passes while the
-bug is there (drawn as a cross on both engines) and the fix's author removes the marker. With it `queue.spec.ts` has 14 tests: the whole file on Chromium, 2026-10-22: 14 passed, 4.6 min (13 scenarios, R1b drawn as a cross).
+runs, its artifacts overwritten) and R1b was added: it reproduces APP-BUG-1 (below) and was marked `test.fail()`, so it passed while the
+bug was there (drawn as a cross on both engines); the marker was removed with the fix (`42ed7643`). With it `queue.spec.ts` has 14 tests: the whole file on Chromium, 2026-10-22: 14 passed, 4.6 min (13 scenarios, R1b drawn as a cross).
 
 ## Phase 2 live Chrome results
 
@@ -137,12 +137,15 @@ with the before and after against the baseline. The "Live Chrome run" column abo
 
 - **Q1** at Fast 4G (the MCP has no 2 MB/s; same as the baseline): 6 initiates in the first second (baseline 50), at most 3 rows moving at all
   332 samples (baseline 50), start order exactly the drop order, at most 3 part PUTs in flight while throttled (baseline 61).
-- **Passing** (13 asked for, 12 pass): Q1, Q3, Q4, C1, C2, C3, S1 (with the real fault, `docker stop` of the e2e MinIO), S2 (25 presigns in 60 s, bound 40),
+- **Passing** (13 asked for, 12 passed the first time, 13 after the R1 re-run): Q1, Q3, Q4, C1, C2, C3, S1 (with the real fault, `docker stop` of the e2e MinIO), S2 (25 presigns in 60 s, bound 40),
   R3, V1, P1 (0.5 file over the cap), P2. Plus the brief's exploratory checks: 50 files at Slow 3G (one initiate at a time, three files sending),
   `/upload/initiate` blocked for 30 s ("Waiting for connection", none failed), and a Resume while 20 files wait (starts next).
-- **R1 fails** in the live pass (**APP-BUG-1**): the Resume starts next, as expected, but a Resume that waits in the queue past the 30 s own-stop
+- **R1 failed** in the first live pass (**APP-BUG-1**, fixed; see the re-run below): the Resume starts next, as expected, but a Resume that waits in the queue past the 30 s own-stop
   grace is read as "Still uploading in another tab or on another device" when its turn comes, and nothing is sent. Controlled
   reproduction and its control (the same Resume with no queue wait resumes) are in the report; `queue.spec.ts` R1b reproduces it.
+- **R1 re-run after the fix** (`a1ac777e`, same real Chrome): **passes**. The Resume was clicked at heartbeat age 8.0 s and waited 38.6 s in the queue
+  (46.6 s after the last heartbeat, past the 30 s grace); then it asked for its parts (`/parts` 200 with `server_time`), started next, sent the missing parts and
+  completed, with its `ff-uploads` entry present throughout. The record is in the report ("R1 re-run after APP-BUG-1 fix"); the first failure is kept there as history.
 - Not run here: the manual real Safari and real Firefox pass (matrix row M).
 
 ## Already covered
