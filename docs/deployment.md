@@ -257,6 +257,33 @@ If you allow **more than one origin**, give each origin its own rule rather than
 
 FreeFrame applies this automatically to **non-AWS** buckets at startup when it has permission (and logs a warning if it can't). The rules allow `FRONTEND_URL`, `http://localhost:3000` and every origin in `CORS_ALLOW_ORIGINS`, the same origins the API accepts; `CORS_ALLOW_ORIGINS=*` becomes a single rule allowing any origin. Older MinIO releases answered this call with `NotImplemented` and allowed every origin regardless, so a browser origin missing from that list only starts failing once you move to a store that enforces bucket CORS (Silo, Garage): add it to `CORS_ALLOW_ORIGINS`. Set it yourself for **AWS S3**, or wherever FreeFrame lacks CORS permission. **Hetzner Object Storage** exposes CORS only via API/CLI (not the Console UI), so it's easy to miss — apply the JSON above with `aws s3api put-bucket-cors`.
 
+#### Abort incomplete multipart uploads — recommended
+
+Add a bucket lifecycle rule that **aborts incomplete multipart uploads after a few days**. It is a backstop: it cleans up the rare empty multipart upload left behind when a request to start an upload times out after storage had already created it. It also frees the parts of any upload that is never completed, which S3 bills for until the upload is aborted. Keep the number of days above `STALE_UPLOAD_TIMEOUT_HOURS` (24 hours by default), so the rule never aborts an upload someone could still resume.
+
+On **AWS S3** (and any store that implements the S3 lifecycle API), save this as `lifecycle.json`:
+
+```json
+{
+  "Rules": [{
+    "ID": "abort-incomplete-multipart-uploads",
+    "Status": "Enabled",
+    "Filter": { "Prefix": "" },
+    "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+  }]
+}
+```
+
+and apply it:
+
+```bash
+aws s3api put-bucket-lifecycle-configuration --bucket YOUR_BUCKET --lifecycle-configuration file://lifecycle.json
+```
+
+That call **replaces** the bucket's whole lifecycle configuration, so if the bucket already has rules, read them first with `aws s3api get-bucket-lifecycle-configuration --bucket YOUR_BUCKET` and add this rule to them. For a store that is not AWS, add `--endpoint-url` with its S3 endpoint. The same rule can be created in the AWS console, under the bucket's **Management** tab (lifecycle rules).
+
+**MinIO and Silo** have no equivalent rule to set: `mc ilm rule add` has no option for it, and Silo's `mc ilm import` rejected a rule with `AbortIncompleteMultipartUpload` as not valid for its lifecycle schema. MinIO expires abandoned multipart uploads on its own, after about 24 hours, so there is nothing to configure there. On either, the API's own reaper (`STALE_UPLOAD_TIMEOUT_HOURS`) still reclaims the uploads it has a record of.
+
 ### External SMTP
 
 > **⚠️ Email is required for login.** FreeFrame authenticates with emailed **magic codes**, and also sends invites/notifications. If email isn't configured, users **cannot log in** — the send fails and the app logs a warning at startup. Configure SMTP or SES before going live.
@@ -313,7 +340,7 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `TRANSCODING_CONCURRENCY` | Parallel transcoding jobs | `2` |
 | `EMAIL_CONCURRENCY` | Parallel email jobs | `2` |
 | `MAINTENANCE_CONCURRENCY` | Parallel housekeeping jobs | `1` |
-| `NEXT_PUBLIC_UPLOAD_CONCURRENCY` | Upload parts in flight per file (browser) | `5` |
+| `NEXT_PUBLIC_UPLOAD_CONCURRENCY` | Upload parts in flight across the whole browser tab, shared by every file being uploaded (the earliest file first), not per file. Values above 6 only help when the storage endpoint speaks HTTP/2: over HTTP/1.1 a browser opens at most 6 connections per host. Build-time: changing it needs a web image rebuild | `5` |
 | `TRANSCODER_PIPELINE` | GPU backend: `Auto`, `NVIDIA`, `Intel`, or `Software` | `Auto` |
 | `TRANSCODER_OUTPUT` | Output codec: `h264_8` (broad compatibility) or `h265_10` (HEVC 10-bit) | `h264_8` |
 | `TRANSCODER_HDR` | `convert` (tone-map HDR to SDR) or `preserve` (keep HDR tags) | `convert` |
@@ -322,6 +349,8 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `TRANSCODER_CPU_LIMIT` | Cap the CPU one transcode takes: a core count (`6`) or a share of what the process may use (`50%`). Empty = unbounded. Covers the encoders and the filter graph, not decoding, so a heavy master can run over by roughly a quarter, and a low budget can push a long master past ffmpeg's 4-hour ceiling — see `.env.example`. Per ffmpeg process, so the machine-wide ceiling is this times `TRANSCODING_CONCURRENCY` | *(empty)* |
 
 Upload part size is set in the app rather than the environment: **Admin Dashboard → Instance settings → Uploads**. Automatic (the default) keeps 10 MB parts up to ~5 GB and grows them for bigger files to about 500 parts, which keeps the storage backend's assembly at the end of an upload short. Fixed cuts every upload into one size from 5 to 512 MB, and refuses a file that would need more than 10,000 parts. A completion that takes 5 seconds or more is logged by the API with where the time went (`completing upload … took …`), which is the place to look when uploads wait at "Finalizing".
+
+Uploads wait in a queue. Files dropped or picked together start in the order they were added, with up to three files active at a time, and the earliest file gets the bandwidth first, so a lost connection leaves whole finished files rather than many half-sent ones. `NEXT_PUBLIC_UPLOAD_CONCURRENCY` is the one budget of upload parts those files share: it used to apply to each file on its own, so with several files uploading at once a tab now sends no more parts than the setting says, where it used to send that many per file. If you raised it to speed up a single large file, it still does. If storage is unreachable when a file's turn comes, the queue pauses (the Uploads panel says "Waiting for storage" or "Waiting for connection") and carries on by itself when it answers again.
 
 Who may download originals is also set in the app: **Admin Dashboard → Instance settings → Downloads**. *Transcode only* (the default) gives share-link visitors, visitors to a public project and people an asset is shared with directly the transcode (a video's MP4, an audio file's MP3, an image's WebP), as earlier releases did; a video with no MP4 still downloads its original. *Original or transcode* lets them pick the original too. Project members can always pick the original one asset at a time. Bulk downloads (a selection on the project page, Download All on a share link) follow this setting for everyone: originals when it is on, transcodes when it is off. Camera masters can be many times the size of the transcode, so turning it on can raise storage egress considerably.
 
