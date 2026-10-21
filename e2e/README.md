@@ -5,6 +5,9 @@ running dev stack. They exist for what unit tests cannot see: files read from di
 browser, uploads that outlive a page, two tabs sharing one `localStorage`, an S3 endpoint
 that misbehaves.
 
+For the hands-on pass in a real, headed Chrome driven through DevTools (not run by `pnpm test`),
+see [`LIVE-CHROME.md`](LIVE-CHROME.md); its results are in `live-runs/`.
+
 This is a standalone package with its own `package.json` and lockfile. Nothing in `apps/web`
 depends on it, and `pnpm install` at the repo root does not touch it.
 

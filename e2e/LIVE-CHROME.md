@@ -43,6 +43,12 @@ Limits of the DevTools MCP that shape the protocol:
   throttled scenario cannot finish a large set. Run the part the scenario is about throttled,
   then lift the throttle (or cancel) to reach an end state, and say so in the report. The cap is
   shared by every request of the page, so with 50 files in flight each sees 20 to 60 KB/s.
+
+  **Rule for Q1 (and the baseline): Fast 4G from before the drop; take the probe `report()`, the
+  `lsof` socket count and a screenshot at about +5 s, +20 s, +100 s and +160 s; at +160 s lift
+  the throttle with a bare `emulate`, wait for the last row to reach an end state, then read the
+  rows. Record the time of the lift.** (The baseline lifted at +167.7 s, 8 s after its +159 s
+  sample.)
 - **There is no request-blocking tool.** Section 4 gives an in-page stand-in (`__ffq.block`).
 - **Files the MCP writes or reads must sit inside the workspace root** (this repository, or its
   worktree): `take_screenshot` `filePath`, `performance_stop_trace` `filePath` and
@@ -265,8 +271,9 @@ the project page):
     },
     stopRows() { clearInterval(q._rows) },
     // In-page request blocking, the stand-in for DevTools' "Network request blocking" (the DevTools MCP has no
-    // such tool). block('/upload/initiate') or block(/\.s3\.|:19000/): matching requests fail with a real
-    // network error (XHR is pointed at a closed port, fetch rejects). unblock() lifts it.
+    // such tool). block('/upload/initiate') or block(/\.s3\.|:19000/): matching requests fail at once with a
+    // network error (the XHR is re-pointed at 127.0.0.1:9, a port Chromium refuses to connect to; fetch rejects).
+    // unblock() lifts it. Lost on reload, does not touch navigator.onLine, covers page fetch/XHR only.
     block(match) { q._blocked = match instanceof RegExp ? match : new RegExp(String(match).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); return String(q._blocked) },
     unblock() { q._blocked = null },
   })
@@ -329,7 +336,7 @@ API (all on `window.__ffq`):
 | Call | Meaning |
 | --- | --- |
 | `mark(label)` | Start a measurement window: zero the clock, forget everything recorded before. Call it in the same tick as the drop. |
-| `report()` | `kinds` (per `initiate`, `presign`, `part-put`, `complete`, `abort`, `parts-list`, `new-version`: started, finished, failed, status counts, first and last start in ms since `mark`), `initiatesStartedWithin` (1 s, 5 s, 30 s), `peakInFlight`, `longtasks`. |
+| `report()` | `kinds` (per `initiate`, `presign`, `part-put`, `complete`, `abort`, `parts-list`, `new-version`: started, finished, failed, status counts, first and last start in ms since `mark`), `initiatesStartedWithin` (1 s, 5 s, 30 s), `peakInFlight`, `longtasks`. A request the app cancels (an XHR `abort()`, as in C3 and R3) ends with status 0 and is counted as `network-error`, so a cancelled part PUT looks like a network failure in `report()`; tell them apart by what the scenario did. |
 | `sampleRows(ms)` / `stopRows()` | Every `ms` (default 500) count the panel's rows by badge text into `rowSamples`. Counts only the rows the panel's current tab shows: the "Active" tab hides finished rows, "All" shows everything. |
 | `block(match)` / `unblock()` | In-page request blocking (section 4). |
 | `rowSamples`, `events`, `open` | Raw data. |
@@ -403,12 +410,12 @@ change after the drop is exactly what those scenarios want. Not exercised.
 | Fault | How | Status |
 | --- | --- | --- |
 | Throttle | `emulate` with `networkConditions: "Fast 4G"` (or `Slow 4G`, `Fast 3G`, `Slow 3G`; rates in section 1) on the page, before the drop. Lift: `emulate` with no `networkConditions`. | verified (Fast 4G; lifting it mid-run: the last `complete` started 2.6 s later) |
-| Offline | `emulate` with `networkConditions: "Offline"`; back online with a bare `emulate`. Check: `navigator.onLine` is `false` and a `fetch` rejects with "Failed to fetch". | verified |
-| Block a request class | `window.__ffq.block('/upload/initiate')` or `window.__ffq.block(/:19000/)` (a string is matched literally, a RegExp as given); `window.__ffq.unblock()`. Matching `fetch` calls reject with `TypeError`, matching `XMLHttpRequest`s are pointed at a closed port and end with a real network error (status 0). The stand-in for DevTools' "Network request blocking", which the MCP lacks. The probe records them as `blocked` / `network-error`. | verified on a fetch and on an XHR |
+| Offline | `emulate` with `networkConditions: "Offline"`; back online with a bare `emulate`. Check: `navigator.onLine` is `false` and a `fetch` rejects with "Failed to fetch"; DevTools lists the request as `net::ERR_INTERNET_DISCONNECTED`. | verified (outputs in the baseline report, "Tooling checks") |
+| Block a request class | `window.__ffq.block('/upload/initiate')` or `window.__ffq.block(/:19000/)` (a string is matched literally, a RegExp as given); `window.__ffq.unblock()`. The stand-in for DevTools' "Network request blocking", which the MCP lacks. Matching `fetch` calls reject at once with `TypeError: Failed to fetch (blocked by __ffq)`; matching `XMLHttpRequest`s are re-pointed at `http://127.0.0.1:9/blocked-by-ffq`, a port Chromium refuses to connect to (`net::ERR_UNSAFE_PORT`, so nothing is sent; to the app it is the same as any network error, status 0). The probe records them as `blocked` (fetch) and `network-error` (XHR). **Counting: for a blocked class the probe's `report()` is the authoritative count.** A blocked `fetch` never reaches DevTools; a blocked XHR is listed by `list_network_requests` under the substitute URL (a `PUT` and its `OPTIONS` preflight, both `ERR_UNSAFE_PORT`), not under the original. **Limits:** the block is lost on reload or navigation (so is the probe: reinstall with `initScript`); it does not change `navigator.onLine` or fire `offline` / `online` events, so N1 and N2 need `emulate` `Offline`; it covers page-level `fetch` and `XMLHttpRequest` only (not workers, `sendBeacon` or `EventSource`); and it fails requests instantly, never as a hang or a timeout (use the throttle or the docker faults for those). | verified on a fetch and on an XHR, with the DevTools side (outputs in the baseline report, "Tooling checks") |
 | Storage down | `STORAGE=$($E2E_COMPOSE ps -q minio)`; `docker stop $STORAGE`; later `docker start $STORAGE`. (ffe2e: container `ffe2e-minio-1`.) The browser's part PUTs fail, and so does `/upload/initiate` (the API creates the multipart upload in storage); presigning signs locally, so expect it to keep answering. | not exercised |
 | Storage black hole | `NET=$(docker inspect $STORAGE --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')` (ffe2e: `ffe2e_default`), then `docker network disconnect $NET $STORAGE`. Reconnect with `docker network connect --alias minio $NET $STORAGE` (the compose service name must come back as an alias or the API cannot resolve the host). Requests hang instead of being refused. | not exercised; check the reconnect before relying on it |
 | Files changed mid-queue | `touch` / `rm` / rewrite on the files in `e2e/.live-files/` (section 3). | not exercised |
-| Second tab, same account | `new_page` with the **same** `isolatedContext` name. It shares localStorage and cookies with the first tab (verified: a second tab opened in the same context was already signed in). Probe it too: `navigate_page` with the `initScript`. | verified |
+| Second tab, same account | `new_page` with the **same** `isolatedContext` name. It shares localStorage and cookies with the first tab (verified: a second tab opened in the same context was already signed in; a page in a differently named context was not). Probe it too: `navigate_page` with the `initScript`. | verified (baseline report, "Tooling checks") |
 | Second account at once | `new_page` with a **different** `isolatedContext` name, sign in as `secondary` there. In the same context, signing in as `secondary` replaces `primary`'s session for both tabs, which is what A2 and A3 want. | not exercised |
 | `beforeunload` dialog (L1) | `navigate_page` takes `handleBeforeUnload` (`accept` or `dismiss`); for a dialog that is already open, `handle_dialog`. | not exercised |
 | Laptop sleep (wake and resume cases) | Close the lid for 2 minutes with the queue running, open it, and record what the rows show. `pmset sleepnow` does the same from a terminal. A person has to be present; the DevTools session may need `list_pages` afterwards to find its tab. | not exercised |
@@ -421,7 +428,7 @@ report.
 
 1. **Verdict** against the expectation in `SCENARIOS.md`, quoted. PASS or FAIL, never "looks
    fine".
-2. **Request counts**, from two sources that must agree:
+2. **Request counts**, from two sources:
    - the probe: `evaluate_script` `() => window.__ffq.report()`: initiates, presigns, part
      PUTs, complete, abort, with status counts and `initiatesStartedWithin`;
    - the DevTools network log: `list_network_requests` with `resourceTypes: ["fetch"]` (the
@@ -429,6 +436,13 @@ report.
      header "Showing 1-200 of N" is the count for that filter; the API calls include the
      page's own GETs, so count the `upload/initiate`, `upload/presign-part`, `upload/complete`
      and `upload/abort` lines. Do this before any navigation.
+
+   For a normal run the two must agree (the baseline's did, count for count). **For a request
+   class you blocked with `__ffq.block`, they cannot, and the probe's count is authoritative:**
+   a blocked `fetch` is rejected in the page and never appears in `list_network_requests`, and a
+   blocked XHR appears as `PUT` and `OPTIONS http://127.0.0.1:9/blocked-by-ffq
+   [net::ERR_UNSAFE_PORT]`, not under its real URL. Say in the report which classes were
+   blocked and where each count comes from.
 3. **Console**: `list_console_messages`. **Any uncaught error fails the scenario.** Report
    errors and warnings by text; the baseline had none (only the React DevTools info line).
 4. **Wire concurrency**, where the scenario is about how many uploads run at once (Q1, Q3):
