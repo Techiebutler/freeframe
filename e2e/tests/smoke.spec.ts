@@ -22,8 +22,8 @@ test('a dropped 3 MB file uploads and shows up as one asset', async ({ page }, t
 
   await openUploads(page)
   const statusOfRow = async () => (await rows(page)).find((r) => r.name === name)?.status
-  // "Ready" is what a finished row says today; "Processing" is the step before.
-  await expect.poll(statusOfRow, { timeout: 90_000 }).toMatch(/^(Ready|Complete|Processing)$/)
+  // "complete" is a finished row (its badge says "Ready"); "processing" is the step before.
+  await expect.poll(statusOfRow, { timeout: 90_000 }).toMatch(/^(complete|processing)$/)
 
   // One asset, and the empty state is gone. The grid refetches on its own once
   // the row is Ready, so this also waits out the processing.

@@ -133,15 +133,28 @@ key in the stack's Redis: `docker exec <redis container> redis-cli del rl:login:
 
 | File          | Gives you |
 | ------------- | --------- |
-| `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm`, `createProject`, `resetUploads`, `openUploads`, `dropFiles`, `rows` |
+| `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm`, `createProject`, `resetUploads`, `openUploads`, `closeUploads`, `dropFiles`, `rows`, `uploadRow` |
 | `files.ts`    | `makeFiles` (real random-content files on disk), `touch`, `remove`, `rewrite`, `liveFilesDir` |
-| `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `failInitiate`, `countRequests`, all on `page.route` (`throttleParts` also reads part sizes the page records) |
+| `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `holdParts`, `failInitiate`, `countRequests`, all on `page.route` (`throttleParts` also reads part sizes the page records) |
 | `accounts.ts` | `primary()`, `secondary()` and the `Account` type |
 
 `dropFiles` cannot drag from the desktop, so it builds the `DataTransfer` a browser would: real
-`File` objects read from disk, delivered as `dragenter`, `dragover` and `drop`. `rows` reads the
-uploads panel's DOM. Both depend on how those parts of the page are built, and the selectors
-are kept in `fixtures/stack.ts`.
+`File` objects read from disk, delivered as `dragenter`, `dragover` and `drop`. It waits for the
+drop region to be hydrated first: a drop that lands before React has attached its handlers goes
+nowhere (seen in WebKit, about one run in eight). `rows` reads the uploads panel by
+`data-testid="upload-row"`: `status` is the row's `data-status` (`queued`, `starting`, `uploading`,
+`processing`, `complete`, `failed`, `cancelled`, `interrupted`, `elsewhere`, not the badge's
+wording), `kind` its `data-detail` and `detail` the line it shows. A row without a status makes
+`rows` throw. Both depend on how those parts of the page are built, and the selectors are kept in
+`fixtures/stack.ts`.
+
+`tests/queue.spec.ts` holds the upload queue's scenarios (see `SCENARIOS.md`, one `test()` per ID).
+Most of them freeze the queue with `holdParts` (the files that started sit in Uploading with their
+parts held, the rest wait), look at it, act, then release it. Q1 moves about 290 MB and takes under
+a minute with the throttle at 2 MB/s; S2 is a 60 s window; the files they make are removed when each
+test ends. P1 sets the instance storage cap and part size through the admin API and puts both back in
+a `finally`; if a run is killed mid-test the cap stays, and the next P1 refuses to start until it is
+reset (`PUT /instance/settings` with `storage_limit_bytes: 0` and `upload_part_size_bytes: 0`).
 
 `tests/fixtures.spec.ts` checks each fixture's observable effect (a throttled part really is
 slow, an injected 500 reaches the page, a folder drop lands in the folder, ...) on every engine.
