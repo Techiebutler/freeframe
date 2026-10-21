@@ -30,6 +30,7 @@ import {
 } from '@/test/upload-queue-server'
 
 const UNREADABLE = 'The file changed or was moved after it was added. Add it again.'
+const READ_FAILED = 'This file could not be read.'
 
 /**
  * Lets a test decide what reading the file does from now on. The probe is
@@ -42,6 +43,7 @@ function watched(file: File, onRead: () => void = () => {}) {
   const real = file.slice.bind(file) as Blob['slice']
   let mode: 'readable' | 'gone' | 'gated' = 'readable'
   let reason = 'NotFoundError'
+  let said = 'gone'
   const gate: Array<{ pass: () => void; fail: () => void }> = []
   Object.defineProperty(file, 'slice', {
     value: (start?: number, end?: number, type?: string) => {
@@ -49,11 +51,11 @@ function watched(file: File, onRead: () => void = () => {}) {
       if (mode === 'readable') return real(start, end, type)
       return {
         arrayBuffer: () => {
-          if (mode === 'gone') return Promise.reject(new DOMException('gone', reason))
+          if (mode === 'gone') return Promise.reject(new DOMException(said, reason))
           return new Promise<ArrayBuffer>((resolve, reject) => {
             gate.push({
               pass: () => resolve(new ArrayBuffer(1)),
-              fail: () => reject(new DOMException('gone', reason)),
+              fail: () => reject(new DOMException(said, reason)),
             })
           })
         },
@@ -61,15 +63,20 @@ function watched(file: File, onRead: () => void = () => {}) {
     },
   })
   return {
-    /** From now on the file cannot be read. */
-    gone(name = 'NotFoundError') {
+    /** From now on the file cannot be read; `message` is the browser's own word for why. */
+    gone(name = 'NotFoundError', message = 'gone') {
       mode = 'gone'
       reason = name
+      said = message
     },
     /** From now on a read waits for `pass()` or `fail()`. */
     gate(name = 'NotFoundError') {
       mode = 'gated'
       reason = name
+    },
+    /** From now on the file can be read again. */
+    readable() {
+      mode = 'readable'
     },
     pass: () => gate.shift()!.pass(),
     fail: () => gate.shift()!.fail(),
@@ -144,18 +151,30 @@ describe('a new file whose turn comes', () => {
     expect(server.calls).toEqual([])
   })
 
-  it('a read that fails for another reason is not told as a changed file', async () => {
+  it.each([
+    ['says why', 'The operation is insecure.', 'The operation is insecure.'],
+    ['says nothing', '', READ_FAILED],
+  ])('a read that fails for another reason, where the browser %s, fails the row with Retry and no claim that the file changed', async (_, said, shown) => {
     const server = fakeServer()
     const a = fileOf('a.mov')
-    watched(a).gone('SecurityError')
+    const read = watched(a)
+    read.gone('SecurityError', said)
 
-    const [idA] = drop([a, small('b.jpg')])
+    const [idA, idB] = drop([a, small('b.jpg')])
     await settle()
 
-    expect(rowOf(idA).status).toBe('failed')
-    expect(rowOf(idA).error).not.toBe(UNREADABLE)
-    expect(rowOf(idA).error).toBeTruthy()
+    expect(rowOf(idA)).toMatchObject({ status: 'failed', failedBeforeStart: true, retryable: true, error: shown })
     expect(server.names()).toEqual(['b.jpg'])
+    expect(rowOf(idB).status).toBe('processing')
+    expect(useUploadStore.getState().canRetry(idA)).toBe(true)
+
+    // Nothing says the file is gone, so Retry reads it again at its turn.
+    read.readable()
+    useUploadStore.getState().retryUpload(idA)
+    await settle()
+    expect(server.names()).toEqual(['b.jpg', 'a.mov'])
+    expect(rowOf(idA).status).toBe('processing')
+    expect(rowOf(idA).error).toBeUndefined()
   })
 
   it('cancelling while the file is being read sends nothing, even when the read then passes', async () => {
@@ -215,6 +234,33 @@ describe('a new file whose turn comes', () => {
     expect(server.names()).toEqual(['a.mov'])
 
     // The hold is still on, and the next file is its probe: it alone tries.
+    expect(rowOf(idB)).toMatchObject({ status: 'queued', holdReason: 'connection' })
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flush()
+    expect(server.names()).toEqual(['a.mov', 'b.mov'])
+  })
+
+  it.each([
+    ['says why', 'The operation is insecure.', 'The operation is insecure.'],
+    ['says nothing', '', READ_FAILED],
+  ])('a read that fails for another reason, where the browser %s, on the file that holds the queue passes the hold on', async (_, said, shown) => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const server = fakeServer((_body, i) => (i === 0 ? new TypeError('Failed to fetch') : 'wait'))
+    const a = fileOf('a.mov')
+    const read = watched(a)
+
+    const [idA, idB] = drop([a, fileOf('b.mov')])
+    await flush()
+    expect(rowOf(idA)).toMatchObject({ status: 'queued', holdReason: 'connection' })
+
+    read.gone('SecurityError', said)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flush()
+    expect(rowOf(idA)).toMatchObject({ status: 'failed', failedBeforeStart: true, retryable: true, error: shown })
+    expect(server.names()).toEqual(['a.mov'])
+
+    // Not stuck on a probe that will never try: the next file is the probe now.
     expect(rowOf(idB)).toMatchObject({ status: 'queued', holdReason: 'connection' })
     await vi.advanceTimersByTimeAsync(2_000)
     await flush()
@@ -399,7 +445,11 @@ describe('a part that is tried again', () => {
 })
 
 describe('a queued resume whose turn comes', () => {
-  it('an unreadable file leaves the row interrupted with the reason, asks nothing, and can be picked again', async () => {
+  // The file is read after `/parts` has answered, and only for an upload that
+  // still takes parts: `/parts` creates nothing, and an upload whose object is
+  // whole needs no bytes from the file.
+
+  it('an unreadable file ends the resume interrupted with the reason before any part is sent, and can be picked again', async () => {
     const server = fakeServer()
     vi.mocked(api.get).mockResolvedValue(resumable() as never)
     useUploadStore.setState({ files: [interrupted()] })
@@ -409,12 +459,13 @@ describe('a queued resume whose turn comes', () => {
     useUploadStore.getState().resumeUpload('r', clip)
     await settle()
 
-    expect(api.get).not.toHaveBeenCalled()
+    expect(api.get).toHaveBeenCalledTimes(1)
     expect(rowOf('r')).toMatchObject({
       status: 'interrupted', error: UNREADABLE, versionId: 'rv', uploadId: 'ru', s3Key: 'rk',
     })
     expect(rowOf('r').resuming).toBeUndefined()
     expect(rowOf('r').queuedResume).toBeUndefined()
+    // No presign, no abort, no completion: what the server holds stays for the next Resume.
     expect(server.calls).toEqual([])
     expect(testing.runningIds()).toEqual([])
     expect(testing.hasAbortController('r')).toBe(false)
@@ -423,12 +474,46 @@ describe('a queued resume whose turn comes', () => {
     expect(useUploadStore.getState().canResume('r')).toBe(true)
     useUploadStore.getState().resumeUpload('r', small('clip.mp4'))
     await settle()
-    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
+    expect(api.get).toHaveBeenCalledTimes(2)
     expect(rowOf('r').status).toBe('processing')
     expect(rowOf('r').error).toBeUndefined()
   })
 
-  it('cancelling a resume while its file is read leaves it interrupted with no reason, even when the read then fails', async () => {
+  it('an assembled upload completes whatever the picked file is', async () => {
+    const server = fakeServer()
+    vi.mocked(api.get).mockResolvedValue(resumable({ state: 'assembled' }) as never)
+    useUploadStore.setState({ files: [interrupted()] })
+    const clip = small('clip.mp4')
+    const read = watched(clip, () => {})
+    read.gone()
+
+    useUploadStore.getState().resumeUpload('r', clip)
+    await settle()
+
+    expect(server.calls).toEqual(['complete ru'])
+    expect(rowOf('r').status).toBe('processing')
+    expect(rowOf('r').error).toBeUndefined()
+  })
+
+  it.each([
+    ['says why', 'The operation is insecure.', 'The operation is insecure.'],
+    ['says nothing', '', READ_FAILED],
+  ])('a read that fails for another reason, where the browser %s, ends the resume interrupted without claiming the file changed', async (_, said, shown) => {
+    const server = fakeServer()
+    vi.mocked(api.get).mockResolvedValue(resumable() as never)
+    useUploadStore.setState({ files: [interrupted()] })
+    const clip = small('clip.mp4')
+    watched(clip).gone('SecurityError', said)
+
+    useUploadStore.getState().resumeUpload('r', clip)
+    await settle()
+
+    expect(rowOf('r')).toMatchObject({ status: 'interrupted', error: shown, uploadId: 'ru' })
+    expect(server.calls).toEqual([])
+    expect(testing.runningIds()).toEqual([])
+  })
+
+  it('cancelling while the file is read stands, and discards what the server holds', async () => {
     const server = fakeServer()
     vi.mocked(api.get).mockResolvedValue(resumable() as never)
     useUploadStore.setState({ files: [interrupted()] })
@@ -443,27 +528,10 @@ describe('a queued resume whose turn comes', () => {
     read.fail()
     await settle()
 
-    expect(rowOf('r').status).toBe('interrupted')
+    expect(rowOf('r').status).toBe('cancelled')
     expect(rowOf('r').error).toBeUndefined()
-    expect(api.get).not.toHaveBeenCalled()
-    expect(server.calls).toEqual([])
+    expect(server.calls).toEqual(['abort ru'])
     expect(testing.runningIds()).toEqual([])
-  })
-
-  it('a read that fails for another reason is not told as a changed file', async () => {
-    fakeServer()
-    vi.mocked(api.get).mockResolvedValue(resumable() as never)
-    useUploadStore.setState({ files: [interrupted()] })
-    const clip = small('clip.mp4')
-    watched(clip).gone('SecurityError')
-
-    useUploadStore.getState().resumeUpload('r', clip)
-    await settle()
-
-    expect(api.get).not.toHaveBeenCalled()
-    expect(rowOf('r').status).toBe('interrupted')
-    expect(rowOf('r').error).toBeTruthy()
-    expect(rowOf('r').error).not.toBe(UNREADABLE)
   })
 
   it('the queue goes on past it', async () => {
@@ -477,7 +545,7 @@ describe('a queued resume whose turn comes', () => {
     drop([small('b.jpg')])
     await settle()
 
-    expect(rowOf('r').status).toBe('interrupted')
+    expect(rowOf('r')).toMatchObject({ status: 'interrupted', error: UNREADABLE })
     expect(server.names()).toEqual(['b.jpg'])
   })
 
@@ -508,46 +576,20 @@ describe('a queued resume whose turn comes', () => {
     expect(useUploadStore.getState().canResume('r')).toBe(true)
   })
 
-  it('cancelling the held resume while it is read leaves it interrupted and passes the hold on', async () => {
+  it.each([
+    ['a file that changed or moved', 'NotFoundError', 'gone', UNREADABLE],
+    ['a read that fails for another reason', 'SecurityError', '', READ_FAILED],
+  ])('the held resume whose /parts then answers and finds %s ends the hold, so the next file starts', async (_, name, said, shown) => {
     vi.useFakeTimers()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const server = fakeServer()
-    vi.mocked(api.get).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    vi.mocked(api.get)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue(resumable() as never)
     useUploadStore.setState({ files: [interrupted()] })
     const clip = small('clip.mp4')
     const read = watched(clip)
-
-    useUploadStore.getState().resumeUpload('r', clip)
-    await flush()
-    drop([small('s.jpg')])
-    await flush()
-    expect(rowOf('r').holdReason).toBe('connection')
-
-    read.gate()
-    await vi.advanceTimersByTimeAsync(2_000)
-    await flush()
-    expect(read.reads()).toBe(1)
-    useUploadStore.getState().cancelUpload('r')
-    read.pass()
-    await flush()
-
-    expect(rowOf('r').status).toBe('interrupted')
-    expect(rowOf('r').error).toBeUndefined()
-    expect(api.get).toHaveBeenCalledTimes(1)
-    expect(server.names()).toEqual([])
-    await vi.advanceTimersByTimeAsync(2_000)
-    await flush()
-    expect(server.names()).toEqual(['s.jpg'])
-  })
-
-  it('the held resume that cannot be read fails and passes the hold on', async () => {
-    vi.useFakeTimers()
-    const server = fakeServer()
-    vi.mocked(api.get).mockRejectedValueOnce(new TypeError('Failed to fetch'))
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    useUploadStore.setState({ files: [interrupted()] })
-    const clip = small('clip.mp4')
-    const read = watched(clip)
+    read.gone(name, said)
 
     useUploadStore.getState().resumeUpload('r', clip)
     await flush()
@@ -556,16 +598,13 @@ describe('a queued resume whose turn comes', () => {
     await flush()
     expect(server.names()).toEqual([])
 
-    read.gone()
+    // The probe's next try gets `/parts` through, which ends the hold; only then is the file read.
     await vi.advanceTimersByTimeAsync(2_000)
     await flush()
 
-    expect(rowOf('r')).toMatchObject({ status: 'interrupted', error: UNREADABLE })
+    expect(rowOf('r')).toMatchObject({ status: 'interrupted', error: shown, uploadId: 'ru' })
     expect(rowOf('r').queuedResume).toBeUndefined()
     expect(rowOf('r').holdReason).toBeUndefined()
-    // The file behind it is the probe now, and it goes on its own try.
-    await vi.advanceTimersByTimeAsync(2_000)
-    await flush()
     expect(server.names()).toEqual(['s.jpg'])
     expect(stored().find((f) => f.id === 'r')).toMatchObject({ status: 'interrupted', uploadId: 'ru' })
   })

@@ -15,6 +15,13 @@ export const FILE_UNREADABLE_MESSAGE =
   'The file changed or was moved after it was added. Add it again.'
 
 /**
+ * What a row says when the file could not be read for a reason this does not
+ * recognise (a `SecurityError`, say) and the browser gave no message to show.
+ * It says nothing about the file having changed, so it must not claim that.
+ */
+export const FILE_READ_FAILED_MESSAGE = 'This file could not be read.'
+
+/**
  * The file behind a `File` changed or moved after it was added. Permanent: the
  * handle stays stale, so trying it again cannot help and only adding the file
  * again can.
