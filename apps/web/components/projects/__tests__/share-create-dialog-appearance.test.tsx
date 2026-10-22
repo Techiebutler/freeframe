@@ -70,9 +70,8 @@ describe('ShareCreateDialog appearance', () => {
   it('picks made in the Appearance block go out with the create request', () => {
     renderDialog()
     openAppearanceBlock()
-    fireEvent.click(screen.getByText('list'))
-    // Card-size buttons render lowercase s/m/l; the uppercase is CSS only.
-    fireEvent.click(screen.getByText('l'))
+    fireEvent.click(screen.getByRole('button', { name: 'List' }))
+    fireEvent.click(screen.getByRole('button', { name: 'L' }))
     expect(createAndSentAppearance()).toEqual({
       ...DEFAULT_SHARE_APPEARANCE,
       layout: 'list',

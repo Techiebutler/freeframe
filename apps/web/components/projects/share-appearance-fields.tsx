@@ -2,7 +2,18 @@
 
 import * as React from 'react'
 import * as Switch from '@radix-ui/react-switch'
-import { LayoutGrid, LayoutList, Wand2 } from 'lucide-react'
+import {
+  ChevronDown,
+  LayoutGrid,
+  List,
+  Moon,
+  RectangleHorizontal,
+  RectangleVertical,
+  Square,
+  Sun,
+  Wand2,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useViewStore } from '@/stores/view-store'
 import type { ShareLinkAppearance } from '@/types'
@@ -51,6 +62,77 @@ export function appearanceFromView(): Partial<ShareLinkAppearance> {
   if (sortKey === 'date') patch.sort_by = 'created_at'
   else if (sortKey === 'name') patch.sort_by = 'name'
   return patch
+}
+
+/**
+ * The live --accent as a hex, for <input type="color">, which takes a value
+ * but not a CSS var. Branding can repaint --accent at runtime, so read it
+ * rather than re-hardcoding a constant; the CSS-var fallback only shows if the
+ * computed value is unreadable or not a plain hex.
+ */
+function useThemeAccentHex(): string {
+  const [hex, setHex] = React.useState('#5b8def')
+  React.useEffect(() => {
+    const raw = getComputedStyle(document.documentElement)
+      .getPropertyValue('--accent')
+      .trim()
+    if (/^#[0-9a-f]{6}$/i.test(raw)) setHex(raw)
+  }, [])
+  return hex
+}
+
+// ─── Rows and controls ──────────────────────────────────────────────────────
+// Deliberately the same shapes as the folder view's Appearance popover
+// (appearance-popover.tsx): a label row with a compact segmented control on
+// the right, plain switches, and a compact select with a chevron. The share
+// block edits the same settings the popover edits for your own view, so the
+// two read as one system.
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-sm text-text-secondary">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+interface SegmentOption<T extends string> {
+  value: T
+  label?: string
+  icon?: React.ReactNode
+  ariaLabel?: string
+}
+
+function Segment<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: SegmentOption<T>[]
+  value: T
+  onChange: (v: T) => void
+}) {
+  return (
+    <div className="flex rounded-md border border-border overflow-hidden">
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          aria-label={opt.ariaLabel}
+          onClick={() => onChange(opt.value)}
+          className={cn(
+            'flex items-center justify-center px-3 py-1.5 text-xs transition-colors min-w-[36px]',
+            value === opt.value
+              ? 'bg-accent text-white'
+              : 'bg-bg-tertiary text-text-tertiary hover:bg-bg-hover hover:text-text-secondary',
+          )}
+        >
+          {opt.icon ?? opt.label}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 function ToggleRow({
@@ -118,53 +200,38 @@ export function ShareAppearanceFields({
     setAccentDraft(appearance.accent_color ?? '')
   }, [appearance.accent_color])
 
-  const accentSwatch = accentDraft ? `#${accentDraft.replace('#', '')}` : '#6366f1'
+  // No colour set means the page resolves to the instance theme's accent
+  // (app/share/[token]/page.tsx), so the picker opens on that too rather than
+  // on a made-up default.
+  const themeAccent = useThemeAccentHex()
+  const accentSwatch = accentDraft ? `#${accentDraft.replace('#', '')}` : themeAccent
 
   return (
     <div className="space-y-3">
       {onUseCurrentView && (
-        <div className="space-y-1">
-          <button
-            type="button"
-            onClick={onUseCurrentView}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:text-text-primary hover:border-border-focus transition-colors"
-          >
-            <Wand2 className="h-3.5 w-3.5" />
-            Use my current view
-          </button>
-          <p className="text-2xs text-text-tertiary">
-            Fills the settings below from how folders look in your own view
-            right now, once. The link then keeps them as its own.
-          </p>
-        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-full"
+          onClick={onUseCurrentView}
+        >
+          <Wand2 className="h-3.5 w-3.5" />
+          Use my current view
+        </Button>
       )}
 
-      {/* Layout — Grid / List */}
-      <div className="space-y-1.5">
-        <p className="text-xs text-text-secondary">Layout</p>
-        <div className="flex gap-2">
-          {(['grid', 'list'] as const).map((layout) => (
-            <button
-              key={layout}
-              type="button"
-              onClick={() => onChange({ layout })}
-              className={cn(
-                'flex-1 flex flex-col items-center gap-1.5 rounded-lg border py-3 text-xs font-medium capitalize transition-colors',
-                appearance.layout === layout
-                  ? 'bg-accent/10 border-accent text-accent'
-                  : 'border-border text-text-secondary hover:text-text-primary hover:border-border-focus',
-              )}
-            >
-              {layout === 'grid' ? (
-                <LayoutGrid className="h-4 w-4" />
-              ) : (
-                <LayoutList className="h-4 w-4" />
-              )}
-              {layout}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Layout — same icons as the folder view's Appearance popover */}
+      <Row label="Layout">
+        <Segment<ShareLinkAppearance['layout']>
+          options={[
+            { value: 'grid', icon: <LayoutGrid className="h-3.5 w-3.5" />, ariaLabel: 'Grid' },
+            { value: 'list', icon: <List className="h-3.5 w-3.5" />, ariaLabel: 'List' },
+          ]}
+          value={appearance.layout}
+          onChange={(layout) => onChange({ layout })}
+        />
+      </Row>
 
       {/* Open in viewer */}
       <ToggleRow
@@ -174,33 +241,21 @@ export function ShareAppearanceFields({
         onCheckedChange={(checked) => onChange({ open_in_viewer: checked })}
       />
 
-      {/* Theme — Dark / Light */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-text-primary">Theme</p>
-        <div className="flex rounded-lg border border-border overflow-hidden">
-          {(['dark', 'light'] as const).map((theme) => (
-            <button
-              key={theme}
-              type="button"
-              onClick={() => onChange({ theme })}
-              className={cn(
-                'px-4 py-1.5 text-xs font-medium capitalize transition-colors',
-                appearance.theme === theme
-                  ? 'bg-accent text-text-inverse'
-                  : 'text-text-secondary hover:text-text-primary',
-              )}
-            >
-              {theme === 'dark' ? '🌙' : '☀️'}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Theme */}
+      <Row label="Theme">
+        <Segment<ShareLinkAppearance['theme']>
+          options={[
+            { value: 'dark', icon: <Moon className="h-3.5 w-3.5" />, ariaLabel: 'Dark theme' },
+            { value: 'light', icon: <Sun className="h-3.5 w-3.5" />, ariaLabel: 'Light theme' },
+          ]}
+          value={appearance.theme}
+          onChange={(theme) => onChange({ theme })}
+        />
+      </Row>
 
       {/* Accent color */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-text-primary">Accent Color</p>
+      <Row label="Accent Color">
         <div className="flex items-center gap-2">
-          <span className="text-xs text-text-tertiary">#</span>
           <input
             type="text"
             value={accentDraft}
@@ -213,14 +268,19 @@ export function ShareAppearanceFields({
                 })
               }
             }}
-            placeholder="None"
+            placeholder="Theme"
             maxLength={7}
+            aria-label="Accent colour hex"
+            title="Buttons and highlights on the share page. Leave empty to use the theme's accent."
             className="w-20 rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 font-mono"
           />
-          <label className="relative h-6 w-6 rounded-full border border-border cursor-pointer overflow-hidden shrink-0">
+          <label
+            className="relative h-6 w-6 rounded-full border border-border cursor-pointer overflow-hidden shrink-0"
+            title="Pick an accent colour"
+          >
             <div
               className="absolute inset-0 rounded-full"
-              style={{ backgroundColor: accentSwatch }}
+              style={{ backgroundColor: accentDraft ? accentSwatch : 'var(--accent)' }}
             />
             <input
               type="color"
@@ -230,81 +290,50 @@ export function ShareAppearanceFields({
                 setAccentDraft(hex)
                 onChange({ accent_color: `#${hex}` })
               }}
+              aria-label="Pick an accent colour"
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
           </label>
         </div>
-      </div>
+      </Row>
 
-      {/* Card Size — S / M / L */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-text-primary">Card Size</p>
-        <div className="flex rounded-lg border border-border overflow-hidden">
-          {(['s', 'm', 'l'] as const).map((size) => (
-            <button
-              key={size}
-              type="button"
-              onClick={() => onChange({ card_size: size })}
-              className={cn(
-                'px-4 py-1.5 text-xs font-medium uppercase transition-colors',
-                (appearance.card_size || 'm') === size
-                  ? 'bg-accent text-text-inverse'
-                  : 'text-text-secondary hover:text-text-primary',
-              )}
-            >
-              {size}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Card Size */}
+      <Row label="Card Size">
+        <Segment<ShareLinkAppearance['card_size']>
+          options={[
+            { value: 's', label: 'S' },
+            { value: 'm', label: 'M' },
+            { value: 'l', label: 'L' },
+          ]}
+          value={(appearance.card_size || 'm') as ShareLinkAppearance['card_size']}
+          onChange={(card_size) => onChange({ card_size })}
+        />
+      </Row>
 
       {/* Aspect Ratio */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-text-primary">Aspect Ratio</p>
-        <div className="flex rounded-lg border border-border overflow-hidden">
-          {[
-            { value: 'landscape' as const, icon: '▭' },
-            { value: 'square' as const, icon: '□' },
-            { value: 'portrait' as const, icon: '▯' },
-          ].map(({ value, icon }) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => onChange({ aspect_ratio: value })}
-              className={cn(
-                'px-4 py-1.5 text-sm transition-colors',
-                (appearance.aspect_ratio || 'landscape') === value
-                  ? 'bg-accent text-text-inverse'
-                  : 'text-text-secondary hover:text-text-primary',
-              )}
-            >
-              {icon}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Row label="Aspect Ratio">
+        <Segment<ShareLinkAppearance['aspect_ratio']>
+          options={[
+            { value: 'landscape', icon: <RectangleHorizontal className="h-3.5 w-3.5" />, ariaLabel: 'Landscape' },
+            { value: 'square', icon: <Square className="h-3.5 w-3.5" />, ariaLabel: 'Square' },
+            { value: 'portrait', icon: <RectangleVertical className="h-3.5 w-3.5" />, ariaLabel: 'Portrait' },
+          ]}
+          value={(appearance.aspect_ratio || 'landscape') as ShareLinkAppearance['aspect_ratio']}
+          onChange={(aspect_ratio) => onChange({ aspect_ratio })}
+        />
+      </Row>
 
-      {/* Thumbnail Scale — Fit / Fill */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-text-primary">Thumbnail Scale</p>
-        <div className="flex rounded-lg border border-border overflow-hidden">
-          {(['fit', 'fill'] as const).map((scale) => (
-            <button
-              key={scale}
-              type="button"
-              onClick={() => onChange({ thumbnail_scale: scale })}
-              className={cn(
-                'px-4 py-1.5 text-xs font-medium capitalize transition-colors',
-                (appearance.thumbnail_scale || 'fill') === scale
-                  ? 'bg-accent text-text-inverse'
-                  : 'text-text-secondary hover:text-text-primary',
-              )}
-            >
-              {scale}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Thumbnail Scale */}
+      <Row label="Thumbnail Scale">
+        <Segment<ShareLinkAppearance['thumbnail_scale']>
+          options={[
+            { value: 'fit', label: 'Fit' },
+            { value: 'fill', label: 'Fill' },
+          ]}
+          value={(appearance.thumbnail_scale || 'fill') as ShareLinkAppearance['thumbnail_scale']}
+          onChange={(thumbnail_scale) => onChange({ thumbnail_scale })}
+        />
+      </Row>
 
       {/* Show Card Info */}
       <ToggleRow
@@ -315,20 +344,23 @@ export function ShareAppearanceFields({
       />
 
       {/* Sort */}
-      <div className="space-y-1.5">
-        <p className="text-xs text-text-secondary">Sort By</p>
-        <select
-          value={appearance.sort_by}
-          onChange={(e) =>
-            onChange({ sort_by: e.target.value as ShareLinkAppearance['sort_by'] })
-          }
-          className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 [color-scheme:auto]"
-        >
-          <option value="name">Name</option>
-          <option value="created_at">Date created</option>
-          <option value="file_size">Size</option>
-        </select>
-      </div>
+      <Row label="Sort By">
+        <div className="relative">
+          <select
+            value={appearance.sort_by}
+            onChange={(e) =>
+              onChange({ sort_by: e.target.value as ShareLinkAppearance['sort_by'] })
+            }
+            aria-label="Sort By"
+            className="appearance-none bg-bg-tertiary border border-border rounded-md pl-2.5 pr-7 py-1 text-xs text-text-primary outline-none cursor-pointer hover:bg-bg-hover transition-colors [color-scheme:auto]"
+          >
+            <option value="name">Name</option>
+            <option value="created_at">Date created</option>
+            <option value="file_size">Size</option>
+          </select>
+          <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-text-tertiary pointer-events-none" />
+        </div>
+      </Row>
     </div>
   )
 }

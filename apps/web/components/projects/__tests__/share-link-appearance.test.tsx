@@ -91,8 +91,7 @@ describe('ShareLinkSettingsPanel appearance', () => {
   it('editing one setting still patches the whole stored appearance', async () => {
     renderPanel()
     await openAppearanceSection()
-    // Card size 's': the button's text is lowercase; the uppercase is CSS only.
-    fireEvent.click(screen.getByRole('button', { name: 's' }))
+    fireEvent.click(screen.getByRole('button', { name: 'S' }))
 
     await waitFor(() => expect(patch).toHaveBeenCalled())
     expect(patch.mock.calls[0]).toEqual([
