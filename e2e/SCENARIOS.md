@@ -502,6 +502,18 @@ Observations (not failures of these scenarios):
 - Not run here: the manual real Safari and real Firefox pass (matrix row M), which also owes "hard reload, then drop from
   Finder without clicking, then reload". The live Chrome pass is below.
 
+### Phase 5 gate (2026-10-23, at `dd623474`)
+
+- Chromium: the whole suite, 55 passed, 2 skipped (12.8 min).
+- WebKit: the whole suite, 55 passed, 2 skipped (14.4 min). No flake this time, including R1 and R2.
+- Firefox (Playwright `firefox` project): still does not launch on this Mac (`browserType.launch` times out after 180 s,
+  `sandbox_extension_issue_file_to_process failed ... Operation not permitted`). No test ran.
+- Web unit suite 148 files, 1485 tests; `tsc --noEmit` clean; lint 18 warnings, 0 errors; API suite 1563 passed, 3 skipped,
+  2 failures that predate this work (`test_deleted_project_routes` metadata-field cases).
+- Not run yet: the manual real Safari and real Firefox pass of L1-L3 (row M), owed before PR 5 merges. It should also cover what
+  the live pass could not: the wake lock in a truly hidden tab (W4), whether the short lock pulses on each retry during a hold
+  keep the machine awake (`pmset -g assertionslog` with an idle display), and the leave prompt seen on screen.
+
 ## Phase 5 live Chrome results
 
 Run by hand in real, headed Chrome 154.0.8037.100 on the phase 5 branch (`eeb6048d`), 2026-10-23 (19:03 to 19:20 UTC on the
