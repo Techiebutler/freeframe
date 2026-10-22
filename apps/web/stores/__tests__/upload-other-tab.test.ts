@@ -30,7 +30,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api } from '@/lib/api'
-import { useUploadStore, currentTabId, LIVE_WINDOW_MS, RESUME_CLAIMS_KEY, __uploadQueueTesting } from '../upload-store'
+import { useUploadStore, currentTabId, LIVE_WINDOW_MS, RESUME_CLAIM_PREFIX, resumeClaimKey, __uploadQueueTesting } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, type PartHandler } from '@/test/xhr-fake'
 import { signInAs } from '@/test/upload-session'
@@ -775,10 +775,24 @@ describe('two tabs resuming the same upload at the same moment', () => {
     installXhrFake(put)
   })
 
+  /** The other tab's claim on the row, as it writes it. */
+  function otherTabClaims(at = Date.now()) {
+    window.localStorage.setItem(resumeClaimKey('row-1'), JSON.stringify({ tab: OTHER_TAB, nonce: 'theirs', at }))
+  }
+
+  /** Every resume claim in storage, by key. */
+  function storedClaims(): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)!
+      if (key.startsWith(RESUME_CLAIM_PREFIX)) out[key] = JSON.parse(window.localStorage.getItem(key)!)
+    }
+    return out
+  }
+
   /** What the other tab writes as it takes the upload up: its claim, then its heartbeat on the row. */
   function otherTabTakesItUp(at = Date.now()) {
-    const claims = JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY) ?? '{}')
-    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify({ ...claims, 'row-1': { tab: OTHER_TAB, nonce: 'theirs', at } }))
+    otherTabClaims(at)
     window.localStorage.setItem('ff-uploads', JSON.stringify({
       state: { files: [row({ status: 'uploading', ownerTab: OTHER_TAB, heartbeatAt: at })] }, version: 1,
     }))
@@ -801,26 +815,41 @@ describe('two tabs resuming the same upload at the same moment', () => {
 
   it('stands aside at once when the other tab\'s claim is already there', async () => {
     vi.mocked(api.get).mockResolvedValue(answer() as never)
-    const claims = { 'row-1': { tab: OTHER_TAB, nonce: 'theirs', at: Date.now() } }
-    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify(claims))
+    const at = Date.now()
+    otherTabClaims(at)
 
     useUploadStore.getState().resumeUpload('row-1', pick())
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('elsewhere'), { timeout: 3_000 })
 
     expect(put).not.toHaveBeenCalled()
-    expect(JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY)!)).toEqual(claims)
+    expect(storedClaims()).toEqual({ [resumeClaimKey('row-1')]: { tab: OTHER_TAB, nonce: 'theirs', at } })
+  })
+
+  it('removes other rows\' claims that hold nobody off any more as it writes its own, and keeps the fresh ones', async () => {
+    vi.mocked(api.get).mockResolvedValue(answer() as never)
+    const fresh = { tab: OTHER_TAB, nonce: 'fresh', at: Date.now() }
+    window.localStorage.setItem(resumeClaimKey('row-8'), JSON.stringify(fresh))
+    window.localStorage.setItem(resumeClaimKey('row-9'), JSON.stringify({ tab: OTHER_TAB, nonce: 'old', at: Date.now() - 11_000 }))
+
+    useUploadStore.getState().resumeUpload('row-1', pick())
+    await vi.waitFor(() => expect(storedClaims()[resumeClaimKey('row-1')]).toBeDefined())
+
+    expect(storedClaims()).toEqual({
+      [resumeClaimKey('row-1')]: expect.objectContaining({ tab: currentTabId() }),
+      [resumeClaimKey('row-8')]: fresh,
+    })
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' }), { timeout: 3_000 })
+    await vi.waitFor(() => expect(storedClaims()).toEqual({ [resumeClaimKey('row-8')]: fresh }))
   })
 
   it('resumes when it is alone, or the only claim there is long over, and clears its own claim after', async () => {
     vi.mocked(api.get).mockResolvedValue(answer() as never)
-    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify({
-      'row-1': { tab: OTHER_TAB, nonce: 'theirs', at: Date.now() - 10 * 60_000 },
-    }))
+    otherTabClaims(Date.now() - 10 * 60_000)
 
     useUploadStore.getState().resumeUpload('row-1', pick())
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' }), { timeout: 3_000 })
 
     expect(put).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY) ?? '{}')).toEqual({}))
+    await vi.waitFor(() => expect(storedClaims()).toEqual({}))
   })
 })

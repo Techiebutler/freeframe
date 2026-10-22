@@ -100,7 +100,7 @@ beforeEach(() => {
   vi.mocked(api.get).mockReset()
   testing.reset()
   // A resume's claim waits for another tab's write still on its way from another process
-  // (RESUME_CLAIMS_KEY). Here every store shares one storage object and sees each write at
+  // (RESUME_CLAIM_PREFIX). Here every store shares one storage object and sees each write at
   // once, and these cases are about other things: no waiting it out on every resume.
   testing.setClaimSettleMs(0)
   window.localStorage.clear()

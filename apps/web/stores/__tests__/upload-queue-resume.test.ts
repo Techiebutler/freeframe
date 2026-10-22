@@ -47,7 +47,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   testing.reset()
   // A resume's claim waits for another tab's write still on its way from another process
-  // (RESUME_CLAIMS_KEY). Here every store shares one storage object and sees each write at
+  // (RESUME_CLAIM_PREFIX). Here every store shares one storage object and sees each write at
   // once, and these cases are about other things: no waiting it out on every resume.
   testing.setClaimSettleMs(0)
   window.localStorage.clear()
@@ -498,10 +498,109 @@ describe('two tabs of one browser', () => {
     }) as never)
     return {
       store: tab.useUploadStore,
+      api: tabApi,
+      testing: tab.__uploadQueueTesting,
       tabId: tab.currentTabId(),
-      status: () => tab.useUploadStore.getState().files.find((f) => f.id === 'r')?.status,
+      status: (id = 'r') => tab.useUploadStore.getState().files.find((f) => f.id === id)?.status,
     }
   }
+
+  /**
+   * `GET /parts` for every tab answers only when the test says so, per version, and
+   * every waiting caller gets the same answer at the same moment.
+   */
+  function heldPartsByVersion(...tabs: Array<{ api: typeof api }>) {
+    const gates = new Map<string, { promise: Promise<unknown>; open: (v: unknown) => void }>()
+    const gate = (version: string) => {
+      let g = gates.get(version)
+      if (!g) {
+        let open!: (v: unknown) => void
+        const promise = new Promise((resolve) => { open = resolve })
+        g = { promise, open }
+        gates.set(version, g)
+      }
+      return g
+    }
+    for (const t of tabs) {
+      vi.mocked(t.api.get).mockImplementation(((path: string) => {
+        const version = /^\/upload\/([^/]+)\/parts$/.exec(path)?.[1]
+        return version ? gate(version).promise : new Promise(() => {})
+      }) as never)
+    }
+    return {
+      answer: (version: string, over: Record<string, unknown> = {}) =>
+        gate(version).open(resumable({ version_id: version, ...over })),
+    }
+  }
+
+  /** Every key and value in localStorage now, as it really is (not as a lagging tab sees it). */
+  const realGetItem = Storage.prototype.getItem
+  function snapshotStorage(): Map<string, string> {
+    const view = new Map<string, string>()
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)!
+      view.set(key, realGetItem.call(window.localStorage, key)!)
+    }
+    return view
+  }
+
+  /** Whether a claim naming `tabId` is in storage, under whatever key claims are kept. */
+  function claimWrittenBy(tabId: string): boolean {
+    return Array.from(snapshotStorage()).some(([key, value]) => key.includes('claim') && value.includes(tabId))
+  }
+
+  it('claims two tabs make on two different rows at nearly the same moment both stand', async () => {
+    // Each tab resumes its own row. A write reaches the other tab's process a
+    // moment later, so the second tab writes its claim from a view of storage
+    // that has not seen the first tab's yet. A claim on one row must not undo a
+    // claim on another: the first tab would show Elsewhere with nobody sending.
+    window.localStorage.setItem('ff-uploads', JSON.stringify({
+      state: {
+        files: [
+          interrupted(),
+          interrupted({ id: 'r2', assetId: 'ra2', versionId: 'rv2', uploadId: 'ru2', s3Key: 'rk2' }),
+        ],
+      },
+      version: 0,
+    }))
+    const one = await openTab()
+    const two = await openTab()
+    one.testing.setClaimSettleMs(300)
+    two.testing.setClaimSettleMs(300)
+    const parts = heldPartsByVersion(one, two)
+
+    // Reads of localStorage made while `lagging` is set see it as it was then.
+    let lagging: Map<string, string> | null = null
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (lagging && this === window.localStorage) return lagging.get(key) ?? null
+      return realGetItem.call(this, key)
+    })
+
+    one.store.getState().resumeUpload('r', small('clip.mp4'))
+    two.store.getState().resumeUpload('r2', small('other.mp4'))
+    await settle()
+
+    const beforeOne = snapshotStorage()
+    parts.answer('rv', { upload_id: 'ru', s3_key: 'rk', asset_id: 'ra' })
+    await vi.waitFor(() => expect(claimWrittenBy(one.tabId)).toBe(true))
+
+    // Tab one is settling. Tab two takes its row up without having seen tab one's claim.
+    lagging = beforeOne
+    parts.answer('rv2', { upload_id: 'ru2', s3_key: 'rk2', asset_id: 'ra2', original_filename: 'other.mp4' })
+    await vi.waitFor(() => expect(claimWrittenBy(two.tabId)).toBe(true))
+    lagging = null
+
+    await vi.waitFor(() => {
+      expect(one.status('r')).not.toBe('starting')
+      expect(two.status('r2')).not.toBe('starting')
+    }, { timeout: 3_000 })
+    expect(one.status('r')).toBe('uploading')
+    expect(two.status('r2')).toBe('uploading')
+
+    one.store.getState().cancelUpload('r')
+    two.store.getState().cancelUpload('r2')
+    await settle()
+  })
 
   beforeEach(() => {
     presigns = 0

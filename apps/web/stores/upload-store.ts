@@ -180,7 +180,8 @@ function beatingInAnotherTab(fileId: string, now: number): boolean {
 
 /**
  * Where a tab says it is taking an upload up, for the moment between deciding
- * to and its heartbeat reaching the other tabs (spec goal 11).
+ * to and its heartbeat reaching the other tabs (spec goal 11). One key per
+ * row: `RESUME_CLAIM_PREFIX` followed by the row id.
  *
  * The check above reads the other tabs' heartbeats, and two tabs that Resume
  * the same row at once are both told nobody is sending it: each looks before
@@ -189,9 +190,24 @@ function beatingInAnotherTab(fileId: string, now: number): boolean {
  * completed the same upload (measured in WebKit, scenario R2). So a tab about
  * to send writes a claim, waits for any other tab's claim still on its way,
  * and reads it back. The last write wins in shared storage and every tab reads
- * the same one, so exactly one goes ahead. A map of row id to claim.
+ * the same one, so at most one goes ahead; this holds while a localStorage
+ * write reaches the other tab within the settle window (`CLAIM_SETTLE_MS`).
+ *
+ * The settle delays every Resume by that long, alone or not, and meanwhile the
+ * resuming row is `starting` and counts against the start rule as an
+ * unfinished upload of unknown size.
+ *
+ * A key per row, not one shared map: a tab writes a map from what it last
+ * read, and a tab that had not yet seen another tab's claim on one row
+ * removed it by claiming a different row, leaving that tab showing Elsewhere
+ * with nobody sending.
  */
-export const RESUME_CLAIMS_KEY = 'ff-upload-claims'
+export const RESUME_CLAIM_PREFIX = 'ff-upload-claim:'
+
+/** Where the resume claim on `rowId` is kept (`RESUME_CLAIM_PREFIX`). */
+export function resumeClaimKey(rowId: string): string {
+  return `${RESUME_CLAIM_PREFIX}${rowId}`
+}
 
 /**
  * How long a claim waits for a competing one before it counts. A write reaches
@@ -216,9 +232,42 @@ interface ResumeClaim {
   at: number
 }
 
-function readClaims(): Record<string, ResumeClaim> {
-  const parsed = JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY) ?? '{}') as unknown
-  return parsed && typeof parsed === 'object' ? (parsed as Record<string, ResumeClaim>) : {}
+/** A stored claim, or null when there is none. */
+function parseClaim(raw: string | null): ResumeClaim | null {
+  if (raw === null) return null
+  const c = JSON.parse(raw) as Partial<ResumeClaim> | null
+  return c && typeof c.tab === 'string' && typeof c.nonce === 'string' && typeof c.at === 'number'
+    ? { tab: c.tab, nonce: c.nonce, at: c.at }
+    : null
+}
+
+/** The claim on `rowId`. Throws only when storage itself cannot be used. */
+function readClaim(rowId: string): ResumeClaim | null {
+  return parseClaim(window.localStorage.getItem(resumeClaimKey(rowId)))
+}
+
+/**
+ * Removes the claims on other rows that hold nobody off any more, so the keys
+ * of tabs that claimed and went away do not pile up. Only what this tab reads
+ * as stale goes: a key it reads no value for is left alone.
+ */
+function pruneClaims(now: number, except: string): void {
+  const storage = window.localStorage
+  const stale: string[] = []
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i)
+    if (key === null || key === except || !key.startsWith(RESUME_CLAIM_PREFIX)) continue
+    const raw = storage.getItem(key)
+    if (raw === null) continue
+    let claim: ResumeClaim | null = null
+    try {
+      claim = parseClaim(raw)
+    } catch {
+      /* unreadable: holds nobody off */
+    }
+    if (!claim || now - claim.at >= CLAIM_TTL_MS) stale.push(key)
+  }
+  stale.forEach((key) => storage.removeItem(key))
 }
 
 /**
@@ -231,19 +280,23 @@ function readClaims(): Record<string, ResumeClaim> {
 async function claimRow(rowId: string, signal: AbortSignal): Promise<{ won: boolean; nonce?: string }> {
   const tab = currentTabId()
   const nonce = newTabId()
+  const key = resumeClaimKey(rowId)
+  const now = Date.now()
   try {
-    const now = Date.now()
-    const claims = readClaims()
-    const theirs = claims[rowId]
+    const theirs = readClaim(rowId)
     if (theirs && theirs.tab !== tab && now - theirs.at < CLAIM_TTL_MS) return { won: false }
-    const live = Object.fromEntries(Object.entries(claims).filter(([, c]) => now - c.at < CLAIM_TTL_MS))
-    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify({ ...live, [rowId]: { tab, nonce, at: now } }))
+    window.localStorage.setItem(key, JSON.stringify({ tab, nonce, at: now }))
   } catch {
     return { won: true }
   }
+  try {
+    pruneClaims(now, key)
+  } catch {
+    /* tidying only: the claim is written */
+  }
   if (claimSettleMs > 0) await delayUnlessAborted(claimSettleMs, signal)
   try {
-    return readClaims()[rowId]?.nonce === nonce ? { won: true, nonce } : { won: false }
+    return readClaim(rowId)?.nonce === nonce ? { won: true, nonce } : { won: false }
   } catch {
     return { won: true, nonce }
   }
@@ -253,10 +306,8 @@ async function claimRow(rowId: string, signal: AbortSignal): Promise<{ won: bool
 function releaseClaim(rowId: string, nonce: string | undefined): void {
   if (nonce === undefined) return
   try {
-    const claims = readClaims()
-    if (claims[rowId]?.nonce !== nonce) return
-    delete claims[rowId]
-    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify(claims))
+    if (readClaim(rowId)?.nonce !== nonce) return
+    window.localStorage.removeItem(resumeClaimKey(rowId))
   } catch {
     /* storage unusable: nothing was claimed there */
   }
@@ -2694,7 +2745,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       return
     }
     // Another tab of this browser may have been told the same at the same
-    // moment: only the tab whose claim stands goes on (see `RESUME_CLAIMS_KEY`).
+    // moment: only the tab whose claim stands goes on (see `RESUME_CLAIM_PREFIX`).
     const claim = await claimRow(id, controller.signal)
     claimNonce = claim.nonce
     // Cancelled while the claim settled: back to plain `interrupted` already.
@@ -3905,7 +3956,7 @@ export const __uploadQueueTesting = {
     claimSettleMs = CLAIM_SETTLE_MS
   },
   /**
-   * How long a resume's claim waits for another tab's (see `RESUME_CLAIMS_KEY`).
+   * How long a resume's claim waits for another tab's (see `RESUME_CLAIM_PREFIX`).
    * The wait is for a write on its way from another process; in a test every
    * store shares one storage object and sees each write at once, so a test of
    * something else may set it to 0 rather than wait it out on every resume.
