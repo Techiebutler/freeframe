@@ -46,6 +46,10 @@ function heldParts() {
 beforeEach(() => {
   vi.clearAllMocks()
   testing.reset()
+  // A resume's claim waits for another tab's write still on its way from another process
+  // (RESUME_CLAIMS_KEY). Here every store shares one storage object and sees each write at
+  // once, and these cases are about other things: no waiting it out on every resume.
+  testing.setClaimSettleMs(0)
   window.localStorage.clear()
   useUploadStore.setState({ files: [], versionsRevision: 0, panelOpen: false })
   signInAs('user-1')
@@ -481,6 +485,8 @@ describe('two tabs of one browser', () => {
     vi.resetModules()
     const { api: tabApi } = await import('@/lib/api')
     const tab = await import('@/stores/upload-store')
+    // One storage object: each tab sees the other's claim at once (see the top of this file).
+    tab.__uploadQueueTesting.setClaimSettleMs(0)
     // The server has not seen the upload move: only this browser's storage knows.
     vi.mocked(tabApi.get).mockImplementation(() => Promise.resolve(resumable()) as never)
     vi.mocked(tabApi.post).mockImplementation(((path: string, body?: { upload_id?: string; part_number?: number }) => {

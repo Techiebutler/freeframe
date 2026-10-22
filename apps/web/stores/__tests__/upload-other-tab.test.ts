@@ -30,7 +30,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api } from '@/lib/api'
-import { useUploadStore, currentTabId, LIVE_WINDOW_MS, __uploadQueueTesting } from '../upload-store'
+import { useUploadStore, currentTabId, LIVE_WINDOW_MS, RESUME_CLAIMS_KEY, __uploadQueueTesting } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, type PartHandler } from '@/test/xhr-fake'
 import { signInAs } from '@/test/upload-session'
@@ -746,5 +746,81 @@ describe('polling a row whose upload is running on another device', () => {
     await useUploadStore.getState().refreshProcessingItems()
 
     expect(rowOf('row-1').progress).toBe(41)
+  })
+})
+
+// ---------------------------------------------------------- two tabs, one Resume each
+
+describe('two tabs resuming the same upload at the same moment', () => {
+  // Each tab looks in shared storage for the other's heartbeat once the server
+  // has said which parts it holds, and in a real browser the two answers can
+  // land together. Storage is shared across processes and a write reaches the
+  // other tab a moment later, so each looked before the other's stamp arrived:
+  // both presigned, sent both parts and completed the same upload (found by the
+  // Phase 4 browser scenario R2, in WebKit). Here the other tab's moves land
+  // just after this tab has looked, which is what that moment is.
+  let put = vi.fn<PartHandler>()
+  const longAgo = () => new Date(Date.now() - LIVE_WINDOW_MS - 60_000)
+  /** Nothing held yet and one part to send: the file picked again is the 10-byte file it was. */
+  const answer = () => ({ ...resumeInfo(longAgo()), file_size_bytes: 10 })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    window.localStorage.clear()
+    signInAs('u1')
+    useUploadStore.setState({ files: [row({ status: 'interrupted', ownerTab: undefined, heartbeatAt: undefined })] })
+    vi.mocked(api.post).mockImplementation(((path: string) =>
+      Promise.resolve(path === '/upload/presign-part' ? { presigned_url: 'https://s3.example/p' } : {})) as never)
+    put = vi.fn<PartHandler>(() => ok('"e"'))
+    installXhrFake(put)
+  })
+
+  /** What the other tab writes as it takes the upload up: its claim, then its heartbeat on the row. */
+  function otherTabTakesItUp(at = Date.now()) {
+    const claims = JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY) ?? '{}')
+    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify({ ...claims, 'row-1': { tab: OTHER_TAB, nonce: 'theirs', at } }))
+    window.localStorage.setItem('ff-uploads', JSON.stringify({
+      state: { files: [row({ status: 'uploading', ownerTab: OTHER_TAB, heartbeatAt: at })] }, version: 1,
+    }))
+  }
+
+  const pick = () => new File([new Uint8Array(10)], 'clip.mp4')
+
+  it('sends nothing when the other tab took it up while this one was looking', async () => {
+    vi.mocked(api.get).mockImplementation((async () => {
+      setTimeout(() => otherTabTakesItUp(), 0)
+      return answer()
+    }) as never)
+
+    useUploadStore.getState().resumeUpload('row-1', pick())
+    await vi.waitFor(() => expect(rowOf('row-1').status).toBe('elsewhere'), { timeout: 3_000 })
+
+    expect(api.post).not.toHaveBeenCalledWith('/upload/presign-part', expect.anything(), expect.anything())
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('stands aside at once when the other tab\'s claim is already there', async () => {
+    vi.mocked(api.get).mockResolvedValue(answer() as never)
+    const claims = { 'row-1': { tab: OTHER_TAB, nonce: 'theirs', at: Date.now() } }
+    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify(claims))
+
+    useUploadStore.getState().resumeUpload('row-1', pick())
+    await vi.waitFor(() => expect(rowOf('row-1').status).toBe('elsewhere'), { timeout: 3_000 })
+
+    expect(put).not.toHaveBeenCalled()
+    expect(JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY)!)).toEqual(claims)
+  })
+
+  it('resumes when it is alone, or the only claim there is long over, and clears its own claim after', async () => {
+    vi.mocked(api.get).mockResolvedValue(answer() as never)
+    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify({
+      'row-1': { tab: OTHER_TAB, nonce: 'theirs', at: Date.now() - 10 * 60_000 },
+    }))
+
+    useUploadStore.getState().resumeUpload('row-1', pick())
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' }), { timeout: 3_000 })
+
+    expect(put).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY) ?? '{}')).toEqual({}))
   })
 })

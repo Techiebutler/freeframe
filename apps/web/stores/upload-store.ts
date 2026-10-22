@@ -179,6 +179,90 @@ function beatingInAnotherTab(fileId: string, now: number): boolean {
 }
 
 /**
+ * Where a tab says it is taking an upload up, for the moment between deciding
+ * to and its heartbeat reaching the other tabs (spec goal 11).
+ *
+ * The check above reads the other tabs' heartbeats, and two tabs that Resume
+ * the same row at once are both told nobody is sending it: each looks before
+ * the other's first stamp has reached it, because a write to shared storage
+ * reaches another tab's process a moment later. Both then sent every part and
+ * completed the same upload (measured in WebKit, scenario R2). So a tab about
+ * to send writes a claim, waits for any other tab's claim still on its way,
+ * and reads it back. The last write wins in shared storage and every tab reads
+ * the same one, so exactly one goes ahead. A map of row id to claim.
+ */
+export const RESUME_CLAIMS_KEY = 'ff-upload-claims'
+
+/**
+ * How long a claim waits for a competing one before it counts. A write reaches
+ * the other tabs within milliseconds; this is generous against a busy machine,
+ * and short next to a Resume, which has just asked the server and is about to
+ * presign.
+ */
+const CLAIM_SETTLE_MS = 500
+/** `CLAIM_SETTLE_MS`, unless a test has set another (`__uploadQueueTesting.setClaimSettleMs`). */
+let claimSettleMs = CLAIM_SETTLE_MS
+
+/**
+ * A claim only bridges the gap until its tab's heartbeat is in storage, and
+ * then the heartbeat holds the others off. One older than this is a tab that
+ * claimed and went away; it holds nobody off.
+ */
+const CLAIM_TTL_MS = 10_000
+
+interface ResumeClaim {
+  tab: string
+  nonce: string
+  at: number
+}
+
+function readClaims(): Record<string, ResumeClaim> {
+  const parsed = JSON.parse(window.localStorage.getItem(RESUME_CLAIMS_KEY) ?? '{}') as unknown
+  return parsed && typeof parsed === 'object' ? (parsed as Record<string, ResumeClaim>) : {}
+}
+
+/**
+ * Claims the row for this tab, once the server and the stored heartbeats have
+ * both said nobody is sending it. `won` is false when another tab's claim is
+ * still fresh, or when another tab's claim replaced this one while it settled.
+ * `nonce` names this tab's claim, for `releaseClaim`. Storage that cannot be
+ * used coordinates nothing, and the tab goes ahead, as it did before claims.
+ */
+async function claimRow(rowId: string, signal: AbortSignal): Promise<{ won: boolean; nonce?: string }> {
+  const tab = currentTabId()
+  const nonce = newTabId()
+  try {
+    const now = Date.now()
+    const claims = readClaims()
+    const theirs = claims[rowId]
+    if (theirs && theirs.tab !== tab && now - theirs.at < CLAIM_TTL_MS) return { won: false }
+    const live = Object.fromEntries(Object.entries(claims).filter(([, c]) => now - c.at < CLAIM_TTL_MS))
+    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify({ ...live, [rowId]: { tab, nonce, at: now } }))
+  } catch {
+    return { won: true }
+  }
+  if (claimSettleMs > 0) await delayUnlessAborted(claimSettleMs, signal)
+  try {
+    return readClaims()[rowId]?.nonce === nonce ? { won: true, nonce } : { won: false }
+  } catch {
+    return { won: true, nonce }
+  }
+}
+
+/** Takes this tab's claim off the row, if it is still the one there. */
+function releaseClaim(rowId: string, nonce: string | undefined): void {
+  if (nonce === undefined) return
+  try {
+    const claims = readClaims()
+    if (claims[rowId]?.nonce !== nonce) return
+    delete claims[rowId]
+    window.localStorage.setItem(RESUME_CLAIMS_KEY, JSON.stringify(claims))
+  } catch {
+    /* storage unusable: nothing was claimed there */
+  }
+}
+
+/**
  * How long after this tab's own last heartbeat its row still counts as its
  * own business, rather than something the server has to be asked about.
  *
@@ -2529,6 +2613,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
   let info: ResumeInfo | undefined
   let completionAttempted = false
   let stopBeat = () => {}
+  let claimNonce: string | undefined
   let watch: ReturnType<typeof transferWatch> | null = null
   try {
     // Inside the `try`, as in `runNew`, so the `finally` always balances it.
@@ -2606,6 +2691,30 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
           elsewhereUntil: liveUntil(refusedAt),
         })
       }
+      return
+    }
+    // Another tab of this browser may have been told the same at the same
+    // moment: only the tab whose claim stands goes on (see `RESUME_CLAIMS_KEY`).
+    const claim = await claimRow(id, controller.signal)
+    claimNonce = claim.nonce
+    // Cancelled while the claim settled: back to plain `interrupted` already.
+    if (runner.stoodDown) return
+    if (!claim.won) {
+      info = undefined
+      if (rowById(id)?.status !== 'cancelled') {
+        updateFile({
+          status: 'elsewhere',
+          resuming: undefined,
+          progress: row.progress,
+          // Until the other tab's heartbeat is in storage, which then keeps it so.
+          elsewhereUntil: Date.now() + CLAIM_TTL_MS,
+        })
+      }
+      return
+    }
+    // The settle is a wait: an account change during it is applied as at any start.
+    if (noticeSubject() !== owner) {
+      standDown({ uploadId: info.upload_id, s3Key: info.s3_key, versionId: info.version_id, assetId: info.asset_id })
       return
     }
     stopBeat = beatFor(updateFile)
@@ -2772,6 +2881,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
   } finally {
     watch?.stop()
     stopBeat()
+    releaseClaim(id, claimNonce)
     releaseWakeLock()
     if (abortControllers[id] === controller) delete abortControllers[id]
     endRun(id, runner, runKey)
@@ -3792,6 +3902,17 @@ export const __uploadQueueTesting = {
     heldIds.clear()
     adopting.clear()
     historyGeneration++
+    claimSettleMs = CLAIM_SETTLE_MS
+  },
+  /**
+   * How long a resume's claim waits for another tab's (see `RESUME_CLAIMS_KEY`).
+   * The wait is for a write on its way from another process; in a test every
+   * store shares one storage object and sees each write at once, so a test of
+   * something else may set it to 0 rather than wait it out on every resume.
+   * `reset` puts it back.
+   */
+  setClaimSettleMs(ms: number): void {
+    claimSettleMs = ms
   },
   /** Lets a saved row go for good, as the check with the server does on a 404 or 409. */
   dropSavedRow,
