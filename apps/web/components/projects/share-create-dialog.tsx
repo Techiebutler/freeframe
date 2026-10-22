@@ -365,10 +365,13 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
         </Dialog.Close>
       </div>
 
-      {/* Content — locked once the link exists, since the settings are already applied */}
+      {/* Content — locked once the link exists, since the settings are already
+          applied. The scrollbar's space stays reserved (`[scrollbar-gutter:stable]`)
+          so the content box keeps one width: hiding the grid-only rows on list
+          layout made the scrollbar come and go, which visibly widened the dialog. */}
       <fieldset
         disabled={!!createdUrl}
-        className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto min-w-0 disabled:opacity-60"
+        className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto min-w-0 disabled:opacity-60 [scrollbar-gutter:stable]"
       >
         {/* Link name */}
         <div className="space-y-1.5">
@@ -821,8 +824,9 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
         </Dialog.Close>
       </div>
 
-      {/* Content */}
-      <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+      {/* Content — scrollbar gutter reserved here too; the Settings tab's
+          layout switch hides rows the same way the configure phase does */}
+      <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto [scrollbar-gutter:stable]">
         {/* Multiple share links switcher */}
         {allResults && allResults.length > 1 && (
           <div className="space-y-1">

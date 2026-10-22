@@ -86,13 +86,29 @@ describe('ShareCreateDialog appearance', () => {
     })
   })
 
-  it('offers no light/dark theme control', () => {
-    // Theme is not editable on a link: the share page falls back to dark and
-    // existing links keep whatever theme they stored.
+  it('the settings scroll box keeps its scrollbar space reserved', () => {
+    // Switching Layout to list hides the grid-only rows. That used to drop
+    // the scroll box's vertical scrollbar when the list got short, and the
+    // freed width visibly widened the dialog. The gutter stays reserved, so
+    // the dialog keeps one width through the switch.
+    renderDialog()
+    openAppearanceBlock()
+    const scrollBox = screen.getByRole('button', { name: 'Appearance' }).closest('fieldset')
+    expect(scrollBox).not.toBeNull()
+    expect(scrollBox!.className).toContain('[scrollbar-gutter:stable]')
+  })
+
+  it('offers no theme, accent or open-in-viewer control', () => {
+    // Those are not editable on a link: it keeps whatever it stored, new
+    // links take the defaults (theme accent, open in viewer, dark theme),
+    // and the values still travel with every whole-appearance patch.
     renderDialog()
     openAppearanceBlock()
     expect(screen.queryByRole('button', { name: 'Dark theme' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Light theme' })).toBeNull()
+    expect(screen.queryByLabelText('Accent colour hex')).toBeNull()
+    expect(screen.queryByRole('button', { name: /pick an accent colour/i })).toBeNull()
+    expect(screen.queryByText('Open in viewer')).toBeNull()
   })
 
   it('Use my current view fills the link from my view, once', () => {

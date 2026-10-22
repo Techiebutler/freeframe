@@ -63,8 +63,10 @@ describe('ShareLinkSettingsPanel appearance', () => {
     expect(
       screen.queryByRole('button', { name: /use my current view/i }),
     ).toBeNull()
-    // And no theme control anywhere: the link keeps its stored theme.
+    // And no theme/accent/open-in-viewer controls: the link keeps what it stored.
     expect(screen.queryByRole('button', { name: /theme/i })).toBeNull()
+    expect(screen.queryByLabelText('Accent colour hex')).toBeNull()
+    expect(screen.queryByText('Open in viewer')).toBeNull()
   })
 
   it('editing one setting still patches the whole stored appearance', async () => {

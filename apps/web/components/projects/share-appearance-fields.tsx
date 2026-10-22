@@ -62,23 +62,6 @@ export function appearanceFromView(): Partial<ShareLinkAppearance> {
   return patch
 }
 
-/**
- * The live --accent as a hex, for <input type="color">, which takes a value
- * but not a CSS var. Branding can repaint --accent at runtime, so read it
- * rather than re-hardcoding a constant; the CSS-var fallback only shows if the
- * computed value is unreadable or not a plain hex.
- */
-function useThemeAccentHex(): string {
-  const [hex, setHex] = React.useState('#5b8def')
-  React.useEffect(() => {
-    const raw = getComputedStyle(document.documentElement)
-      .getPropertyValue('--accent')
-      .trim()
-    if (/^#[0-9a-f]{6}$/i.test(raw)) setHex(raw)
-  }, [])
-  return hex
-}
-
 // ─── Rows and controls ──────────────────────────────────────────────────────
 // Deliberately the same shapes as the folder view's Appearance popover
 // (appearance-popover.tsx): a label row with a compact segmented control on
@@ -172,19 +155,20 @@ function ToggleRow({
 }
 
 /**
- * The whole Appearance block a share link carries: layout, open-in-viewer,
- * accent, card size, aspect ratio, fit/fill, card info and sort.
+ * The Appearance block a share link edits: layout, card size, aspect ratio,
+ * fit/fill, card info and sort.
  *
  * The card rows follow the folder Appearance popover: in list layout the
  * grid-only settings (card size, aspect ratio, fit/fill) are hidden, their
- * values kept on the link in case it goes back to grid. Theme is not offered
- * here at all — a link keeps whatever theme it already stored, and the share
- * page falls back to dark.
+ * values kept on the link in case it goes back to grid. Theme, accent colour
+ * and open-in-viewer are not offered at all — a link keeps whatever it stored
+ * and new links take the defaults above (the theme's own accent, open in
+ * viewer, dark theme).
  *
  * One component for both places that edit it — the create dialog and the
  * link panel's Settings > Appearance — so the two can't drift. It holds no
- * state of its own beyond the accent draft the text/color pair needs; the
- * caller owns the appearance and merges every patch it is handed.
+ * state of its own; the caller owns the appearance and merges every patch it
+ * is handed.
  */
 export function ShareAppearanceFields({
   appearance,
@@ -202,20 +186,6 @@ export function ShareAppearanceFields({
    */
   onUseCurrentView?: () => void
 }) {
-  const [accentDraft, setAccentDraft] = React.useState(appearance.accent_color ?? '')
-
-  // Follow the appearance from above (a save landing, a current-view fill)
-  // without clobbering a mid-edit draft on every unrelated keystroke.
-  React.useEffect(() => {
-    setAccentDraft(appearance.accent_color ?? '')
-  }, [appearance.accent_color])
-
-  // No colour set means the page resolves to the instance theme's accent
-  // (app/share/[token]/page.tsx), so the picker opens on that too rather than
-  // on a made-up default.
-  const themeAccent = useThemeAccentHex()
-  const accentSwatch = accentDraft ? `#${accentDraft.replace('#', '')}` : themeAccent
-
   return (
     <div className="space-y-3">
       {onUseCurrentView && (
@@ -241,58 +211,6 @@ export function ShareAppearanceFields({
           value={appearance.layout}
           onChange={(layout) => onChange({ layout })}
         />
-      </Row>
-
-      {/* Open in viewer */}
-      <ToggleRow
-        label="Open in viewer"
-        description="Click assets to open full viewer"
-        checked={appearance.open_in_viewer}
-        onCheckedChange={(checked) => onChange({ open_in_viewer: checked })}
-      />
-
-      {/* Accent color */}
-      <Row label="Accent Color">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={accentDraft}
-            onChange={(e) => setAccentDraft(e.target.value)}
-            onBlur={() => {
-              const color = accentDraft.trim() || null
-              if (color !== (appearance.accent_color || '')) {
-                onChange({
-                  accent_color: color ? `#${color.replace('#', '')}` : null,
-                })
-              }
-            }}
-            placeholder="Theme"
-            maxLength={7}
-            aria-label="Accent colour hex"
-            title="Buttons and highlights on the share page. Leave empty to use the theme's accent."
-            className="w-20 rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 font-mono"
-          />
-          <label
-            className="relative h-6 w-6 rounded-full border border-border cursor-pointer overflow-hidden shrink-0"
-            title="Pick an accent colour"
-          >
-            <div
-              className="absolute inset-0 rounded-full"
-              style={{ backgroundColor: accentDraft ? accentSwatch : 'var(--accent)' }}
-            />
-            <input
-              type="color"
-              value={accentSwatch}
-              onChange={(e) => {
-                const hex = e.target.value.replace('#', '')
-                setAccentDraft(hex)
-                onChange({ accent_color: `#${hex}` })
-              }}
-              aria-label="Pick an accent colour"
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            />
-          </label>
-        </div>
       </Row>
 
       {/* Card Size — only in grid mode */}
