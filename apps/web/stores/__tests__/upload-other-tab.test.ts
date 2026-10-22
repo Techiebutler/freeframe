@@ -632,6 +632,19 @@ describe('writing to storage every tab shares', () => {
     expect(storedFiles()).toEqual([])
   })
 
+  it('does not erase a row it once held while another tab is still sending it', () => {
+    // This tab loaded or wrote the row, and another tab has since taken the
+    // upload up. That this tab no longer writes it says nothing about a
+    // transfer the other tab is running.
+    const live = { id: 'row-1', ownerTab: 'tab-A', heartbeatAt: Date.now() }
+    seedStorage([live])
+    write([live])
+
+    write([])
+
+    expect(storedFiles().map((f) => f.id)).toEqual(['row-1'])
+  })
+
   it('lets this tab remove its own row', () => {
     const own = { id: 'row-1', ownerTab: currentTabId(), heartbeatAt: Date.now() }
     seedStorage([own])

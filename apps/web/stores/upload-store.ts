@@ -1768,25 +1768,30 @@ function applySubject(next: string | null): void {
     fileRefs.delete(id)
     resumeRequestedAt.delete(id)
   })
+  // Built before the write, so only the write itself is guarded below: a
+  // mistake in building it still surfaces.
+  const s = useUploadStore.getState()
+  const changed: Partial<UploadStore> = {
+    subject: next,
+    files: [
+      ...s.files.map((f) => (newRows.has(f.id)
+        ? { ...f, ...accountFailure(next) }
+        : resumes.has(f.id)
+          ? { ...f, queuedResume: undefined, holdReason: undefined }
+          : f)),
+      // Only on an actual change: the storage event for an account that a
+      // start has already noticed must not read storage in again.
+      ...(s.subject !== next ? returningRows(s.files) : []),
+    ],
+  }
   try {
-    useUploadStore.setState((s) => ({
-      subject: next,
-      files: [
-        ...s.files.map((f) => (newRows.has(f.id)
-          ? { ...f, ...accountFailure(next) }
-          : resumes.has(f.id)
-            ? { ...f, queuedResume: undefined, holdReason: undefined }
-            : f)),
-        // Only on an actual change: the storage event for an account that a
-        // start has already noticed must not read storage in again.
-        ...(s.subject !== next ? returningRows(s.files) : []),
-      ],
-    }))
-  } catch {
+    useUploadStore.setState(changed)
+  } catch (err) {
     // Saving the change was refused (storage full). zustand sets the state
     // before it saves, so the change is in memory, and it is saved with the
     // next write that succeeds. Nothing that noticed the change -- a start in
     // the middle of a batch, a run reading an answer, a drop -- is cut short.
+    console.warn('Upload rows could not be saved after an account change', err)
   }
   // The probe was one of them: the hold passes to whoever still waits, or ends.
   if (probe !== null && (newRows.has(probe) || resumes.has(probe)) && !runners.has(probe)) passOnProbe()
@@ -3358,10 +3363,13 @@ function savedRow(f: UploadFile): UploadFile | null {
 /**
  * Ids of saved rows this tab has let go of for good: a row saved before rows
  * had owners, which the server said is gone or finished, or which never had a
- * version to check (spec goal 10). The merge keeps rows of other accounts and
- * rows with no owner whatever their stamp, so without this a dropped row would
- * be written straight back from storage, by this tab's next write or by a tab
- * still on the pre-release bundle that put it back.
+ * version to check (spec goal 10). A row this tab held and then let go of is
+ * already removed by the merge through `heldIds`; what tombstones add is:
+ *
+ *  * `returningRows` never reads one back in on a change of account, even when
+ *    a tab still on the pre-release bundle has written it back to storage;
+ *  * an id this tab never held is dropped as well, and none is written from
+ *    this tab's own rows either.
  */
 const tombstones = new Set<string>()
 
@@ -3417,8 +3425,9 @@ function runningHere(id: string): boolean {
  *
  *  * A row in `tombstones` is never written, from either side.
  *  * A stored row this tab is not writing is removed only if this page load
- *    held it (`heldIds`): then its absence is this tab's own doing. Any other
- *    is kept as stored, whatever its account, owner or stamp. Erasing a row
+ *    held it (`heldIds`) and no other tab is still stamping it: then its
+ *    absence is this tab's own doing. Any other is kept as stored, whatever
+ *    its account, owner or stamp. Erasing a row
  *    another tab saved after this one loaded -- a transfer that tab was
  *    sending when it closed, say -- loses the upload outright: history
  *    answers with the display version, which skips `uploading`, so a second
@@ -3443,6 +3452,7 @@ function mergeWithStored(name: string, outgoing: string): string {
 
     const mine = currentTabId()
     const subject = appliedSubject()
+    const now = Date.now()
     const byId = new Map(ours.filter((f) => !tombstones.has(f.id)).map((f) => [f.id, f]))
     byId.forEach((_, id) => heldIds.add(id))
     const notTheSubjects = (f: UploadFile) => f.ownerId === undefined || f.ownerId !== subject
@@ -3451,7 +3461,11 @@ function mergeWithStored(name: string, outgoing: string): string {
       if (tombstones.has(row.id)) continue
       const here = byId.get(row.id)
       if (!here) {
-        if (!heldIds.has(row.id)) byId.set(row.id, row)
+        // Held here once, but another tab is sending it now: that tab took it
+        // up, and the row is that tab's, not this one's to erase.
+        const beating = row.heartbeatAt !== undefined && now - row.heartbeatAt < LIVE_WINDOW_MS
+        const liveElsewhere = row.ownerTab !== undefined && row.ownerTab !== mine && beating
+        if (!heldIds.has(row.id) || liveElsewhere) byId.set(row.id, row)
         continue
       }
       if (row.ownerId === undefined && here.ownerId !== undefined) continue

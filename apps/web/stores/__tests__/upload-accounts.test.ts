@@ -221,9 +221,11 @@ describe('an initiate that meets another account', () => {
       return setItem.call(this, key, value)
     })
 
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let ids: string[] = []
     expect(() => { ids = drop([small('y1.jpg')]) }).not.toThrow()
     expect(refusals).toBe(1)
+    expect(warn).toHaveBeenCalledWith('Upload rows could not be saved after an account change', expect.any(DOMException))
     const [y1] = ids
 
     // The change is applied all the same, and Y's file is in.
@@ -256,12 +258,14 @@ describe('an initiate that meets another account', () => {
       return setItem.call(this, key, value)
     })
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     // X's initiate answers; the run reads the token and finds Y.
     server.initiates[0].resolve()
     await settle()
 
     expect(refusals).toBe(1)
+    expect(warn).toHaveBeenCalledWith('Upload rows could not be saved after an account change', expect.any(DOMException))
     // The run went on to keep what the server created, for X, and ended.
     expect(rowOf(x1)).toMatchObject({ status: 'interrupted', uploadId: 'u1', versionId: 'v1', ownerId: X })
     expect(storedRow(x1)).toMatchObject({ status: 'interrupted', uploadId: 'u1', versionId: 'v1', ownerId: X })
