@@ -613,7 +613,7 @@ in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section)
 
 ## 9. Phase 2 stand-ins (`live-tools/`)
 
-Four scripts, loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
+Six files (five scripts for the page and the throwaway server), loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
 the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript` is only needed for a page that sends at load):
 
 | File | Gives you |
@@ -628,9 +628,11 @@ the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript`
 After a reload, one script reinstalls everything and adds the two inputs (`ffq-drop-input` and `ffq-pick`) and the hold:
 
 ```bash
-cd e2e && cat live-tools/ffq-probe.js live-tools/ffq-extras.js live-tools/ffq-helpers.js live-tools/ffq-fast.js | sed 's/^(() => {$/;(() => {/' > .live-files/ffq-all.js
+cd e2e && cat live-tools/ffq-probe.js live-tools/ffq-extras.js live-tools/ffq-helpers.js live-tools/ffq-fast.js live-tools/ffq-route.js | sed 's/^(() => {$/;(() => {/' > .live-files/ffq-all.js
 echo ";(() => { const q = window.__ffq; q.addInput2('ffq-drop-input', 8); q.addInput2('ffq-pick', 44); q.hold(); return 'ready' })()" >> .live-files/ffq-all.js
 ```
+
+`ffq-route.js` must come after `ffq-extras.js` (it finds a file by the upload id in `q.initiates`) and does nothing until `q.route` or `q.holdFile` is set; when a scenario routes a part to the server, start `node e2e/live-tools/stall-server.js` first and `kill` it by its PID at the end. Exercised in phase 3: `hang` and `holdFile` in the 5 min clocks (U3c), `stall` in a smoke run (a 20 MiB file: 1 146 880 bytes sent, then nothing) and, in an earlier inline form, in U3b and X2b.
 
 What each stand-in is not: `hold` and `pace` act on the part PUT at `XMLHttpRequest.send` (nothing reaches the network; an `abort()` of
 an unsent part ends with `abort` and `loadend` events, as the browser would deliver); `pace` waits `size / rate` per part, it does not
