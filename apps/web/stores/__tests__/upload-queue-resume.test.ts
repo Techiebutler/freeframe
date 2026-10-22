@@ -21,7 +21,7 @@ vi.mock('@/lib/api', async (orig) => ({
 vi.mock('swr', () => ({ mutate: vi.fn() }))
 
 import { api, ApiError } from '@/lib/api'
-import { useUploadStore, currentTabId, __uploadQueueTesting as testing } from '../upload-store'
+import { useUploadStore, currentTabId, resumeClaimKey, __uploadQueueTesting as testing } from '../upload-store'
 import { signInAs, row } from '@/test/upload-session'
 import { installXhrFake } from '@/test/xhr-fake'
 import {
@@ -635,6 +635,37 @@ describe('two tabs of one browser', () => {
 
     // Stop the first tab's transfer, so its heartbeat does not outlive the test.
     first.store.getState().cancelUpload('r')
+    await settle()
+  })
+
+  it('a claim it cannot read is replaced, and the next tab to resume at once stands aside', async () => {
+    // A claim value that is not one (cut short, or written by something else)
+    // must not turn the claim off for that row: the tab writes its own over
+    // it, and the other tab, looking at the same moment, finds it.
+    window.localStorage.setItem('ff-uploads', JSON.stringify({ state: { files: [interrupted()] }, version: 0 }))
+    window.localStorage.setItem(resumeClaimKey('r'), '{"tab":"some-tab","nonce":')
+    const one = await openTab()
+    const two = await openTab()
+    one.testing.setClaimSettleMs(200)
+    two.testing.setClaimSettleMs(200)
+    const parts = heldPartsByVersion(one, two)
+
+    one.store.getState().resumeUpload('r', small('clip.mp4'))
+    two.store.getState().resumeUpload('r', small('clip.mp4'))
+    await settle()
+    // Both answers land together: each tab looks before either has stamped the row.
+    parts.answer('rv')
+
+    await vi.waitFor(() => {
+      expect(one.status()).not.toBe('starting')
+      expect(two.status()).not.toBe('starting')
+    }, { timeout: 3_000 })
+    expect(one.status()).toBe('uploading')
+    expect(two.status()).toBe('elsewhere')
+    expect(presigns).toBe(1)
+    expect(JSON.parse(window.localStorage.getItem(resumeClaimKey('r'))!)).toMatchObject({ tab: one.tabId })
+
+    one.store.getState().cancelUpload('r')
     await settle()
   })
 

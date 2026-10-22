@@ -232,13 +232,22 @@ interface ResumeClaim {
   at: number
 }
 
-/** A stored claim, or null when there is none. */
+/**
+ * A stored claim, or null when there is none or the value cannot be read as
+ * one. A claim that cannot be read holds nobody off and is written over: if it
+ * stopped the claim instead, every later Resume of that row would go ahead
+ * unclaimed, and two tabs would both send it again.
+ */
 function parseClaim(raw: string | null): ResumeClaim | null {
   if (raw === null) return null
-  const c = JSON.parse(raw) as Partial<ResumeClaim> | null
-  return c && typeof c.tab === 'string' && typeof c.nonce === 'string' && typeof c.at === 'number'
-    ? { tab: c.tab, nonce: c.nonce, at: c.at }
-    : null
+  try {
+    const c = JSON.parse(raw) as Partial<ResumeClaim> | null
+    return c && typeof c.tab === 'string' && typeof c.nonce === 'string' && typeof c.at === 'number'
+      ? { tab: c.tab, nonce: c.nonce, at: c.at }
+      : null
+  } catch {
+    return null
+  }
 }
 
 /** The claim on `rowId`. Throws only when storage itself cannot be used. */
@@ -259,12 +268,7 @@ function pruneClaims(now: number, except: string): void {
     if (key === null || key === except || !key.startsWith(RESUME_CLAIM_PREFIX)) continue
     const raw = storage.getItem(key)
     if (raw === null) continue
-    let claim: ResumeClaim | null = null
-    try {
-      claim = parseClaim(raw)
-    } catch {
-      /* unreadable: holds nobody off */
-    }
+    const claim = parseClaim(raw)
     if (!claim || now - claim.at >= CLAIM_TTL_MS) stale.push(key)
   }
   stale.forEach((key) => storage.removeItem(key))
