@@ -316,7 +316,8 @@ describe('a queued row', () => {
 
     expect(testing.hasAbortController(a)).toBe(true)
     expect(rowOf(a).ownerTab).toBeDefined()
-    // The one lock is wanted for the row that is moving; the queued one adds nothing.
+    // The lock is wanted because `a` is moving. A boolean cannot show that `b`,
+    // which only waits, adds nothing; the wake-lock tests cover waiting rows.
     expect(testing.wakeLockWanted()).toBe(true)
 
     expect(testing.hasAbortController(b)).toBe(false)

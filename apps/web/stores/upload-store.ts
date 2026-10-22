@@ -4009,6 +4009,8 @@ export const __uploadQueueTesting = {
     // again, so rows still moving ask for it afresh.
     wakeLockWanted = false
     releaseWakeLock()
+    // A request that never settles would otherwise starve every later test.
+    wakeLockPending = null
     tabProgressAt = -Infinity
     tombstones.clear()
     heldIds.clear()

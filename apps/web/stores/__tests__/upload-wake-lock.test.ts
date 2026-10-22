@@ -10,7 +10,7 @@ vi.mock('@/lib/api', async (orig) => ({
 vi.mock('swr', () => ({ mutate: vi.fn() }))
 
 import { useUploadStore, __uploadQueueTesting as testing, type UploadFile } from '../upload-store'
-import { row, signInAs } from '@/test/upload-session'
+import { row, signInAs, signOutElsewhere } from '@/test/upload-session'
 
 // Rows belong to the account that added them: with nobody signed in, nothing is added.
 beforeEach(() => signInAs('u1'))
@@ -161,6 +161,25 @@ describe('upload wake lock', () => {
     expect(testing.wakeLockWanted()).toBe(false)
   })
 
+  it('lets go on sign-out, and takes it again when the owner signs back in', async () => {
+    // Nobody is signed in, so no row is anyone's to see: the row is still
+    // sending, and the lock follows the account, not the run.
+    setRows({ status: 'uploading' })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+
+    signOutElsewhere()
+    expect(sentinel.release).toHaveBeenCalledTimes(1)
+    expect(testing.wakeLockWanted()).toBe(false)
+
+    // The owner is back and the row is still moving.
+    const next = makeSentinel()
+    request.mockResolvedValue(next)
+    signInAs('u1')
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+    expect(testing.wakeLockWanted()).toBe(true)
+    expect(next.release).not.toHaveBeenCalled()
+  })
+
   // ------------------------------------------------------------ visibility
 
   it('re-acquired on visibility', async () => {
@@ -234,7 +253,11 @@ describe('upload wake lock', () => {
   })
 
   // Several files can take their turn in the same tick (up to three), so there
-  // are several rows starting before the first request has resolved.
+  // are several rows starting before the first request has resolved. The second
+  // and third write find the answer unchanged, so the boolean guard in
+  // `syncWakeLock` is what makes this pass; it never reaches the pending guard
+  // in `acquireWakeLock`. That one is tested by 'keeps a lock that arrives
+  // after the rows stopped and started moving again'.
   it('requests a single sentinel when several rows start in the same tick', async () => {
     const acquired: ReturnType<typeof makeSentinel>[] = []
     request.mockImplementation(async () => {
@@ -273,6 +296,19 @@ describe('upload wake lock', () => {
     for (let progress = 1; progress <= 5; progress++) patch('r1', { processingProgress: progress })
     expect(request).toHaveBeenCalledTimes(1)
     expect(sentinel.release).not.toHaveBeenCalled()
+  })
+
+  it('a reset forgets a request that never settled', async () => {
+    // The browser never answers the first request. Without the reset, the
+    // pending guard would swallow every later ask for the life of the module.
+    request.mockImplementation(() => new Promise(() => {}))
+    setRows({ status: 'starting' })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+
+    testing.reset()
+    request.mockResolvedValue(sentinel)
+    setRows({ status: 'starting' })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
   })
 
   // ------------------------------------------------------------ best effort

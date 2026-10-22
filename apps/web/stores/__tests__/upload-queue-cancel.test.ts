@@ -200,7 +200,8 @@ describe('cancel', () => {
 
     expect(rowOf(a).status).toBe('cancelled')
     expect(aborts(server.calls)).toEqual(['abort u1'])
-    // The other file is still moving, so the one lock is still wanted.
+    // `b` is still moving, so the lock is still wanted. The boolean cannot say
+    // which row wants it; it goes only once `b` is cancelled too, below.
     expect(testing.wakeLockWanted()).toBe(true)
     expect(testing.runningIds()).toEqual([b])
     expect(testing.hasAbortController(a)).toBe(false)
