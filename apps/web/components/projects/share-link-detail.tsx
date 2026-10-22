@@ -11,15 +11,12 @@ import {
   Lock,
   Calendar,
   Paintbrush,
-  LayoutGrid,
-  LayoutList,
   Eye,
   EyeOff,
   ChevronDown,
   ChevronRight,
   MessageSquare,
   Download,
-  Layers,
   Droplets,
   Globe,
   X,
@@ -28,6 +25,10 @@ import { cn, dateInputValue, endOfDayISO } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
+import {
+  ShareAppearanceFields,
+  appearanceFromView,
+} from "@/components/projects/share-appearance-fields";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
@@ -819,13 +820,11 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
   const [localPassword, setLocalPassword] = React.useState("");
   const [passwordEnabled, setPasswordEnabled] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
-  const [localAccentColor, setLocalAccentColor] = React.useState("");
 
   React.useEffect(() => {
     if (shareLink) {
       setPasswordEnabled(shareLink.has_password ?? false);
       setLocalPassword(shareLink.password_value || "");
-      setLocalAccentColor(shareLink.appearance?.accent_color || "");
     }
   }, [shareLink]);
 
@@ -1028,218 +1027,17 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
               />
             </Section>
 
-            {/* Appearance */}
+            {/* Appearance — the same block the create dialog shows */}
             <Section
               title="Appearance"
               icon={<Paintbrush className="h-3.5 w-3.5" />}
               defaultOpen={false}
             >
-              {/* Layout — Grid / List */}
-              <div className="space-y-1.5">
-                <p className="text-xs text-text-secondary">Layout</p>
-                <div className="flex gap-2">
-                  {(["grid", "list"] as const).map((layout) => (
-                    <button
-                      key={layout}
-                      onClick={() => updateAppearance({ layout })}
-                      className={cn(
-                        "flex-1 flex flex-col items-center gap-1.5 rounded-lg border py-3 text-xs font-medium capitalize transition-colors",
-                        appearance.layout === layout
-                          ? "bg-accent/10 border-accent text-accent"
-                          : "border-border text-text-secondary hover:text-text-primary hover:border-border-focus",
-                      )}
-                    >
-                      {layout === "grid" ? (
-                        <LayoutGrid className="h-4 w-4" />
-                      ) : (
-                        <LayoutList className="h-4 w-4" />
-                      )}
-                      {layout}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Open in viewer */}
-              <ToggleRow
-                label="Open in viewer"
-                description="Click assets to open full viewer"
-                checked={appearance.open_in_viewer}
-                onCheckedChange={(checked) =>
-                  updateAppearance({ open_in_viewer: checked })
-                }
+              <ShareAppearanceFields
+                appearance={appearance}
+                onChange={updateAppearance}
+                onUseCurrentView={() => updateAppearance(appearanceFromView())}
               />
-
-              {/* Theme — Dark / Light */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Theme</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {(["dark", "light"] as const).map((theme) => (
-                    <button
-                      key={theme}
-                      onClick={() => updateAppearance({ theme })}
-                      className={cn(
-                        "px-4 py-1.5 text-xs font-medium capitalize transition-colors",
-                        appearance.theme === theme
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {theme === "dark" ? "🌙" : "☀️"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Accent color */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Accent Color</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-text-tertiary">#</span>
-                  <input
-                    type="text"
-                    value={localAccentColor}
-                    onChange={(e) => setLocalAccentColor(e.target.value)}
-                    onBlur={() => {
-                      const color = localAccentColor.trim() || null;
-                      if (color !== (appearance.accent_color || "")) {
-                        updateAppearance({
-                          accent_color: color
-                            ? `#${color.replace("#", "")}`
-                            : null,
-                        });
-                      }
-                    }}
-                    placeholder="None"
-                    maxLength={7}
-                    className="w-20 rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 font-mono"
-                  />
-                  <label className="relative h-6 w-6 rounded-full border border-border cursor-pointer overflow-hidden shrink-0">
-                    <div
-                      className="absolute inset-0 rounded-full"
-                      style={{
-                        backgroundColor: localAccentColor
-                          ? `#${localAccentColor.replace("#", "")}`
-                          : "#6366f1",
-                      }}
-                    />
-                    <input
-                      type="color"
-                      value={
-                        localAccentColor
-                          ? `#${localAccentColor.replace("#", "")}`
-                          : "#6366f1"
-                      }
-                      onChange={(e) => {
-                        const hex = e.target.value.replace("#", "");
-                        setLocalAccentColor(hex);
-                        updateAppearance({ accent_color: `#${hex}` });
-                      }}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {/* Card Size — S / M / L */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Card Size</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {(["s", "m", "l"] as const).map((size) => (
-                    <button
-                      key={size}
-                      onClick={() => updateAppearance({ card_size: size })}
-                      className={cn(
-                        "px-4 py-1.5 text-xs font-medium uppercase transition-colors",
-                        (appearance.card_size || "m") === size
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {size}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Aspect Ratio */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Aspect Ratio</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {[
-                    { value: "landscape" as const, icon: "▭" },
-                    { value: "square" as const, icon: "□" },
-                    { value: "portrait" as const, icon: "▯" },
-                  ].map(({ value, icon }) => (
-                    <button
-                      key={value}
-                      onClick={() => updateAppearance({ aspect_ratio: value })}
-                      className={cn(
-                        "px-4 py-1.5 text-sm transition-colors",
-                        (appearance.aspect_ratio || "landscape") === value
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {icon}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Thumbnail Scale — Fit / Fill */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Thumbnail Scale</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {(["fit", "fill"] as const).map((scale) => (
-                    <button
-                      key={scale}
-                      onClick={() =>
-                        updateAppearance({ thumbnail_scale: scale })
-                      }
-                      className={cn(
-                        "px-4 py-1.5 text-xs font-medium capitalize transition-colors",
-                        (appearance.thumbnail_scale || "fill") === scale
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {scale}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Show Card Info */}
-              <ToggleRow
-                label="Show Card Info"
-                description="Display name, type, and size below thumbnail"
-                checked={appearance.show_card_info !== false}
-                onCheckedChange={(checked) =>
-                  updateAppearance({ show_card_info: checked })
-                }
-              />
-            </Section>
-
-            {/* Sort By */}
-            <Section
-              title="Sort By"
-              icon={<Layers className="h-3.5 w-3.5" />}
-              defaultOpen={false}
-            >
-              <select
-                value={appearance.sort_by}
-                onChange={(e) =>
-                  updateAppearance({
-                    sort_by: e.target.value as ShareLinkAppearance["sort_by"],
-                  })
-                }
-                className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 [color-scheme:auto]"
-              >
-                <option value="name">Name</option>
-                <option value="created_at">Date created</option>
-                <option value="file_size">Size</option>
-              </select>
             </Section>
           </div>
         ) : (

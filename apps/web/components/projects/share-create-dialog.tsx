@@ -16,18 +16,25 @@ import {
   Images,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   MessageSquare,
   Download,
   Key,
   Clock,
   Droplets,
   LayoutGrid,
+  Paintbrush,
 } from 'lucide-react'
 import * as Switch from '@radix-ui/react-switch'
 import { cn, copyToClipboard, dateInputValue, endOfDayISO } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import {
+  ShareAppearanceFields,
+  DEFAULT_SHARE_APPEARANCE,
+  appearanceFromView,
+} from '@/components/projects/share-appearance-fields'
 import type { AssetResponse, Folder, ShareLink, ShareLinkAppearance } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -290,6 +297,7 @@ interface ShareConfig {
   expiresAt: string | null
   watermark: boolean
   visibility: 'public' | 'secure'
+  appearance: ShareLinkAppearance
 }
 
 // ─── Configure Phase ──────────────────────────────────────────────────────────
@@ -317,6 +325,12 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
   const [watermark, setWatermark] = React.useState(false)
   const [expiresAt, setExpiresAt] = React.useState('')
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
+  // The link's own look, editable right here. It starts on the share defaults
+  // (same as the API's), not on the viewer's current view, so a link never
+  // depends on how one browser happened to be set up. "Use my current view"
+  // inside the block copies the view in once, at the click.
+  const [appearance, setAppearance] = React.useState<ShareLinkAppearance>(DEFAULT_SHARE_APPEARANCE)
+  const [showAppearance, setShowAppearance] = React.useState(false)
   const { status: copyStatus, copy } = useCopyStatus(createdUrl ?? '')
 
   function handleCreate() {
@@ -328,6 +342,7 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
       expiresAt: expiresAt || null,
       watermark,
       visibility,
+      appearance,
     })
   }
 
@@ -487,6 +502,38 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
               <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
             </Switch.Root>
           </div>
+        </div>
+
+        {/* Appearance — same block as the link panel's Settings > Appearance,
+            so how the client sees the link is picked here, not rebuilt by
+            hand afterwards. Goes out with the create request itself. */}
+        <div className="border-t border-border pt-1">
+          <button
+            type="button"
+            onClick={() => setShowAppearance((v) => !v)}
+            className="flex w-full items-center justify-between py-2.5"
+          >
+            <div className="flex items-center gap-2.5">
+              <Paintbrush className="h-4 w-4 text-text-tertiary" />
+              <span className="text-sm text-text-primary">Appearance</span>
+            </div>
+            {showAppearance ? (
+              <ChevronDown className="h-4 w-4 text-text-tertiary" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-text-tertiary" />
+            )}
+          </button>
+          {showAppearance && (
+            <div className="rounded-lg border border-border bg-bg-tertiary/50 p-3">
+              <ShareAppearanceFields
+                appearance={appearance}
+                onChange={(patch) => setAppearance((a) => ({ ...a, ...patch }))}
+                onUseCurrentView={() =>
+                  setAppearance((a) => ({ ...a, ...appearanceFromView() }))
+                }
+              />
+            </div>
+          )}
         </div>
       </fieldset>
 
@@ -669,7 +716,9 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   }, [result.token, result.title])
   const [urlCopied, setUrlCopied] = React.useState(false)
   const [urlCopyFailed, setUrlCopyFailed] = React.useState(false)
-  const [layout, setLayout] = React.useState<'grid' | 'list'>('grid')
+  // The full appearance, not just the layout: the PATCH below replaces the
+  // whole object server-side, so switching layout must carry the rest along.
+  const [appearance, setAppearance] = React.useState<ShareLinkAppearance>(DEFAULT_SHARE_APPEARANCE)
   const titleInputRef = React.useRef<HTMLInputElement>(null)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -681,7 +730,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
       setPassphrase(data.has_password ?? false)
       setWatermark(data.show_watermark)
       setExpiresAt(dateInputValue(data.expires_at))
-      setLayout((data.appearance as ShareLinkAppearance | null)?.layout || 'grid')
+      setAppearance({ ...DEFAULT_SHARE_APPEARANCE, ...(data.appearance ?? {}) })
       setVisibility(data.visibility === 'secure' ? 'secure' : 'public')
     }).catch(() => {})
   }, [result.token])
@@ -896,8 +945,12 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                   {(['grid', 'list'] as const).map((l) => (
                     <button
                       key={l}
-                      onClick={() => { setLayout(l); patchLink({ appearance: { layout: l, theme: 'dark', accent_color: null, open_in_viewer: true, sort_by: 'created_at' } }) }}
-                      className={cn('rounded-md px-3 py-1 text-2xs font-medium capitalize', layout === l ? 'bg-accent text-white' : 'text-text-tertiary hover:text-text-primary')}
+                      onClick={() => {
+                        const next = { ...appearance, layout: l }
+                        setAppearance(next)
+                        patchLink({ appearance: next })
+                      }}
+                      className={cn('rounded-md px-3 py-1 text-2xs font-medium capitalize', appearance.layout === l ? 'bg-accent text-white' : 'text-text-tertiary hover:text-text-primary')}
                     >{l}</button>
                   ))}
                 </div>
@@ -1167,6 +1220,7 @@ export function ShareCreateDialog({
         visibility: config.visibility,
         allow_download: config.allowDownloads,
         show_watermark: config.watermark,
+        appearance: config.appearance,
       }
       if (config.passphrase) settings.password = config.passphrase
       if (config.expiresAt) settings.expires_at = endOfDayISO(config.expiresAt)

@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { ShareCreateDialog } from '../share-create-dialog'
+import { DEFAULT_SHARE_APPEARANCE } from '../share-appearance-fields'
 
 // 2026-10-20 in New York (EDT, UTC-4) ends at 03:59:59.999 UTC on the 21st.
 const NY_END_OF_OCT_20 = '2026-10-21T03:59:59.999Z'
@@ -93,6 +94,7 @@ describe('ShareCreateDialog creating a link', () => {
         show_watermark: false,
         password: 's3cret',
         expires_at: NY_END_OF_OCT_20,
+        appearance: DEFAULT_SHARE_APPEARANCE,
       },
     ]])
     // No follow-up PATCH that could fail after the link is already live.
