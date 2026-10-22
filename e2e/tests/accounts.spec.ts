@@ -79,6 +79,21 @@ async function savedRows(page: Page, names: string[]) {
   }, names)
 }
 
+/**
+ * Resolves once `page` has its first page of upload history from the server
+ * (`fetchHistory`, `/me/assets?filter=owned&skip=0`) and has drawn what it
+ * holds. Call it before the load that asks: the panel's history is the last of
+ * what a freshly signed-in page shows, so a row missing after it is missing.
+ */
+function historyShown(page: Page): Promise<void> {
+  return page
+    .waitForResponse((r) => r.request().method() === 'GET' && /\/me\/assets\?filter=owned&skip=0&/.test(r.url()), { timeout: 30_000 })
+    .then(async (r) => {
+      await r.finished()
+      await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+    })
+}
+
 // ─── A1 ────────────────────────────────────────────────────────────────────────
 
 test('A1: a log out in another tab fails the queued files with the signed-out message, kept for the owner', async ({ context, page }) => {
@@ -123,23 +138,24 @@ test('A1: a log out in another tab fails the queued files with the signed-out me
     void d.dismiss().catch(() => {})
   })
   await closeUploads(page)
+  // The login page looks for a token once, as it mounts, and with none it asks the API whether setup is
+  // needed: that request is the page's own, made by the browser (the middleware's is made by the server).
+  const loginChecked = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith('/setup/status'), { timeout: 30_000 })
   await page.locator('button[title="Notifications"], button:has(span:text-is("Notifications"))').first().click()
   await expect(page).toHaveURL(/\/login/, { timeout: 30_000 })
   expect(dialogs, 'no prompt on the way to the login page').toEqual([])
   // The login form is up (it looks for a token only as it loads, so it stays up whoever signs in elsewhere).
-  // Wait for it to be hydrated too: the server renders the form before the page's own check has run, and
-  // that check, run after B's sign-in below, would take A straight to B's account.
+  // Wait for that look to have been made too: the server renders the form before the page's own check has
+  // run, and that check, run after B's sign-in below, would take A straight to B's account.
   await expect(page.getByRole('button', { name: 'Sign in with password instead' }).or(page.getByPlaceholder('Your password'))).toBeVisible()
-  await page.waitForFunction(() => {
-    const el = document.querySelector('input[placeholder="you@example.com"], input[placeholder="Your password"], button')
-    return !!el && Object.keys(el).some((k) => k.startsWith('__reactProps$'))
-  })
+  await loginChecked
   await page.waitForLoadState('networkidle')
 
   // B signs in as secondary, who sees none of it.
+  const secondarysHistory = historyShown(pageB)
   await signInWithTokens(pageB, await tokensFor(await secondary()))
   await openUploads(pageB)
-  await pageB.waitForTimeout(1_000)
+  await secondarysHistory
   expect(mineOf(await rows(pageB), files), 'secondary sees none of primary\'s rows').toEqual([])
 
   // A signs back in as primary, through the login form it was sent to: the queued files are Failed with
@@ -173,69 +189,89 @@ async function freshInvite(): Promise<{ id: string; email: string; token: string
   return { id: invited.id, email, token: invited.invite_token }
 }
 
+/** Deactivates, then deletes, a user `freshInvite` made, so runs do not pile them up. */
+async function removeInvitee(id: string): Promise<void> {
+  const token = await accessToken(await primary())
+  await json('PATCH', `/admin/users/${id}/deactivate`, { token })
+  await json('DELETE', `/users/${id}`, { token })
+}
+
 test('A2: an invite accepted in another tab while A sends: sending rows end Interrupted, queued rows fail, nothing lands in the new account', async ({ context, page }) => {
   test.setTimeout(4 * 60_000)
   const me = await primary()
   const invitee = await freshInvite()
-  const { project } = await openProject(page, 'A2')
-  // The invitee may upload into this project, so a file sent with their token would be accepted and
-  // land in their account. That is what must not happen.
-  await json('POST', `/projects/${project.id}/members`, {
-    token: await accessToken(me),
-    body: { user_id: invitee.id, role: 'editor' },
-  })
+  // The invitee is removed whatever happens. A failure to remove it fails a run that passed, and does
+  // not hide the reason one failed. The project stays, as every scenario's does.
+  let passed = false
+  try {
+    const { project } = await openProject(page, 'A2')
+    // The invitee may upload into this project, so a file sent with their token would be accepted and
+    // land in their account. That is what must not happen.
+    await json('POST', `/projects/${project.id}/members`, {
+      token: await accessToken(me),
+      body: { user_id: invitee.id, role: 'editor' },
+    })
 
-  const calls = recordUploadCalls(page)
-  const hold = await holdParts(page)
-  const files = await pngs('a2', Array(5).fill(1 * MB))
-  await dropFiles(page, 'project', files.map((f) => f.file))
-  await openUploads(page)
-  const frozen = await until(page, files, '3 uploading and 2 queued', (m) => m.length === 5 && count(m, 'uploading') === 3 && count(m, 'queued') === 2)
-  const queued = frozen.filter((r) => r.status === 'queued').map((r) => r.name)
-  const started = frozen.filter((r) => r.status === 'uploading').map((r) => r.name)
-  expect(calls.initiates.map((c) => c.name).sort()).toEqual([...started].sort())
+    const calls = recordUploadCalls(page)
+    const hold = await holdParts(page)
+    const files = await pngs('a2', Array(5).fill(1 * MB))
+    await dropFiles(page, 'project', files.map((f) => f.file))
+    await openUploads(page)
+    const frozen = await until(page, files, '3 uploading and 2 queued', (m) => m.length === 5 && count(m, 'uploading') === 3 && count(m, 'queued') === 2)
+    const queued = frozen.filter((r) => r.status === 'queued').map((r) => r.name)
+    const started = frozen.filter((r) => r.status === 'uploading').map((r) => r.name)
+    expect(calls.initiates.map((c) => c.name).sort()).toEqual([...started].sort())
 
-  // Tab B, same browser: the invite link, accepted the way the invitee does it.
-  const pageB = await context.newPage()
-  await pageB.goto(`/invite/${invitee.token}`)
-  await pageB.getByPlaceholder('Alex Johnson').fill('E2E Invitee')
-  await pageB.getByPlaceholder('Min. 8 characters').fill('e2e-invitee-password')
-  await pageB.getByPlaceholder('Repeat password').fill('e2e-invitee-password')
-  await pageB.getByRole('button', { name: 'Create account & join' }).click()
-  await expect(pageB).toHaveURL(/\/projects/, { timeout: 30_000 })
-  const inviteeToken = await pageB.evaluate(() => window.localStorage.getItem('ff_access_token'))
-  expect(inviteeToken, 'B is signed in as the invitee').toBeTruthy()
+    // Tab B, same browser: the invite link, accepted the way the invitee does it.
+    const pageB = await context.newPage()
+    await pageB.goto(`/invite/${invitee.token}`)
+    await pageB.getByPlaceholder('Alex Johnson').fill('E2E Invitee')
+    await pageB.getByPlaceholder('Min. 8 characters').fill('e2e-invitee-password')
+    await pageB.getByPlaceholder('Repeat password').fill('e2e-invitee-password')
+    await pageB.getByRole('button', { name: 'Create account & join' }).click()
+    await expect(pageB).toHaveURL(/\/projects/, { timeout: 30_000 })
+    const inviteeToken = await pageB.evaluate(() => window.localStorage.getItem('ff_access_token'))
+    expect(inviteeToken, 'B is signed in as the invitee').toBeTruthy()
 
-  // A: the queued files fail at once with the account message, saved for their owner.
-  await expect.poll(async () => (await savedRows(page, queued)).map((r) => `${r.status}|${r.error}|${r.ownerId}`), { timeout: 10_000 })
-    .toEqual(queued.map(() => `failed|${ACCOUNT_SWITCHED}|${me.id}`))
-  // The ones sending: their presigned parts go through, nothing more is sent, and they end Interrupted.
-  hold.release()
-  await expect.poll(async () => (await savedRows(page, started)).map((r) => `${r.status}|${r.ownerId}`), { timeout: 30_000 })
-    .toEqual(started.map(() => `interrupted|${me.id}`))
-  // A now shows the invitee's uploads, which are none of these.
-  await expect.poll(async () => mineOf(await rows(page), files), { timeout: 10_000 }).toEqual([])
-  await page.waitForTimeout(2_000) // anything still on its way from A goes out in this time
-  expect(calls.initiates.filter((c) => queued.includes(c.name)), 'no initiate for a queued file').toEqual([])
-  expect(calls.completes, 'no completion sent').toEqual([])
+    // A: the queued files fail at once with the account message, saved for their owner.
+    await expect.poll(async () => (await savedRows(page, queued)).map((r) => `${r.status}|${r.error}|${r.ownerId}`), { timeout: 10_000 })
+      .toEqual(queued.map(() => `failed|${ACCOUNT_SWITCHED}|${me.id}`))
+    // The ones sending: their presigned parts go through, nothing more is sent, and they end Interrupted.
+    hold.release()
+    await expect.poll(async () => (await savedRows(page, started)).map((r) => `${r.status}|${r.ownerId}`), { timeout: 30_000 })
+      .toEqual(started.map(() => `interrupted|${me.id}`))
+    // A now shows the invitee's uploads, which are none of these.
+    await expect.poll(async () => mineOf(await rows(page), files), { timeout: 10_000 }).toEqual([])
+    await page.waitForTimeout(2_000) // anything still on its way from A goes out in this time
+    expect(calls.initiates.filter((c) => queued.includes(c.name)), 'no initiate for a queued file').toEqual([])
+    expect(calls.completes, 'no completion sent').toEqual([])
 
-  // Nothing landed in the invitee's account. `/me/assets?filter=owned` lists every asset an account
-  // created, unfinished uploads included (the panel rebuilds Interrupted rows from it): primary's list
-  // holds the three that started, which shows the check can see such an asset at all.
-  const owned = async (token: string) =>
-    (await json<Array<{ name: string; project_id: string }>>('GET', '/me/assets?filter=owned&limit=100', { token }))
-  expect((await owned(inviteeToken!)).map((a) => a.name), 'assets created by the invitee').toEqual([])
-  const primarys = (await owned(await accessToken(me))).filter((a) => a.project_id === project.id).map((a) => a.name)
-  expect(primarys.sort(), 'the assets made in this project, all primary\'s').toEqual([...started].sort())
+    // Nothing landed in the invitee's account. `/me/assets?filter=owned` lists every asset an account
+    // created, unfinished uploads included (the panel rebuilds Interrupted rows from it): primary's list
+    // holds the three that started, which shows the check can see such an asset at all.
+    const owned = async (token: string) =>
+      (await json<Array<{ name: string; project_id: string }>>('GET', '/me/assets?filter=owned&limit=100', { token }))
+    expect((await owned(inviteeToken!)).map((a) => a.name), 'assets created by the invitee').toEqual([])
+    const primarys = (await owned(await accessToken(me))).filter((a) => a.project_id === project.id).map((a) => a.name)
+    expect(primarys.sort(), 'the assets made in this project, all primary\'s').toEqual([...started].sort())
 
-  // Back as primary (in B): A shows them again, the queued ones Failed with the account message.
-  await signInWithTokens(pageB, await tokensFor(me))
-  const back = await until(page, files, 'all five rows back in A', (m) => m.length === 5)
-  for (const name of queued) {
-    expect(back.find((r) => r.name === name), name).toMatchObject({ status: 'failed', kind: 'failed', detail: ACCOUNT_SWITCHED })
-  }
-  for (const name of started) {
-    expect(back.find((r) => r.name === name), name).toMatchObject({ status: 'interrupted', kind: 'interrupted' })
+    // Back as primary (in B): A shows them again, the queued ones Failed with the account message.
+    await signInWithTokens(pageB, await tokensFor(me))
+    const back = await until(page, files, 'all five rows back in A', (m) => m.length === 5)
+    for (const name of queued) {
+      expect(back.find((r) => r.name === name), name).toMatchObject({ status: 'failed', kind: 'failed', detail: ACCOUNT_SWITCHED })
+    }
+    for (const name of started) {
+      expect(back.find((r) => r.name === name), name).toMatchObject({ status: 'interrupted', kind: 'interrupted' })
+    }
+    passed = true
+  } finally {
+    try {
+      await removeInvitee(invitee.id)
+    } catch (error) {
+      if (passed) throw error
+      test.info().annotations.push({ type: 'invitee not removed', description: String(error) })
+    }
   }
 })
 
@@ -299,11 +335,12 @@ test('A3: another account signed in after primary left interrupted uploads sees 
   const pageB = await context.newPage()
   await pageB.goto('/projects')
   await logOut(pageB, me)
+  const othersHistory = historyShown(pageB)
   await signInWithTokens(pageB, await tokensFor(other))
   await openUploads(pageB)
   // A hears of it at once and shows secondary's uploads, which are none of these.
   await expect.poll(async () => mineOf(await rows(pageA), files), { timeout: 10_000 }).toEqual([])
-  await pageB.waitForTimeout(1_500) // the panel's history from the server comes in
+  await othersHistory
   expect(mineOf(await rows(pageB), files), 'secondary sees none of primary\'s uploads').toEqual([])
   expect(await pageB.getByText(files[0].name).count(), 'not anywhere on secondary\'s page').toBe(0)
   // Hidden, not deleted: both are still saved, for their owner.

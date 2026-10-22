@@ -319,16 +319,20 @@ What each one observed:
   tabs show it Interrupted; each clicks Resume and opens its file picker, then both pick the file at once. Both ask
   `/parts` in the same millisecond or the next. In all six runs after the fix exactly one tab presigned (2 presigns, 2 PUTs,
   1 completion) and the other showed Elsewhere and sent nothing.
+  Before the fix Chromium passed R2 3 of 3; only WebKit exposed the race, so R2 is no guard for it in Chromium: the unit
+  tests named below are the regression guard.
 
 **APP-BUG-2 (fixed, `71793505`): two tabs resuming at once both sent the upload.** Before the fix R2 failed in WebKit in
 2 of 3 runs (Chromium passed 3 of 3): both tabs asked `/parts` at +0 ms, both presigned and PUT both parts, and both
 completed; in one run one tab was then left Failed, "Upload is incomplete: 1 part(s) missing, starting at part 1.". Each tab
 looks in shared storage for the other's heartbeat once `/parts` answers (spec goal 11, step 2), and a write to localStorage
 reaches another tab's process a moment later, so each looked before the other's first stamp arrived. Now a resume that
-has been told nobody is sending writes a claim (`ff-upload-claims`), waits 500 ms for a competing claim still on its way,
-and goes on only if its claim stands; the other shows Elsewhere. The unit test in `upload-other-tab.test.ts` ("two tabs
-resuming the same upload at the same moment") reproduces it: the other tab's moves land just after this tab has looked,
-and before the fix this tab sent and completed.
+has been told nobody is sending writes a claim (one key per row, `ff-upload-claim:<row id>`), waits 500 ms for a competing
+claim still on its way, and goes on only if its claim stands; the other shows Elsewhere. The unit test in
+`upload-other-tab.test.ts` ("two tabs resuming the same upload at the same moment") reproduces it: the other tab's moves
+land just after this tab has looked, and before the fix this tab sent and completed. The same describe and "two tabs of
+one browser" in `upload-queue-resume.test.ts` also cover a claim on another row written from a stale view of storage, a
+claim value that cannot be read, and an account change while the claim settles (review fix round, 2026-10-22).
 
 Each scenario was checked, on Chromium, against a temporary mutation of the app (reverted, never committed) and failed
 for the intended reason: the `storage` listener for the token ignored (A1 and A2 fail: the queued rows are not failed when
