@@ -133,4 +133,20 @@ describe('ShareLinkContent preview', () => {
     expect(screen.getByText('Zeta.png')).toBeTruthy()
     expect(screen.getByText('Alpha.png')).toBeTruthy()
   })
+
+  it('sorts every fetched asset before taking the six it shows', async () => {
+    // Thirteen assets, the alphabetically first one last: the sort must see
+    // all of them, not only the first dozen the API happened to return.
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      id: `m${i}`, name: `M${String(i).padStart(2, '0')}.png`, asset_type: 'image',
+      thumbnail_url: null, file_size: 1, created_at: '2026-10-01T00:00:00Z',
+    }))
+    const first = { ...many[0], id: 'aa', name: 'AA-first.png' }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ assets: [...many, first], subfolders: [] }),
+    }))
+    renderContent({ ...APPEARANCE, sort_by: 'name' })
+    expect(await screen.findByText('AA-first.png')).toBeTruthy()
+  })
 })

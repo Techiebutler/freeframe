@@ -25,7 +25,10 @@ import { cn, dateInputValue, endOfDayISO } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
-import { ShareAppearanceFields } from "@/components/projects/share-appearance-fields";
+import {
+  ShareAppearanceFields,
+  DEFAULT_SHARE_APPEARANCE,
+} from "@/components/projects/share-appearance-fields";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
@@ -67,17 +70,10 @@ function useShareLinkData(token: string) {
     [token, mutate],
   );
 
-  const appearance: ShareLinkAppearance = shareLink?.appearance || {
-    layout: "grid",
-    theme: "dark",
-    accent_color: null,
-    open_in_viewer: false,
-    sort_by: "name",
-    card_size: "m",
-    aspect_ratio: "landscape",
-    thumbnail_scale: "fit",
-    show_card_info: true,
-  };
+  // A link without a stored appearance renders on the API's defaults, so the
+  // panel shows (and patches from) those same values.
+  const appearance: ShareLinkAppearance =
+    shareLink?.appearance || DEFAULT_SHARE_APPEARANCE;
 
   const updateAppearance = React.useCallback(
     (patch: Partial<ShareLinkAppearance>) => {
@@ -628,9 +624,9 @@ export function ShareLinkContent({
         .then((r) => r.ok ? r.json() : Promise.reject())
         .then((data) => {
           setPreviewThumbnails(
-            // A few more than the six shown: the appearance sort is applied
-            // at render, before the slice.
-            (data.assets || []).slice(0, 12).map((a: any) => ({
+            // Keep the whole page: the appearance sort is applied at render,
+            // before the slice to six, so it must see every asset fetched.
+            (data.assets || []).map((a: any) => ({
               id: a.id,
               name: a.name,
               asset_type: a.asset_type,

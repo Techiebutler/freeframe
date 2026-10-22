@@ -722,20 +722,30 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   // The full appearance, not just the layout: the PATCH below replaces the
   // whole object server-side, so switching layout must carry the rest along.
   const [appearance, setAppearance] = React.useState<ShareLinkAppearance>(DEFAULT_SHARE_APPEARANCE)
+  // The token whose appearance `appearance` holds. Until it matches the link
+  // shown, the layout switch is disabled: patching then would send the
+  // defaults, or the previous link's appearance, over this link's own.
+  const [appearanceToken, setAppearanceToken] = React.useState<string | null>(null)
   const titleInputRef = React.useRef<HTMLInputElement>(null)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Fetch share link details to initialize settings
   React.useEffect(() => {
+    // Switching between created links refetches; a late answer for the link
+    // switched away from must not land on the one now shown.
+    let cancelled = false
     api.get<ShareLink>(`/share/${result.token}/details`).then((data) => {
+      if (cancelled) return
       setAllowComments(data.permission === 'comment' || data.permission === 'approve')
       setAllowDownloads(data.allow_download)
       setPassphrase(data.has_password ?? false)
       setWatermark(data.show_watermark)
       setExpiresAt(dateInputValue(data.expires_at))
       setAppearance({ ...DEFAULT_SHARE_APPEARANCE, ...(data.appearance ?? {}) })
+      setAppearanceToken(result.token)
       setVisibility(data.visibility === 'secure' ? 'secure' : 'public')
     }).catch(() => {})
+    return () => { cancelled = true }
   }, [result.token])
 
   const shareUrl = buildShareUrl(result.token)
@@ -949,12 +959,13 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                   {(['grid', 'list'] as const).map((l) => (
                     <button
                       key={l}
+                      disabled={appearanceToken !== result.token}
                       onClick={() => {
                         const next = { ...appearance, layout: l }
                         setAppearance(next)
                         patchLink({ appearance: next })
                       }}
-                      className={cn('rounded-md px-3 py-1 text-2xs font-medium capitalize', appearance.layout === l ? 'bg-accent text-white' : 'text-text-tertiary hover:text-text-primary')}
+                      className={cn('rounded-md px-3 py-1 text-2xs font-medium capitalize', appearance.layout === l ? 'bg-accent text-white' : 'text-text-tertiary hover:text-text-primary', 'disabled:opacity-50')}
                     >{l}</button>
                   ))}
                 </div>

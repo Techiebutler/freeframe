@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { ShareLinkSettingsPanel } from '../share-link-detail'
+import { DEFAULT_SHARE_APPEARANCE } from '../share-appearance-fields'
 
 // The link panel's Appearance section edits the same block the create dialog
 // shows, but without the current-view copy: while editing a saved link there
@@ -78,6 +79,26 @@ describe('ShareLinkSettingsPanel appearance', () => {
     expect(patch.mock.calls[0]).toEqual([
       '/share/tok',
       { appearance: { ...LINK_APPEARANCE, card_size: 's' } },
+    ])
+  })
+
+  it('a link with no stored appearance edits from the share defaults', async () => {
+    get.mockResolvedValue({
+      id: 'l1', token: 'tok', title: 'Link', permission: 'comment', visibility: 'public',
+      allow_download: false, show_versions: true, show_watermark: false, is_enabled: true,
+      has_password: false, appearance: null, created_at: '2026-10-01T00:00:00Z',
+      expires_at: null,
+    })
+    renderPanel()
+    await openAppearanceSection()
+    fireEvent.click(screen.getByRole('button', { name: 'S' }))
+
+    // The same values the API and the create dialog start a link on, not a
+    // second set of fallbacks (open_in_viewer off, name sort, fit).
+    await waitFor(() => expect(patch).toHaveBeenCalled())
+    expect(patch.mock.calls[0]).toEqual([
+      '/share/tok',
+      { appearance: { ...DEFAULT_SHARE_APPEARANCE, card_size: 's' } },
     ])
   })
 })

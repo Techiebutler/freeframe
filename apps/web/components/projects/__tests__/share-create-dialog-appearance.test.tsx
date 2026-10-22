@@ -203,4 +203,40 @@ describe('ShareCreateDialog appearance', () => {
       },
     ])
   })
+
+  it('the created-link layout switch waits for the link\'s appearance', async () => {
+    // Until the details load, the panel only has the defaults; a click then
+    // would patch them over the appearance the link was created with.
+    let resolveDetails: (v: unknown) => void = () => {}
+    get.mockReturnValue(new Promise((r) => { resolveDetails = r }))
+    render(
+      <ShareCreateDialog
+        open
+        onOpenChange={() => {}}
+        projectId="p1"
+        currentFolderId={null}
+        assets={[]}
+        folders={[]}
+        initialResult={{ token: 'tok', title: 'Link', itemType: 'asset', thumbnailUrl: null }}
+        onShareCreated={() => {}}
+      />,
+    )
+    fireEvent.click(await screen.findByText('Settings'))
+    const list = await screen.findByRole('button', { name: 'list' })
+    expect(list).toHaveProperty('disabled', true)
+    fireEvent.click(list)
+    expect(patch).not.toHaveBeenCalled()
+
+    resolveDetails({
+      permission: 'view', allow_download: false, has_password: false,
+      show_watermark: false, visibility: 'public',
+      appearance: { ...DEFAULT_SHARE_APPEARANCE, card_size: 'l' },
+    })
+    await waitFor(() => expect(list).toHaveProperty('disabled', false))
+    fireEvent.click(list)
+    await waitFor(() => expect(patch).toHaveBeenCalled())
+    expect(patch.mock.calls[0][1]).toEqual({
+      appearance: { ...DEFAULT_SHARE_APPEARANCE, card_size: 'l', layout: 'list' },
+    })
+  })
 })
