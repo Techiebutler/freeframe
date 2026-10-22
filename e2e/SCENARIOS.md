@@ -41,9 +41,9 @@ version.
 | A1 | Two pages, one context: log out in B with files queued in A | A redirects to /login; after signing back in, A's queued files show as Failed with the signed-out message | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | [PASS](live-runs/2026-10-22-phase-4.md#a1-log-out-in-another-tab-with-files-queued-pass) | — | — |
 | A2 | Accept an invite as `secondary` in tab B while A sends | A's sending row ends Interrupted; A's queued rows fail with the account message; no asset lands in `secondary`'s account | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | [PASS](live-runs/2026-10-22-phase-4.md#a2-accept-an-invite-in-another-window-while-a-sends-pass) | — | — |
 | A3 | Sign in as `secondary` in the same browser after `primary` left interrupted rows | `secondary` sees none of them; `primary` sees them again after switching back | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | [PASS](live-runs/2026-10-22-phase-4.md#a3-another-account-in-the-same-browser-after-primary-left-interrupted-rows-pass) | — | — |
-| L1 | Reload with files queued | the beforeunload dialog appears (`page.on('dialog')`, type `beforeunload`) in Chromium and WebKit | Chromium, WebKit, Firefox | 5 | — | — | — | — |
-| L2 | Log out with files queued | in-app confirm "N uploads will stop. Log out anyway?"; confirming navigates with no beforeunload dialog | Chromium, WebKit, Firefox | 5 | — | — | — | — |
-| L3 | Expired session (clear both tokens, then trigger a request) | redirect to /login, no dialog | Chromium, WebKit, Firefox | 5 | — | — | — | — |
+| L1 | Reload with files queued | the beforeunload dialog appears (`page.on('dialog')`, type `beforeunload`) in Chromium and WebKit | Chromium, WebKit, Firefox | 5 | `tests/leave.spec.ts` (L1, and L1 negative: nothing on its way, no prompt) | — | — | — |
+| L2 | Log out with files queued | in-app confirm "N uploads will stop. Log out anyway?"; confirming navigates with no beforeunload dialog | Chromium, WebKit, Firefox | 5 | `tests/leave.spec.ts` (L2 with Cancel then Log out, L2 one file, L2 negative: nothing on its way, no confirm) | — | — | — |
+| L3 | Expired session (clear both tokens, then trigger a request) | redirect to /login, no dialog | Chromium, WebKit, Firefox | 5 | `tests/leave.spec.ts` | — | — | — |
 | V1 | New Version during a long queue | the asset page shows "New version queued, waiting for other uploads."; the version appears without reload | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#v1-new-version-during-a-long-queue-pass) | — | — |
 | P1 | A storage cap that fits only about 3 of 10 files | at least one row Failed "Storage limit reached …" with Retry; every row ends Complete/Processing or Failed; none stays Queued or Starting; committed bytes exceed the cap by at most one file (with at most two files in flight; the cap counts only committed media) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#p1-storage-cap-pass) | — | — |
 | P2 | Project deleted while 5 files are queued for it, plus 2 queued for another project | the 5 fail with 404; the 2 upload | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#p2-project-deleted-under-queued-files-pass) | — | — |
@@ -398,6 +398,88 @@ the heartbeat) was not exercised in any multi-tab step (A1, A3, R2 and its two v
   account change or a history load (as on `main`); a second open tab keeps the uploading tab's token fresh, so the 401 path shows
   only with one tab.
 - Not run here: the manual real Safari and real Firefox pass (matrix row M).
+
+## Phase 5 automated results
+
+`tests/leave.spec.ts` (L1, L2, L3, and a negative for each of L1 and L2), run against the phase 5 branch
+(`feat/upload-queue-5-leave`) on the e2e stack, 2026-10-23. Each test clicks the page before it leaves (the panel's
+Uploads button and All tab), since a browser prompts only a page that has had a user interaction; the negatives click too.
+
+| Engine | Result | Duration |
+|---|---|---|
+| Chromium (Playwright 1.59, Chromium headless shell 1217) | `leave.spec.ts --repeat-each=3`: 18 of 18 passed (setup skipped, saved sessions reused) | 46.1 s |
+| WebKit (Playwright 1.59) | the same: 18 of 18 passed | 54.4 s |
+| Firefox (Playwright's Firefox 1511) | **does not launch on this macOS machine** (Darwin 27), as before. Not run. Run `pnpm test:firefox` wherever it launches, and do the manual real-Firefox pass | n/a |
+
+Per test (seconds, Chromium / WebKit, the three runs): L1 3.6 3.4 3.4 / 4.0 3.7 3.7, L1 negative 2.0 2.0 2.1 / 2.1 1.9 1.9,
+L2 3.4 3.3 3.1 / 4.0 4.0 4.1, L2 one file 2.1 2.1 2.1 / 2.6 2.6 2.7, L2 negative 1.9 1.9 1.9 / 2.3 2.3 3.6, L3 1.9 1.6 1.7 /
+1.8 1.9 3.0. No retry (`retries` is 0).
+
+What each one observed:
+
+- **L1** five 1 MB PNGs, parts on hold: three Uploading, two Queued. `page.reload()` raises a dialog of type
+  `beforeunload`. Dismissed, the document stays (a marker set on `window` is still there a second later) and the five rows
+  read exactly as before. Reloaded again (after another click) and accepted, the page reloads: the three that had started
+  come back Interrupted, and the two that were queued are gone, which is the design (keeping never-started files across a
+  reload is a non-goal; it is why the prompt exists). **L1 negative**: one PNG uploaded to Ready, then a reload: no dialog,
+  and the document is replaced.
+- **L2** (as `secondary`) the same frozen queue; Log out from the sidebar's account menu opens the in-app confirmation titled
+  exactly "5 uploads will stop. Log out anyway?". Cancel closes it, both tokens are unchanged, `<body>` is not left at
+  `pointer-events: none`, the next clicks land (the Uploads panel opens, the rows are as they were, the account menu opens
+  again). Log out again and confirm: `/login`, both tokens gone, no `beforeunload` dialog. **L2 one file**: the title reads
+  "1 upload will stop. Log out anyway?", and confirming leaves with no dialog. **L2 negative**: with one upload Ready and
+  nothing on its way, Log out goes straight to `/login`; a `MutationObserver` watching for any `role="dialog"` (its finding
+  kept in sessionStorage across the load) saw none, and there was no browser prompt.
+- **L3** the same frozen queue (as primary), then both tokens are removed from localStorage in the page itself (no `storage`
+  event, so nothing reacts: the three sending rows are still saved as `uploading`). Opening Notifications asks the API,
+  which answers 401; with no refresh token `clearTokens` sends the page to `/login`, with no dialog.
+
+**Engine quirk: how Playwright reports a dismissed `beforeunload`** (measured in both engines, Playwright 1.59, recorded in
+the spec's header). Every way of leaving shows the prompt as a `dialog` of type `beforeunload`, and accepting it lets every
+one of them through. Dismissing it:
+
+| Navigation | Chromium | WebKit |
+|---|---|---|
+| `page.reload()` | the promise never settles (runs to its timeout) | rejects, "navigation cancelled by beforeunload dialog" |
+| `page.goto(url)` | rejects, `net::ERR_ABORTED` | the promise never settles (runs to its timeout) |
+| `page.evaluate(() => location.reload())` | resolves | resolves |
+| `page.close({ runBeforeUnload: true })` | resolves, the page stays open | resolves, the page stays open |
+
+So L1 reloads with `page.reload()` (the browser's own Reload, not a script's) without awaiting it when the prompt is
+dismissed: it awaits the dialog event, then looks at the page.
+
+Each scenario was checked, on Chromium, against a temporary mutation of the app (reverted, never committed; `apps/` clean
+afterwards), and failed for the intended reason:
+
+- `useUploadLeaveGuard()` not mounted in `app/(dashboard)/layout.tsx`: **L1 fails** (no dialog within 15 s), in Chromium and
+  in WebKit. Everything else passes, as it should: they all expect no prompt.
+- the sidebar's Log out calling `logout()` directly, with no confirmation: **L2 and L2 one file fail** (no confirmation;
+  the page is already on `/login`).
+- `clearTokens` no longer setting the suppression flag: **L2, L2 one file and L3 fail** with a `beforeunload` dialog on the
+  way to `/login`, in Chromium and in WebKit (L3 checked again on Chromium against the final spec).
+
+**No app bug of the upload queue was found.**
+
+Observations (not failures of these scenarios):
+
+- **These short tests can spend the API's per-account read limit.** `GlobalRateLimitMiddleware` allows each account 600
+  reads a minute. One of these tests reads about 30 times in 2 to 4 s (the dev server's strict mode asks twice for most
+  things), so with every test signed in as primary, a WebKit `--repeat-each=3` was refused with 429 on its 18th test in two runs
+  of two, and runs started within a minute of another failed earlier (traces: the failed requests read "Status code:
+  429"). After the split below, a Chromium run started straight after a WebKit run still met one 429, on its 2nd test. The L2 tests now sign
+  in as `secondary`, which halves each account's share, and the spec counts 429s and names them when a test fails. Wait a
+  minute between back-to-back runs of this file.
+- **A 429 from the API has no CORS header** (the browser reports "not allowed by Access-Control-Allow-Origin. Status code:
+  429"), so the page sees a network failure, cannot read `Retry-After`, and SWR retries into the same window. Pre-existing,
+  not part of the upload queue; not fixed here.
+- **A drop on a project page before it knows the account's role goes nowhere, silently.** The role comes from the
+  project's members matched against `/auth/me`, and until both answer it is "viewer" and the drop region has no handler (no
+  row, no message). With the API answering normally that window is well under a second; under the 429s above it lasted
+  the whole test. The spec waits for the header's Upload button (drawn on the same condition) before dropping. The same
+  window is the likely cause of the Phase 4 note that R1 in WebKit sometimes "never sees its first upload start" (not
+  re-measured there); `dropFiles` could wait for it too.
+- Not run here: the manual real Safari and real Firefox pass (matrix row M), which also owes "hard reload, then drop from
+  Finder without clicking, then reload". No live Chrome pass for Phase 5 yet.
 
 ## Already covered
 

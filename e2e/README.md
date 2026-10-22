@@ -180,6 +180,12 @@ not through the form, to stay under `/auth/login`'s limit (A1 uses the form once
 admin API every run (`e2e-invitee-<ms>@example.com`; the API refuses the reserved `.test` domain), so each run leaves
 one more user behind. R2 waits out the 150 s live window first, so it takes about three minutes.
 
+`tests/leave.spec.ts` holds the Phase 5 scenarios (L1 to L3: a reload with files on their way, Log out with files on their
+way, a session that ends on its own). Each clicks the page before it leaves, since a browser prompts only a page the person
+has used, and answers every dialog from the start of the test, since one left unanswered blocks the page. How Playwright
+reports a dismissed `beforeunload` differs by engine and by how the navigation began (a table in the spec's header and in
+`SCENARIOS.md`). The L2 tests sign in as `secondary` to share the API's per-account read limit (see Traps).
+
 `tests/fixtures.spec.ts` checks each fixture's observable effect (a throttled part really is
 slow, an injected 500 reaches the page, a folder drop lands in the folder, ...) on every engine.
 Run it after touching anything in `fixtures/`. One of its tests is marked `test.fail()`: it
@@ -215,6 +221,10 @@ tell how big a part is. The list reporter draws such a pass as a red cross, but 
 - **A part must be bigger than the sockets hold to stall.** A part of 2 MB is "fully sent" to WebKit before a server that
   has stopped reading has seen most of it, and the part then waits on the 5 min answer clock instead of the 90 s one.
   `stallParts` needs a part of 10 MB (a file of 20 MB), which both engines report as partly sent.
+- **The API allows each account 600 reads a minute.** A short test that loads a page or two reads about 30 times (the dev
+  server's strict mode asks twice for most things), so a fast spec run back to back (`--repeat-each`) can spend the
+  minute. The 429 carries no CORS header, so the page sees a failed request, and a project page that never learns the
+  account's role ignores a drop. Wait a minute between such runs, or spread the tests over both accounts.
 - **Faults act on one page.** `throttleParts` and the others apply to the `page` they are given
   from the moment they are called until it closes; call them before `page.goto` when the page
   should be under them from the first request.
