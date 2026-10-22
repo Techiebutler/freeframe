@@ -36,6 +36,9 @@ import { closeUploads, createProject, dropFiles, openUploads, resetUploads, rows
  *
  * A dialog nobody answers blocks the page, so each test answers every dialog
  * from the moment it starts (`answerDialogs`).
+ *
+ * Not run on Firefox: Playwright's Firefox does not launch on the Mac this was
+ * written on (see README.md, Known gaps), so L1's prompt there is unmeasured.
  */
 
 test.afterEach(() => removeScenarioFiles())
@@ -50,7 +53,10 @@ test.afterEach(() => removeScenarioFiles())
  * primary, which halves each account's share. The 429 carries no CORS header,
  * so the page sees a failed request rather than an answer, the project page
  * never learns the account's role, and the test times out somewhere
- * unrelated. Count them, and say so when a test fails.
+ * unrelated. Count them, and say so when a test fails. Both listeners are
+ * needed: a real 429 reached WebKit only as a failed request whose error text
+ * names the status, and a 429 fulfilled by `page.route` (no CORS header)
+ * reached both engines as a response with that status (checked once, by hand).
  */
 let rateLimited = 0
 test.beforeEach(({ page }) => {
@@ -90,8 +96,9 @@ async function openCleanProject(page: Page, label: string, account: Account) {
   await page.goto(`/projects/${project.id}`)
   await expect(page.getByText('No assets')).toBeVisible()
   // The page takes a drop only once it knows the account may upload here: the role comes from the
-  // project's members matched against `/auth/me`, and until both have answered it is "viewer" and the
-  // drop region has no handler, so a drop goes nowhere (no initiate, no row). Seen in WebKit when those
+  // project's members matched against `/auth/me`, and until both have answered it is "viewer": the drop
+  // region's handlers are attached but return early while it is not enabled (`useFileDropRegion`), so a
+  // drop goes nowhere (no initiate, no row). Seen in WebKit when those
   // reads were slow to answer (they were being refused with 429, see above). The header's Upload button
   // is drawn on the same condition; the empty project's own is drawn regardless, so two means known.
   await expect(page.getByRole('button', { name: 'Upload', exact: true })).toHaveCount(2, { timeout: 60_000 })
@@ -184,14 +191,15 @@ test('L1: a reload with files queued and sending asks first; Stay keeps the page
   await page.reload()
   expect(dialogs.seen).toEqual(['beforeunload', 'beforeunload'])
   expect(await documentMark(page), 'a new document').toBeNull()
-  // What the prompt was about: the three that had started come back Interrupted, to be resumed, and the
-  // two that were queued are gone (keeping never-started files across a reload is a non-goal of the
-  // design; the browser's file handles do not survive it).
+  // What the prompt was about: the three that had started come back Interrupted, to be resumed. (What
+  // becomes of the two never-started ones is not this scenario's business, and is left unchecked.)
   await openUploads(page)
   const started = frozen.filter((r) => r.status === 'uploading').map((r) => r.name).sort()
-  const after = await until(page, files, 'the three that had started, Interrupted', (m) => count(m, 'interrupted') === 3)
+  const isStarted = (r: { name: string }) => started.includes(r.name)
+  const after = await until(page, files, 'the three that had started, Interrupted', (m) =>
+    m.filter((r) => isStarted(r) && r.status === 'interrupted').length === 3)
   test.info().annotations.push({ type: 'rows after the reload', description: summary(after) })
-  expect(after.map((r) => `${r.name}|${r.status}`).sort(), summary(after)).toEqual(started.map((n) => `${n}|interrupted`))
+  expect(after.filter(isStarted).map((r) => `${r.name}|${r.status}`).sort(), summary(after)).toEqual(started.map((n) => `${n}|interrupted`))
 })
 
 test('L1 (negative): with nothing queued or sending, a reload asks nothing', async ({ page }) => {
@@ -230,6 +238,11 @@ test('L2: Log out with files queued asks in the app; Cancel keeps everything and
   expect(await tokens(page), 'the tokens are kept').toEqual(signedIn)
   // Radix holds <body> at `pointer-events: none` while a modal is open and puts it back as the modal
   // closes; a lock left behind keeps every click from landing. The click that follows is the real check.
+  // This does not guard the sidebar's handoff (the confirmation opened only once the menu has closed):
+  // with that reverted, so the dialog opens from inside the menu's pick, this test still passed, twice in
+  // each engine. This stack has a single Radix copy (react-dismissable-layer 1.2.1) and cannot reproduce
+  // the duplicate-layer lock; the jsdom unit test "asks only once the menu has let go of the page"
+  // (`sidebar-logout-confirm.test.tsx`) pins the handoff.
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).pointerEvents), { timeout: 5_000 }).not.toBe('none')
   await openUploads(page)
   expect(summary(mineOf(await rows(page), files)), 'the rows are as they were').toBe(summary(frozen))

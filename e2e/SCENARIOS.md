@@ -411,6 +411,9 @@ Uploads button and All tab), since a browser prompts only a page that has had a 
 | WebKit (Playwright 1.59) | the same: 18 of 18 passed | 54.4 s |
 | Firefox (Playwright's Firefox 1511) | **does not launch on this macOS machine** (Darwin 27), as before. Not run. Run `pnpm test:firefox` wherever it launches, and do the manual real-Firefox pass | n/a |
 
+**L1 has not been run on Firefox**: Playwright's Firefox does not launch on this Mac, so whether and how Firefox raises the
+prompt here is unmeasured (owed to a machine where it launches, and to the manual real-Firefox pass).
+
 Per test (seconds, Chromium / WebKit, the three runs): L1 3.6 3.4 3.4 / 4.0 3.7 3.7, L1 negative 2.0 2.0 2.1 / 2.1 1.9 1.9,
 L2 3.4 3.3 3.1 / 4.0 4.0 4.1, L2 one file 2.1 2.1 2.1 / 2.6 2.6 2.7, L2 negative 1.9 1.9 1.9 / 2.3 2.3 3.6, L3 1.9 1.6 1.7 /
 1.8 1.9 3.0. No retry (`retries` is 0).
@@ -420,8 +423,9 @@ What each one observed:
 - **L1** five 1 MB PNGs, parts on hold: three Uploading, two Queued. `page.reload()` raises a dialog of type
   `beforeunload`. Dismissed, the document stays (a marker set on `window` is still there a second later) and the five rows
   read exactly as before. Reloaded again (after another click) and accepted, the page reloads: the three that had started
-  come back Interrupted, and the two that were queued are gone, which is the design (keeping never-started files across a
-  reload is a non-goal; it is why the prompt exists). **L1 negative**: one PNG uploaded to Ready, then a reload: no dialog,
+  come back Interrupted (asserted). The two that were queued were not listed after the reload in these runs; that is not
+  asserted (the row does not ask for it, and keeping never-started files across a reload is a non-goal of the design, not
+  a promise either way). **L1 negative**: one PNG uploaded to Ready, then a reload: no dialog,
   and the document is replaced.
 - **L2** (as `secondary`) the same frozen queue; Log out from the sidebar's account menu opens the in-app confirmation titled
   exactly "5 uploads will stop. Log out anyway?". Cancel closes it, both tokens are unchanged, `<body>` is not left at
@@ -448,15 +452,31 @@ one of them through. Dismissing it:
 So L1 reloads with `page.reload()` (the browser's own Reload, not a script's) without awaiting it when the prompt is
 dismissed: it awaits the dialog event, then looks at the page.
 
-Each scenario was checked, on Chromium, against a temporary mutation of the app (reverted, never committed; `apps/` clean
-afterwards), and failed for the intended reason:
+Each scenario was checked against a temporary mutation of the app (reverted, never committed; `apps/` clean afterwards),
+in the engines each bullet names, and failed for the intended reason:
 
 - `useUploadLeaveGuard()` not mounted in `app/(dashboard)/layout.tsx`: **L1 fails** (no dialog within 15 s), in Chromium and
   in WebKit. Everything else passes, as it should: they all expect no prompt.
 - the sidebar's Log out calling `logout()` directly, with no confirmation: **L2 and L2 one file fail** (no confirmation;
-  the page is already on `/login`).
+  the page is already on `/login`), in Chromium.
 - `clearTokens` no longer setting the suppression flag: **L2, L2 one file and L3 fail** with a `beforeunload` dialog on the
   way to `/login`, in Chromium and in WebKit (L3 checked again on Chromium against the final spec).
+
+One check does **not** catch its mutation: L2's "Cancel leaves the page clickable" (`<body>` not at `pointer-events:
+none`, and the next click lands). With `e31deb08`'s handoff reverted (the sidebar's `requestLogout` calling `setLogoutAsk`
+inside the menu's `onSelect` instead of through `afterMenuCloses`), L2 still passed, twice in Chromium and twice in WebKit
+(fix round 1, 2026-10-23). The web container has one copy of Radix's `react-dismissable-layer` (1.2.1), and the lock that
+handoff prevents comes from duplicate layers, which this stack cannot reproduce. The check stays as a guard against a lock
+left behind for any other reason; the handoff itself is pinned by the jsdom unit test "asks only once the menu has let go
+of the page" (`components/layout/__tests__/sidebar-logout-confirm.test.tsx`).
+
+The spec's 429 diagnostic was checked once by hand (fix round 1): a temporary test that fulfils `GET /me/notifications`
+with 429 and no CORS header through `page.route`, then fails on purpose, ended with "The API answered 429 (its per-account
+read limit) 2 times during this test" in Chromium and in WebKit (both counted as responses). A real 429 reached WebKit as a
+failed request only (its error text names the status), and the diagnostic fired on it during development ("22 times").
+
+After fix round 1 (the wording above, L1 no longer checking the never-started rows), `leave.spec.ts` was run once per
+engine: Chromium 6 of 6 (17.7 s), WebKit 6 of 6 (18.2 s).
 
 **No app bug of the upload queue was found.**
 
@@ -473,8 +493,9 @@ Observations (not failures of these scenarios):
   429"), so the page sees a network failure, cannot read `Retry-After`, and SWR retries into the same window. Pre-existing,
   not part of the upload queue; not fixed here.
 - **A drop on a project page before it knows the account's role goes nowhere, silently.** The role comes from the
-  project's members matched against `/auth/me`, and until both answer it is "viewer" and the drop region has no handler (no
-  row, no message). With the API answering normally that window is well under a second; under the 429s above it lasted
+  project's members matched against `/auth/me`, and until both answer it is "viewer". The drop region's handlers are
+  attached all along but return early while it is not enabled (`useFileDropRegion`), so the drop is ignored (no row, no
+  message). With the API answering normally that window is well under a second; under the 429s above it lasted
   the whole test. The spec waits for the header's Upload button (drawn on the same condition) before dropping. The same
   window is the likely cause of the Phase 4 note that R1 in WebKit sometimes "never sees its first upload start" (not
   re-measured there); `dropFiles` could wait for it too.
