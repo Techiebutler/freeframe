@@ -26,11 +26,11 @@ version.
 | C1 | Cancel a queued file | the row disappears; no initiate for it (`countRequests`) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#c1-cancel-a-queued-file-pass) | — | — |
 | C2 | "Cancel all queued" mid-run | active files continue; every queued row disappears | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#c2-cancel-all-queued-mid-run-pass) | — | — |
 | C3 | Cancel the active file | the next file starts; `/upload/abort` sent once | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#c3-cancel-the-active-file-pass) | — | — |
-| U1 | `touch` a queued file before its turn | that row: "The file changed or was moved after it was added. Add it again.", Dismiss only; no initiate; the queue continues | Chromium, WebKit, Firefox | 3 | — | — | — | — |
-| U2 | `remove` the sending file mid-part | the row ends Interrupted within 90 s + backoff; the queue continues; in WebKit the hang is broken by the watchdog | Chromium, WebKit, Firefox | 3 | — | — | — | — |
-| U3 | `hangParts` for one file | parts are aborted after 90 s and retried; the queue does not freeze | Chromium, WebKit, Firefox | 3 | — | — | — | — |
-| N1 | `context.setOffline(true)` at enqueue, back online after 30 s | rows show "Waiting for connection"; none failed; all complete after reconnect | Chromium, WebKit, Firefox | 3 | — | — | — | — |
-| N2 | Offline mid-part for 20 s | the sending file's ladder recovers; queued files never fail | Chromium, WebKit, Firefox | 3 | — | — | — | — |
+| U1 | `touch` a queued file before its turn | that row: "The file changed or was moved after it was added. Add it again.", Dismiss only (no Retry); no initiate for it; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | — | — | — |
+| U2 | `remove` the sending file mid-part | the row ends Interrupted with the same copy within 90 s + backoff (Chromium errors the send at once; in WebKit the send hangs with no event and the part watchdog ends it); nothing is aborted; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | — | — | — |
+| U3 | `hangParts` / `stallParts` for parts of a file | the part watchdog aborts a part and retries it, and the queue does not freeze. A part that has sent its first byte and then stops is aborted after 90 s without upload progress. A part that has not sent a byte yet is aborted only when the whole tab has had no upload progress for 90 s, or when it has itself waited 5 min (the hard cap, so a part held behind busy sockets is not mistaken for a stalled one). A part that sent its last byte waits 5 min for the answer. The retry goes through; the 5 min cap alone is not automated (see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` (U3: parts that never start, tab silent; U3b: a part that stops after progress, tab busy) | — | — | — |
+| N1 | `context.setOffline(true)` at enqueue, back online after 30 s | rows show "Waiting for connection"; none failed; all complete after reconnect (WebKit: `networkSwitch` aborts the API and bucket requests instead, see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | — | — | — |
+| N2 | Offline mid-part for 20 s | the sending file's ladder recovers; queued files never fail | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | — | — | — |
 | S1 | `failInitiate` coded 503 three times | "Waiting for storage", then the queue continues; 3 retries spaced ≥ 5 s | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#s1-failinitiate-coded-503-pass-with-the-real-fault) | — | — |
 | S2 | `failParts(503)` on every PUT for 60 s | presign requests ≤ budget × 8 over the window (`countRequests`) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#s2-failparts503-for-60-s-pass-stand-in-network-errors) | — | — |
 | S3 | Infra: `docker stop` storage mid-queue, start after 60 s | queued files hold; the sending file ends Interrupted (as today) or recovers | Chromium | 6 | — | — | — | — |
@@ -147,6 +147,103 @@ with the before and after against the baseline. The "Live Chrome run" column abo
   (46.6 s after the last heartbeat, past the 30 s grace); then it asked for its parts (`/parts` 200 with `server_time`), started next, sent the missing parts and
   completed, with its `ff-uploads` entry present throughout. The record is in the report ("R1 re-run after APP-BUG-1 fix"); the first failure is kept there as history.
 - Not run here: the manual real Safari and real Firefox pass (matrix row M).
+
+## Phase 3 automated results
+
+`tests/unreadable.spec.ts` (U1, U2, U3 and its tab-busy twin U3b) and `tests/network.spec.ts` (N1, N2), run against
+the phase 3 branch (`feat/upload-queue-3-stuck`) on the e2e stack, 2026-10-22. The three new fixture tests in
+`tests/fixtures.spec.ts` (`hangParts` with `only`/`times`, `stallParts`, `networkSwitch`) ran with them.
+
+| Engine | Result | Duration |
+|---|---|---|
+| Chromium (Playwright 1.59, Chromium headless shell 1217) | `unreadable.spec.ts` + `network.spec.ts` + `fixtures.spec.ts`: 30 passed, 2 skipped (saved sessions reused; the `test.fail()` fixtures test is drawn as a cross and counts as passed) | 5.8 min (the six scenarios alone: 5.0 min) |
+| WebKit (Playwright 1.59) | the same: 30 passed, 2 skipped | 7.3 min |
+| Firefox (Playwright's Firefox 1511) | **does not launch on this macOS machine** (Darwin 27), as before: `browserType.launch: Timeout 180000ms exceeded`, re-run 2026-10-22 on `U1`. Not run. The scenarios are engine-neutral; run `pnpm test:firefox` wherever it launches, and do the manual real-Firefox pass | n/a |
+
+Repeats, to see whether any is flaky: Chromium U1, U2, N1 and N2 three more times each (12 passed, 5.2 min); WebKit U1, N1 and N2 twice
+more (6 passed, 2.8 min); U3 and U3b passed twice on each engine and U2 twice on WebKit, all within a second of the times below. No retry was ever
+needed (`retries` is 0). One earlier run of N1 on Chromium failed an assertion on the order of the creations, which was removed (see the
+observation at the end of this section); one run of U1 on WebKit failed before `pngs` backdated its files (see the engine facts).
+
+Per scenario (seconds, Chromium / WebKit): U1 2.6 / 2.4, U2 4.0 / 94.4, U3 94.5 / 94.1, U3b 99.6 / 94.1, N1 63.9 / 64.8, N2 33.0 / 33.0.
+
+What each one observed:
+
+- **U1** five 1 MB PNGs, parts on hold so three upload and two queue; the fourth is `touch`ed, then the hold is released.
+  Its row fails with the exact copy, `data-detail` `failed`; it has Dismiss and no Retry and no Resume; no initiate was sent
+  for it (so no asset and nothing to abort); the fifth file asked last and everything else completed; Dismiss removes the row.
+- **U2** a 12 MB file (two parts) first of five, parts on hold, the file deleted, the hold released. Chromium errors the send at
+  once: A is Interrupted with the exact copy 2.1 s after the release (one 2 s backoff, then the retry's read of the file fails).
+  WebKit's send of the missing file hangs with no event; the part watchdog ends it at 90 s, the retry's read fails, and A is
+  Interrupted with the same copy 92.3 s after the release. No `/upload/abort` was sent (the upload stays on the server for a
+  resume), no part of A was sent a second time, and the four small files behind it were across.
+- **U3** the first PUT of each of the three files that start is never answered and never sent (`hangParts({ times: 3 })`): the tab
+  is silent from the start. For 70 s the three rows are Uploading, the other two Queued, nothing is retried, no
+  row fails. Each part is aborted and sent again 92.1 to 92.3 s after its first PUT on both engines (the 90 s watchdog, 2 s
+  backoff and a presign), the retries are answered 200, and then the two that were waiting start and everything completes.
+- **U3b** a 20 MB file (two parts of 10 MB); one PUT is sent to a throwaway server on 127.0.0.1 (`stallParts`) that reads about
+  256 KB and then stops reading. The browser reports real upload progress for it (1.1 MB in Chromium, 3.1 MB in WebKit) and then
+  nothing. At 45 s a second, small file is sent in full, so the tab moves again. The stalled part is still
+  aborted by its own clock, 97.3 s (Chromium) / 92.0 s (WebKit) after the stall began, and the retry goes to the bucket and
+  completes. A watchdog that waited for the tab to be quiet would act at 137 s (see the mutation below).
+- **N1** five 1 MB files dropped with the network down for 30 s. One row (the probe) reads "Waiting for connection" and the rest
+  "Waiting to start" or, during a try, "Starting…"; none fails and none uploads; the probe asks 5 times in the 30 s (tries 0, 2, 6, 14
+  and 30 s in, so the pauses are 2, 4, 8 and 16 s); nothing is created. After the network returns, everything is uploaded within
+  about 32 s (the next try after the one at 30 s is due at 62 s; 32 s on both engines in the final runs, under a second in a run where a
+  try happened to land just after the network was back), each file created once.
+- **N2** five 3 MB files, three uploading with their parts on hold; the network goes down, the parts are released into it and
+  20 s pass. The three rows stay Uploading and the two behind stay Queued throughout (no row failed, copy exact); no part was
+  answered. After the network returns the retries of all three parts are answered and everything is uploaded 11 s later;
+  the two that waited are created only after the network is back.
+
+How U3 is designed. The watchdog has three clocks, so U3 covers them as far as an end-to-end run can:
+
+- **a part that never sent a byte, tab silent** (U3): aborted 90 s after the tab's last progress (here, after the send).
+- **a part that sent a first stretch and then stopped, tab busy** (U3b): aborted 90 s after its own last progress, however busy
+  the tab is.
+- **a part that never sent a byte while another part keeps the tab moving**: aborted at 5 min, the hard cap. **Not automated.** It
+  needs a sibling that reports progress for 5 minutes without a break, and neither `throttleParts` (it holds a whole PUT,
+  then sends it) nor `stallParts` (its progress ends within seconds) can make that. It is covered with a fake clock by
+  `stores/__tests__/upload-store.test.ts` ("a part that never starts is given up on at 5 min even while another part keeps
+  moving"), and so is the 5 min wait after a part's last byte.
+
+Engine facts the scenarios stand on (measured; the README's Traps repeat the ones a test author needs):
+
+- **WebKit compares a picked file's modification time at one-second resolution.** A `touch` 350 ms after the file was written was
+  not noticed in one run of three, so U1 failed on WebKit until `pngs` backdated its files by a minute (3 of 3 after).
+  A touched file is `NotReadableError` in Chromium and `NotFoundError` in WebKit; a deleted one is `NotFoundError` in both.
+- **In Playwright's WebKit `context.setOffline(true)` also makes files unreadable**: `file.slice(0, 1).arrayBuffer()` rejects with
+  `NotReadableError` while it is on (and `new Response(blob)` with a `TypeError`), and returns when it is turned off. With it, the app
+  correctly reads every dropped file as one that changed and N1 fails all five rows with the changed-file copy. So `networkSwitch`
+  uses `setOffline` on Chromium (and Firefox) and, on WebKit, a route that aborts every request to another origin than the app's
+  with "internet disconnected". Both give the app a network error on every API and bucket call.
+- **WebKit reports a small part as sent before the server has read it**: a 2 MB part PUT to a server that had read 311 KB took the
+  row to "Finalizing…", the app's "every byte of this file is sent" (so such a part waits on the 5 min answer clock, not the 90 s one). The stalled part of U3b is therefore a part of
+  10 MB, which both engines report as partly sent.
+- **Chromium reads a deleted file as an empty one if nothing has asked its size yet** (`size` 0, `slice().arrayBuffer()` resolves
+  with no bytes). The app reads `file.size` when the file is added, so after that Chromium reports `NotFoundError` as above.
+
+Each test was checked against a temporary mutation of the app (reverted, never committed; `apps/` is clean) and failed for the
+intended reason:
+
+| Mutation | Test, engine | Result |
+|---|---|---|
+| the readability probe at a new file's turn skipped | U1, Chromium | fails: D never reads Failed; it is created and ends Interrupted (the retry's probe) after the 60 s wait |
+| no readability probe before a part retry | U2, Chromium | fails: A is still Uploading after 4 min (the retry ladder keeps sending it) |
+| the watchdog never fires (both limits 2 000 000 000 ms) | U2, U3, U3b, WebKit | all three fail by timeout: A still Uploading after 4 min; three rows Uploading and two Queued after 3 min; A still Uploading after 2.5 min |
+| `PART_STALL_MS` 30 s | U3, Chromium | fails: at 35 s every part has already been retried (the watchdog acted before 90 s) |
+| a part that has started is judged by the tab's silence, not its own | U3b, Chromium | fails: the retry came 137.6 s after the stall began, bound 125 s |
+| a network error at initiate refuses the file | N1, Chromium | fails: all five rows Failed "Failed to fetch", none ever Waiting for connection |
+| a network error on a part is final | N2, Chromium | fails: three rows Interrupted "Part 1 failed: network error" within 3 s of the release |
+
+The first attempt at the "tab's silence" mutation, run straight after the edit, failed differently (the stalled part was retried 22 s
+after it began and A was complete before 45 s; a dev-server reload right after an edit is the likely cause, not confirmed). The repeat,
+with the edit settled, failed on the intended bound as above.
+
+Observation for the app, not asserted (N1): when several files ask at once and all fail with a hold, the one that fails first is the
+probe and the others are put back at the front in the order their failures arrive, which is arbitrary. In one Chromium run of N1 the files
+were created in the order 01, 03, 02, 04, 05 (in the one later run that logged the order it was 01, 02, 03, 04, 05). Files of 5 MiB or less count as one part while they initiate,
+so the first three do ask together. No data is lost; the order among those three can change after an outage.
 
 ## Already covered
 

@@ -1,4 +1,7 @@
-import type { Page, Request, Route } from '@playwright/test'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
+import type { BrowserContext, Page, Request, Route } from '@playwright/test'
+import { baseUrl } from './env'
 
 /**
  * Fault injection for the upload path, built on `page.route`.
@@ -133,14 +136,156 @@ export async function failParts(page: Page, status: number, times = Infinity): P
 }
 
 /**
+ * Narrows a fault to some of the part PUTs: it gets the PUT's URL (the presigned
+ * one, whose path ends in the upload's S3 key and whose query carries `uploadId`
+ * and `partNumber`) and says whether the fault applies. May be async, so a
+ * scenario can wait for the initiate answer that tells it which key is its file's
+ * (see `trackUploads`).
+ */
+export type PartFilter = (url: URL) => boolean | Promise<boolean>
+
+/** Which part PUTs a fault applies to, and for how many of them (every match when `times` is omitted). */
+export type PartFaultScope = { only?: PartFilter; times?: number }
+
+/**
  * Never answer a part PUT. The request stays open until the page closes or the
  * page's own code aborts it, which is what a stalled connection looks like.
+ *
+ * `only` limits it to the PUTs it accepts (one file's, say), and `times` to the
+ * first that many of those; every other PUT, and every one after them, goes
+ * through untouched. So `{ times: 3 }` hangs three parts once and lets their
+ * retries through, which is how a watchdog that aborts and retries is seen to
+ * work.
  */
-export async function hangParts(page: Page): Promise<void> {
+export async function hangParts(page: Page, scope: PartFaultScope = {}): Promise<void> {
+  let left = scope.times ?? Infinity
   await page.route(partUrl, async (route: Route, request: Request) => {
-    if (!isPartPut(request)) return route.fallback()
+    if (!isPartPut(request) || left <= 0) return route.fallback()
+    if (scope.only && !(await scope.only(new URL(request.url())))) return route.fallback()
+    // Re-checked after the wait: another PUT may have used the last of `times` meanwhile.
+    if (left <= 0) return route.fallback()
+    left -= 1
     // Deliberately neither fulfilled, continued nor aborted.
   })
+}
+
+/**
+ * What the page told the API about the uploads it started: for each file (by
+ * its original file name) the S3 key, multipart upload id and version id the
+ * initiate answered with.
+ */
+export type UploadTracker = {
+  /** Resolves with the ids of the upload started for `fileName`, once the initiate for it is answered. */
+  of: (fileName: string) => Promise<{ s3Key: string; uploadId: string; versionId: string | null }>
+  /** A `PartFilter` for the PUTs of `fileName`'s upload: the presigned URL's path is that upload's S3 key. */
+  partsOf: (fileName: string) => PartFilter
+}
+
+/**
+ * Watch initiate answers on `page`, so a fault can be aimed at one file's
+ * parts. Call it before the file is dropped. A part PUT only happens after the
+ * initiate that created its upload was answered, so a filter built with
+ * `partsOf` always finds the key it is waiting for.
+ */
+export function trackUploads(page: Page): UploadTracker {
+  type Ids = { s3Key: string; uploadId: string; versionId: string | null }
+  const seen = new Map<string, Ids>()
+  const waiting = new Map<string, Array<(ids: Ids) => void>>()
+  page.on('response', async (response) => {
+    const request = response.request()
+    if (request.method() !== 'POST' || !/\/(upload\/initiate|assets\/[^/]+\/versions)(\?|$)/.test(response.url())) return
+    if (response.status() !== 200) return
+    try {
+      const fileName = String((request.postDataJSON() as Record<string, unknown>)?.original_filename ?? '')
+      const answer = (await response.json()) as { s3_key?: string; upload_id?: string; version_id?: string }
+      if (!fileName || !answer.s3_key || !answer.upload_id) return
+      const ids = { s3Key: answer.s3_key, uploadId: answer.upload_id, versionId: answer.version_id ?? null }
+      seen.set(fileName, ids)
+      for (const resolve of waiting.get(fileName) ?? []) resolve(ids)
+      waiting.delete(fileName)
+    } catch {
+      /* a response that is gone (the page closed) is no initiate answer */
+    }
+  })
+  const of = (fileName: string) =>
+    new Promise<Ids>((resolve) => {
+      const known = seen.get(fileName)
+      if (known) resolve(known)
+      else waiting.set(fileName, [...(waiting.get(fileName) ?? []), resolve])
+    })
+  return {
+    of,
+    partsOf: (fileName) => async (url) => decodeURIComponent(url.pathname).includes((await of(fileName)).s3Key),
+  }
+}
+
+/**
+ * Let a part PUT start for real, then stop it dead after the first stretch of
+ * its body: the part makes progress (the browser's upload events fire, a few
+ * hundred KB to a few MB of them) and then nothing more happens and no answer
+ * comes. This is a connection that dies in the middle of a part, which `hangParts`
+ * (nothing is ever sent, so no progress event is ever fired) cannot be.
+ *
+ * The PUT is sent to a throwaway server on 127.0.0.1 that reads the first
+ * `readBytes` and then stops reading. The browser fills the sockets in between
+ * and reports progress on the way. The part has to be bigger than they hold
+ * (10 MB is, on Chromium and WebKit: 1 to 3 MB are accepted before the stall),
+ * or the browser reports it fully sent and then waits for an answer, which is a
+ * different case with a different clock.
+ *
+ * `only` and `times` pick which PUTs, as for `hangParts`; the rest, and every
+ * retry after `times` are used up, go to the real bucket. `stalled()` is how
+ * many PUTs reached the server, `partNumbers()` which parts they were (in the
+ * order they were stalled) and `bytesRead()` how much of them it took.
+ * `stop()` closes the server; it also closes with the page.
+ */
+export async function stallParts(
+  page: Page,
+  scope: PartFaultScope & { readBytes?: number } = {},
+): Promise<{ stalled: () => number; partNumbers: () => number[]; bytesRead: () => number; stop: () => void }> {
+  const readBytes = scope.readBytes ?? 256 * 1024
+  let stalled = 0
+  let read = 0
+  const parts: number[] = []
+  const server = http.createServer((req, res) => {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'access-control-allow-origin': req.headers.origin ?? '*',
+        'access-control-allow-methods': 'PUT, OPTIONS',
+        'access-control-allow-headers': req.headers['access-control-request-headers'] ?? '*',
+        vary: 'Origin',
+      })
+      res.end()
+      return
+    }
+    stalled += 1
+    let mine = 0
+    req.on('data', (chunk: Buffer) => {
+      mine += chunk.length
+      read += chunk.length
+      if (mine >= readBytes) req.pause() // stop reading; never answer
+    })
+    req.on('error', () => {})
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  const stop = () => {
+    server.closeAllConnections()
+    server.close()
+  }
+  page.on('close', stop)
+
+  let left = scope.times ?? Infinity
+  await page.route(partUrl, async (route: Route, request: Request) => {
+    if (!isPartPut(request) || left <= 0) return route.fallback()
+    if (scope.only && !(await scope.only(new URL(request.url())))) return route.fallback()
+    if (left <= 0) return route.fallback()
+    left -= 1
+    parts.push(Number(new URL(request.url()).searchParams.get('partNumber')))
+    // Same path and query (the signature is for the real bucket and does not matter here), another host.
+    await route.continue({ url: `http://127.0.0.1:${port}/stalled${new URL(request.url()).search}` })
+  })
+  return { stalled: () => stalled, partNumbers: () => [...parts], bytesRead: () => read, stop }
 }
 
 /**
@@ -150,16 +295,22 @@ export async function hangParts(page: Page): Promise<void> {
  * What `hangParts` is when it is never released, and a way to freeze a queue in
  * a known state: the files that started sit in "Uploading" with their parts on
  * hold, the rest wait, and the scenario can act, then let the run go on.
- * `held()` is how many part PUTs have reached the hold so far. The hold ends
- * with the page: do not keep one for longer than the app's part watchdog (90 s)
- * once that exists, or the app will abort the held parts itself.
+ * `held()` is how many part PUTs have reached the hold so far. `only` limits the
+ * hold to the PUTs it accepts (one file's, say). The hold ends
+ * with the page: do not keep one for longer than the app's part watchdog (90 s
+ * with the whole tab silent), or the app aborts the held parts and retries them
+ * itself.
  */
-export async function holdParts(page: Page): Promise<{ release: () => void; held: () => number }> {
+export async function holdParts(
+  page: Page,
+  scope: Pick<PartFaultScope, 'only'> = {},
+): Promise<{ release: () => void; held: () => number }> {
   let open = false
   let held = 0
   let waiting: Array<() => void> = []
   await page.route(partUrl, async (route: Route, request: Request) => {
     if (!isPartPut(request)) return route.fallback()
+    if (scope.only && !(await scope.only(new URL(request.url())))) return route.fallback()
     if (!open) {
       held += 1
       await new Promise<void>((resolve) => waiting.push(resolve))
@@ -216,4 +367,40 @@ export function countRequests(page: Page, pattern: RegExp): { count: () => numbe
     if (pattern.test(request.url())) n += 1
   })
   return { count: () => n }
+}
+
+/**
+ * Take the browser's network away and give it back: every request to the API and
+ * to the bucket fails the way a dropped connection does, and files on disk stay
+ * readable.
+ *
+ * Chromium and Firefox use `context.setOffline`. In Playwright's WebKit that
+ * switch fails more than the network: a file-backed `Blob` cannot be read while
+ * it is on (`file.slice(0, 1).arrayBuffer()` rejects with `NotReadableError`;
+ * measured, WebKit 26.4 / Playwright 1.59), which no browser does when the wifi
+ * goes, and which the app rightly reads as a file that changed. So WebKit gets
+ * the same outage from a route that aborts, as "internet disconnected", every
+ * http(s) request to an origin other than the app's.
+ *
+ * `down()` and `up()` may be called any number of times.
+ */
+export function networkSwitch(context: BrowserContext, browserName: string): { down: () => Promise<void>; up: () => Promise<void> } {
+  const appOrigin = new URL(baseUrl()).origin
+  const isOtherOrigin = (url: URL) => /^https?:$/.test(url.protocol) && url.origin !== appOrigin
+  const cut = (route: Route) => route.abort('internetdisconnected')
+  let routed = false
+  return {
+    down: async () => {
+      if (browserName !== 'webkit') return context.setOffline(true)
+      if (routed) return
+      routed = true
+      await context.route(isOtherOrigin, cut)
+    },
+    up: async () => {
+      if (browserName !== 'webkit') return context.setOffline(false)
+      if (!routed) return
+      routed = false
+      await context.unroute(isOtherOrigin, cut)
+    },
+  }
 }

@@ -145,7 +145,8 @@ key in the stack's Redis: `docker exec <redis container> redis-cli del rl:login:
 | ------------- | --------- |
 | `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm`, `createProject`, `resetUploads`, `openUploads`, `closeUploads`, `dropFiles`, `rows`, `uploadRow` |
 | `files.ts`    | `makeFiles` (real random-content files on disk), `touch`, `remove`, `rewrite`, `liveFilesDir` |
-| `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `holdParts`, `failInitiate`, `countRequests`, all on `page.route` (`throttleParts` also reads part sizes the page records) |
+| `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `holdParts`, `stallParts`, `failInitiate`, `countRequests`, all on `page.route` (`throttleParts` also reads part sizes the page records); `trackUploads` (which S3 key is which file's, to aim `hangParts`, `holdParts` and `stallParts` at one file with `only`); `networkSwitch` (the browser's network down and up) |
+| `scenario.ts` | What the Phase 3 specs share: `openProject`, `pngs` (PNGs in a folder the test may change, backdated), `removeScenarioFiles`, `recordUploadCalls` (initiates, part PUTs, presigns, aborts, with times), `until` and the panel helpers |
 | `accounts.ts` | `primary()`, `secondary()` and the `Account` type |
 
 `dropFiles` cannot drag from the desktop, so it builds the `DataTransfer` a browser would: real
@@ -165,6 +166,12 @@ a minute with the throttle at 2 MB/s; S2 is a 60 s window; the files they make a
 test ends. P1 sets the instance storage cap and part size through the admin API and puts both back in
 a `finally`; if a run is killed mid-test the cap stays, and the next P1 refuses to start until it is
 reset (`PUT /instance/settings` with `storage_limit_bytes: 0` and `upload_part_size_bytes: 0`).
+
+`tests/unreadable.spec.ts` (U1 to U3: files the browser can no longer read, parts that stop moving) and
+`tests/network.spec.ts` (N1, N2: the network goes) hold the Phase 3 scenarios. U3 and U3b (and U2 in WebKit,
+where a deleted file hangs the send) wait out the 90 s part watchdog, so each takes about 95 s (`test.setTimeout`
+is 10 min); the files they change are under
+`.live-files/` and are removed when each test ends. The watchdog's 5 min cap is not run here (see `SCENARIOS.md`).
 
 `tests/fixtures.spec.ts` checks each fixture's observable effect (a throttled part really is
 slow, an injected 500 reaches the page, a folder drop lands in the folder, ...) on every engine.
@@ -190,6 +197,17 @@ tell how big a part is. The list reporter draws such a pass as a red cross, but 
   host over HTTP/1.1. Use `.png` files unless a scenario is about video.
 - **The grid only refetches on its own once a row is "Ready".** After a "Processing" row, reload
   to see the asset.
+- **A file's modification time means a second to WebKit.** WebKit compares a picked file's modification time at one-second
+  resolution, so a `touch` within a second of the file being written is not noticed (measured: a `touch` 350 ms
+  after the write went unnoticed in one run of three). `pngs` in `fixtures/scenario.ts` backdates its files by a
+  minute, as a real pick would be; do the same for any file you `touch`.
+- **`context.setOffline(true)` makes files unreadable in WebKit.** In Playwright's WebKit it also fails reads of
+  file-backed blobs (`file.slice(0, 1).arrayBuffer()` rejects with `NotReadableError`), which no browser does when
+  the wifi goes; the app rightly calls that a file that changed. Use `networkSwitch(context, browserName)`, which
+  uses `setOffline` where it is faithful and, in WebKit, a route that aborts every request to the API and the bucket.
+- **A part must be bigger than the sockets hold to stall.** A part of 2 MB is "fully sent" to WebKit before a server that
+  has stopped reading has seen most of it, and the part then waits on the 5 min answer clock instead of the 90 s one.
+  `stallParts` needs a part of 10 MB (a file of 20 MB), which both engines report as partly sent.
 - **Faults act on one page.** `throttleParts` and the others apply to the `page` they are given
   from the moment they are called until it closes; call them before `page.goto` when the page
   should be under them from the first request.

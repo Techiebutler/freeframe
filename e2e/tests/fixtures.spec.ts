@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { crc32 } from 'node:zlib'
 import { accessToken, json, primary, savedRefreshToken, secondary } from '../fixtures/accounts'
-import { countRequests, failInitiate, failParts, hangParts, holdParts, partBodyBytes, throttleParts } from '../fixtures/faults'
+import { countRequests, failInitiate, failParts, hangParts, holdParts, networkSwitch, partBodyBytes, stallParts, throttleParts, trackUploads } from '../fixtures/faults'
 import { makeFiles, remove, rewrite, touch } from '../fixtures/files'
 import { apiUrl, createProject, dropFiles, openUploads, resetUploads, rows, signIn } from '../fixtures/stack'
 
@@ -278,6 +278,90 @@ test('hangParts() leaves a part PUT unanswered and the row uploading', async ({ 
   await page.waitForTimeout(4_000)
   expect(statuses, 'no part PUT was ever answered').toEqual([])
   expect((await rowOf(page, name)())?.status).toBe('uploading')
+})
+
+test('hangParts() with only and times hangs just those PUTs, and lets the rest through', async ({ page }, testInfo) => {
+  await openProject(page)
+  const statuses = partStatuses(page)
+  const uploads = trackUploads(page)
+  const hung = await pngFile(testInfo, 'hangonly-a')
+  const free = await pngFile(testInfo, 'hangonly-b')
+  // The first PUT of the first file only: the second file's PUT passes, and so would a retry of the first.
+  await hangParts(page, { only: uploads.partsOf(`${hung.name}.png`), times: 1 })
+
+  await dropFiles(page, 'project', [hung.file, free.file])
+  await openUploads(page)
+  await expect.poll(statusOf(page, free.name), { timeout: 60_000 }).toBe('complete')
+  await page.waitForTimeout(3_000)
+  expect(statuses, 'only the other file\'s PUT was answered').toEqual([200])
+  expect((await rowOf(page, hung.name)())?.status).toBe('uploading')
+  // trackUploads knows the key of each file's upload.
+  expect((await uploads.of(`${hung.name}.png`)).s3Key).toMatch(/^raw\/[0-9a-f-]+\/[0-9a-f-]+\/[0-9a-f-]+\/original\.png$/)
+})
+
+test('stallParts() lets a part start, so the browser reports progress, and then answers nothing', async ({ page }, testInfo) => {
+  await openProject(page)
+  // What the browser reports as sent for each PUT, as the page's own XHR sees it.
+  await page.addInitScript(() => {
+    const w = window as any
+    w.__e2eProgress = {} as Record<string, { loaded: number; total: number }>
+    const send = XMLHttpRequest.prototype.send
+    XMLHttpRequest.prototype.send = function (this: XMLHttpRequest, body?: any) {
+      const total = body && typeof body.size === 'number' ? body.size : 0
+      const id = (w.__e2eProgressCount = (w.__e2eProgressCount ?? 0) + 1)
+      this.upload.addEventListener('progress', (e) => {
+        w.__e2eProgress[id] = { loaded: e.loaded, total }
+      })
+      return send.call(this, body)
+    }
+  })
+  await page.reload()
+  await expect(page.getByText('No assets')).toBeVisible()
+  const statuses = partStatuses(page)
+  const stall = await stallParts(page, { times: 1 })
+
+  // 20 MB: two parts of 10 MB, more than the sockets hold, so the stalled one is partly sent.
+  const { name, file } = await pngFile(testInfo, 'stall', 20 * MB)
+  await dropFiles(page, 'project', [file])
+  await openUploads(page)
+  await expect.poll(() => stall.stalled(), { timeout: 60_000 }).toBe(1)
+  await page.waitForTimeout(5_000)
+
+  expect(stall.partNumbers()).toHaveLength(1)
+  expect(stall.bytesRead()).toBeGreaterThan(0)
+  // The other part went to the bucket and was answered; the stalled one never was.
+  expect(statuses).toEqual([200])
+  expect((await rowOf(page, name)())?.status).toBe('uploading')
+  const progress = Object.values(await page.evaluate(() => (window as any).__e2eProgress as Record<string, { loaded: number; total: number }>))
+  const partial = progress.filter((p) => p.total > 0 && p.loaded > 0 && p.loaded < p.total)
+  expect(partial.length, `progress events: ${JSON.stringify(progress)}`).toBeGreaterThan(0)
+  stall.stop()
+})
+
+test('networkSwitch() fails the API and the bucket while down, leaves files readable, and restores both', async ({ context, page, browserName }, testInfo) => {
+  const network = networkSwitch(context, browserName)
+  await signIn(page, await primary())
+  const [file] = await makeFiles(testInfo.outputPath('files'), [{ name: 'net.bin', bytes: 1 * MB }])
+  await page.evaluate(() => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.id = 'e2e-net-input'
+    document.body.appendChild(input)
+  })
+  await page.locator('#e2e-net-input').setInputFiles(file)
+  const probe = () =>
+    page.evaluate(async (url) => {
+      const picked = (document.getElementById('e2e-net-input') as HTMLInputElement).files![0]
+      const api = await fetch(url).then((r) => r.status, (e) => `${e.name}`)
+      const read = await picked.slice(0, 1).arrayBuffer().then((b) => b.byteLength, (e) => `${e.name}`)
+      return { api, read }
+    }, `${apiUrl()}/health`)
+
+  expect(await probe()).toEqual({ api: 200, read: 1 })
+  await network.down()
+  expect(await probe()).toEqual({ api: 'TypeError', read: 1 })
+  await network.up()
+  expect(await probe()).toEqual({ api: 200, read: 1 })
 })
 
 test('holdParts() holds every part PUT until released, then lets them all through', async ({ page }, testInfo) => {
