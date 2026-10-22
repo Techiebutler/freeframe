@@ -6,11 +6,9 @@ import {
   ChevronDown,
   LayoutGrid,
   List,
-  Moon,
   RectangleHorizontal,
   RectangleVertical,
   Square,
-  Sun,
   Wand2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -175,7 +173,13 @@ function ToggleRow({
 
 /**
  * The whole Appearance block a share link carries: layout, open-in-viewer,
- * theme, accent, card size, aspect ratio, fit/fill, card info and sort.
+ * accent, card size, aspect ratio, fit/fill, card info and sort.
+ *
+ * The card rows follow the folder Appearance popover: in list layout the
+ * grid-only settings (card size, aspect ratio, fit/fill) are hidden, their
+ * values kept on the link in case it goes back to grid. Theme is not offered
+ * here at all — a link keeps whatever theme it already stored, and the share
+ * page falls back to dark.
  *
  * One component for both places that edit it — the create dialog and the
  * link panel's Settings > Appearance — so the two can't drift. It holds no
@@ -247,18 +251,6 @@ export function ShareAppearanceFields({
         onCheckedChange={(checked) => onChange({ open_in_viewer: checked })}
       />
 
-      {/* Theme */}
-      <Row label="Theme">
-        <Segment<ShareLinkAppearance['theme']>
-          options={[
-            { value: 'dark', icon: <Moon className="h-3.5 w-3.5" />, ariaLabel: 'Dark theme' },
-            { value: 'light', icon: <Sun className="h-3.5 w-3.5" />, ariaLabel: 'Light theme' },
-          ]}
-          value={appearance.theme}
-          onChange={(theme) => onChange({ theme })}
-        />
-      </Row>
-
       {/* Accent color */}
       <Row label="Accent Color">
         <div className="flex items-center gap-2">
@@ -303,43 +295,49 @@ export function ShareAppearanceFields({
         </div>
       </Row>
 
-      {/* Card Size */}
-      <Row label="Card Size">
-        <Segment<ShareLinkAppearance['card_size']>
-          options={[
-            { value: 's', label: 'S' },
-            { value: 'm', label: 'M' },
-            { value: 'l', label: 'L' },
-          ]}
-          value={(appearance.card_size || 'm') as ShareLinkAppearance['card_size']}
-          onChange={(card_size) => onChange({ card_size })}
-        />
-      </Row>
+      {/* Card Size — only in grid mode */}
+      {appearance.layout === 'grid' && (
+        <Row label="Card Size">
+          <Segment<ShareLinkAppearance['card_size']>
+            options={[
+              { value: 's', label: 'S' },
+              { value: 'm', label: 'M' },
+              { value: 'l', label: 'L' },
+            ]}
+            value={(appearance.card_size || 'm') as ShareLinkAppearance['card_size']}
+            onChange={(card_size) => onChange({ card_size })}
+          />
+        </Row>
+      )}
 
-      {/* Aspect Ratio */}
-      <Row label="Aspect Ratio">
-        <Segment<ShareLinkAppearance['aspect_ratio']>
-          options={[
-            { value: 'landscape', icon: <RectangleHorizontal className="h-3.5 w-3.5" />, ariaLabel: 'Landscape' },
-            { value: 'square', icon: <Square className="h-3.5 w-3.5" />, ariaLabel: 'Square' },
-            { value: 'portrait', icon: <RectangleVertical className="h-3.5 w-3.5" />, ariaLabel: 'Portrait' },
-          ]}
-          value={(appearance.aspect_ratio || 'landscape') as ShareLinkAppearance['aspect_ratio']}
-          onChange={(aspect_ratio) => onChange({ aspect_ratio })}
-        />
-      </Row>
+      {/* Aspect Ratio — only in grid mode */}
+      {appearance.layout === 'grid' && (
+        <Row label="Aspect Ratio">
+          <Segment<ShareLinkAppearance['aspect_ratio']>
+            options={[
+              { value: 'landscape', icon: <RectangleHorizontal className="h-3.5 w-3.5" />, ariaLabel: 'Landscape' },
+              { value: 'square', icon: <Square className="h-3.5 w-3.5" />, ariaLabel: 'Square' },
+              { value: 'portrait', icon: <RectangleVertical className="h-3.5 w-3.5" />, ariaLabel: 'Portrait' },
+            ]}
+            value={(appearance.aspect_ratio || 'landscape') as ShareLinkAppearance['aspect_ratio']}
+            onChange={(aspect_ratio) => onChange({ aspect_ratio })}
+          />
+        </Row>
+      )}
 
-      {/* Thumbnail Scale */}
-      <Row label="Thumbnail Scale">
-        <Segment<ShareLinkAppearance['thumbnail_scale']>
-          options={[
-            { value: 'fit', label: 'Fit' },
-            { value: 'fill', label: 'Fill' },
-          ]}
-          value={(appearance.thumbnail_scale || 'fill') as ShareLinkAppearance['thumbnail_scale']}
-          onChange={(thumbnail_scale) => onChange({ thumbnail_scale })}
-        />
-      </Row>
+      {/* Thumbnail Scale — only in grid mode */}
+      {appearance.layout === 'grid' && (
+        <Row label="Thumbnail Scale">
+          <Segment<ShareLinkAppearance['thumbnail_scale']>
+            options={[
+              { value: 'fit', label: 'Fit' },
+              { value: 'fill', label: 'Fill' },
+            ]}
+            value={(appearance.thumbnail_scale || 'fill') as ShareLinkAppearance['thumbnail_scale']}
+            onChange={(thumbnail_scale) => onChange({ thumbnail_scale })}
+          />
+        </Row>
+      )}
 
       {/* Show Card Info */}
       <ToggleRow

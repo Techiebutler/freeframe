@@ -70,13 +70,29 @@ describe('ShareCreateDialog appearance', () => {
   it('picks made in the Appearance block go out with the create request', () => {
     renderDialog()
     openAppearanceBlock()
-    fireEvent.click(screen.getByRole('button', { name: 'List' }))
     fireEvent.click(screen.getByRole('button', { name: 'L' }))
+    fireEvent.click(screen.getByRole('button', { name: 'List' }))
+
+    // List layout hides the grid-only rows, like the folder Appearance
+    // popover — but the picks stay stored and go out with the request, so
+    // switching back to grid (here or later) keeps them.
+    expect(screen.queryByRole('button', { name: 'S' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Landscape' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Fit' })).toBeNull()
     expect(createAndSentAppearance()).toEqual({
       ...DEFAULT_SHARE_APPEARANCE,
       layout: 'list',
       card_size: 'l',
     })
+  })
+
+  it('offers no light/dark theme control', () => {
+    // Theme is not editable on a link: the share page falls back to dark and
+    // existing links keep whatever theme they stored.
+    renderDialog()
+    openAppearanceBlock()
+    expect(screen.queryByRole('button', { name: 'Dark theme' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Light theme' })).toBeNull()
   })
 
   it('Use my current view fills the link from my view, once', () => {

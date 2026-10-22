@@ -63,6 +63,8 @@ describe('ShareLinkSettingsPanel appearance', () => {
     expect(
       screen.queryByRole('button', { name: /use my current view/i }),
     ).toBeNull()
+    // And no theme control anywhere: the link keeps its stored theme.
+    expect(screen.queryByRole('button', { name: /theme/i })).toBeNull()
   })
 
   it('editing one setting still patches the whole stored appearance', async () => {
