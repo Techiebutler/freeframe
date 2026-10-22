@@ -433,7 +433,9 @@ change after the drop is exactly what those scenarios want. Not exercised.
 | Sign-out or account switch elsewhere (A1 to A3) | In the second tab or window: the sidebar's account menu (narrow rail: `button[aria-haspopup="menu"][title="<account name>"]`), then the menu item "Log out"; sign in through the login form (`live-tools/ffq-login.js`); an invite: `POST /users/invite` from the first tab with its own token, open `/invite/<token>`, fill the form. `live-tools/ffq-auth.js` records the `storage` events and, per request, the account it was sent as. | verified in phase 4 |
 | Short access tokens | Recreate only the stack's api container with `ACCESS_TOKEN_EXPIRE_MINUTES=1`: one extra compose file holding just that variable under `services.api.environment`, added after the stack's own `-f` files and `--env-file` (read them from the container's `com.docker.compose.project.config_files` / `working_dir` labels), `docker compose -p ffe2e --env-file <env> -f docker-compose.dev.yml -f <override> -f <extra> up -d --no-deps --no-build api`. Restore with the same command without the extra file and check `printenv ACCESS_TOKEN_EXPIRE_MINUTES` is empty and a refresh returns a 900 s token. A token in hand keeps its old lifetime: refresh once to get a short one. | verified in phase 4 (the restored container had its original config hash) |
 | Offline exactly while a refresh is due | `ffq-auth.js`: `holdRefresh = true` holds the app's `POST /auth/refresh` at the page's `fetch`; once `refreshHeld()` is 1, go offline, then `releaseRefresh()`: the refresh goes out offline and fails `ERR_INTERNET_DISCONNECTED`. Set `holdRefresh = false` before going back online. It acts only on a refresh that starts while it is on: a refresh already in flight when the network drops (the case a person meets without the stand-in) is not covered, and no live run has caught one. | verified in phase 4 (T2) |
-| `beforeunload` dialog (L1) | `navigate_page` takes `handleBeforeUnload` (`accept` or `dismiss`); for a dialog that is already open, `handle_dialog`. | not exercised |
+| `beforeunload` dialog (L1) | MCP: `navigate_page` takes `handleBeforeUnload` (`accept` or `dismiss`); for a dialog that is already open, `handle_dialog`. Section 10's driver: `dialogs {page, answer, delayMs}` sets how that page's dialogs are answered and after how long (the dialog stays up, and the page blocked, meanwhile), then `reload {page, nowait: true}` (the browser's own Reload; a dismissed prompt leaves Playwright's promise unsettled) or `close {page, runBeforeUnload: true}` (closing the tab as a person does). The page needs a trusted click first (sticky activation): the driver's `click`. Proof it was the browser's modal: `dialogs` lists it with type `beforeunload`, and an `eval {timeout: 800}` sent while it is up times out. | MCP not exercised; driver verified in phase 5 (L1: reload and tab close, Stay and Leave) |
+| Screen wake lock | `live-tools/ffq-wakelock.js` as an init script (MCP `initScript`, driver `init`): every request, grant, refusal, `release()` and browser `release` event with the visibility, kept across loads in sessionStorage (`__wl.prev`). From the OS, read-only: `pmset -g assertions` lists Chrome's `NoDisplaySleepAssertion` named "Blink Wake Lock" while a lock is held ("Capturing" is a screenshot). Needs a secure context (`http://localhost` is one). | verified in phase 5 (W1 to W4, V) |
+| Hide the tab, show it again | Not through Playwright (every page reads visible, section 10). Stop the driver, then `live-tools/cdp-raw.js`: `new` opens a foreground tab in the same window (the first one goes `hidden`), `activate <id>` switches back, `eval <id> '<expr>'` reads the page. | verified in phase 5 (V) |
 | Laptop sleep (wake and resume cases) | Close the lid for 2 minutes with the queue running, open it, and record what the rows show. `pmset sleepnow` does the same from a terminal. A person has to be present; the DevTools session may need `list_pages` afterwards to find its tab. An unattended agent must not do this (it ends the session): it belongs to the manual pass. | not exercised (phase 3: moved to the manual pass) |
 | Busy main thread (Q2) | Optional: `emulate` with `cpuThrottlingRate: 4`. Report it if used. | not exercised |
 
@@ -634,10 +636,20 @@ in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section)
   in 8 minutes) has to count them.
 - **A tab sees another tab's new rows only when the account changes** (or from the server's history): a row added in tab B is not listed in
   tab A of the same account. Read each tab's own rows, and Local Storage (`ff-uploads`) for what is saved.
+- **`has-text("All")` also matches "Cancel all queued"** (Playwright's `has-text` is a case-insensitive substring). With rows queued, a
+  click meant for the panel's All tab cancels them (phase 5's closed-tab run). Use `button:text-matches("^All")` and
+  `button:text-matches("^Active")`.
+- **A `beforeunload` dialog left up blocks the page**: every `eval` waits until it is answered. Give the driver's `eval` a `timeout`
+  while one may be open, and keep `delayMs` short when parts are held (the watchdog's clock keeps running).
+- **`screencapture` needs Screen Recording permission** for the terminal; without it `screencapture -R` fails ("could not create image
+  from rect"), and a page screenshot cannot be taken while a dialog holds the page. The dialog's evidence is then the `dialogs` entry
+  and the blocked `eval`.
+- **A screenshot is a power assertion too**: `pmset -g assertions` lists one named "Capturing" for Chrome while it is taken. Only
+  "Blink Wake Lock" is the page's wake lock.
 
 ## 9. Phase 2 stand-ins (`live-tools/`)
 
-Nine files (seven scripts for the page, plus the throwaway server and the section 10 driver), loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
+Eleven files (eight scripts for the page, plus the throwaway server and the two section 10 drivers), loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
 the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript` is only needed for a page that sends at load):
 
 | File | Gives you |
@@ -649,7 +661,9 @@ the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript`
 | `live-tools/ffq-route.js` | per-file faults for part PUTs (phase 3): `route['name.png'] = 'stall'` or `'hang'` sends that file's next part PUT to the throwaway server below (real upload progress, then nothing; or every byte sent and no answer), `holdFile['name.png'] = n` holds its first n part PUTs unsent; `routeLog` has the times |
 | `live-tools/ffq-auth.js` | phase 4: `apiLog` (every request to the API: method, path with ids replaced, the account it was sent as from the bearer token's `sub` (first 8 characters of the user id, never the token), status, time), `storageLog` (token and resume-claim writes, from this tab and the others), `me()` (account and seconds left on the token), `authSummary()`, `uploadCallsAs()`, `savedRows(prefix)` and `savedOwners()` (Local Storage `ff-uploads`, with `ownerId`), `claims()`; stand-ins `holdRefresh` / `releaseRefresh()` and `partsAnswerAt` (the `/parts` answer reaches the app at that wall time: two tabs learn "nobody is sending" in the same millisecond). Needs `ffq-probe.js` first; set `q.apiHost` when the API is not `localhost:18000` |
 | `live-tools/ffq-login.js` | phase 4: on a login page, adds `#pwin`; put the mode-0600 password files (named `<account>.pw`) into it, then `__ffqLogin(email, account)` reads the file in the page, fills the form and clicks "Sign in". Delete the password files when the pass ends, at the latest |
-| `live-tools/cdp-driver.js` | phase 4: the section 10 driver |
+| `live-tools/cdp-driver.js` | phase 4: the section 10 driver (phase 5 added `init`, `focus`, `bounds`, `reload {nowait}`, `close {runBeforeUnload}`, `dialogs {answer, delayMs}`) |
+| `live-tools/cdp-raw.js` | phase 5: plain DevTools-protocol commands with nothing of Playwright attached (`list`, `eval`, `new`, `activate`, `close`), for a real hidden tab (section 10) |
+| `live-tools/ffq-wakelock.js` | phase 5: install before the app (init script): `__wl.log` (request, granted, refused, release-called, released, visibility, pagehide), `__wl.prev` (the previous documents' entries, from sessionStorage), `held()`, `state()`, `watch(prefix, ms)` (a timeline of locks held and that prefix's rows, written on change), `stop()`, `clearPrev()` |
 | `live-tools/stall-server.js` | the throwaway server for `route` (`node e2e/live-tools/stall-server.js [port]`, default 18777, on 127.0.0.1): answers the CORS preflight, then `/stall` stops reading after 256 KB and `/hang` reads everything and never answers. Stop it with `kill <pid>` when done |
 
 After a reload, one script reinstalls everything and adds the two inputs (`ffq-drop-input` and `ffq-pick`) and the hold:
@@ -701,11 +715,13 @@ c() { curl -s -X POST "http://127.0.0.1:9334/$1" -d "${2:-}"; echo; }           
 ```
 
 The driver answers JSON on `127.0.0.1:9334`: `pages`, `new {url, window}` (`window: true` opens a new window, otherwise a tab),
-`goto`, `reload`, `url`, `eval {page, fn}` (a function's source), `evalfile {page, path}` (the `ffq-*.js` scripts), `files {page,
-selector, paths}` (the stand-in for `upload_file`), `click {page, selector}` and `fill` (trusted input), `shot {page, path}`,
+`goto`, `reload {page, nowait}`, `url`, `eval {page, fn, timeout}` (a function's source), `evalfile {page, path}` (the `ffq-*.js` scripts), `init {page,
+path}` (a script on every new document of that page, before the app), `files {page, selector, paths}` (the stand-in for `upload_file`),
+`click {page, selector}` and `fill` (trusted input), `shot {page, path}`, `front`, `focus {page, enabled}`, `bounds {page}`,
 `emulate {page, offline}` or `{page, preset: "Fast 4G"}` or `{page}` to lift it, `net {page, match, since}` (the page's requests
-with status or `net::` error, the "DevTools list"), `console {page, since}` (with `pageerror` for uncaught errors), `dialogs`,
-`close`. All pages are in the profile's one browser context, so every tab and window shares localStorage and cookies.
+with status or `net::` error, the "DevTools list"), `console {page, since}` (with `pageerror` for uncaught errors), `dialogs {page,
+answer, delayMs}` (the dialogs seen, and how the next ones are answered: dismiss at once by default), `close {page, runBeforeUnload}`,
+`closed`. All pages are in the profile's one browser context, so every tab and window shares localStorage and cookies.
 
 How it differs from the MCP:
 
@@ -713,8 +729,11 @@ How it differs from the MCP:
   the driver stops). Offline behaves as with the MCP: `navigator.onLine` false, `offline` / `online` events, `ERR_INTERNET_DISCONNECTED`.
 - `net` comes from Playwright's page events and does not list CORS preflights.
 - **Every page reads `document.visibilityState` "visible" and `hasFocus()` true**, even a background tab: Playwright enables focus
-  emulation on the pages it attaches to. Background-tab timer throttling is therefore not in play; a scenario about a hidden tab needs the
-  MCP or the manual pass.
+  emulation on the pages it attaches to. Background-tab timer throttling is therefore not in play. `focus {enabled: false}` does not undo
+  it (measured in phase 5: `hasFocus()` went false, a background tab still read "visible"; the emulation of Playwright's own session
+  stands). For a scenario about a hidden tab, stop the driver (`kill $(cat $SCR/driver.pid)`; the page keeps running) and use
+  `live-tools/cdp-raw.js` (`node e2e/live-tools/cdp-raw.js 9333 new`, `activate <id>`, `eval <id> '<expr>'`), then start the driver
+  again. A restarted driver has new page ids and none of the old one's records, network conditions or `init` scripts: run `init` again.
 - Screenshots and the network list are Playwright's, not DevTools'.
 - The driver listens on 127.0.0.1 only and answers 403 to any request with an `Origin` or `Sec-Fetch-Site` header or a `Host`
   other than `127.0.0.1:<port>` / `localhost:<port>`, so a web page cannot drive it; curl is unaffected. It replaces every

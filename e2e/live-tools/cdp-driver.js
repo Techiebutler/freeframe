@@ -40,14 +40,23 @@ const PRESETS = {
   const adopt = (page) => {
     for (const v of pages.values()) if (v.page === page) return
     const id = next++
-    const rec = { page, net: [], console: [], dialogs: [], cdp: null }
+    // dialogAnswer / dialogDelayMs: how this page's dialogs are answered (the `dialogs` command sets them). Dismiss at once
+    // by default; a delay leaves the browser's own dialog on screen, and the page blocked, for that long.
+    const rec = { page, net: [], console: [], dialogs: [], cdp: null, dialogAnswer: 'dismiss', dialogDelayMs: 0 }
     pages.set(id, rec)
     page.on('request', (r) => rec.net.push({ at: Date.now(), method: r.method(), url: r.url(), type: r.resourceType(), status: null, req: r }))
     page.on('requestfinished', async (r) => { const e = rec.net.find((x) => x.req === r); if (e) { try { e.status = (await r.response())?.status() ?? null } catch {} } })
     page.on('requestfailed', (r) => { const e = rec.net.find((x) => x.req === r); if (e) e.status = r.failure()?.errorText ?? 'failed' })
     page.on('console', (m) => rec.console.push({ at: Date.now(), type: m.type(), text: m.text().slice(0, 500) }))
     page.on('pageerror', (e) => rec.console.push({ at: Date.now(), type: 'pageerror', text: String(e).slice(0, 500) }))
-    page.on('dialog', (d) => { rec.dialogs.push({ at: Date.now(), type: d.type(), message: d.message() }); d.dismiss().catch(() => {}) })
+    page.on('dialog', (d) => {
+      const e = { at: Date.now(), type: d.type(), message: d.message(), answer: rec.dialogAnswer, answeredAt: null }
+      rec.dialogs.push(e)
+      setTimeout(() => {
+        e.answeredAt = Date.now()
+        ;(e.answer === 'accept' ? d.accept() : d.dismiss()).catch(() => {})
+      }, rec.dialogDelayMs)
+    })
     page.on('close', () => { rec.closed = Date.now() })
   }
   ctx.pages().forEach(adopt)
@@ -68,7 +77,28 @@ const PRESETS = {
       return [...pages].find(([, r]) => r.page === page)[0]
     },
     goto: async ({ page, url }) => { await get(page).page.goto(url, { waitUntil: 'domcontentloaded' }); return get(page).page.url() },
-    reload: async ({ page }) => { await get(page).page.reload({ waitUntil: 'domcontentloaded' }); return get(page).page.url() },
+    // nowait: start the browser's own Reload and return at once (a dismissed beforeunload leaves Playwright's promise unsettled).
+    reload: async ({ page, nowait }) => {
+      const p = get(page).page.reload({ waitUntil: 'domcontentloaded' })
+      if (nowait) { p.catch(() => {}); return { started: Date.now() } }
+      await p
+      return get(page).page.url()
+    },
+    // A script run on every new document of this page before the app's own (Page.addScriptToEvaluateOnNewDocument).
+    init: async ({ page, path }) => { await get(page).page.addInitScript({ path }); return path },
+    // enabled: false lets the page see its real visibility and focus (Playwright turns focus emulation on when it attaches).
+    focus: async ({ page, enabled }) => {
+      const s = await cdpOf(get(page))
+      await s.send('Emulation.setFocusEmulationEnabled', { enabled: !!enabled })
+      return { enabled: !!enabled, at: Date.now() }
+    },
+    // The window holding this page, for an OS screenshot of the browser's own dialog.
+    bounds: async ({ page }) => {
+      const s = await cdpOf(get(page))
+      const { targetInfo } = await s.send('Target.getTargetInfo')
+      const b = await browser.newBrowserCDPSession()
+      return b.send('Browser.getWindowForTarget', { targetId: targetInfo.targetId })
+    },
     url: async ({ page }) => get(page).page.url(),
     eval: async ({ page, fn, timeout }) => {
       const p = get(page).page.evaluate(`(${fn})()`)
@@ -99,8 +129,15 @@ const PRESETS = {
     console: async ({ page, since }) => get(page).console
       .filter((e) => !since || e.at >= since)
       .map((e) => ({ ...e, text: redact(e.text) })),
-    dialogs: async ({ page }) => get(page).dialogs,
-    close: async ({ page }) => { await get(page).page.close(); return 'closed' },
+    dialogs: async ({ page, answer, delayMs }) => {
+      const rec = get(page)
+      if (answer) rec.dialogAnswer = answer
+      if (delayMs !== undefined) rec.dialogDelayMs = delayMs
+      return rec.dialogs
+    },
+    // runBeforeUnload: close the tab the way the browser does when a person closes it, so the page may ask first.
+    close: async ({ page, runBeforeUnload }) => { await get(page).page.close({ runBeforeUnload: !!runBeforeUnload }); return { closed: !!get(page).closed, at: Date.now() } },
+    closed: async ({ page }) => ({ closed: get(page).closed ?? null }),
     now: async () => Date.now(),
   }
 
