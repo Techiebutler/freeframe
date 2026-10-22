@@ -25,10 +25,7 @@ import { cn, dateInputValue, endOfDayISO } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
-import {
-  ShareAppearanceFields,
-  appearanceFromView,
-} from "@/components/projects/share-appearance-fields";
+import { ShareAppearanceFields } from "@/components/projects/share-appearance-fields";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
@@ -565,7 +562,7 @@ export function ShareLinkContent({
   frontendUrl,
   onUpdate,
 }: ShareLinkContentProps) {
-  const { shareLink, immediateUpdate } = useShareLinkData(token);
+  const { shareLink, immediateUpdate, appearance } = useShareLinkData(token);
 
   const [localTitle, setLocalTitle] = React.useState("");
   const [localDescription, setLocalDescription] = React.useState("");
@@ -575,6 +572,8 @@ export function ShareLinkContent({
       name: string;
       thumbnail_url: string | null;
       asset_type: string;
+      file_size: number | null;
+      created_at: string;
     }[]
   >([]);
   const [previewFolders, setPreviewFolders] = React.useState<
@@ -602,8 +601,18 @@ export function ShareLinkContent({
           name: string;
           asset_type: string;
           thumbnail_url: string | null;
+          file_size?: number | null;
+          created_at?: string;
         }>(`/assets/${shareLink.asset_id}`)
-        .then((asset) => setPreviewThumbnails([asset]))
+        .then((asset) =>
+          setPreviewThumbnails([
+            {
+              ...asset,
+              file_size: asset.file_size ?? null,
+              created_at: asset.created_at ?? "",
+            },
+          ]),
+        )
         .catch(() => setPreviewThumbnails([]));
       setPreviewFolders([]);
     } else if (folderId || isProjectShare) {
@@ -619,11 +628,15 @@ export function ShareLinkContent({
         .then((r) => r.ok ? r.json() : Promise.reject())
         .then((data) => {
           setPreviewThumbnails(
-            (data.assets || []).slice(0, 4).map((a: any) => ({
+            // A few more than the six shown: the appearance sort is applied
+            // at render, before the slice.
+            (data.assets || []).slice(0, 12).map((a: any) => ({
               id: a.id,
               name: a.name,
               asset_type: a.asset_type,
               thumbnail_url: a.thumbnail_url,
+              file_size: a.file_size ?? null,
+              created_at: a.created_at ?? "",
             }))
           );
           setPreviewFolders(
@@ -642,6 +655,40 @@ export function ShareLinkContent({
   }, [shareLink, projectId]);
 
   const shareUrl = `${frontendUrl}${withBasePath(`/share/${token}`)}`;
+
+  // Mirror how the share page itself renders this link (folder-share-viewer):
+  // card size picks the grid columns, aspect ratio and fit/fill the thumbnail
+  // box and image, card info the name strip, layout the grid-vs-list switch,
+  // and the same client-side sort orders assets. The settings panel mutates
+  // the same SWR key, so a save re-renders this preview immediately.
+  // Theme and accent are deliberately not mirrored: they repaint the share
+  // page's own chrome, and repainting this panel would repaint the app.
+  const isGridLayout = appearance.layout !== "list";
+  const cardSize = appearance.card_size ?? "m";
+  // The page scales its grid against the viewport; this preview lives in a
+  // fixed-width pane, so keep the same relative steps at panel scale.
+  const gridCols =
+    cardSize === "s" ? "grid-cols-4" : cardSize === "l" ? "grid-cols-2" : "grid-cols-3";
+  const aspectClass =
+    appearance.aspect_ratio === "square"
+      ? "aspect-square"
+      : appearance.aspect_ratio === "portrait"
+        ? "aspect-[3/4]"
+        : "aspect-[16/10]";
+  const thumbnailScale = appearance.thumbnail_scale ?? "fill";
+  const showCardInfo = appearance.show_card_info !== false;
+
+  const sortedPreviewAssets = React.useMemo(() => {
+    const list = [...previewThumbnails];
+    const sortBy = appearance.sort_by ?? "created_at";
+    list.sort((a, b) => {
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      if (sortBy === "file_size") return (b.file_size ?? 0) - (a.file_size ?? 0);
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+    return list;
+  }, [previewThumbnails, appearance.sort_by]);
+  const shownAssets = sortedPreviewAssets.slice(0, 6);
 
   if (!shareLink) {
     return (
@@ -704,7 +751,7 @@ export function ShareLinkContent({
                   {previewFolders.length}{" "}
                   {previewFolders.length === 1 ? "Folder" : "Folders"}
                 </span>
-                <div className="grid grid-cols-3 gap-3">
+                <div className={cn("grid gap-3", gridCols)}>
                   {previewFolders.map((folder) => (
                     <div
                       key={folder.id}
@@ -740,39 +787,84 @@ export function ShareLinkContent({
                 </div>
               </>
             )}
-            {/* Assets */}
-            {previewThumbnails.length > 0 && (
+            {/* Assets — rendered the way the link's appearance says */}
+            {shownAssets.length > 0 && (
               <>
                 <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {previewThumbnails.length}{" "}
-                  {previewThumbnails.length === 1 ? "Asset" : "Assets"}
+                  {shownAssets.length}{" "}
+                  {shownAssets.length === 1 ? "Asset" : "Assets"}
                 </span>
-                <div className="grid grid-cols-3 gap-3">
-                  {previewThumbnails.slice(0, 6).map((asset) => (
-                    <div
-                      key={asset.id}
-                      className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
-                    >
-                      <div className="aspect-[16/10] bg-bg-tertiary flex items-center justify-center overflow-hidden">
-                        {asset.thumbnail_url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={asset.thumbnail_url}
-                            alt={asset.name}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <Eye className="h-8 w-8 text-text-tertiary/40" />
+                {isGridLayout ? (
+                  <div className={cn("grid gap-3", gridCols)}>
+                    {shownAssets.map((asset) => (
+                      <div
+                        key={asset.id}
+                        className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
+                      >
+                        <div
+                          className={cn(
+                            "bg-bg-tertiary flex items-center justify-center overflow-hidden",
+                            aspectClass,
+                          )}
+                        >
+                          {asset.thumbnail_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={asset.thumbnail_url}
+                              alt={asset.name}
+                              className={cn(
+                                "h-full w-full",
+                                thumbnailScale === "fill"
+                                  ? "object-cover"
+                                  : "object-contain",
+                              )}
+                            />
+                          ) : (
+                            <Eye className="h-8 w-8 text-text-tertiary/40" />
+                          )}
+                        </div>
+                        {showCardInfo && (
+                          <div className="px-3 py-2">
+                            <p className="text-sm font-medium text-text-primary truncate">
+                              {asset.name}
+                            </p>
+                          </div>
                         )}
                       </div>
-                      <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
+                    ))}
+                  </div>
+                ) : (
+                  // Same list layout the share page switches to.
+                  <div className="rounded-lg border border-border overflow-hidden divide-y divide-border">
+                    {shownAssets.map((asset) => (
+                      <div
+                        key={asset.id}
+                        className="flex items-center gap-3 px-3 py-2"
+                      >
+                        <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md bg-bg-tertiary">
+                          {asset.thumbnail_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={asset.thumbnail_url}
+                              alt={asset.name}
+                              className={cn(
+                                "h-full w-full",
+                                thumbnailScale === "fill"
+                                  ? "object-cover"
+                                  : "object-contain",
+                              )}
+                            />
+                          ) : (
+                            <Eye className="absolute inset-0 m-auto h-4 w-4 text-text-tertiary/40" />
+                          )}
+                        </div>
+                        <p className="min-w-0 flex-1 truncate text-sm text-text-primary">
                           {asset.name}
                         </p>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1027,7 +1119,9 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
               />
             </Section>
 
-            {/* Appearance — the same block the create dialog shows */}
+            {/* Appearance — the same block the create dialog shows, minus the
+                current-view copy: editing a saved link, there is no folder view
+                on screen to copy from. */}
             <Section
               title="Appearance"
               icon={<Paintbrush className="h-3.5 w-3.5" />}
@@ -1036,7 +1130,6 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
               <ShareAppearanceFields
                 appearance={appearance}
                 onChange={updateAppearance}
-                onUseCurrentView={() => updateAppearance(appearanceFromView())}
               />
             </Section>
           </div>

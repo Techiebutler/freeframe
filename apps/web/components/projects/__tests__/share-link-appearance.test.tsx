@@ -13,12 +13,11 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { ShareLinkSettingsPanel } from '../share-link-detail'
-import { useViewStore } from '@/stores/view-store'
 
-// Existing links get the same "Use my current view" action the create dialog
-// has: one click fills the link's appearance from the folder view, and the
-// link then owns the result. Fields the view has no equivalent for (theme,
-// accent, open-in-viewer) are left exactly as the link has them.
+// The link panel's Appearance section edits the same block the create dialog
+// shows, but without the current-view copy: while editing a saved link there
+// is no folder view on screen to copy from. The panel still patches the whole
+// appearance object, since the API replaces it wholesale.
 
 const LINK_APPEARANCE = {
   layout: 'grid',
@@ -54,38 +53,16 @@ describe('ShareLinkSettingsPanel appearance', () => {
       expires_at: null,
     })
     patch.mockReset().mockResolvedValue({})
-    useViewStore.setState({
-      layout: 'list',
-      cardSize: 'L',
-      aspectRatio: 'square',
-      thumbnailScale: 'fill',
-      showCardInfo: false,
-      sortKey: 'date',
-      sortDirection: 'asc',
-    })
   })
 
-  it('Use my current view copies the view into the link, keeping the rest', async () => {
+  it('does not offer "Use my current view" when editing a saved link', async () => {
     renderPanel()
     await openAppearanceSection()
-    fireEvent.click(await screen.findByRole('button', { name: /use my current view/i }))
-
-    await waitFor(() => expect(patch).toHaveBeenCalled())
-    expect(patch.mock.calls[0]).toEqual([
-      '/share/tok',
-      {
-        appearance: {
-          ...LINK_APPEARANCE,
-          // Copied from the view:
-          layout: 'list',
-          card_size: 'l',
-          aspect_ratio: 'square',
-          thumbnail_scale: 'fill',
-          show_card_info: false,
-          sort_by: 'created_at',
-        },
-      },
-    ])
+    // That copy only makes sense in the create dialog, where the folder view
+    // is on screen behind the modal. Here there is no view to copy.
+    expect(
+      screen.queryByRole('button', { name: /use my current view/i }),
+    ).toBeNull()
   })
 
   it('editing one setting still patches the whole stored appearance', async () => {

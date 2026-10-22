@@ -189,7 +189,13 @@ export function ShareAppearanceFields({
 }: {
   appearance: ShareLinkAppearance
   onChange: (patch: Partial<ShareLinkAppearance>) => void
-  /** When set, renders the "Use my current view" action (see `appearanceFromView`). */
+  /**
+   * Renders the "Use my current view" action (see `appearanceFromView`).
+   * Only the create dialog passes it: there the folder view sits behind the
+   * modal, so "my current view" is something the person can see. The link
+   * panel edits a saved link with no view on screen, so it has nothing to
+   * copy from and omits the action.
+   */
   onUseCurrentView?: () => void
 }) {
   const [accentDraft, setAccentDraft] = React.useState(appearance.accent_color ?? '')
