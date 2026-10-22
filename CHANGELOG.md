@@ -12,11 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`next.config.js` no longer takes an `eslint` key.** If you run a custom `next.config.js`, remove it; Next 16 ignores the key and warns on every build.
 
 ### Added
-- **Appearance settings in the Create Share Link dialog.** Set a link's layout, card size, aspect ratio, Fit/Fill, card info and sort before you create it, or click **Use my current view** to copy them from the project view. The link panel's preview now shows the link with these settings.
+- **Appearance settings in the Create Share Link dialog.** Set a link's layout, card size, aspect ratio, Fit/Fill, card info and sort before you create it, or click **Use my current view** to copy them from the project view. The link panel's preview now shows the link with these settings. (#517 by @jdanna)
 
 ### Changed
-- **One Appearance section for share links.** The link panel's Settings → Appearance uses the same controls as the create dialog, and Sort By moves into it. In list layout the grid-only settings (card size, aspect ratio, Fit/Fill) are hidden. The Theme, Accent Color and Open in viewer controls are removed; existing links keep their saved values.
-- **Folder share links open with the comments pane closed.** The header toggle opens it. Single-asset links, and assets opened from a folder link, still open with comments showing.
+- **One Appearance section for share links.** The link panel's Settings → Appearance uses the same controls as the create dialog, and Sort By moves into it. In list layout the grid-only settings (card size, aspect ratio, Fit/Fill) are hidden. The Theme, Accent Color and Open in viewer controls are removed; existing links keep their saved values. (#517 by @jdanna)
+- **Folder share links open with the comments pane closed.** The header toggle opens it. Single-asset links, and assets opened from a folder link, still open with comments showing. (#517 by @jdanna)
 
 ### Changed
 - **The web app moves to Next.js 16.4.2 and React 19.** It was on Next 14.2.35 and React 18. `middleware.ts` is now `proxy.ts` (Next 16 renamed the file; the checks are unchanged), route `params` are read as promises, and `next lint` is replaced by `eslint .` with an ESLint 9 flat config (`apps/web/eslint.config.mjs`), because Next 16 removed `next lint`. No API, environment variable or Docker setting changes. Node 20.19 or newer (or 22.12+, 24+) is required; the Docker images and CI already use Node 20.
