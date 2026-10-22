@@ -40,10 +40,6 @@ describe('folder share — opening an asset mounts the review UI (#192)', () => 
     await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
     fireEvent.doubleClick(screen.getByText('Clip.mp4'))
 
-    // The viewer opens with its sidebar closed; open it to reach the tabs.
-    const toggle = await screen.findByTitle('Show panel', {}, { timeout: 3000 })
-    fireEvent.click(toggle)
-
     // These tabs live inside ShareReviewInner, so they only appear if that
     // subtree mounted — i.e. if its hook imports resolved.
     await waitFor(() => expect(screen.getByText('Fields')).toBeInTheDocument(), { timeout: 3000 })
@@ -64,9 +60,6 @@ describe('folder share — opening an asset mounts the review UI (#192)', () => 
 
     await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
     fireEvent.doubleClick(screen.getByText('Clip.mp4'))
-
-    const toggle = await screen.findByTitle('Show panel', {}, { timeout: 3000 })
-    fireEvent.click(toggle)
 
     await waitFor(() => expect(screen.getAllByPlaceholderText('Leave your comment...').length).toBeGreaterThan(0), { timeout: 3000 })
     expect(screen.queryByRole('button', { name: 'Public' })).toBeNull()

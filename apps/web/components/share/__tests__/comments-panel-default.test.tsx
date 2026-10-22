@@ -1,9 +1,9 @@
 /**
- * A share link used to load with the right-hand comments pane open on a desktop
- * screen, so the first thing a visitor saw was a "Select an asset to view
- * comments" placeholder (folder grid) or the comment list beside a media they
- * had not looked at yet (viewer). The pane now starts closed on both, and opens
- * only from the header toggle.
+ * A share link's folder grid used to load with the right-hand comments pane
+ * open on a desktop screen, so the first thing a visitor saw was an empty
+ * "Select an asset to view comments" placeholder. The grid now starts closed;
+ * an asset — a single-asset link, or one opened out of the grid — still opens
+ * on its comments, which is what that pane is for.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -63,22 +63,18 @@ describe('the share-link comments pane', () => {
     expect(await screen.findByText('Select an asset to view comments')).toBeInTheDocument()
   })
 
-  it('opens the viewer closed and shows its comments from the toggle', async () => {
+  it('opens an asset on its comments, with no click in between', async () => {
     renderViewer()
 
     await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
     fireEvent.doubleClick(screen.getByText('Clip.mp4'))
 
     // The grid unmounts (its search box goes) and the review screen's own top
-    // bar lands, closed. The tabs live in its sidebar, so they only show once
-    // that sidebar is opened.
+    // bar lands, already showing the panel. The tabs live in that sidebar.
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Search assets…')).toBeNull()
-      expect(screen.getAllByTitle('Show panel')).toHaveLength(1)
+      expect(screen.getByTitle('Hide panel')).toBeInTheDocument()
     }, { timeout: 3000 })
-    expect(screen.queryByText('Fields')).toBeNull()
-    fireEvent.click(screen.getByTitle('Show panel'))
-
     await waitFor(() => expect(screen.getByText('Fields')).toBeInTheDocument(), { timeout: 3000 })
     expect(screen.getByText('Comments')).toBeInTheDocument()
   })

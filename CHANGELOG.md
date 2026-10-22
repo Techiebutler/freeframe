@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Appearance settings when creating a share link:** layout, card size, aspect ratio, Fit/Fill, card info and sort, with **Use my current view** to copy your own. New links are dark and open assets in the viewer. The link preview mirrors them.
 
 ### Changed
-- **Share links open with the comments pane closed,** on the folder grid and in the asset viewer alike. The header toggle opens it.
+- **Folder share links open with the comments pane closed;** the header toggle opens it. Assets — a single-asset link, or one opened out of the grid — still open on their comments.
 - **Button focus rings follow the theme accent.**
 
 ### Changed

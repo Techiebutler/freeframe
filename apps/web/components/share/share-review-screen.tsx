@@ -98,11 +98,12 @@ function ShareReviewInner({
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime } = useReviewStore()
-  // Starts closed on every viewport. A guest following a link came to look at
-  // the media; the panel opens from the toggle in the top bar. (The mobile
-  // sheet still shows its peek band — that is the transport strip, not the
-  // comment list.)
-  const [sidebarOpen, setSidebarOpen] = React.useState(false)
+  // An asset opens on its comments: that pane is the reason an asset link
+  // exists. The folder grid is the surface that starts closed. Below `md` the
+  // sheet's peek band stands in for it, as on the project review page.
+  const [sidebarOpen, setSidebarOpen] = React.useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches,
+  )
 
   // Same rule as the project review screen: a bottom sheet on a portrait phone
   // so the media stays in view, the side-by-side column on a landscape one.
