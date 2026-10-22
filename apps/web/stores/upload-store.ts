@@ -4,7 +4,7 @@ import { mutate as globalMutate } from 'swr'
 import { api, ApiError } from '@/lib/api'
 import { createSpeedMeter, type SpeedMeter } from '@/lib/upload-speed'
 import { createPartBudget, type PartBudget } from '@/lib/upload-budget'
-import { createUploadQueue, type ActiveInfo, type QueueEntry } from '@/lib/upload-queue'
+import { createUploadQueue, usableRetryAfter, type ActiveInfo, type QueueEntry } from '@/lib/upload-queue'
 import { classifyInitiateError, type InitiateOutcome } from '@/lib/upload-initiate-outcome'
 import {
   assertReadable, FileUnreadableError, FILE_READ_FAILED_MESSAGE,
@@ -1594,6 +1594,8 @@ const startTargets = new Map<string, StartTarget>()
  * that whatever takes the probe away (a cancel, a discard) can clear it.
  */
 let probeTimer: ReturnType<typeof setTimeout> | null = null
+/** When the probe's pending try is due (`Date.now()` clock); meaningful only while `probeTimer` is set. */
+let probeDueAt = 0
 
 let dropSeqs = 0
 
@@ -1759,11 +1761,13 @@ function endRun(id: string, runner: Runner, runKey: string): void {
  */
 function scheduleProbe(): void {
   if (probeTimer !== null) clearTimeout(probeTimer)
+  const delay = queue.hold.nextDelayMs()
+  probeDueAt = Date.now() + delay
   probeTimer = setTimeout(() => {
     probeTimer = null
     const id = queue.hold.probeId
     if (id !== null) retryProbe(id)
-  }, queue.hold.nextDelayMs())
+  }, delay)
 }
 
 function retryProbe(id: string): void {
@@ -1827,8 +1831,11 @@ function endHoldIfProbe(id: string): void {
  * before that probe and the probe is only waiting out its backoff, this row
  * takes the role over, on the same backoff, and the probe waits in line: the
  * probe is the first to start once the way is open, and that must be the
- * earliest file. A probe whose try is already out keeps the role, as there is
- * never more than one try at a time.
+ * earliest file. A probe whose try is already out keeps the role for that try,
+ * as there is never more than one try at a time; when that try fails as well,
+ * the earliest row waiting behind it takes the role over for the next one. A
+ * row that takes the role over with a retry-after longer than the wait left
+ * waits for the retry-after, and the backoff doubles from it.
  */
 function holdRow(
   id: string,
@@ -1842,7 +1849,16 @@ function holdRow(
     ? { status: 'queued', progress: 0 }
     : { status: 'interrupted', queuedResume: true, resuming: undefined, progress: 0 }
   if (queue.hold.begin(id, reason, retryAfterMs)) {
-    patchRow(id, { ...waiting, holdReason: reason })
+    // The probe failed (again). A row that went back while its try was out,
+    // queued before it, makes the next try instead.
+    const first = queue.firstNext()
+    if (first && queue.queueSeq(first.id) < queue.queueSeq(id)
+      && queue.hold.takeOver(first.id, reason, queueEntry(row, kind))) {
+      patchRow(id, { ...waiting, holdReason: undefined })
+      patchRow(first.id, { holdReason: reason })
+    } else {
+      patchRow(id, { ...waiting, holdReason: reason })
+    }
     scheduleProbe()
     return
   }
@@ -1854,6 +1870,12 @@ function holdRow(
     && queue.hold.takeOver(id, reason, queueEntry(probeRow, probeKind))) {
     patchRow(probeRow.id, { holdReason: undefined })
     patchRow(id, { ...waiting, holdReason: reason })
+    // The try it takes over is due when the old probe's was, unless it was told to wait longer.
+    const asked = usableRetryAfter(retryAfterMs)
+    if (asked !== undefined && probeTimer !== null && asked > probeDueAt - Date.now()) {
+      queue.hold.begin(id, reason, retryAfterMs)
+      scheduleProbe()
+    }
     return
   }
   queue.enqueue([queueEntry(row, kind)], 'held')

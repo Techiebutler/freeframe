@@ -66,7 +66,10 @@
  * When the row that failed was queued before the probe and the probe is between
  * tries, the caller may instead `hold.takeOver` with it: it becomes the probe,
  * the old probe goes back to waiting as a held entry, and the backoff carries
- * on. Either way the earliest of the rows an outage stopped starts first. If the
+ * on. A row that went back while the probe's try was out cannot take over then,
+ * so when the probe fails again the caller compares it with `firstNext()` and
+ * hands the role over if that entry was queued first. Either way the earliest
+ * of the rows an outage stopped starts first. If the
  * probe is cancelled, `hold.handOff()` takes the first waiting entry out of the
  * list and makes it the new probe, with the delay the cancelled probe was
  * waiting on; when nothing is waiting it returns null and the caller calls
@@ -133,6 +136,12 @@ export interface UploadQueue {
   queueSeq(id: string): number
   /** A snapshot, in start order. */
   waiting(): readonly QueueEntry[]
+  /**
+   * The first of the `'next'` and `'held'` entries, the lowest queueSeq among them; null when there
+   * is none. Never a `'back'` entry, so a file that is merely waiting its turn is never taken for one
+   * the hold sent back.
+   */
+  firstNext(): QueueEntry | null
   hold: {
     readonly probeId: string | null
     readonly reason: 'connection' | 'storage' | null
@@ -171,7 +180,7 @@ export const HOLD_MAX_DELAY_MS = 60_000
  * A retry-after the server gave, made safe to use as a wait: undefined when it is unusable, and
  * never shorter than HOLD_INITIAL_DELAY_MS, so a repeated `Retry-After: 0` cannot become a loop.
  */
-function usableRetryAfter(retryAfterMs: number | undefined): number | undefined {
+export function usableRetryAfter(retryAfterMs: number | undefined): number | undefined {
   if (typeof retryAfterMs !== 'number' || Number.isNaN(retryAfterMs) || retryAfterMs < 0) return undefined
   return Math.max(HOLD_INITIAL_DELAY_MS, Math.min(retryAfterMs, HOLD_MAX_DELAY_MS))
 }
@@ -357,6 +366,10 @@ export function createUploadQueue(): UploadQueue {
 
     waiting() {
       return list.slice()
+    },
+
+    firstNext() {
+      return nextIds.size > 0 ? list[0] : null
     },
 
     hold,

@@ -107,7 +107,7 @@ test('U2: the sending file deleted mid-part ends Interrupted with the changed-fi
   await until(page, rest, 'the others uploaded', (m) => m.length === 4 && count(m, ...FINISHED_UPLOADING) === 4, 120_000)
   expect(initiatesOf(calls, rest)).toHaveLength(4)
   await expect.poll(() => assetNames(project.id), { timeout: 60_000 }).toEqual(expect.arrayContaining(rest.map((f) => f.name)))
-  expect((await rows(page)).find((r) => r.name === a.name)).toMatchObject({ status: 'interrupted', detail: FILE_CHANGED_COPY })
+  expect((await rows(page)).find((r) => r.name === a.name)).toMatchObject({ status: 'interrupted', kind: 'interrupted', detail: FILE_CHANGED_COPY })
 
   // Nothing was thrown away: no abort, so the parts the server holds stay for a resume. And the part the
   // watchdog or the network error ended was not sent again (the retry's read of the file failed first).

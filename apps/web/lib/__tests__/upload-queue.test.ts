@@ -693,6 +693,22 @@ describe('rows an outage held back', () => {
     expect(queue.nextToStart([], 5)).toEqual([])
   })
 
+  it('firstNext is the earliest held or next entry, and never a file merely waiting its turn', () => {
+    const { queue } = startedTogether()
+    expect(queue.firstNext()).toBeNull()
+
+    queue.hold.begin('r', 'connection', undefined)
+    // Only 'later' waits, at the back: it was queued before the probe 'r', but it is no held row.
+    expect(queue.firstNext()).toBeNull()
+
+    queue.enqueue([entry('n', GB, 'resume')], 'next')
+    expect(queue.firstNext()?.id).toBe('n')
+    queue.enqueue([entry('c', MB)], 'held')
+    queue.enqueue([entry('b', MB)], 'held')
+    expect(queue.firstNext()?.id).toBe('b')
+    expect(ids(queue.waiting())).toEqual(['b', 'c', 'n', 'later'])
+  })
+
   it('takeOver changes nothing with no hold, for the probe itself, or with a previous that is not the probe', () => {
     const { queue } = startedTogether()
     expect(queue.hold.takeOver('a', 'connection', entry('c', MB))).toBe(false)

@@ -19,6 +19,7 @@ vi.mock('@/lib/api', async (orig) => ({
 }))
 vi.mock('swr', () => ({ mutate: vi.fn() }))
 
+import { ApiError } from '@/lib/api'
 import { useUploadStore, __uploadQueueTesting as testing } from '../upload-store'
 import { signInAs } from '@/test/upload-session'
 import { fakeServer, small, drop, rowOf, flush } from '@/test/upload-queue-server'
@@ -121,5 +122,85 @@ describe('files held back by one outage', () => {
     server.initiates[3].resolve()
     await flush()
     expect(server.names().slice(4)).toEqual(['01.jpg', '02.jpg'])
+  })
+
+  it('when that try fails, the earliest file waiting takes the role over for the next try', async () => {
+    const server = fakeServer((_, i) => (i < 4 ? 'wait' : 'answer'))
+    const ids = drop([small('01.jpg'), small('02.jpg'), small('03.jpg')])
+    await flush()
+
+    server.initiates[2].reject(offline())
+    await flush()
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flush()
+    server.initiates[1].reject(offline())
+    await flush()
+    server.initiates[0].reject(offline())
+    await flush()
+    expect(rowOf(ids[2]).holdReason).toBeUndefined()
+
+    // 03's try fails too: it goes back to its place in line, and 01 makes the next try.
+    server.initiates[3].reject(offline())
+    await flush()
+    expect(rowOf(ids[0])).toMatchObject({ status: 'queued', holdReason: 'connection' })
+    expect(rowOf(ids[2])).toMatchObject({ status: 'queued' })
+    expect(rowOf(ids[2]).holdReason).toBeUndefined()
+
+    // The backoff carried on: the next try is 4 s later, and it is 01's.
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(server.names()).toHaveLength(4)
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(server.names().slice(4)).toEqual(['01.jpg', '02.jpg', '03.jpg'])
+  })
+
+  it('a file that takes the role over with a longer retry-after waits for it, and the backoff doubles from it', async () => {
+    const server = fakeServer((_, i) => (i < 4 ? 'wait' : 'answer'))
+    const ids = drop([small('01.jpg'), small('02.jpg'), small('03.jpg')])
+    await flush()
+
+    server.initiates[2].reject(offline())
+    await flush()
+    await vi.advanceTimersByTimeAsync(500)
+    // 03 is waiting 1.5 s more; 01 is told to come back in 5 s.
+    server.initiates[0].reject(new ApiError(503, 'Storage is not answering', { code: 'storage_unavailable', retryAfter: 5 }))
+    await flush()
+    expect(rowOf(ids[0])).toMatchObject({ status: 'queued', holdReason: 'storage' })
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(server.names()).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(server.names()).toEqual(['01.jpg', '02.jpg', '03.jpg', '01.jpg'])
+
+    // That try fails as well: the next wait is 10 s, double the 5 s.
+    server.initiates[3].reject(offline())
+    await flush()
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(server.names()).toHaveLength(4)
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(server.names().slice(4, 5)).toEqual(['01.jpg'])
+  })
+
+  it('a file that takes the role over with a shorter retry-after does not bring the try forward', async () => {
+    const storage = (seconds: number) =>
+      new ApiError(503, 'Storage is not answering', { code: 'storage_unavailable', retryAfter: seconds })
+    const server = fakeServer((_, i) => (i < 3 ? 'wait' : 'answer'))
+    drop([small('01.jpg'), small('02.jpg'), small('03.jpg')])
+    await flush()
+
+    server.initiates[2].reject(storage(30))
+    await flush()
+    await vi.advanceTimersByTimeAsync(500)
+    server.initiates[0].reject(storage(5))
+    await flush()
+
+    // The try stays due 30 s after 03 failed.
+    await vi.advanceTimersByTimeAsync(29_499)
+    expect(server.names()).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(server.names().slice(3, 4)).toEqual(['01.jpg'])
   })
 })
