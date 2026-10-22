@@ -123,6 +123,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   testing.reset()
+  vi.useRealTimers()
 })
 
 describe('Uploads panel render cost', () => {
@@ -185,6 +186,14 @@ describe('Uploads panel render cost', () => {
     expect(dialogRenders).not.toHaveBeenCalled()
   })
 
+  it("a row of another account, mounted by its id, draws nothing", () => {
+    useUploadStore.setState({
+      files: [row({ id: 'theirs', fileName: 'theirs.mp4', assetName: 'theirs', status: 'uploading', ownerId: 'user-2' })],
+    })
+    const { container } = render(<UploadItem fileId="theirs" />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
   it('a row id the store no longer has draws nothing rather than throwing', () => {
     useUploadStore.setState({ files: rows(1, () => ({ status: 'uploading' })) })
     const { container } = render(<UploadItem fileId="row-0" />)
@@ -196,7 +205,10 @@ describe('Uploads panel render cost', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('2,000 queued rows render and one progress write costs under 16 ms', () => {
+  // Retried rather than loosened: a hosted CI runner is two or three times
+  // slower per core than the machine the bound was measured on (about 3 ms
+  // alone, 5.5 ms under the full suite), and one noisy run should not fail it.
+  it('2,000 queued rows render and one progress write costs under 16 ms', { retry: 2, timeout: 30_000 }, () => {
     // One upload under way at the top of the drop, and 1,999 waiting their turn.
     openPanelWith(rows(2000, (i) => (i === 0 ? { status: 'uploading', progress: 0 } : { status: 'queued' })))
     expect(screen.getAllByTestId('upload-row')).toHaveLength(2000)
@@ -251,5 +263,73 @@ describe('SSE bridge render cost', () => {
     // A row finishing changes the set: project-2 has nothing processing left.
     act(() => useUploadStore.getState().markProcessingComplete('asset-c'))
     expect(sseRenders.mock.calls.map(([pid]) => pid)).toEqual(['project-1'])
+  })
+})
+
+describe('Day headings', () => {
+  it('a day before yesterday is headed the way the browser writes the date', () => {
+    const fiveDaysAgo = Date.now() - 5 * 86_400_000
+    openPanelWith([row({ id: 'old', status: 'uploading', createdAt: fiveDaysAgo })])
+
+    expect(screen.getAllByTestId('upload-group').map((h) => h.textContent)).toEqual([
+      new Date(fiveDaysAgo).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    ])
+  })
+})
+
+describe('"N minutes ago" on completed rows', () => {
+  const NOON = new Date(2026, 9, 21, 12, 0, 0).getTime()
+
+  function completedAndMoving() {
+    vi.useFakeTimers({ now: NOON })
+    return [
+      row({ id: 'done-1', fileName: 'done-1.mp4', assetName: 'done-1', status: 'complete', createdAt: NOON - 5 * 60_000 }),
+      row({ id: 'done-2', fileName: 'done-2.mp4', assetName: 'done-2', status: 'complete', createdAt: NOON - 2 * 60_000 }),
+      ...rows(3, () => ({ status: 'uploading', progress: 10 })),
+    ]
+  }
+
+  function openOnAll(files: UploadFile[]) {
+    const view = openPanelWith(files)
+    act(() => screen.getByRole('button', { name: /^All/ }).click())
+    panelRenders.mockClear()
+    dialogRenders.mockClear()
+    return view
+  }
+
+  it('moves on by itself as the minutes pass', () => {
+    openOnAll(completedAndMoving())
+    expect(screen.getByText('5 minutes ago')).toBeInTheDocument()
+    expect(screen.getByText('2 minutes ago')).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(60_000))
+
+    expect(screen.getByText('6 minutes ago')).toBeInTheDocument()
+    expect(screen.getByText('3 minutes ago')).toBeInTheDocument()
+  })
+
+  it('a tick re-renders the text alone: not the panel, and no row', () => {
+    openOnAll(completedAndMoving())
+
+    act(() => vi.advanceTimersByTime(60_000))
+
+    expect(screen.getByText('6 minutes ago')).toBeInTheDocument()
+    expect(panelRenders).not.toHaveBeenCalled()
+    expect(dialogRenders).not.toHaveBeenCalled()
+  })
+
+  it('leaves no timer running once nothing shows the time', () => {
+    const files = completedAndMoving()
+    const before = vi.getTimerCount()
+    const view = openOnAll(files)
+    // Opening the panel sets a short one-off timer besides the clock;
+    // a second lets them run out, and is far short of a tick.
+    act(() => vi.advanceTimersByTime(1000))
+    // One clock for both completed rows.
+    expect(vi.getTimerCount()).toBe(before + 1)
+
+    view.unmount()
+
+    expect(vi.getTimerCount()).toBe(before)
   })
 })

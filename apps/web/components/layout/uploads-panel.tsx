@@ -74,6 +74,18 @@ function byQueueOrder(a: UploadFile, b: UploadFile): number {
 }
 
 /**
+ * The heading of a day before yesterday, "Oct 18". One formatter, made on first
+ * use and kept: the listing is worked out on every write to the store, and
+ * `toLocaleDateString` builds a new formatter on every call. It formats with the
+ * same locale and options, so the labels are the same to the byte.
+ */
+let dayFormat: Intl.DateTimeFormat | null = null
+function dayLabel(): Intl.DateTimeFormat {
+  if (dayFormat === null) dayFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+  return dayFormat
+}
+
+/**
  * Groups an already sorted list under date headings, keeping its order.
  *
  * A row with a `dropSeq` was dropped, picked, resumed or retried in this page
@@ -96,10 +108,7 @@ function groupByDate(files: UploadFile[]): { label: string; items: UploadFile[] 
     } else if (f.createdAt >= yesterday) {
       label = 'Yesterday'
     } else {
-      label = new Date(f.createdAt).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-      })
+      label = dayLabel().format(f.createdAt)
     }
     if (!groups[label]) groups[label] = []
     groups[label].push(f)
@@ -343,6 +352,47 @@ function UploadName({
   )
 }
 
+// ─── Relative time ────────────────────────────────────────────────────────────
+
+/**
+ * One clock for every "N minutes ago" in the panel, ticking once a minute while
+ * anything shows one. The interval starts with the first reader and stops with
+ * the last, so a closed panel, or one with no completed row, runs no timer.
+ */
+const TICK_MS = 60_000
+let tick = 0
+let tickTimer: ReturnType<typeof setInterval> | null = null
+const tickListeners = new Set<() => void>()
+
+function subscribeTick(listener: () => void): () => void {
+  tickListeners.add(listener)
+  if (tickTimer === null) {
+    tickTimer = setInterval(() => {
+      tick++
+      tickListeners.forEach((l) => l())
+    }, TICK_MS)
+  }
+  return () => {
+    tickListeners.delete(listener)
+    if (tickListeners.size === 0 && tickTimer !== null) {
+      clearInterval(tickTimer)
+      tickTimer = null
+    }
+  }
+}
+
+const readTick = () => tick
+
+/**
+ * "3 minutes ago", kept current. Rows re-render only on their own data, so a
+ * completed row would otherwise say "just now" for as long as the panel stayed
+ * open. The tick re-renders this text and nothing around it.
+ */
+function RelativeTime({ at }: { at: number }) {
+  React.useSyncExternalStore(subscribeTick, readTick, readTick)
+  return <>{formatRelativeTime(new Date(at).toISOString())}</>
+}
+
 // ─── Upload Item ──────────────────────────────────────────────────────────────
 
 const DISMISS_KEPT = 'Dismiss (the partial upload stays on the server until it is cleaned up)'
@@ -352,11 +402,16 @@ const DISMISS_KEPT = 'Dismiss (the partial upload stays on the server until it i
  *
  * It reads its own row and nothing else, and is memoised on the id, so a
  * progress write, which replaces only the row it changes, re-renders only that
- * row (spec goal 14). A row that has just left the store reads as undefined
- * for the moment before the panel stops listing it, and draws nothing.
+ * row (spec goal 14). A row that has just left the store, or is another
+ * account's, reads as undefined and draws nothing.
  */
 export const UploadItem = React.memo(function UploadItem({ fileId }: { fileId: string }) {
-  const upload = useUploadStore((s) => findRow(s, fileId))
+  // Only the signed-in account's row, as `visibleFiles` has it: whose row this
+  // is does not rest on the listing alone.
+  const upload = useUploadStore((s) => {
+    const r = findRow(s, fileId)
+    return r !== undefined && r.ownerId !== undefined && r.ownerId === s.subject ? r : undefined
+  })
   if (!upload) return null
   return <UploadRow upload={upload} />
 })
@@ -487,7 +542,7 @@ function UploadRow({ upload }: { upload: UploadFile }) {
           )}
           {upload.status === 'complete' && (
             <span className="text-[11px] text-text-tertiary">
-              {formatRelativeTime(new Date(upload.createdAt).toISOString())}
+              <RelativeTime at={upload.createdAt} />
             </span>
           )}
           {upload.status === 'failed' && upload.error && (
