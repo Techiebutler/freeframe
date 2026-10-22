@@ -653,7 +653,12 @@ export function FolderShareViewer({
   const [searchQuery, setSearchQuery] = React.useState('')
   const [foldersExpanded, setFoldersExpanded] = React.useState(true)
   const [assetsExpanded, setAssetsExpanded] = React.useState(true)
-  const [panelOpen, setPanelOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
+  // The comments pane starts closed. A guest following a link came to look at
+  // the media, and on a laptop the pane took a third of the grid before they
+  // had picked anything — it showed "Select an asset to view comments". The
+  // panel belongs to the asset viewer, where ShareReviewScreen opens its own
+  // sidebar by default; here it stays behind the header toggle.
+  const [panelOpen, setPanelOpen] = React.useState(false)
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   // Page title; the hook re-applies it once branding loads and when React remounts the metadata title
