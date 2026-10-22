@@ -29,13 +29,15 @@ vi.mock('@/lib/api', () => ({ api: { get: vi.fn().mockResolvedValue([]), post: v
 
 import { Sidebar } from '../sidebar'
 import { useUploadStore } from '@/stores/upload-store'
-import { row } from '@/test/upload-session'
+import { signInAs, row } from '@/test/upload-session'
 
 const badge = () => screen.getByTitle('Uploads').textContent
 
 describe('the Uploads badge in the sidebar', () => {
   beforeEach(() => {
     useUploadStore.setState({ files: [] })
+    // The badge counts the signed-in account's uploads.
+    signInAs('u1')
   })
 
   it('counts every upload on its way, including a resume waiting for its turn', () => {

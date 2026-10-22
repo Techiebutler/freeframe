@@ -74,7 +74,7 @@ describe('a queued resume', () => {
     server.initiates[0].reject(new ApiError(400, 'No'))
     await settle()
 
-    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
+    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts', { pinSubject: 'user-1' })
     expect(rowOf('r')).toMatchObject({ status: 'starting', resuming: true })
     expect(server.names()).toEqual(['a.mov'])
   })
@@ -209,7 +209,7 @@ describe('a resume at its turn', () => {
 
     useUploadStore.getState().resumeUpload('r', small('clip.mp4'))
     await settle()
-    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
+    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts', { pinSubject: 'user-1' })
 
     // A file that starts meanwhile takes every part slot and keeps them.
     drop([fileOf('b.mov', 80 * MB)])
@@ -331,7 +331,7 @@ describe('a resume that waits its turn', () => {
     await flush()
     await vi.advanceTimersByTimeAsync(opts.partsMs ?? 0)
     await flush()
-    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
+    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts', { pinSubject: 'user-1' })
     return server
   }
 
@@ -460,7 +460,7 @@ describe('a resume and a discard', () => {
     useUploadStore.getState().resumeUpload('r', small('clip.mp4'))
     await settle()
     expect(api.get).toHaveBeenCalledTimes(2)
-    expect(api.get).toHaveBeenLastCalledWith('/upload/rv/parts')
+    expect(api.get).toHaveBeenLastCalledWith('/upload/rv/parts', { pinSubject: 'user-1' })
   })
 })
 

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
-import { useUploadStore, isOnItsWay } from '@/stores/upload-store'
+import { useUploadStore, visibleFiles, isOnItsWay } from '@/stores/upload-store'
 import { useNotificationStore } from '@/stores/notification-store'
 import { useBranding } from '@/components/shared/branding-provider'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
@@ -49,7 +49,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const togglePanel = useUploadStore((s) => s.togglePanel)
   const panelOpen = useUploadStore((s) => s.panelOpen)
   // A count, not the rows, so progress writes don't re-render the sidebar.
-  const activeUploads = useUploadStore((s) => s.files.filter(isOnItsWay).length)
+  // The signed-in account's uploads only, though another's may still be running.
+  const activeUploads = useUploadStore((s) => visibleFiles(s).filter(isOnItsWay).length)
   const { unreadCount, fetchNotifications } = useNotificationStore()
   const { orgName, orgLogoDark, orgLogoLight } = useBranding()
   // Resolved, not the raw preference: 'system' is neither 'light' nor 'dark',

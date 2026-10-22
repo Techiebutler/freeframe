@@ -108,6 +108,7 @@ vi.mock('@/stores/review-store', () => ({
 vi.mock('@/stores/upload-store', () => ({
   // `files` is read by the page to say a new version is queued; none are.
   useUploadStore: storeHook({ startVersionUpload: vi.fn(), files: [], versionsRevision: 0 }),
+  visibleFiles: (s: { files: unknown[] }) => s.files,
 }))
 vi.mock('@/stores/view-store', () => ({ useViewStore: storeHook(viewState) }))
 vi.mock('@/stores/breadcrumb-store', () => ({
@@ -137,9 +138,15 @@ vi.mock('@/components/review/share-dialog', () => ({ ShareDialog: () => null }))
 vi.mock('@/components/review/compare/compare-overlay', () => ({ CompareOverlay: () => null }))
 
 import ReviewPage from '../page'
+import { ToastProvider } from '@/components/shared/toast'
 
 function renderPage() {
-  return render(<ReviewPage params={{ id: 'p1', assetId: 'a2' }} />)
+  // The page tells the user through a toast when a version cannot be added.
+  return render(
+    <ToastProvider>
+      <ReviewPage params={{ id: 'p1', assetId: 'a2' }} />
+    </ToastProvider>,
+  )
 }
 
 const defaultRootAssets = [{ id: 'a1' }, asset, { id: 'a3' }]

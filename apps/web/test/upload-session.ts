@@ -3,9 +3,10 @@
  *
  * Upload rows belong to the account that added them, read from the access
  * token's `sub` (spec goal 9). A test that starts uploads without a token, or
- * builds rows without an owner, passes today and breaks the day owner gating
- * lands. So every upload test signs in with `signInAs` and builds its rows with
- * `row`, which gives them the signed-in owner.
+ * builds rows without an owner, sees no rows at all: the store creates none
+ * without a token and shows only the signed-in account's. So every upload test
+ * signs in with `signInAs` and builds its rows with `row`, which gives them the
+ * signed-in owner.
  */
 import type { UploadFile } from '@/stores/upload-store'
 
@@ -17,13 +18,44 @@ function base64url(value: unknown): string {
   return btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-/** Writes a JWT-shaped access token whose payload is `{ sub }`. The signature is not checked by the client. */
+/** A JWT-shaped access token whose payload is `{ sub }`. The signature is not checked by the client. */
+export function tokenFor(sub: string): string {
+  return `${base64url({ alg: 'HS256', typ: 'JWT' })}.${base64url({ sub })}.signature`
+}
+
+/** What the browser tells every other tab when one of them writes the token. */
+function announce(newValue: string | null): void {
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: ACCESS_TOKEN_KEY, newValue, storageArea: window.localStorage }),
+  )
+}
+
+/**
+ * Signs in as `sub`, and tells the upload store the way the browser tells a tab
+ * that another tab signed in: a `storage` event. A tab is never told of its own
+ * writes, so without the event the store would go on showing the account it
+ * last heard of. Signing in as the account already signed in tells it nothing.
+ */
 export function signInAs(sub: string): void {
   signedIn = sub
-  window.localStorage.setItem(
-    ACCESS_TOKEN_KEY,
-    `${base64url({ alg: 'HS256', typ: 'JWT' })}.${base64url({ sub })}.signature`,
-  )
+  const token = tokenFor(sub)
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, token)
+  announce(token)
+}
+
+/**
+ * Writes `sub`'s token without telling anyone: another tab signed in and its
+ * `storage` event has not reached this tab yet. Rows built with `row` still
+ * belong to whoever `signInAs` last signed in.
+ */
+export function writeTokenUnannounced(sub: string): void {
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, tokenFor(sub))
+}
+
+/** Another tab signs out: the token goes, and this tab hears of it. */
+export function signOutElsewhere(): void {
+  window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+  announce(null)
 }
 
 /** An upload row owned by whoever `signInAs` last signed in. Override any field. */

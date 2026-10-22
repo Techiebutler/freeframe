@@ -40,6 +40,7 @@ import { CommentPanel } from "@/components/review/comment-panel";
 import { UploadZone } from "@/components/upload/upload-zone";
 import { useFileDropRegion } from "@/components/projects/use-file-drop-region";
 import { useUploadStore } from "@/stores/upload-store";
+import { useToast } from "@/components/shared/toast";
 import { useAuthStore } from "@/stores/auth-store";
 import { useViewStore } from "@/stores/view-store";
 import { useBreadcrumbStore } from "@/stores/breadcrumb-store";
@@ -126,6 +127,7 @@ export default function ProjectDetailPage() {
   const [assetToDelete, setAssetToDelete] = React.useState<AssetResponse | null>(null);
 
   const startUploads = useUploadStore((s) => s.startUploads);
+  const toast = useToast();
   const { user } = useAuthStore();
 
   const {
@@ -378,6 +380,19 @@ export default function ProjectDetailPage() {
   // it; see `useFileDropRegion` for why naming them one by one does not work.
   const canDropFiles = canUpload && !showTrash && !showShareLinks;
 
+  /**
+   * Hands a drop or pick to the upload queue. With no session the queue takes
+   * none of it, since an upload belongs to the account that added it, and the
+   * user is told once for the whole drop.
+   */
+  const queueUploads = React.useCallback(
+    (items: Parameters<typeof startUploads>[0], folderId: string | null) => {
+      const ids = startUploads(items, projectId, project?.name, folderId);
+      if (items.length > 0 && ids.length === 0) toast.error("Sign in to upload");
+    },
+    [startUploads, projectId, project?.name, toast],
+  );
+
   const startDroppedUploads = React.useCallback(
     (folderId: string | null, files: File[]) => {
       // Straight to the queue rather than through the dialog. Dragging a file
@@ -386,14 +401,12 @@ export default function ProjectDetailPage() {
       // rename field is skipped; the row in the uploads panel takes the rename
       // while the file waits or goes up. One call for the whole drop, so the
       // files keep their order and start in turn.
-      startUploads(
+      queueUploads(
         files.map((file) => ({ file, assetName: assetNameFromFile(file.name) })),
-        projectId,
-        project?.name,
         folderId,
       );
     },
-    [startUploads, projectId, project?.name],
+    [queueUploads],
   );
 
   const {
@@ -410,13 +423,11 @@ export default function ProjectDetailPage() {
   });
 
   const handleStartUpload = () => {
-    startUploads(
+    queueUploads(
       pendingFiles.map((file) => ({
         file,
         assetName: uploadNameForFile(file.name, assetName, pendingFiles.length),
       })),
-      projectId,
-      project?.name,
       currentFolderId,
     );
     setPendingFiles([]);

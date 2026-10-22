@@ -111,9 +111,56 @@ describe('pinned-identity requests', () => {
     expect(err).toEqual({ status: 401, code: 'identity_changed' })
     expect(sentTo(INITIATE)).toHaveLength(1)
     expect(sentTo(INITIATE)[0].auth).toBe(`Bearer ${tokenFor(X)}`)
-    // Y's session is Y's; this tab did not sign anyone out.
-    expect(localStorage.getItem('ff_access_token')).toBe(tokenFor(Y, 1))
+    // Y's session is Y's; this tab did not refresh it or sign anyone out.
+    expect(sentTo('/auth/refresh')).toHaveLength(0)
+    expect(localStorage.getItem('ff_access_token')).toBe(tokenFor(Y))
     expect(location.href).toBe('')
+  })
+
+  it("a 401 while another account is signed in does not refresh with that account's token", async () => {
+    // Refreshing would spend Y's refresh token on X's request, and a refusal
+    // would sign Y out of every tab.
+    signIn(X)
+    stubFetch({
+      initiate: [
+        () => {
+          signIn(Y)
+          return json(401, { detail: 'Not authenticated' })
+        },
+      ],
+      refresh: [() => json(401, { detail: 'Invalid refresh token' })],
+    })
+    const { api } = await load()
+
+    const err = await codeOf(api.post(INITIATE, BODY, { pinSubject: X }))
+
+    expect(err).toEqual({ status: 401, code: 'identity_changed' })
+    expect(sentTo('/auth/refresh')).toHaveLength(0)
+    expect(localStorage.getItem('ff_access_token')).toBe(tokenFor(Y))
+    expect(localStorage.getItem('ff_refresh_token')).toBe(`refresh-${Y}-0`)
+    expect(location.href).toBe('')
+  })
+
+  it('a refresh that gets no answer while another account signs in throws identity_changed', async () => {
+    signIn(X)
+    stubFetch({
+      initiate: [() => json(401, { detail: 'Token expired' })],
+      refresh: [
+        () => {
+          // Y signs in while X's refresh is on the wire, and the refresh is
+          // lost to the network: the tokens left are Y's.
+          signIn(Y)
+          throw new TypeError('Failed to fetch')
+        },
+      ],
+    })
+    const { api } = await load()
+
+    const err = await codeOf(api.post(INITIATE, BODY, { pinSubject: X }))
+
+    expect(err).toEqual({ status: 401, code: 'identity_changed' })
+    expect(sentTo(INITIATE)).toHaveLength(1)
+    expect(localStorage.getItem('ff_access_token')).toBe(tokenFor(Y))
   })
 
   it('a 401 whose refresh fails on the network throws refresh_unavailable', async () => {

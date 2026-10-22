@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo } from 'react'
-import { useUploadStore, type UploadFile } from '@/stores/upload-store'
+import { useUploadStore, useVisibleFiles, type UploadFile } from '@/stores/upload-store'
 import { useSSE } from '@/hooks/use-sse'
 
 /**
@@ -38,7 +38,8 @@ export function pollIntervalFor(files: UploadFile[]): number {
 }
 
 export function UploadSSEBridge() {
-  const files = useUploadStore((s) => s.files)
+  // The signed-in account's rows: another account's are neither listened for nor polled.
+  const files = useVisibleFiles()
   const refreshProcessingItems = useUploadStore((s) => s.refreshProcessingItems)
 
   const processingProjectIds = useMemo(() => {

@@ -16,19 +16,24 @@ vi.stubGlobal(
 )
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: { post: vi.fn(), get: vi.fn().mockResolvedValue([]) },
 }))
 
 import { UploadsPanel } from '../uploads-panel'
 import { useUploadStore, type UploadFile } from '@/stores/upload-store'
+import { signInAs } from '@/test/upload-session'
+
+// Rows belong to the account that added them, and the panel shows only the signed-in account's.
+beforeEach(() => signInAs('u1'))
 
 function row(patch: Partial<UploadFile> = {}): UploadFile {
   return {
     id: 'row-1', fileName: 'A047C012.mov', fileSize: 1024, fileType: 'video/quicktime',
     projectId: 'p1', projectName: 'Season 2', assetName: 'A047C012',
     progress: 40, processingProgress: 0, status: 'interrupted',
-    assetId: 'a1', versionId: 'v1', uploadId: 'u1', createdAt: Date.now(),
+    assetId: 'a1', versionId: 'v1', uploadId: 'u1', createdAt: Date.now(), ownerId: 'u1',
     ...patch,
   }
 }

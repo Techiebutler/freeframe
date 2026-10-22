@@ -82,7 +82,7 @@ describe('a rename made while initiate is in flight', () => {
 
     const id = useUploadStore.getState().startUpload(
       file(), 'p1', 'A047C012_230815_R1AB', 'Season 2', null,
-    )
+    )!
     // Its turn came at once: nothing else is uploading.
     expect(useUploadStore.getState().files.find((f) => f.id === id)?.status).toBe('starting')
     await settle()
@@ -92,7 +92,7 @@ describe('a rename made while initiate is in flight', () => {
     held.open()
     await settle()
 
-    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04 Rohschnitt' })
+    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04 Rohschnitt' }, { pinSubject: 'user-1' })
   })
 
   it('does not correct a name that never changed', async () => {
@@ -114,7 +114,7 @@ describe('a rename made while initiate is in flight', () => {
     mockUpload(held.promise)
     vi.mocked(api.patch).mockRejectedValue(new Error('boom'))
 
-    const id = useUploadStore.getState().startUpload(file(), 'p1', 'Rushes', 'Season 2', null)
+    const id = useUploadStore.getState().startUpload(file(), 'p1', 'Rushes', 'Season 2', null)!
     await settle()
     await useUploadStore.getState().renameUpload(id, 'Ep04')
     held.open()
@@ -133,7 +133,7 @@ describe('a rename made while initiate is in flight', () => {
     mockUpload(held.promise)
     vi.mocked(api.patch).mockRejectedValue(new Error('Name too long'))
 
-    const id = useUploadStore.getState().startUpload(file(), 'p1', 'Rushes', 'Season 2', null)
+    const id = useUploadStore.getState().startUpload(file(), 'p1', 'Rushes', 'Season 2', null)!
     await settle()
     await useUploadStore.getState().renameUpload(id, 'Ep04')
     held.open()
@@ -151,7 +151,7 @@ describe('a rename made while initiate is in flight', () => {
     mockUpload(held.promise)
     vi.mocked(api.patch).mockRejectedValue(new Error('boom'))
 
-    const id = useUploadStore.getState().startUpload(file(), 'p1', 'Rushes', 'Season 2', null)
+    const id = useUploadStore.getState().startUpload(file(), 'p1', 'Rushes', 'Season 2', null)!
     await settle()
     await useUploadStore.getState().renameUpload(id, 'Ep04')
     held.open()

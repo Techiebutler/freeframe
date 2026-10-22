@@ -18,6 +18,7 @@ import { api, ApiError } from '@/lib/api'
 import { useUploadStore, __uploadQueueTesting } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake } from '@/test/xhr-fake'
+import { signInAs } from '@/test/upload-session'
 
 // The upload queue is tab-wide module state: start every test from an empty one.
 beforeEach(() => __uploadQueueTesting.reset())
@@ -45,6 +46,7 @@ function seedRow(overrides: Partial<UploadFile> = {}) {
       uploadId: UPLOAD_ID,
       s3Key: S3_KEY,
       createdAt: Date.now(),
+      ownerId: 'u1',
       ...overrides,
     }],
   })
@@ -66,6 +68,7 @@ describe('discardUpload when /parts says the version is gone', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    signInAs('u1')
     seedRow()
     vi.mocked(api.get).mockRejectedValue(new ApiError(404, 'Version not found'))
     vi.mocked(api.post).mockResolvedValue({} as never)
@@ -175,6 +178,7 @@ describe('the key a row carries', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    signInAs('u1')
     useUploadStore.setState({ files: [] })
     vi.mocked(api.post).mockImplementation(async (path: string) => {
       if (path === '/upload/initiate' || path.endsWith('/versions')) return INITIATE as never
@@ -193,7 +197,7 @@ describe('the key a row carries', () => {
   const file = () => new File([new Uint8Array(8)], 'clip.mp4', { type: 'video/mp4' })
 
   it('s3Key is recorded at initiate and survives a reload', async () => {
-    const id = useUploadStore.getState().startUpload(file(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(file(), 'project-1', 'clip')!
 
     await vi.waitFor(() => expect(rowOf(id).s3Key).toBe(S3_KEY))
     expect(rowOf(id).uploadId).toBe(UPLOAD_ID)
@@ -210,7 +214,7 @@ describe('the key a row carries', () => {
   it('s3Key is recorded when a new version is initiated', async () => {
     const id = useUploadStore.getState().startVersionUpload(
       file(), ASSET_ID, 'clip', 'project-1',
-    )
+    )!
 
     await vi.waitFor(() => expect(rowOf(id).s3Key).toBe(S3_KEY))
     expect(storedFiles().find((f) => f.id === id)?.s3Key).toBe(S3_KEY)

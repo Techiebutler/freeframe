@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: {
     post: vi.fn(),
     get: vi.fn(),
@@ -8,6 +9,10 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { retainWakeLock, releaseWakeLock } from '../upload-store'
+import { signInAs } from '@/test/upload-session'
+
+// Rows belong to the account that added them: with nobody signed in, nothing is added.
+beforeEach(() => signInAs('u1'))
 
 /** Minimal stand-in for a WakeLockSentinel. */
 function makeSentinel() {

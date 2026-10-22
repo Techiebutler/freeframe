@@ -27,9 +27,12 @@ import { useUploadStore, uploadAllParts, __uploadQueueTesting } from '../upload-
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, fail, type PartHandler } from '@/test/xhr-fake'
 import { createPartBudget } from '@/lib/upload-budget'
+import { signInAs } from '@/test/upload-session'
 
 // The upload queue is tab-wide module state: start every test from an empty one.
 beforeEach(() => __uploadQueueTesting.reset())
+// Rows belong to the account that added them, and only it can resume them.
+beforeEach(() => signInAs('u1'))
 
 /** A budget of `n` slots for one file, which is what the old `concurrency` argument was. */
 const slots = (n: number) => ({ budget: createPartBudget(n), fileKey: 'f' })
@@ -77,6 +80,7 @@ function seedInterrupted() {
       assetId: ASSET_ID,
       versionId: VERSION_ID,
       createdAt: Date.now(),
+      ownerId: 'u1',
     }],
   })
 }
@@ -220,7 +224,7 @@ describe('resumeUpload', () => {
     useUploadStore.getState().resumeUpload('row-1', makeFile())
     await vi.waitFor(() => expect(rowOf('row-1').status).toBe('processing'))
 
-    expect(api.get).toHaveBeenCalledWith(`/upload/${VERSION_ID}/parts`)
+    expect(api.get).toHaveBeenCalledWith(`/upload/${VERSION_ID}/parts`, { pinSubject: 'u1' })
     expect(completionBody().s3_key).toBe('raw/p/a/v/original.mp4')
     expect(completionBody().upload_id).toBe('u1')
   })
@@ -554,7 +558,7 @@ describe('refreshProcessingItems', () => {
       id: 'row-1', fileName: 'clip.mp4', fileSize: TOTAL, fileType: 'video/mp4',
       projectId: 'project-1', assetName: 'clip', progress: 0, processingProgress: 0,
       status: 'interrupted', assetId: ASSET_ID, versionId: VERSION_ID,
-      createdAt: Date.now(), ...over,
+      createdAt: Date.now(), ownerId: 'u1', ...over,
     }
   }
 
@@ -622,7 +626,7 @@ describe('a row that was uploading when the tab reloaded', () => {
     id: 'row-1', fileName: 'clip.mp4', fileSize: TOTAL, fileType: 'video/mp4',
     projectId: 'project-1', assetName: 'clip', progress: 41, processingProgress: 0,
     status: 'uploading', assetId: ASSET_ID, versionId: VERSION_ID, uploadId: 'u1',
-    createdAt: Date.now(),
+    createdAt: Date.now(), ownerId: 'u1',
   }
 
   it('comes back as interrupted rather than not at all', () => {

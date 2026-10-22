@@ -13,12 +13,14 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: { post: vi.fn(), get: vi.fn() },
 }))
 
 import { api } from '@/lib/api'
 import { useUploadStore } from '../upload-store'
+import { signInAs } from '@/test/upload-session'
 
 /** Every `/me/assets` path the store requested, in order. */
 function historyRequests(): string[] {
@@ -30,6 +32,7 @@ function historyRequests(): string[] {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  signInAs('u1')
   vi.mocked(api.get).mockResolvedValue([] as never)
   useUploadStore.setState({
     files: [],

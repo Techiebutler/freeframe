@@ -1,11 +1,13 @@
 import { create, type StateCreator } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
+import { useShallow } from 'zustand/react/shallow'
 import { mutate as globalMutate } from 'swr'
 import { api, ApiError } from '@/lib/api'
 import { createSpeedMeter, type SpeedMeter } from '@/lib/upload-speed'
 import { createPartBudget, type PartBudget } from '@/lib/upload-budget'
 import { createUploadQueue, usableRetryAfter, type ActiveInfo, type QueueEntry } from '@/lib/upload-queue'
 import { classifyInitiateError, type InitiateOutcome } from '@/lib/upload-initiate-outcome'
+import { currentSubject, watchSubject } from '@/lib/upload-owner'
 import {
   assertReadable, FileUnreadableError, FILE_READ_FAILED_MESSAGE,
 } from '@/lib/upload-readable'
@@ -370,6 +372,51 @@ function isAbortError(err: unknown): err is DOMException {
   return err instanceof DOMException && err.name === 'AbortError'
 }
 
+/**
+ * A pinned request found another account signed in, or none (see
+ * `RequestOptions.pinSubject`). Nothing is wrong with the upload: it is its
+ * owner's to carry on with once they are signed in again, and nobody else's.
+ */
+function isAccountChange(err: unknown): err is ApiError {
+  return err instanceof ApiError && (err.code === 'identity_changed' || err.code === 'session_ended')
+}
+
+/**
+ * The server refused to presign a part for the upload's own owner: the owner
+ * lost access to the project, the asset was trashed, the project deleted, or
+ * the upload is no longer open (#510). Nothing will change that, so the row
+ * fails with the server's reason and offers no Resume. Retrying it used to run
+ * the whole ladder, four minutes, and then offer a Resume that could never work.
+ */
+class UploadAccessGoneError extends Error {
+  readonly permanent = true
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'UploadAccessGoneError'
+  }
+}
+
+const ACCESS_GONE_MESSAGE = 'This upload can no longer be sent.'
+
+/**
+ * What a failed presign means for its part.
+ *
+ * A 403, 404 or 409, or a 401 that came back again after a refresh as the same
+ * account (a 401 with no code), is the server refusing the owner for good. An
+ * account change is final for the row too, and `uploadPart` stops on it. A 401
+ * whose refresh got no answer, a 408, a 429, a 5xx or a network error is the
+ * moment, not the upload, and is retried like any part failure.
+ */
+function presignFailure(err: unknown): unknown {
+  if (!(err instanceof ApiError)) return err
+  const refused =
+    err.status === 403 || err.status === 404 || err.status === 409 ||
+    (err.status === 401 && err.code === undefined)
+  if (!refused) return err
+  return new UploadAccessGoneError(err.detail.trim() === '' ? ACCESS_GONE_MESSAGE : err.detail)
+}
+
 /** 408 Request Timeout and 429 Too Many Requests explicitly invite a later attempt. */
 function isPermanentStatus(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 429
@@ -387,6 +434,7 @@ async function uploadPartOnce(
   controller: AbortController,
   chunkSize: number,
   onBytes: (sent: number) => void,
+  ownerId: string | undefined,
 ): Promise<string> {
   // A slot can be granted in the same turn as the upload stops: the grant is
   // delivered on a microtask, and the abort that came first cannot take it back.
@@ -400,12 +448,19 @@ async function uploadPartOnce(
 
   // The presigned URL is fetched per attempt, not cached across retries:
   // presign_upload_part expires after an hour and a large upload can outlive
-  // that, so a URL obtained before a long backoff may already be dead.
-  const { presigned_url } = await api.post<{ presigned_url: string }>('/upload/presign-part', {
-    s3_key: s3Key,
-    upload_id: uploadId,
-    part_number: partNumber,
-  })
+  // that, so a URL obtained before a long backoff may already be dead. As the
+  // upload's owner only: a URL signed for whoever else is signed in now would
+  // send this file into their account.
+  let presigned_url: string
+  try {
+    ;({ presigned_url } = await api.post<{ presigned_url: string }>(
+      '/upload/presign-part',
+      { s3_key: s3Key, upload_id: uploadId, part_number: partNumber },
+      { pinSubject: ownerId },
+    ))
+  } catch (err) {
+    throw presignFailure(err)
+  }
 
   return putPart(presigned_url, chunk, partNumber, controller.signal, onBytes)
 }
@@ -592,6 +647,8 @@ function putPart(
 interface PartSlots {
   budget: PartBudget
   fileKey: string
+  /** The account the upload belongs to; every presign is sent as it. */
+  ownerId?: string
   /** Runs once, when the part's first attempt is granted a slot. */
   onFirstGrant?: () => void
 }
@@ -606,7 +663,9 @@ interface PartSlots {
  *
  * Only failures that can plausibly recover are repeated: network errors and 5xx.
  * A 4xx is thrown straight through, because retrying it eight times over four
- * minutes would delay the error message without ever changing the outcome.
+ * minutes would delay the error message without ever changing the outcome. So
+ * is a presign the server refused for good, or one that found another account
+ * signed in (see `presignFailure`).
  *
  * Jitter keeps concurrent uploads from retrying in lockstep. A user-initiated
  * cancel is never retried.
@@ -665,7 +724,7 @@ async function uploadPart(
       // the hook throws.
       if (attempt === 1) slots.onFirstGrant?.()
       if (attempt > 1) await assertReadable(file)
-      return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize, onBytes)
+      return await uploadPartOnce(file, s3Key, uploadId, partNumber, controller, chunkSize, onBytes, slots.ownerId)
     } catch (err) {
       // The next attempt sends the part from its first byte again, so what
       // this one got across no longer counts.
@@ -675,6 +734,8 @@ async function uploadPart(
       // The handle stays stale however often it is tried.
       if (err instanceof FileUnreadableError) throw err
       if ((err as PartUploadError)?.permanent) throw err
+      // Another account, or none, is signed in: no retry can be sent as the owner.
+      if (isAccountChange(err)) throw err
       if (attempt === PART_MAX_ATTEMPTS) throw err
 
       lastError = err
@@ -784,6 +845,9 @@ function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  *
  * `opts.onBytes` hears every byte count, not just whole-percent moves, for the
  * speed meter. It must not write to this store: see `useUploadSpeedStore`.
+ *
+ * `opts.ownerId` is the account the upload belongs to. Every presign is pinned
+ * to it, so no part is ever signed for another account.
  */
 export async function uploadAllParts(
   file: File,
@@ -801,6 +865,7 @@ export async function uploadAllParts(
     onAllSent?: () => void
     onResend?: () => void
     onBytes?: (sent: number) => void
+    ownerId?: string
   },
 ): Promise<Array<{ PartNumber: number; ETag: string }>> {
   const { budget, fileKey } = opts
@@ -918,6 +983,7 @@ export async function uploadAllParts(
         {
           budget,
           fileKey,
+          ownerId: opts.ownerId,
           onFirstGrant: () => {
             granted = true
             waitingFirst -= 1
@@ -1117,8 +1183,10 @@ export interface UploadFile {
   createdAt: number // timestamp for grouping
   /**
    * The account that added the row: the access token's `sub` when it was
-   * added. Views and starts are scoped to it (spec goal 9); until that lands
-   * it is recorded by tests only.
+   * added, never the profile in `useAuthStore`, which is fetched once and goes
+   * stale when another tab signs in. Every request the row's run makes is
+   * pinned to it, and only this account sees the row (`visibleFiles`). A row
+   * is never added without one: with no token there is no row.
    */
   ownerId?: string
   /** The tab that is transferring this row, see `currentTabId`. */
@@ -1323,8 +1391,16 @@ function transferWatch(
   }
 }
 
-interface UploadStore {
+export interface UploadStore {
   files: UploadFile[]
+  /**
+   * The account this tab is acting as, as far as the store knows: the token's
+   * `sub` when the store loaded, then whatever another tab's sign-in or
+   * sign-out said, or a start or an add found. Views show only its rows. Kept
+   * in state, not read from the token at render, so a change of account
+   * re-renders the views even though no row changed.
+   */
+  subject: string | null
   /** Bumped when something here has changed an asset's versions server-side in
    *  a way no transcode event announces -- today, discarding an upload, which
    *  deletes the version. A screen showing a version list watches this so it
@@ -1350,12 +1426,16 @@ interface UploadStore {
   /**
    * Adds one file to the back of the upload queue as its own drop, and returns
    * its row id. It starts at its turn, which is at once only when the start
-   * rule allows it at that moment.
+   * rule allows it at that moment. With nobody signed in nothing is added and
+   * this returns null; the caller tells the user to sign in.
    */
-  startUpload: (file: File, projectId: string, assetName: string, projectName?: string, folderId?: string | null) => string
+  startUpload: (file: File, projectId: string, assetName: string, projectName?: string, folderId?: string | null) => string | null
   /** The same for a new version of `assetId`. */
-  startVersionUpload: (file: File, assetId: string, assetName: string, projectId: string, projectName?: string) => string
-  /** Adds a whole drop or pick, in order, as one drop. Returns the row ids in the order given. */
+  startVersionUpload: (file: File, assetId: string, assetName: string, projectId: string, projectName?: string) => string | null
+  /**
+   * Adds a whole drop or pick, in order, as one drop. Returns the row ids in
+   * the order given, or none at all when nobody is signed in.
+   */
   startUploads: (items: Array<{ file: File; assetName: string }>, projectId: string, projectName?: string, folderId?: string | null) => string[]
   /** Queues an interrupted row to carry on with `file`, ahead of every file not yet started. */
   resumeUpload: (fileId: string, file: File) => void
@@ -1429,8 +1509,9 @@ function mapProcessingStatus(status: string): UploadStatus {
 async function completedVersionStatus(
   assetId: string,
   versionId: string,
+  ownerId: string | undefined,
 ): Promise<'processing' | 'complete' | null> {
-  const asset = await api.get<AssetResponse>(`/assets/${assetId}`).catch(() => null)
+  const asset = await api.get<AssetResponse>(`/assets/${assetId}`, { pinSubject: ownerId }).catch(() => null)
   if (!asset?.latest_version || asset.latest_version.id !== versionId) return null
   const status = mapProcessingStatus(asset.latest_version.processing_status)
   return status === 'processing' || status === 'complete' ? status : null
@@ -1452,9 +1533,9 @@ async function completedVersionStatus(
  * Returns whether the version was finished. Never throws: this runs from a catch
  * that has already decided what to report.
  */
-async function finishAssembledUpload(versionId: string): Promise<boolean> {
+async function finishAssembledUpload(versionId: string, ownerId: string | undefined): Promise<boolean> {
   try {
-    const info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`)
+    const info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`, { pinSubject: ownerId })
     if (info.state !== 'assembled') return false
     await api.post('/upload/complete', {
       s3_key: info.s3_key,
@@ -1462,7 +1543,7 @@ async function finishAssembledUpload(versionId: string): Promise<boolean> {
       asset_id: info.asset_id,
       version_id: info.version_id,
       parts: [],
-    })
+    }, { pinSubject: ownerId })
     return true
   } catch {
     return false
@@ -1513,6 +1594,9 @@ function mergeHistoryAssets(existing: UploadFile[], assets: AssetResponse[]): Up
         createdAt: new Date(v.created_at).getTime(),
         elsewhereUntil: status === 'elsewhere' ? until : undefined,
         fromHistory: true,
+        // `/me/assets?filter=owned` lists the assets this account created, so
+        // the creator is the owner, and the row shows to them like any other.
+        ownerId: a.created_by,
       }
     })
   return [...existing, ...newFiles]
@@ -1546,8 +1630,11 @@ function reportDiscardFailure(
 async function abortCancelled(
   set: (fn: (s: UploadStore) => Partial<UploadStore>) => void,
   ids: { s3_key: string; upload_id: string; version_id: string },
+  ownerId: string | undefined,
 ): Promise<void> {
-  await api.post('/upload/abort', { ...ids, discard: true }).catch(() => {})
+  // As the owner only. Once another account is signed in the abort is not
+  // sent, and the reaper reclaims the upload.
+  await api.post('/upload/abort', { ...ids, discard: true }, { pinSubject: ownerId }).catch(() => {})
   set((s) => ({ versionsRevision: s.versionsRevision + 1 }))
 }
 
@@ -1639,6 +1726,88 @@ function noteRunsChanged(): void {
 const newRowId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 const REFUSED_MESSAGE = 'The server refused this upload.'
+const ACCOUNT_SWITCHED_MESSAGE = 'Another account signed in. Add these files again after signing back in.'
+const SIGNED_OUT_MESSAGE = 'Signed out in another tab. Add these files again after signing in.'
+
+/** Why a row could not start as its owner: someone else is signed in, or nobody is. */
+function accountMessage(now: string | null): string {
+  return now === null ? SIGNED_OUT_MESSAGE : ACCOUNT_SWITCHED_MESSAGE
+}
+
+/** A new row that cannot start because its owner is no longer signed in. */
+function accountFailure(now: string | null): Partial<UploadFile> {
+  return {
+    status: 'failed',
+    failedBeforeStart: true,
+    retryable: true,
+    holdReason: undefined,
+    progress: 0,
+    error: accountMessage(now),
+  }
+}
+
+/**
+ * The account change rules (spec goal 9), applied at once and before any
+ * further request: every row of another account that has not started fails,
+ * saved with its owner, and every resume of another account that waits for its
+ * turn goes back to plain `interrupted`, still resumable. Rows whose turn has
+ * begun are left to their run: each request it makes is pinned to the row's
+ * owner, and its answer decides between `interrupted` and failed. Applying the
+ * same account twice changes nothing.
+ */
+function applySubject(next: string | null): void {
+  const others = (f: UploadFile) => f.ownerId !== next && !runners.has(f.id)
+  const files = useUploadStore.getState().files
+  const newRows = new Set(files.filter((f) => f.status === 'queued' && others(f)).map((f) => f.id))
+  const resumes = new Set(files.filter((f) => f.status === 'interrupted' && f.queuedResume && others(f)).map((f) => f.id))
+
+  const probe = queue.hold.probeId
+  newRows.forEach((id) => queue.remove(id))
+  resumes.forEach((id) => {
+    queue.remove(id)
+    fileRefs.delete(id)
+    resumeRequestedAt.delete(id)
+  })
+  useUploadStore.setState((s) => ({
+    subject: next,
+    files: s.files.map((f) => (newRows.has(f.id)
+      ? { ...f, ...accountFailure(next) }
+      : resumes.has(f.id)
+        ? { ...f, queuedResume: undefined, holdReason: undefined }
+        : f)),
+  }))
+  // The probe was one of them: the hold passes to whoever still waits, or ends.
+  if (probe !== null && (newRows.has(probe) || resumes.has(probe)) && !runners.has(probe)) passOnProbe()
+  pump()
+}
+
+/**
+ * The account signed in now, read from the token at the point of use. Another
+ * tab's sign-in reaches this one as a `storage` event, which can arrive after a
+ * start this tab is about to make, so every start reads the token again, and
+ * applies a change it finds there as if the event had come.
+ */
+function noticeSubject(): string | null {
+  const now = currentSubject()
+  if (now !== useUploadStore.getState().subject) applySubject(now)
+  return now
+}
+
+/**
+ * A row came to its turn owned by someone other than whoever is signed in. A
+ * new file fails, and a resume goes back to plain `interrupted`, its parts
+ * kept for its owner. Neither asks the server anything.
+ */
+function refuseTurn(row: UploadFile, kind: 'new' | 'resume', now: string | null): void {
+  forgetQueued(row.id)
+  if (kind === 'new') {
+    patchRow(row.id, accountFailure(now))
+    return
+  }
+  fileRefs.delete(row.id)
+  resumeRequestedAt.delete(row.id)
+  patchRow(row.id, { queuedResume: undefined, holdReason: undefined })
+}
 
 function rowById(id: string): UploadFile | undefined {
   return useUploadStore.getState().files.find((f) => f.id === id)
@@ -1696,11 +1865,18 @@ function pump(): void {
         if (ids.length === 0) break
         let skipped = false
         for (const id of ids) {
+          // Read for each start: a row is started only as the account that added it.
+          const now = noticeSubject()
           const row = rowById(id)
           const kind = turnKind(row)
           if (!row || !kind) {
             // Gone, cancelled or already changed by something else: it gives up its place.
             queue.remove(id)
+            skipped = true
+            continue
+          }
+          if (row.ownerId === undefined || row.ownerId !== now) {
+            refuseTurn(row, kind, now)
             skipped = true
             continue
           }
@@ -1772,10 +1948,17 @@ function scheduleProbe(): void {
 
 function retryProbe(id: string): void {
   if (queue.hold.probeId !== id) return
+  const now = noticeSubject()
+  // An account change just failed it and passed the hold on.
+  if (queue.hold.probeId !== id) return
   const row = rowById(id)
   const kind = turnKind(row)
   if (!row || !kind) {
     passOnProbe()
+    return
+  }
+  if (row.ownerId === undefined || row.ownerId !== now) {
+    refuseTurn(row, kind, now)
     return
   }
   startRun(row, kind)
@@ -1896,7 +2079,12 @@ function refusalMessage(outcome: InitiateOutcome, err: unknown): string {
 /**
  * An initiate failed. A refusal fails this row, with Retry, and the queue goes
  * on; a hold puts it back to wait for the connection or storage (spec goal 6).
- * The account outcomes are refusals until owner pinning lands.
+ *
+ * So does an account change: the pinned request found another account signed
+ * in, or none, or the answer came after the change. The row fails saying which,
+ * and keeps its `File` for a Retry should its owner sign back in here. No ids
+ * came back, so there is nothing on the row to resume; anything an answer lost
+ * on the way may have created is left to the reaper, as for any hold.
  */
 function onInitiateFailed(id: string, err: unknown): void {
   const row = rowById(id)
@@ -1912,6 +2100,14 @@ function onInitiateFailed(id: string, err: unknown): void {
   }
 
   const outcome = classifyInitiateError(err)
+  const now = noticeSubject()
+  if (outcome.kind === 'account' || outcome.kind === 'session_ended' || now !== row.ownerId) {
+    // A hold it was probing has not been answered: the next row probes.
+    if (outcome.kind === 'hold') handOffProbe(id)
+    else endHoldIfProbe(id)
+    patchRow(id, accountFailure(now))
+    return
+  }
   if (outcome.kind === 'hold') {
     // Nothing on screen says what a non-API failure was; a bug here would
     // otherwise hold the queue with no trace. Once per row, not per retry.
@@ -1982,6 +2178,9 @@ function failUnreadableBeforeStart(id: string, err: unknown): void {
 async function runNew(id: string, runner: Runner, runKey: string): Promise<void> {
   const file = fileRefs.get(id)!
   const target: StartTarget = startTargets.get(id) ?? { kind: 'asset', folderId: null }
+  // Every request below is sent as this account, or not at all.
+  const owner = rowById(id)?.ownerId
+  const asOwner = { pinSubject: owner }
 
   const controller = new AbortController()
   abortControllers[id] = controller
@@ -2027,6 +2226,13 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
       handOffProbe(id)
       throw new DOMException('Upload cancelled', 'AbortError')
     }
+    // The account may have changed while the file was read.
+    const now = noticeSubject()
+    if (now !== owner) {
+      handOffProbe(id)
+      patchRow(id, accountFailure(now))
+      return
+    }
 
     let initRes: InitiateResponse
     try {
@@ -2038,14 +2244,14 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
           file_size_bytes: file.size,
           mime_type: file.type,
           folder_id: target.folderId,
-        })
+        }, asOwner)
         : await api.post<VersionInitiateResponse>(`/assets/${target.assetId}/versions`, {
           project_id: projectId,
           asset_name: sentName,
           original_filename: file.name,
           file_size_bytes: file.size,
           mime_type: file.type,
-        })
+        }, asOwner)
     } catch (err) {
       onInitiateFailed(id, err)
       return
@@ -2061,10 +2267,14 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
     // count this file by its parts instead of by the whole budget.
     runner.unfinished = Math.ceil(file.size / initRes.chunk_size_bytes)
     const cancelled = controller.signal.aborted
+    // The answer came after another account signed in, or after the sign-out.
+    // What it created is the owner's: kept on the row, `interrupted`, to be
+    // resumed or discarded once they are signed in again. Nothing more is sent.
+    const ownerGone = noticeSubject() !== owner
     patchRow(id, {
       uploadId: upload_id, s3Key: s3_key, assetId: asset_id, versionId: version_id,
       // A cancel made while the initiate was out stands.
-      ...(cancelled ? {} : { status: 'uploading' as const }),
+      ...(cancelled ? {} : { status: ownerGone ? 'interrupted' as const : 'uploading' as const }),
     })
     // A new version exists on the server from this answer, and a screen
     // showing the asset's versions is told now rather than guessing at when.
@@ -2074,6 +2284,7 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
     pump()
     // Cancelled while the initiate was out: what it created is thrown away below.
     if (cancelled) throw new DOMException('Upload cancelled', 'AbortError')
+    if (ownerGone) return
 
     if (target.kind === 'asset') {
       // The round trip is the window that does exist, and the only place a
@@ -2093,7 +2304,7 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
       const nameAfterInitiate = rowById(id)?.assetName ?? sentName
       if (nameAfterInitiate !== sentName) {
         try {
-          await api.patch(`/assets/${asset_id}`, { name: nameAfterInitiate })
+          await api.patch(`/assets/${asset_id}`, { name: nameAfterInitiate }, asOwner)
         } catch (err) {
           patchRow(id, {
             assetName: sentName,
@@ -2110,6 +2321,7 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
         budget: partBudget,
         fileKey: runKey,
         chunkSize: initRes.chunk_size_bytes,
+        ownerId: owner,
         onPartDone: () => patchRow(id, { heartbeatAt: Date.now() }),
         onUnfinished: (n) => {
           runner.unfinished = n
@@ -2129,7 +2341,7 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
       asset_id,
       version_id,
       parts,
-    })
+    }, asOwner)
 
     // Upload done — backend now processes (transcode/convert).
     // For non-processable types (or if SSE isn't wired), mark complete directly.
@@ -2159,7 +2371,7 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
       // response lost on the way back. Writing that off would report a
       // working upload as Failed.
       const landed = completionAttempted && asset_id && version_id
-        ? await completedVersionStatus(asset_id, version_id)
+        ? await completedVersionStatus(asset_id, version_id, owner)
         : null
       if (landed) {
         applyLanded(landed)
@@ -2168,15 +2380,16 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
         // still open and every part already sent is still held. `interrupted`
         // says that, where `failed` claimed the opposite. A version that never
         // got as far as a multipart upload has nothing to come back to and
-        // stays `failed`.
+        // stays `failed`, as does one whose owner can no longer send to it.
+        // An account change is no failure of the upload's, so says nothing.
         patchRow(id, {
-          status: upload_id && version_id ? 'interrupted' : 'failed',
-          error: err instanceof Error ? err.message : 'Upload failed',
+          status: upload_id && version_id && !(err instanceof UploadAccessGoneError) ? 'interrupted' : 'failed',
+          error: isAccountChange(err) ? undefined : err instanceof Error ? err.message : 'Upload failed',
         })
         // Only after a completion was attempted can the object be whole with
         // the version still `uploading`, and only then is it worth a request
         // to find out.
-        if (completionAttempted && version_id && await finishAssembledUpload(version_id)) {
+        if (completionAttempted && version_id && await finishAssembledUpload(version_id, owner)) {
           applyLanded('processing')
         }
       }
@@ -2188,7 +2401,7 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
     // exactly the moment they became worth keeping. Everything else is left
     // for the user to resume or for the reaper to reclaim.
     if (userCancelled() && upload_id && s3_key && version_id) {
-      await abortCancelled(useUploadStore.setState, { s3_key, upload_id, version_id })
+      await abortCancelled(useUploadStore.setState, { s3_key, upload_id, version_id }, owner)
     }
   } finally {
     watch?.stop()
@@ -2211,6 +2424,12 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
   const row = rowById(id)!
   const versionId = row.versionId!
   const updateFile = (patch: Partial<UploadFile>) => patchRow(id, patch)
+  // Every request below is sent as this account, or not at all.
+  const owner = row.ownerId
+  const asOwner = { pinSubject: owner }
+  /** Back to plain `interrupted`, still resumable, as the queued resume was. */
+  const standDown = (patch: Partial<UploadFile> = {}) =>
+    updateFile({ status: 'interrupted', resuming: undefined, progress: row.progress, ...patch })
 
   const controller = new AbortController()
   abortControllers[id] = controller
@@ -2232,7 +2451,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     // browser that never saw them.
     const askedAt = Date.now()
     try {
-      info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`)
+      info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`, asOwner)
     } catch (err) {
       const outcome = isAbortError(err) || isFinalRefusal(err) ? null : classifyInitiateError(err)
       // Cancelled while it asked: the row is already plain `interrupted` again,
@@ -2240,6 +2459,16 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       if (runner.stoodDown) {
         if (outcome?.kind === 'hold' && queue.hold.probeId === id) passOnProbe()
         else endHoldIfProbe(id)
+        return
+      }
+      // Its owner is no longer signed in: the upload waits for them, as it was.
+      const ownerGone = outcome !== null &&
+        (outcome.kind === 'account' || outcome.kind === 'session_ended' || noticeSubject() !== owner)
+      if (ownerGone && rowById(id)?.status === 'starting') {
+        if (outcome.kind === 'hold') handOffProbe(id)
+        else endHoldIfProbe(id)
+        resumeRequestedAt.delete(id)
+        standDown()
         return
       }
       if (outcome?.kind === 'hold' && rowById(id)?.status === 'starting') {
@@ -2257,6 +2486,13 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     // Cancelled while it asked. Nothing has been sent and nothing is thrown
     // away: the parts on the server are what a later Resume carries on from.
     if (runner.stoodDown) return
+    // The answer came after another account signed in, or after the sign-out.
+    // It is kept for the owner, and nothing is sent.
+    if (noticeSubject() !== owner) {
+      resumeRequestedAt.delete(id)
+      standDown({ uploadId: info.upload_id, s3Key: info.s3_key, versionId: info.version_id, assetId: info.asset_id })
+      return
+    }
 
     // Two tabs sending the same part numbers into one multipart upload leave
     // the completing tab with ETags that no longer match what is stored.
@@ -2354,6 +2590,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
           fileKey: runKey,
           chunkSize: info.chunk_size_bytes,
           alreadyHeld: held,
+          ownerId: owner,
           onPartDone: () => updateFile({ heartbeatAt: Date.now() }),
           onUnfinished: (n) => {
             runner.unfinished = n
@@ -2380,7 +2617,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       // no error on most backends; handing over none makes that backend
       // refuse instead, which is the failure worth having.
       parts: held.length > 0 ? [] : parts,
-    })
+    }, asOwner)
 
     const isMedia = /^(video|audio|image)\//.test(info.mime_type)
     updateFile({
@@ -2407,7 +2644,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       // version that really did fail still falls through to `failed`.
       const askAbout = info?.asset_id ?? row.assetId
       const landed = (completionAttempted || isFinalRefusal(err)) && askAbout
-        ? await completedVersionStatus(askAbout, versionId)
+        ? await completedVersionStatus(askAbout, versionId, owner)
         : null
       if (landed) {
         if (!userCancelled()) {
@@ -2420,13 +2657,14 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
         }
       } else if (!userCancelled()) {
         updateFile({
-          // Back to resumable unless the server said this upload is over.
-          // Nothing was aborted here either, so the parts sent this time are
-          // held too and the next attempt starts from further along.
-          status: isFinalRefusal(err) ? 'failed' : 'interrupted',
+          // Back to resumable unless the server said this upload is over, or
+          // that its owner can no longer send to it. Nothing was aborted here
+          // either, so the parts sent this time are held too and the next
+          // attempt starts from further along. An account change says nothing.
+          status: isFinalRefusal(err) || err instanceof UploadAccessGoneError ? 'failed' : 'interrupted',
           resuming: undefined,
           progress: 0,
-          error: err instanceof Error ? err.message : 'Upload failed',
+          error: isAccountChange(err) ? undefined : err instanceof Error ? err.message : 'Upload failed',
         })
       }
     }
@@ -2436,7 +2674,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
         s3_key: info.s3_key,
         upload_id: info.upload_id,
         version_id: info.version_id,
-      })
+      }, owner)
     }
   } finally {
     watch?.stop()
@@ -2450,6 +2688,13 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
 /**
  * Adds new uploads to the back of the queue, as one drop, and starts whatever
  * may start now. Returns the row ids in the order given.
+ *
+ * Each row belongs to the account whose token is in storage now. With no token
+ * nothing is added and none is returned: an upload nobody owns could never be
+ * started as anyone. A token for an account the store has not heard of yet is
+ * another tab's sign-in whose `storage` event is still on its way. The views
+ * follow it now, so the rows just added show; the rows of the account before
+ * it are hidden, and each fails at its turn, or when the event arrives.
  */
 function enqueueNew(
   set: (fn: (s: UploadStore) => Partial<UploadStore>) => void,
@@ -2458,6 +2703,8 @@ function enqueueNew(
   projectName: string | undefined,
 ): string[] {
   if (items.length === 0) return []
+  const owner = currentSubject()
+  if (owner === null) return []
   const dropSeq = ++dropSeqs
   const createdAt = Date.now()
   const rows: UploadFile[] = items.map(({ file, assetName, target }) => {
@@ -2476,6 +2723,7 @@ function enqueueNew(
       processingProgress: 0,
       status: 'queued',
       createdAt,
+      ownerId: owner,
       dropSeq,
       ...(target.kind === 'version' ? { assetId: target.assetId } : {}),
     }
@@ -2484,7 +2732,7 @@ function enqueueNew(
   for (const r of rows) r.queueSeq = queue.queueSeq(r.id)
   try {
     // Newest first, as rows have always been listed.
-    set((s) => ({ files: [...rows.slice().reverse(), ...s.files], panelOpen: true }))
+    set((s) => ({ files: [...rows.slice().reverse(), ...s.files], panelOpen: true, subject: owner }))
   } finally {
     // The rows are in state even when saving them threw: they still get their turn.
     pump()
@@ -2494,6 +2742,7 @@ function enqueueNew(
 
 const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = (set, get) => ({
   files: [],
+  subject: currentSubject(),
   versionsRevision: 0,
   runsRevision: 0,
   panelOpen: false,
@@ -2506,7 +2755,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen })),
 
   startUpload: (file, projectId, assetName, projectName, folderId) =>
-    enqueueNew(set, [{ file, assetName, target: { kind: 'asset', folderId: folderId ?? null } }], projectId, projectName)[0],
+    enqueueNew(set, [{ file, assetName, target: { kind: 'asset', folderId: folderId ?? null } }], projectId, projectName)[0] ?? null,
 
   startUploads: (items, projectId, projectName, folderId) =>
     enqueueNew(
@@ -2517,7 +2766,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     ),
 
   startVersionUpload: (file, assetId, assetName, projectId, projectName) =>
-    enqueueNew(set, [{ file, assetName, target: { kind: 'version', assetId } }], projectId, projectName)[0],
+    enqueueNew(set, [{ file, assetName, target: { kind: 'version', assetId } }], projectId, projectName)[0] ?? null,
 
   resumeUpload: (fileId, file) => {
     const row = get().files.find((f) => f.id === fileId)
@@ -2724,7 +2973,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   cancelAllQueued: () => {
     // Each row by its own rule. A held probe hands the hold down the line as
     // it goes, and the last one out finds nobody waiting and ends it.
-    const waiting = get().files.filter(
+    const waiting = visibleFiles(get()).filter(
       (f) => (f.status === 'queued' || (f.status === 'interrupted' && f.queuedResume)) && !runners.has(f.id),
     )
     for (const f of waiting) get().cancelUpload(f.id)
@@ -2824,7 +3073,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   },
 
   clearCompleted: () => {
-    set((s) => ({ files: s.files.filter((f) => f.status !== 'complete') }))
+    // The signed-in account's own: another account's rows are not this one's to clear.
+    set((s) => ({ files: s.files.filter((f) => f.status !== 'complete' || f.ownerId !== s.subject) }))
   },
 
   fetchHistory: async () => {
@@ -2902,11 +3152,15 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     // stamping it in shared storage. Once it stops -- the transfer ended, or the
     // tab went -- the row is judged like any interrupted one below, which is
     // how a finished upload over there turns into processing here.
+    //
+    // Only the signed-in account's rows: the others are hidden here, and are
+    // theirs to reconcile once they are signed in again.
     const now = Date.now()
-    if (get().files.some((f) => f.status === 'elsewhere')) {
+    const visible = new Set(visibleFiles(get()).map((f) => f.id))
+    if (get().files.some((f) => f.status === 'elsewhere' && visible.has(f.id))) {
       set((s) => ({
         files: s.files.map((f) => {
-          if (f.status !== 'elsewhere') return f
+          if (f.status !== 'elsewhere' || !visible.has(f.id)) return f
           const beat = storedHeartbeat(f.id)
           const beating = beat !== undefined && now - beat < LIVE_WINDOW_MS
           const held = f.elsewhereUntil !== undefined && now < f.elsewhereUntil
@@ -2923,14 +3177,17 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     // poll rewriting it meanwhile would leave the queue holding a row that
     // is no longer waiting.
     const watched = get().files.filter(
-      (f) => (f.status === 'processing' || f.status === 'interrupted') && f.assetId && !f.queuedResume,
+      (f) => (f.status === 'processing' || f.status === 'interrupted') && f.assetId && !f.queuedResume &&
+        visible.has(f.id),
     )
     if (!watched.length) return
     try {
       // `null` is "no answer, ask again"; `'gone'` is an answer that is final.
+      // Asked as the row's owner: sent as an account that signed in since, a
+      // 403 would read as the asset gone and fail the owner's row for good.
       const results = await Promise.all(
         watched.map((f) =>
-          api.get<AssetResponse>(`/assets/${f.assetId}`).catch((err): 'gone' | null =>
+          api.get<AssetResponse>(`/assets/${f.assetId}`, { pinSubject: f.ownerId }).catch((err): 'gone' | null =>
             isAssetGone(err) ? 'gone' : null,
           ),
         ),
@@ -3177,6 +3434,28 @@ export const useUploadStore = create<UploadStore>()(
   }),
 )
 
+/**
+ * The rows of the account signed in now (spec goal 10). Every row stays in
+ * state whichever account added it, so that the owner finds it again after
+ * signing back in; views, counts and polls see only these. A row with no owner
+ * is nobody's and shows to nobody, and with nobody signed in nothing shows.
+ */
+export function visibleFiles(state: UploadStore): UploadFile[] {
+  return state.files.filter((f) => f.ownerId !== undefined && f.ownerId === state.subject)
+}
+
+/**
+ * `visibleFiles` for a component. Compared row by row: the filter builds a new
+ * array every time, and a bare selector returning one re-renders forever.
+ */
+export const useVisibleFiles = (): UploadFile[] => useUploadStore(useShallow(visibleFiles))
+
+// Another tab signed in as someone else, or signed out. Applied as the event
+// arrives, before this tab can send anything more.
+if (typeof window !== 'undefined') {
+  watchSubject((next) => applySubject(next))
+}
+
 // "Duplicate tab" copies sessionStorage, and with it this tab's id. Announce the
 // id; a live tab already holding it answers, and the copy takes a new one and
 // looks again at the rows it hydrated as its own.
@@ -3195,7 +3474,8 @@ if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
         const now = Date.now()
         useUploadStore.setState((s) => ({
           files: s.files.map((f) =>
-            f.status === 'interrupted' && f.ownerTab === inherited && !f.queuedResume
+            f.status === 'interrupted' && f.ownerTab === inherited && !f.queuedResume &&
+            f.ownerId !== undefined && f.ownerId === s.subject
               ? standingOfStoredRow({ ...f, status: 'uploading' }, now)
               : f,
           ),

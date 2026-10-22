@@ -10,7 +10,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: { post: vi.fn(), get: vi.fn() },
 }))
 
@@ -18,9 +19,12 @@ import { api } from '@/lib/api'
 import { useUploadStore, __uploadQueueTesting } from '../upload-store'
 import { useUploadSpeedStore } from '../upload-speed-store'
 import { installXhrFake, ok, fail, type PartReply } from '@/test/xhr-fake'
+import { signInAs } from '@/test/upload-session'
 
 // The upload queue is tab-wide module state: start every test from an empty one.
 beforeEach(() => __uploadQueueTesting.reset())
+// Rows belong to the account that added them: with nobody signed in, nothing is added.
+beforeEach(() => signInAs('u1'))
 
 function makeFile(): File {
   return new File([new Uint8Array(1024)], 'clip.mp4', { type: 'video/mp4' })
@@ -68,7 +72,7 @@ describe('finalizing an upload', () => {
   it('is marked for as long as /upload/complete runs, still as uploading', async () => {
     const { release, seenWhenCompleting } = mockUpload()
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.waitFor(() => expect(seenWhenCompleting).toHaveLength(1))
 
     expect(seenWhenCompleting[0]).toEqual({ finalizing: true, status: 'uploading' })
@@ -90,14 +94,14 @@ describe('finalizing an upload', () => {
       })
     })
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.waitFor(() => expect(rowOf(id).finalizing).toBe(true))
 
     expect(rowOf(id).status).toBe('uploading')
-    expect(api.post).not.toHaveBeenCalledWith('/upload/complete', expect.anything())
+    expect(api.post).not.toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' })
     answer(ok('"etag-1"'))
     await vi.waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything()),
+      expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' }),
     )
   })
 
@@ -110,7 +114,7 @@ describe('finalizing an upload', () => {
     })
 
     useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
-    await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything()))
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' }))
 
     expect(finalizingDuringTransfer).toBeFalsy()
   })
@@ -130,7 +134,7 @@ describe('finalizing an upload', () => {
       return ok('"etag-1"')
     })
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.waitFor(() => expect(attempts).toBe(2), { timeout: 5000 })
 
     expect(finalizingOnRetry).toBe(false)
@@ -153,7 +157,7 @@ describe('finalizing an upload', () => {
       return ok('"etag-1"')
     })
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.waitFor(
       () => expect(useUploadSpeedStore.getState().rates[id]?.bytesPerSecond).toBeGreaterThan(0),
       { timeout: 4000 },

@@ -12,16 +12,20 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: { post: vi.fn(), get: vi.fn() },
 }))
 
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { useUploadStore, __uploadQueueTesting } from '../upload-store'
 import { installXhrFake, ok } from '@/test/xhr-fake'
+import { signInAs } from '@/test/upload-session'
 
 // The upload queue is tab-wide module state: start every test from an empty one.
 beforeEach(() => __uploadQueueTesting.reset())
+// Rows belong to the account that added them: with nobody signed in, nothing is added.
+beforeEach(() => signInAs('u1'))
 
 const ASSET_ID = 'asset-1'
 const VERSION_ID = 'version-2'
@@ -89,7 +93,7 @@ describe('an upload whose completion request threw', () => {
     const { aborts } = mockUploadWithFailingCompletion()
     mockAssetRead(VERSION_ID, 'processing')
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).status).toBe('processing')
@@ -102,7 +106,7 @@ describe('an upload whose completion request threw', () => {
     const { aborts } = mockUploadWithFailingCompletion()
     mockAssetRead(VERSION_ID, 'ready')
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).status).toBe('complete')
@@ -117,7 +121,7 @@ describe('an upload whose completion request threw', () => {
     const { aborts } = mockUploadWithFailingCompletion()
     mockAssetRead(PREVIOUS_VERSION_ID, 'ready')
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).status).toBe('interrupted')
@@ -128,7 +132,7 @@ describe('an upload whose completion request threw', () => {
     const { aborts } = mockUploadWithFailingCompletion()
     mockAssetRead(null, '')
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).status).toBe('interrupted')
@@ -139,7 +143,7 @@ describe('an upload whose completion request threw', () => {
     const { aborts } = mockUploadWithFailingCompletion()
     vi.mocked(api.get).mockRejectedValue(new Error('Failed to fetch'))
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).status).toBe('interrupted')
@@ -152,7 +156,7 @@ describe('an upload whose completion request threw', () => {
     mockUploadWithFailingCompletion()
     mockAssetRead(null, '')
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).versionId).toBe(VERSION_ID)
@@ -167,9 +171,13 @@ describe('an upload that failed before it ever completed', () => {
   })
 
   it('does not ask the server about a version that was never uploaded', async () => {
-    vi.mocked(api.post).mockRejectedValue(new Error('initiate exploded'))
+    // A refusal. An error the API did not answer with is a connection hold
+    // (spec goal 6), which waits for the server rather than failing: with the
+    // mock leaving `ApiError` out, the classification itself threw, and that
+    // failed the row by accident.
+    vi.mocked(api.post).mockRejectedValue(new ApiError(400, 'initiate refused'))
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     // Failed, not interrupted: initiate never returned, so there is no multipart
@@ -198,7 +206,7 @@ describe('races during the recovery read', () => {
       () => new Promise((r) => { release = r }) as never,
     )
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.waitFor(() => expect(api.get).toHaveBeenCalled())
 
     useUploadStore.getState().cancelUpload(id)
@@ -254,7 +262,7 @@ describe('races during the recovery read', () => {
       return originalPost(path, body)
     })
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.waitFor(() => expect(rowOf(id).status).toBe('processing'))
 
     expect(aborts).toEqual([])
@@ -274,7 +282,7 @@ describe('races during the recovery read', () => {
       }) as never
     })
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).status).toBe('interrupted')
@@ -325,7 +333,7 @@ describe('an abort the browser started itself', () => {
       return new Promise(() => {})
     })
 
-    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.advanceTimersByTimeAsync(30_000)
 
     expect(attempt).toBe(2)

@@ -105,8 +105,9 @@ function pinnedError(code: 'identity_changed' | 'session_ended' | 'refresh_unava
  *
  * With `pinSubject`, the token is checked before the first send, in the same
  * tick as the fetch, so an account switched in another tab after the caller's
- * own owner check still sends nothing. After a 401, the refreshed token is
- * resent only if it belongs to the same account.
+ * own owner check still sends nothing. After a 401, no refresh is tried once
+ * another account's token is in storage, and the refreshed token is resent
+ * only if it belongs to the same account.
  */
 async function sendWithAuth(
   execute: (token: string | null) => Promise<Response>,
@@ -121,17 +122,27 @@ async function sendWithAuth(
   const response = await execute(token)
   if (response.status !== 401) return response
 
-  const newToken = await refreshAccessToken()
   if (pinSubject === undefined) {
+    const newToken = await refreshAccessToken()
     return newToken ? execute(newToken) : response
   }
+  // Another account signed in while this was on the wire. The refresh token in
+  // storage is now that account's: spending it on this request would rotate
+  // their session for nothing, and a refusal would sign them out everywhere.
+  const stored = subjectOf(getAccessToken())
+  if (stored !== null && stored !== pinSubject) throw pinnedError('identity_changed')
+
+  const newToken = await refreshAccessToken()
   if (newToken) {
     if (subjectOf(newToken) !== pinSubject) throw pinnedError('identity_changed')
     return execute(newToken)
   }
   // `refreshAccessToken` keeps the tokens when the refresh got no answer and
-  // clears them when the server refused it.
-  throw pinnedError(getAccessToken() ? 'refresh_unavailable' : 'session_ended')
+  // clears them when the server refused it. Tokens kept may still have become
+  // another account's while the refresh was out.
+  const left = subjectOf(getAccessToken())
+  if (left === null) throw pinnedError(getAccessToken() ? 'refresh_unavailable' : 'session_ended')
+  throw pinnedError(left === pinSubject ? 'refresh_unavailable' : 'identity_changed')
 }
 
 async function request<T>(

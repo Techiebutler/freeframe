@@ -33,9 +33,12 @@ import { api } from '@/lib/api'
 import { useUploadStore, currentTabId, LIVE_WINDOW_MS, __uploadQueueTesting } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, type PartHandler } from '@/test/xhr-fake'
+import { signInAs } from '@/test/upload-session'
 
 // The upload queue is tab-wide module state: start every test from an empty one.
 beforeEach(() => __uploadQueueTesting.reset())
+// Rows belong to the account that added them, and only its rows are shown and polled.
+beforeEach(() => signInAs('u1'))
 
 const MB = 1024 * 1024
 const VERSION_ID = 'version-1'
@@ -48,6 +51,7 @@ function row(overrides: Partial<UploadFile> = {}): UploadFile {
     projectId: 'project-1', assetName: 'clip', progress: 41, processingProgress: 0,
     status: 'uploading', assetId: ASSET_ID, versionId: VERSION_ID, uploadId: 'u1',
     createdAt: Date.now(),
+    ownerId: 'u1',
     ...overrides,
   }
 }
@@ -135,6 +139,7 @@ describe('a row sent from elsewhere, while this tab watches', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    signInAs('u1')
     vi.mocked(api.get).mockResolvedValue(null as never)
   })
 
@@ -350,10 +355,10 @@ describe('a tab that is sending', () => {
   const ways: Array<[string, () => string]> = [
     ['a new upload', () => useUploadStore.getState().startUpload(
       new File([new Uint8Array(SIZE)], 'clip.mp4', { type: 'video/mp4' }), 'project-1', 'clip',
-    )],
+    )!],
     ['a new version', () => useUploadStore.getState().startVersionUpload(
       new File([new Uint8Array(SIZE)], 'clip.mp4', { type: 'video/mp4' }), ASSET_ID, 'clip', 'project-1',
-    )],
+    )!],
     ['a resume', () => {
       useUploadStore.setState({
         files: [row({ status: 'interrupted', fileSize: SIZE, ownerTab: undefined, heartbeatAt: undefined })],
@@ -392,7 +397,7 @@ describe('a tab that is sending', () => {
     try {
       start()
       await vi.waitFor(() =>
-        expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything()),
+        expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' }),
       )
 
       expect(stamps.size).toBeGreaterThanOrEqual(PARTS)
@@ -436,7 +441,7 @@ describe('a tab that is sending', () => {
     try {
       id = useUploadStore.getState().startUpload(
         new File([new Uint8Array(PARTS * 1000)], 'clip.mp4', { type: 'video/mp4' }), 'project-1', 'clip',
-      )
+      )!
       await vi.waitFor(() => expect(seenAtPut).toHaveLength(PARTS), { timeout: 20_000 })
 
       const stale = seenAtPut.slice(POOL).filter((stamp, i) => stamp <= seenAtPut[i])
@@ -466,8 +471,8 @@ describe('a tab that is sending', () => {
       return file
     }
 
-    const first = useUploadStore.getState().startUpload(big('a.mp4'), 'project-1', 'a')
-    const second = useUploadStore.getState().startUpload(big('b.mp4'), 'project-1', 'b')
+    const first = useUploadStore.getState().startUpload(big('a.mp4'), 'project-1', 'a')!
+    const second = useUploadStore.getState().startUpload(big('b.mp4'), 'project-1', 'b')!
 
     expect(rowOf(first).ownerTab).toBe(currentTabId())
     expect(rowOf(first).heartbeatAt).toBeGreaterThan(Date.now() - 1000)
@@ -520,7 +525,7 @@ describe('cancelling an upload', () => {
     // which went on saying "Uploading" until a reload.
     const id = useUploadStore.getState().startUpload(
       new File([new Uint8Array(10)], 'clip.mp4', { type: 'video/mp4' }), 'project-1', 'clip',
-    )
+    )!
     await vi.waitFor(() => expect(put).toHaveBeenCalled())
 
     useUploadStore.getState().cancelUpload(id)
@@ -528,7 +533,7 @@ describe('cancelling an upload', () => {
     await vi.waitFor(() => expect(useUploadStore.getState().versionsRevision).toBe(1))
     expect(api.post).toHaveBeenCalledWith('/upload/abort', {
       s3_key: 'raw/k', upload_id: 'u1', version_id: VERSION_ID, discard: true,
-    })
+    }, { pinSubject: 'u1' })
   })
 })
 
@@ -560,7 +565,10 @@ describe('writing to storage every tab shares', () => {
     storage().setItem(KEY, { state: { files: files.map((f) => row(f)) }, version: 0 })
   }
 
-  beforeEach(() => window.localStorage.clear())
+  beforeEach(() => {
+    window.localStorage.clear()
+    signInAs('u1')
+  })
 
   it('does not roll back a heartbeat another tab wrote more recently', () => {
     // The whole reason the sweep reads storage rather than the row it hydrated.
@@ -636,6 +644,7 @@ describe('polling a row whose upload is running on another device', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    signInAs('u1')
   })
 
   function assetStillUploading(lastActivity: Date) {

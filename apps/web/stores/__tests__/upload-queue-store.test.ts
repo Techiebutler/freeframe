@@ -677,7 +677,7 @@ describe('a resume', () => {
     server.initiates[0].reject(new ApiError(400, 'No'))
     await settle()
     // Its turn: it goes ahead of nothing that was already running, and starts.
-    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
+    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts', { pinSubject: 'user-1' })
     expect(rowOf('r')).toMatchObject({ status: 'starting', resuming: true })
   })
 
@@ -697,7 +697,7 @@ describe('a resume', () => {
     server.initiates[0].reject(new ApiError(400, 'No'))
     await settle()
 
-    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts')
+    expect(api.get).toHaveBeenCalledWith('/upload/rv/parts', { pinSubject: 'user-1' })
     expect(server.names()).toEqual(['a.mov'])
   })
 

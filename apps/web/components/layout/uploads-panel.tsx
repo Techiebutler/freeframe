@@ -19,7 +19,7 @@ import {
   Pencil,
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime, formatTimeLeft } from '@/lib/utils'
-import { useUploadStore, isOnItsWay, type UploadFile } from '@/stores/upload-store'
+import { useUploadStore, useVisibleFiles, isOnItsWay, type UploadFile } from '@/stores/upload-store'
 import { useUploadSpeedStore } from '@/stores/upload-speed-store'
 import { carriesFiles } from '@/lib/drag'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -575,7 +575,9 @@ export function UploadsPanel({
    *  opens against its right edge, so it has to know which. */
   railCollapsed?: boolean
 } = {}) {
-  const { files, panelOpen, setPanelOpen, clearCompleted, cancelAllQueued, fetchHistory, fetchMoreHistory, historyHasMore, historyLoading } = useUploadStore()
+  const { panelOpen, setPanelOpen, clearCompleted, cancelAllQueued, fetchHistory, fetchMoreHistory, historyHasMore, historyLoading } = useUploadStore()
+  // The signed-in account's rows only: another account's stay in the store, hidden.
+  const files = useVisibleFiles()
   const [filter, setFilter] = React.useState<FilterTab>('active')
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const sentinelRef = React.useRef<HTMLDivElement>(null)

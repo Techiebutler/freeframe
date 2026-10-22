@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
+// The real `ApiError`: a failed presign is classified by it.
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: {
     post: vi.fn(),
     get: vi.fn(),

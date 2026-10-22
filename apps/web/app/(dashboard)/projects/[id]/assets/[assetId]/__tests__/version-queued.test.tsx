@@ -118,6 +118,7 @@ vi.mock('@/components/review/share-dialog', () => ({ ShareDialog: () => null }))
 vi.mock('@/components/review/compare/compare-overlay', () => ({ CompareOverlay: () => null }))
 
 import ReviewPage from '../page'
+import { ToastProvider } from '@/components/shared/toast'
 import { ApiError } from '@/lib/api'
 import { useUploadStore, __uploadQueueTesting as testing } from '@/stores/upload-store'
 import { signInAs, row } from '@/test/upload-session'
@@ -126,7 +127,12 @@ import { MB, fakeServer, fileOf, drop, flush } from '@/test/upload-queue-server'
 const QUEUED_LINE = 'New version queued, waiting for other uploads.'
 
 function renderPage() {
-  return render(<ReviewPage params={{ id: 'p1', assetId: 'a2' }} />)
+  // The page tells the user through a toast when a version cannot be added.
+  return render(
+    <ToastProvider>
+      <ReviewPage params={{ id: 'p1', assetId: 'a2' }} />
+    </ToastProvider>,
+  )
 }
 
 /** What clicking New Version and picking a file does. */

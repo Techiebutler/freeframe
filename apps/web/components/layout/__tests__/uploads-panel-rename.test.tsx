@@ -16,7 +16,8 @@ vi.stubGlobal(
 )
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
   api: { post: vi.fn(), get: vi.fn().mockResolvedValue([]), patch: vi.fn() },
 }))
 vi.mock('swr', () => ({ mutate: vi.fn() }))
@@ -24,6 +25,10 @@ vi.mock('swr', () => ({ mutate: vi.fn() }))
 import { api } from '@/lib/api'
 import { UploadsPanel } from '../uploads-panel'
 import { useUploadStore, type UploadFile } from '@/stores/upload-store'
+import { signInAs } from '@/test/upload-session'
+
+// Rows belong to the account that added them, and the panel shows only the signed-in account's.
+beforeEach(() => signInAs('u1'))
 
 function row(patch: Partial<UploadFile> = {}): UploadFile {
   return {
@@ -39,6 +44,7 @@ function row(patch: Partial<UploadFile> = {}): UploadFile {
     status: 'uploading',
     assetId: 'a1',
     createdAt: Date.now(),
+    ownerId: 'u1',
     ...patch,
   } as UploadFile
 }
@@ -196,6 +202,7 @@ describe('where the history flag comes from', () => {
         id: 'a9',
         name: 'A cut they no longer edit',
         project_id: 'p2',
+        created_by: 'u1',
         asset_type: 'video',
         latest_version: {
           id: 'v9',

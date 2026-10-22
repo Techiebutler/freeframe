@@ -23,6 +23,7 @@ import { api, ApiError } from '@/lib/api'
 import { useUploadStore } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { pollIntervalFor } from '@/components/layout/upload-sse-bridge'
+import { signInAs } from '@/test/upload-session'
 
 const GONE_MESSAGE = 'This file is no longer available.'
 
@@ -40,6 +41,7 @@ function seedRow(overrides: Partial<UploadFile> = {}): UploadFile {
     assetId: 'asset-1',
     versionId: 'version-1',
     createdAt: Date.now(),
+    ownerId: 'u1',
     ...overrides,
   }
 }
@@ -66,6 +68,7 @@ describe('the poll when the asset is gone', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    signInAs('u1')
     useUploadStore.setState({ files: [] })
   })
 

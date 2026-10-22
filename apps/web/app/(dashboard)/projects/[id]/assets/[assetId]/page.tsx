@@ -24,7 +24,8 @@ import { useComments } from '@/hooks/use-comments'
 import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
 import { projectFolderHref } from '@/lib/project-links'
-import { useUploadStore } from '@/stores/upload-store'
+import { useUploadStore, visibleFiles } from '@/stores/upload-store'
+import { useToast } from '@/components/shared/toast'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { useViewStore } from '@/stores/view-store'
 import { sortAssets } from '@/lib/sort-assets'
@@ -60,6 +61,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
   const { user } = useAuthStore()
   const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
+  const toast = useToast()
   const versionFileInputRef = useRef<HTMLInputElement>(null)
   const setExtraCrumbs = useBreadcrumbStore((s) => s.setExtraCrumbs)
   const setLabel = useBreadcrumbStore((s) => s.setLabel)
@@ -245,7 +247,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const assetIdForQueue = asset?.id
   const versionQueueLine = useUploadStore((s) => {
     if (assetIdForQueue === undefined) return ''
-    const queued = s.files.filter((f) => f.status === 'queued' && f.assetId === assetIdForQueue)
+    const queued = visibleFiles(s).filter((f) => f.status === 'queued' && f.assetId === assetIdForQueue)
     if (queued.length === 0) return ''
     const reason = queued.find((f) => f.holdReason)?.holdReason
     if (reason === 'connection') return 'Waiting for connection'
@@ -631,7 +633,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             onChange={async (e) => {
               const file = e.target.files?.[0]
               if (!file || !asset) return
-              startVersionUpload(file, asset.id, asset.name, asset.project_id, project?.name)
+              // No row without a session: the upload would belong to nobody.
+              if (startVersionUpload(file, asset.id, asset.name, asset.project_id, project?.name) === null) {
+                toast.error('Sign in to upload')
+              }
               e.target.value = ''
               // The new version (it starts as "uploading") is fetched when the
               // upload store says it exists, through `versionsRevision`; SSE
