@@ -6,7 +6,7 @@
  *
  * How the store drives it:
  *
- *   queue.enqueue(entries, 'back' | 'next')                  // a drop, or a Resume
+ *   queue.enqueue(entries, 'back' | 'next' | 'held')         // a drop, a Resume, a row an outage sent back
  *   for (const id of queue.nextToStart(activeInfos, partBudget.size)) {
  *     const rank = queue.markStarted(id)                     // the file left the waiting list
  *     partBudget.setRank(id, rank)
@@ -59,7 +59,14 @@
  * ones included, sit in the waiting list and start after the hold ends. There is
  * one probe at a time: when a second row fails while a probe is in charge,
  * `hold.begin` answers false and the caller puts that row back with
- * `enqueue([entry], 'next')`, so it runs again right after the probe succeeds. If the
+ * `enqueue([entry], 'held')`, so it runs again right after the probe succeeds.
+ * A held entry keeps its queueSeq and goes among the `'next'` entries in queueSeq
+ * order, so rows that one outage sent back start in the order they were queued,
+ * whatever order their failures arrived in, and keep their place in the panel.
+ * When the row that failed was queued before the probe and the probe is between
+ * tries, the caller may instead `hold.takeOver` with it: it becomes the probe,
+ * the old probe goes back to waiting as a held entry, and the backoff carries
+ * on. Either way the earliest of the rows an outage stopped starts first. If the
  * probe is cancelled, `hold.handOff()` takes the first waiting entry out of the
  * list and makes it the new probe, with the delay the cancelled probe was
  * waiting on; when nothing is waiting it returns null and the caller calls
@@ -104,10 +111,14 @@ export interface ActiveInfo {
 
 export interface UploadQueue {
   /**
-   * Entries already waiting, and the current probe, are skipped. Enqueueing an id again (a retry, a
-   * row sent back to the queue) gives it a new queueSeq, so its position in the panel moves.
+   * Entries already waiting, and the current probe, are skipped. Enqueueing an id again with
+   * `'back'` or `'next'` (a Retry, a Resume) gives it a new queueSeq, so its position in the panel
+   * moves. `'held'` is for a row an outage sent back: it keeps the queueSeq it has (a new one only
+   * if it never had one) and goes among the `'next'` entries ahead of the first one with a higher
+   * queueSeq, so it is never moved in the panel and the rows held back by one outage start in the
+   * order they were queued.
    */
-  enqueue(entries: QueueEntry[], where: 'back' | 'next'): void
+  enqueue(entries: QueueEntry[], where: 'back' | 'next' | 'held'): void
   /** A not-yet-started entry; false if absent. */
   remove(id: string): boolean
   /** Ids to start now, in order, given the current active set. Pure: does not mutate. */
@@ -129,11 +140,18 @@ export interface UploadQueue {
      * Starts a hold with `probeId` as its probe; if it already is the probe, updates the reason and,
      * when given, the retry-after for its next wait. Returns true when `probeId` is now (or still) the
      * probe. Returns false, and changes nothing, when another probe is in charge: the caller must then
-     * `enqueue([entry], 'next')` that row, so it runs again right after the probe succeeds (first come,
-     * first served with the other nexts), and must NOT call `nextDelayMs()` for it or show a hold
-     * reason on it.
+     * `enqueue([entry], 'held')` that row (or `takeOver` with it), so it runs again right after the
+     * probe succeeds, and must NOT call `nextDelayMs()` for it or show a hold reason on it.
      */
     begin(probeId: string, reason: 'connection' | 'storage', retryAfterMs: number | undefined): boolean
+    /**
+     * Makes `probeId` the probe in place of the current one, whose entry `previous` goes back to
+     * waiting as `'held'`. The backoff carries on as it was: the new probe makes the try the old one
+     * was waiting for. Only for while the probe is between tries, never while its try is out, so
+     * there is still only one try at a time. Returns false, and changes nothing, when there is no
+     * hold, `probeId` already is the probe, or `previous` is not the probe.
+     */
+    takeOver(probeId: string, reason: 'connection' | 'storage', previous: QueueEntry): boolean
     /** Backoff for the probe: honours retryAfter, doubles otherwise, cap 60_000. */
     nextDelayMs(): number
     end(): void
@@ -190,6 +208,18 @@ export function createUploadQueue(): UploadQueue {
     return true
   }
 
+  /** A row an outage sent back: among the nexts by its queueSeq, which it keeps. */
+  function putHeld(e: QueueEntry) {
+    if (waitingIds.has(e.id) || e.id === probeId) return
+    waitingIds.add(e.id)
+    if (!queueSeqs.has(e.id)) queueSeqs.set(e.id, ++queueCounter)
+    const seq = queueSeqs.get(e.id)!
+    let at = 0
+    while (at < nextIds.size && (queueSeqs.get(list[at].id) ?? 0) < seq) at++
+    list.splice(at, 0, e)
+    nextIds.add(e.id)
+  }
+
   function clearBackoff() {
     pendingDelay = undefined
     pendingRetryAfter = undefined
@@ -242,6 +272,15 @@ export function createUploadQueue(): UploadQueue {
       clearBackoff()
     },
 
+    takeOver(id, why, previous) {
+      if (probeId === null || probeId === id || previous.id !== probeId) return false
+      removeWaiting(id)
+      probeId = id
+      reason = why
+      putHeld(previous)
+      return true
+    },
+
     handOff() {
       if (probeId === null || list.length === 0) return null
       const next = list[0]
@@ -257,6 +296,10 @@ export function createUploadQueue(): UploadQueue {
 
   return {
     enqueue(entries, where) {
+      if (where === 'held') {
+        for (const e of entries) putHeld(e)
+        return
+      }
       const accepted: QueueEntry[] = []
       for (const e of entries) {
         if (waitingIds.has(e.id) || e.id === probeId) continue

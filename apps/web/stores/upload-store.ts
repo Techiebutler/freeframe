@@ -1752,11 +1752,17 @@ function endRun(id: string, runner: Runner, runKey: string): void {
   pump()
 }
 
-function scheduleProbe(id: string): void {
+/**
+ * The probe's next try, after the backoff. The timer tries whichever row is the
+ * probe when it fires: a row that takes the role over while it runs
+ * (`holdRow`) makes the try the old probe was waiting for.
+ */
+function scheduleProbe(): void {
   if (probeTimer !== null) clearTimeout(probeTimer)
   probeTimer = setTimeout(() => {
     probeTimer = null
-    retryProbe(id)
+    const id = queue.hold.probeId
+    if (id !== null) retryProbe(id)
   }, queue.hold.nextDelayMs())
 }
 
@@ -1789,7 +1795,7 @@ function passOnProbe(): void {
   }
   const reason = queue.hold.reason ?? 'connection'
   patchRow(next, { holdReason: reason })
-  scheduleProbe(next)
+  scheduleProbe()
 }
 
 /** A row the user no longer wants started: out of the queue, and out of the probe role if it held it. */
@@ -1811,8 +1817,18 @@ function endHoldIfProbe(id: string): void {
 /**
  * The connection or storage is down. The row goes back to waiting: as the
  * probe, which alone tries again, or, when another row already is the probe,
- * first in line behind it. A resume goes back to being a queued resume, never
- * to `queued`: it has an upload on the server to come back to.
+ * in line behind it among the rows the outage held back, at the place it was
+ * queued in, so they start again in the order they were dropped and keep their
+ * places in the panel. A resume goes back to being a queued resume, never to
+ * `queued`: it has an upload on the server to come back to.
+ *
+ * Rows that were initiating together fail in whatever order the network gives
+ * up on them, and the first to fail became the probe. When this row was queued
+ * before that probe and the probe is only waiting out its backoff, this row
+ * takes the role over, on the same backoff, and the probe waits in line: the
+ * probe is the first to start once the way is open, and that must be the
+ * earliest file. A probe whose try is already out keeps the role, as there is
+ * never more than one try at a time.
  */
 function holdRow(
   id: string,
@@ -1827,11 +1843,21 @@ function holdRow(
     : { status: 'interrupted', queuedResume: true, resuming: undefined, progress: 0 }
   if (queue.hold.begin(id, reason, retryAfterMs)) {
     patchRow(id, { ...waiting, holdReason: reason })
-    scheduleProbe(id)
-  } else {
-    queue.enqueue([queueEntry(row, kind)], 'next')
-    patchRow(id, { ...waiting, holdReason: undefined, queueSeq: queue.queueSeq(id) })
+    scheduleProbe()
+    return
   }
+  const probe = queue.hold.probeId
+  const probeRow = probe === null ? undefined : rowById(probe)
+  // Waiting for its turn, so between tries: a probe whose try is out is `starting`.
+  const probeKind = turnKind(probeRow)
+  if (probeRow && probeKind && queue.queueSeq(id) < queue.queueSeq(probeRow.id)
+    && queue.hold.takeOver(id, reason, queueEntry(probeRow, probeKind))) {
+    patchRow(probeRow.id, { holdReason: undefined })
+    patchRow(id, { ...waiting, holdReason: reason })
+    return
+  }
+  queue.enqueue([queueEntry(row, kind)], 'held')
+  patchRow(id, { ...waiting, holdReason: undefined, queueSeq: queue.queueSeq(id) })
 }
 
 /** The reason a refused row shows. */

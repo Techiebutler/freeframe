@@ -633,6 +633,79 @@ describe('hold backoff', () => {
   })
 })
 
+describe('rows an outage held back', () => {
+  /** a, b, c started together; `later` is still waiting. */
+  function startedTogether() {
+    const queue = createUploadQueue()
+    queue.enqueue([entry('a', MB), entry('b', MB), entry('c', MB), entry('later', MB)], 'back')
+    for (const id of ['a', 'b', 'c']) queue.markStarted(id)
+    const seqs = Object.fromEntries(['a', 'b', 'c', 'later'].map((id) => [id, queue.queueSeq(id)]))
+    return { queue, seqs }
+  }
+
+  it('held entries wait in the order they were queued, not the order they came back, and keep their queueSeq', () => {
+    const { queue, seqs } = startedTogether()
+    expect(queue.hold.begin('a', 'connection', undefined)).toBe(true)
+    expect(queue.hold.begin('c', 'connection', undefined)).toBe(false)
+    queue.enqueue([entry('c', MB)], 'held')
+    expect(queue.hold.begin('b', 'connection', undefined)).toBe(false)
+    queue.enqueue([entry('b', MB)], 'held')
+
+    expect(ids(queue.waiting())).toEqual(['b', 'c', 'later'])
+    for (const id of ['a', 'b', 'c', 'later']) expect(queue.queueSeq(id)).toBe(seqs[id])
+
+    queue.hold.end()
+    expect(queue.nextToStart([], 5)).toEqual(['b', 'c', 'later'])
+  })
+
+  it('a Resume clicked later stays behind them, and Resumes stay first come, first served', () => {
+    const { queue } = startedTogether()
+    queue.hold.begin('a', 'connection', undefined)
+    queue.enqueue([entry('r1', GB, 'resume')], 'next')
+    queue.enqueue([entry('c', MB)], 'held')
+    queue.enqueue([entry('r2', GB, 'resume')], 'next')
+    queue.enqueue([entry('b', MB)], 'held')
+
+    expect(ids(queue.waiting())).toEqual(['b', 'c', 'r1', 'r2', 'later'])
+  })
+
+  it('held skips an entry already waiting and the probe itself', () => {
+    const { queue, seqs } = startedTogether()
+    queue.hold.begin('a', 'connection', undefined)
+    queue.enqueue([entry('a', MB), entry('later', MB)], 'held')
+
+    expect(ids(queue.waiting())).toEqual(['later'])
+    expect(queue.queueSeq('later')).toBe(seqs.later)
+  })
+
+  it('takeOver makes an earlier row the probe, sends the old one back in queue order and keeps the backoff', () => {
+    const { queue } = startedTogether()
+    queue.hold.begin('c', 'storage', undefined)
+    expect(queue.hold.nextDelayMs()).toBe(2_000)
+
+    expect(queue.hold.takeOver('a', 'connection', entry('c', MB))).toBe(true)
+    expect(queue.hold.probeId).toBe('a')
+    expect(queue.hold.reason).toBe('connection')
+    queue.enqueue([entry('b', MB)], 'held')
+    expect(ids(queue.waiting())).toEqual(['b', 'c', 'later'])
+    // The ladder carries on from the wait the old probe was on.
+    expect(queue.hold.nextDelayMs()).toBe(4_000)
+    expect(queue.nextToStart([], 5)).toEqual([])
+  })
+
+  it('takeOver changes nothing with no hold, for the probe itself, or with a previous that is not the probe', () => {
+    const { queue } = startedTogether()
+    expect(queue.hold.takeOver('a', 'connection', entry('c', MB))).toBe(false)
+    expect(queue.hold.probeId).toBeNull()
+
+    queue.hold.begin('c', 'connection', undefined)
+    expect(queue.hold.takeOver('c', 'connection', entry('c', MB))).toBe(false)
+    expect(queue.hold.takeOver('a', 'connection', entry('b', MB))).toBe(false)
+    expect(queue.hold.probeId).toBe('c')
+    expect(ids(queue.waiting())).toEqual(['later'])
+  })
+})
+
 describe('hold handOff', () => {
   it('handOff passes the probe role and the current delay to the next entry', () => {
     const queue = createUploadQueue()
