@@ -431,8 +431,8 @@ change after the drop is exactly what those scenarios want. Not exercised.
 | Second tab, same account | `new_page` with the **same** `isolatedContext` name. It shares localStorage and cookies with the first tab (verified: a second tab opened in the same context was already signed in; a page in a differently named context was not). Probe it too: `navigate_page` with the `initScript`. | verified (baseline report, "Tooling checks") |
 | Second account at once | `new_page` with a **different** `isolatedContext` name, sign in as `secondary` there. In the same context, signing in as `secondary` replaces `primary`'s session for both tabs, which is what A2 and A3 want. | same-profile switch verified in phase 4 (A1 to A3, section 10's driver): a sign-in, log out or invite accepted in one tab or window reaches the others as `storage` events for `ff_access_token` / `ff_refresh_token` within a millisecond; a separate context not exercised |
 | Sign-out or account switch elsewhere (A1 to A3) | In the second tab or window: the sidebar's account menu (narrow rail: `button[aria-haspopup="menu"][title="<account name>"]`), then the menu item "Log out"; sign in through the login form (`live-tools/ffq-login.js`); an invite: `POST /users/invite` from the first tab with its own token, open `/invite/<token>`, fill the form. `live-tools/ffq-auth.js` records the `storage` events and, per request, the account it was sent as. | verified in phase 4 |
-| Short access tokens | Recreate only the stack's api container with `ACCESS_TOKEN_EXPIRE_MINUTES=1`: one extra compose file holding just that variable under `services.api.environment`, added after the stack's own `-f` files and `--env-file` (read them from the container's `com.docker.compose.project.config_files` / `working_dir` labels), `up -d --no-deps --no-build api`. Restore with the same command without the extra file and check `printenv ACCESS_TOKEN_EXPIRE_MINUTES` is empty and a refresh returns a 900 s token. A token in hand keeps its old lifetime: refresh once to get a short one. | verified in phase 4 (the restored container had its original config hash) |
-| Offline exactly while a refresh is due | `ffq-auth.js`: `holdRefresh = true` holds the app's `POST /auth/refresh` at the page's `fetch`; once `refreshHeld()` is 1, go offline, then `releaseRefresh()`: the refresh goes out offline and fails `ERR_INTERNET_DISCONNECTED`. Set `holdRefresh = false` before going back online. | verified in phase 4 (T2) |
+| Short access tokens | Recreate only the stack's api container with `ACCESS_TOKEN_EXPIRE_MINUTES=1`: one extra compose file holding just that variable under `services.api.environment`, added after the stack's own `-f` files and `--env-file` (read them from the container's `com.docker.compose.project.config_files` / `working_dir` labels), `docker compose -p ffe2e --env-file <env> -f docker-compose.dev.yml -f <override> -f <extra> up -d --no-deps --no-build api`. Restore with the same command without the extra file and check `printenv ACCESS_TOKEN_EXPIRE_MINUTES` is empty and a refresh returns a 900 s token. A token in hand keeps its old lifetime: refresh once to get a short one. | verified in phase 4 (the restored container had its original config hash) |
+| Offline exactly while a refresh is due | `ffq-auth.js`: `holdRefresh = true` holds the app's `POST /auth/refresh` at the page's `fetch`; once `refreshHeld()` is 1, go offline, then `releaseRefresh()`: the refresh goes out offline and fails `ERR_INTERNET_DISCONNECTED`. Set `holdRefresh = false` before going back online. It acts only on a refresh that starts while it is on: a refresh already in flight when the network drops (the case a person meets without the stand-in) is not covered, and no live run has caught one. | verified in phase 4 (T2) |
 | `beforeunload` dialog (L1) | `navigate_page` takes `handleBeforeUnload` (`accept` or `dismiss`); for a dialog that is already open, `handle_dialog`. | not exercised |
 | Laptop sleep (wake and resume cases) | Close the lid for 2 minutes with the queue running, open it, and record what the rows show. `pmset sleepnow` does the same from a terminal. A person has to be present; the DevTools session may need `list_pages` afterwards to find its tab. An unattended agent must not do this (it ends the session): it belongs to the manual pass. | not exercised (phase 3: moved to the manual pass) |
 | Busy main thread (Q2) | Optional: `emulate` with `cpuThrottlingRate: 4`. Report it if used. | not exercised |
@@ -469,6 +469,10 @@ report.
    blocked and where each count comes from.
 3. **Console**: `list_console_messages`. **Any uncaught error fails the scenario.** Report
    errors and warnings by text; the baseline had none (only the React DevTools info line).
+   One exception: an uncaught error that already exists on `main`, in code the branch has not changed and outside the feature
+   under test, is reported as an observation and noted for a ticket. It does not fail the scenario, and the report must name it
+   as a deviation (which scenario, the error, and how it was shown to predate the branch: reproduced on `main`, or only read in
+   the code).
 4. **Wire concurrency**, where the scenario is about how many uploads run at once (Q1, Q3):
    sockets Chrome really holds open to the storage host and to the API, sampled several times
    during the run (verified on macOS):
@@ -644,7 +648,7 @@ the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript`
 | `live-tools/ffq-fast.js` | a stand-in file chooser for Resume (`pickNext = true` then click Resume: the next file input the app clicks gets the files of `#ffq-pick`) and `delayPartsMs` (a deferred `/parts` answer, R3's route) |
 | `live-tools/ffq-route.js` | per-file faults for part PUTs (phase 3): `route['name.png'] = 'stall'` or `'hang'` sends that file's next part PUT to the throwaway server below (real upload progress, then nothing; or every byte sent and no answer), `holdFile['name.png'] = n` holds its first n part PUTs unsent; `routeLog` has the times |
 | `live-tools/ffq-auth.js` | phase 4: `apiLog` (every request to the API: method, path with ids replaced, the account it was sent as from the bearer token's `sub` (first 8 characters of the user id, never the token), status, time), `storageLog` (token and resume-claim writes, from this tab and the others), `me()` (account and seconds left on the token), `authSummary()`, `uploadCallsAs()`, `savedRows(prefix)` and `savedOwners()` (Local Storage `ff-uploads`, with `ownerId`), `claims()`; stand-ins `holdRefresh` / `releaseRefresh()` and `partsAnswerAt` (the `/parts` answer reaches the app at that wall time: two tabs learn "nobody is sending" in the same millisecond). Needs `ffq-probe.js` first; set `q.apiHost` when the API is not `localhost:18000` |
-| `live-tools/ffq-login.js` | phase 4: on a login page, adds `#pwin`; put the mode-0600 password files (named `<account>.pw`) into it, then `__ffqLogin(email, account)` reads the file in the page, fills the form and clicks "Sign in" |
+| `live-tools/ffq-login.js` | phase 4: on a login page, adds `#pwin`; put the mode-0600 password files (named `<account>.pw`) into it, then `__ffqLogin(email, account)` reads the file in the page, fills the form and clicks "Sign in". Delete the password files when the pass ends, at the latest |
 | `live-tools/cdp-driver.js` | phase 4: the section 10 driver |
 | `live-tools/stall-server.js` | the throwaway server for `route` (`node e2e/live-tools/stall-server.js [port]`, default 18777, on 127.0.0.1): answers the CORS preflight, then `/stall` stops reading after 256 KB and `/hang` reads everything and never answers. Stop it with `kill <pid>` when done |
 
@@ -689,8 +693,10 @@ own, and drive it over the DevTools protocol:
 ```bash
 SCR=$(mktemp -d)            # scratch: profile, screenshots, pid files
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir=$SCR/profile --remote-debugging-port=9333 \
-  --no-first-run --no-default-browser-check --window-size=1400,900 about:blank &   # note its pid; kill only that pid at the end
-node e2e/live-tools/cdp-driver.js "$PWD/e2e/node_modules/playwright" 9333 9334 &  # Playwright 1.59 connectOverCDP; note its pid
+  --no-first-run --no-default-browser-check --window-size=1400,900 about:blank &
+echo $! > $SCR/chrome.pid    # kill only this pid at the end
+node e2e/live-tools/cdp-driver.js "$PWD/e2e/node_modules/playwright" 9333 9334 &  # Playwright 1.59 connectOverCDP
+echo $! > $SCR/driver.pid
 c() { curl -s -X POST "http://127.0.0.1:9334/$1" -d "${2:-}"; echo; }             # c <command> '<json>'
 ```
 
@@ -710,5 +716,9 @@ How it differs from the MCP:
   emulation on the pages it attaches to. Background-tab timer throttling is therefore not in play; a scenario about a hidden tab needs the
   MCP or the manual pass.
 - Screenshots and the network list are Playwright's, not DevTools'.
-- Stop the driver and the Chrome by the pids you noted, and delete the profile directory.
+- The driver listens on 127.0.0.1 only and answers 403 to any request with an `Origin` or `Sec-Fetch-Site` header or a `Host`
+  other than `127.0.0.1:<port>` / `localhost:<port>`, so a web page cannot drive it; curl is unaffected. It replaces every
+  `token=` query value with `<redacted>` in `net` and `console` (the live-event URL carries the access token).
+- Stop the driver and the Chrome by the pids in `$SCR/driver.pid` and `$SCR/chrome.pid` (`kill $(cat $SCR/driver.pid)`), and
+  delete the profile directory. Delete any compose or env dump you made in the scratch directory too: they hold `JWT_SECRET`.
 

@@ -357,7 +357,9 @@ Observations (not failures of these scenarios):
 Run by hand in real, headed Chrome 154.0.8037.100 on the phase 4 branch (`75618d4b`), 2026-10-22, with two tabs and two windows of
 one profile: [`live-runs/2026-10-22-phase-4.md`](live-runs/2026-10-22-phase-4.md). The "Live Chrome run" column above links each
 scenario's section. The DevTools MCP's profile was held by another session's Chrome, so the pass drove its own headed Chrome over
-the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` section 10).
+the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` section 10). Through that driver every page read visible and
+focused (Playwright's focus emulation), so the throttling of a hidden tab or an occluded window (which bears on the claim settle and
+the heartbeat) was not exercised in any multi-tab step (A1, A3, R2 and its two variants); that is owed to the manual pass (row M).
 
 - **Passing**: A1, A2, A3 and R2, plus the brief's three checks:
   - A1: the log out in tab B failed A's two queued rows at once with the signed-out copy, kept for primary; the three sending sent
@@ -372,12 +374,15 @@ the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` section 10).
     millisecond, so both tabs wrote a claim at once): each time exactly one tab presigned and completed, the other showed
     Elsewhere and sent nothing.
   - Token expiry (1-minute tokens on the dev stack): one tab's three `/upload/complete` answered 401, one refresh, all resent 180 ms
-    later as the same account; no account message. A refresh that goes out offline leaves the rows "Waiting for connection" and
-    the tokens in place, and the queue goes on 2.3 s after the network returns; 40 s offline across the expiry with parts in
-    flight, likewise. None failed with "Another account signed in".
+    later as the same account; no account message. A refresh that goes out offline (T2, with the `holdRefresh` stand-in, which
+    holds the refresh until the network is off) leaves the rows "Waiting for connection" and the tokens in place, and the queue
+    goes on 2.3 s after the network returns. 40 s offline across the token's expiry (T3: parts held by `hold()` and released into
+    the outage, never cut mid-PUT; no refresh went out offline) left the rows Uploading and Waiting to start, and the queue went on
+    at the ladder's next rung, 23.9 s after the network returned. None failed with "Another account signed in".
 - **No app bug of the upload queue was found.** One uncaught error was seen: a signed-out tab opening Notifications rejects a
-  promise nobody handles (`ApiError: Not authenticated`); `notification-store.ts` and its drawer are unchanged from `main`, so it is
-  reported, not fixed. Also seen, not failures: rows added in one tab are not listed in another tab of the same account until an
+  promise nobody handles (`ApiError: Not authenticated`); `notification-store.ts` and its drawer are unchanged from `main` (read in
+  the code, not reproduced on `main`), so it is reported, not fixed, ticket to be filed. A1 is PASS under the exception now in
+  `LIVE-CHROME.md` section 5 item 3, declared as a deviation in the report. Also seen, not failures: rows added in one tab are not listed in another tab of the same account until an
   account change or a history load (as on `main`); a second open tab keeps the uploading tab's token fresh, so the 401 path shows
   only with one tab.
 - Not run here: the manual real Safari and real Firefox pass (matrix row M).

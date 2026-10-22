@@ -1,10 +1,30 @@
 // The fallback for a locked DevTools MCP profile (LIVE-CHROME.md section 10): a small HTTP front for one real, headed Google
 // Chrome that you started yourself with its own profile and --remote-debugging-port, driven over the DevTools protocol by
 // Playwright connectOverCDP. Usage: node live-tools/cdp-driver.js <path to node_modules/playwright> <cdp port> <http port>
+// It listens on 127.0.0.1 only and answers only requests that come from a local tool such as curl (see `allowed`), and it
+// redacts the `token=` query parameter (the live-event URL carries the access JWT) from what it hands out.
 const http = require('node:http')
-const { chromium } = require(process.argv[2])
 const CDP = Number(process.argv[3] || 9333)
 const PORT = Number(process.argv[4] || 9334)
+
+/** Replaces the value of every `token=` query parameter, so no access token leaves the driver. */
+function redact(text) {
+  return String(text).replace(/([?&]token=)[^&]*/g, '$1<redacted>')
+}
+
+/**
+ * Whether a request to the driver may be served. A web page can reach a localhost port, so a request that carries an
+ * `Origin` or a `Sec-Fetch-Site` header (every browser sends one or the other) is refused, and the `Host` must be exactly
+ * this port on 127.0.0.1 or localhost (which also refuses DNS rebinding). curl sends neither header.
+ */
+function allowed(headers, port) {
+  if (headers.origin !== undefined || headers['sec-fetch-site'] !== undefined) return false
+  return headers.host === `127.0.0.1:${port}` || headers.host === `localhost:${port}`
+}
+
+module.exports = { redact, allowed }
+if (require.main !== module) return
+const { chromium } = require(process.argv[2])
 
 const PRESETS = {
   'Fast 4G': { latency: 165, downloadThroughput: 1012500, uploadThroughput: 168750 },
@@ -75,14 +95,22 @@ const PRESETS = {
     },
     net: async ({ page, match, since }) => get(page).net
       .filter((e) => (!since || e.at >= since) && (!match || new RegExp(match).test(e.method + ' ' + e.url)))
-      .map(({ req, ...e }) => ({ ...e, url: e.url.replace(/X-Amz-[^&]*/g, '').replace(/[?&]+$/, '') })),
-    console: async ({ page, since }) => get(page).console.filter((e) => !since || e.at >= since),
+      .map(({ req, ...e }) => ({ ...e, url: redact(e.url.replace(/X-Amz-[^&]*/g, '').replace(/[?&]+$/, '')) })),
+    console: async ({ page, since }) => get(page).console
+      .filter((e) => !since || e.at >= since)
+      .map((e) => ({ ...e, text: redact(e.text) })),
     dialogs: async ({ page }) => get(page).dialogs,
     close: async ({ page }) => { await get(page).page.close(); return 'closed' },
     now: async () => Date.now(),
   }
 
   http.createServer((req, res) => {
+    if (!allowed(req.headers, PORT)) {
+      res.statusCode = 403
+      res.end(JSON.stringify({ ok: false, error: 'forbidden' }))
+      req.resume()
+      return
+    }
     let body = ''
     req.on('data', (c) => (body += c))
     req.on('end', async () => {

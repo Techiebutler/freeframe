@@ -30,6 +30,7 @@
   }
   // The token refresh can be held at the fetch (holdRefresh = true) and let go with releaseRefresh(): the stand-in for
   // "DevTools offline exactly while a refresh is due" (hold it, emulate Offline, release, and the refresh goes out offline).
+  // It acts only on a refresh that starts while holdRefresh is on; a refresh already in flight when the network drops is not covered.
   q.holdRefresh = false
   q._refreshWaiters = []
   q.refreshHeld = () => q._refreshWaiters.length
