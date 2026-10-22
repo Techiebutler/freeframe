@@ -825,6 +825,31 @@ describe('two tabs resuming the same upload at the same moment', () => {
     expect(storedClaims()).toEqual({ [resumeClaimKey('row-1')]: { tab: OTHER_TAB, nonce: 'theirs', at } })
   })
 
+  it('goes back to plain interrupted, for its owner, when the account changed while its claim settled and the claim was lost', async () => {
+    // Another account signing in during the settle is applied as at any start:
+    // the resume is its owner's to make, later. That holds whether or not this
+    // tab's claim stood; Elsewhere would tell the owner someone is sending it.
+    vi.mocked(api.get).mockImplementation((async (path: string) => {
+      if (path === '/upload/version-1/parts') {
+        setTimeout(() => {
+          otherTabClaims()
+          signInAs('u2')
+        }, 0)
+        return answer()
+      }
+      return new Promise(() => {})
+    }) as never)
+
+    useUploadStore.getState().resumeUpload('row-1', pick())
+    await vi.waitFor(() => expect(rowOf('row-1').status).toBe('starting'))
+    await vi.waitFor(() => expect(rowOf('row-1').status).not.toBe('starting'), { timeout: 3_000 })
+
+    expect(rowOf('row-1')).toMatchObject({ status: 'interrupted', ownerId: 'u1' })
+    expect(rowOf('row-1').resuming).toBeUndefined()
+    expect(api.post).not.toHaveBeenCalledWith('/upload/presign-part', expect.anything(), expect.anything())
+    expect(put).not.toHaveBeenCalled()
+  })
+
   it('removes other rows\' claims that hold nobody off any more as it writes its own, and keeps the fresh ones', async () => {
     vi.mocked(api.get).mockResolvedValue(answer() as never)
     const fresh = { tab: OTHER_TAB, nonce: 'fresh', at: Date.now() }

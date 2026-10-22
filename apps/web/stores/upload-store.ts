@@ -2754,6 +2754,14 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     claimNonce = claim.nonce
     // Cancelled while the claim settled: back to plain `interrupted` already.
     if (runner.stoodDown) return
+    // The settle is a wait: an account change during it is applied as at any
+    // start, whether or not the claim stood. The row goes back to its owner as
+    // plain `interrupted`, theirs to resume; Elsewhere would say someone is
+    // sending it, and the tab that won may stand down for the same reason.
+    if (noticeSubject() !== owner) {
+      standDown({ uploadId: info.upload_id, s3Key: info.s3_key, versionId: info.version_id, assetId: info.asset_id })
+      return
+    }
     if (!claim.won) {
       info = undefined
       if (rowById(id)?.status !== 'cancelled') {
@@ -2765,11 +2773,6 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
           elsewhereUntil: Date.now() + CLAIM_TTL_MS,
         })
       }
-      return
-    }
-    // The settle is a wait: an account change during it is applied as at any start.
-    if (noticeSubject() !== owner) {
-      standDown({ uploadId: info.upload_id, s3Key: info.s3_key, versionId: info.version_id, assetId: info.asset_id })
       return
     }
     stopBeat = beatFor(updateFile)
