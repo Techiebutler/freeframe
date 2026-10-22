@@ -203,6 +203,40 @@ describe('an initiate that meets another account', () => {
     expect(server.names()).toEqual(['x1.mov'])
   })
 
+  it('a storage write that throws on the drop that first sees a new account leaves the queue moving', async () => {
+    const server = fakeServer(() => 'wait')
+    const [x1, x2] = drop([fileOf('x1.mov'), fileOf('x2.mov')])
+    await settle()
+    expect(server.names()).toEqual(['x1.mov'])
+
+    writeTokenUnannounced(Y)
+    // The write that saves the account change is refused (storage full).
+    const setItem = Storage.prototype.setItem
+    let refusals = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === 'ff-uploads' && refusals === 0) {
+        refusals += 1
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+      }
+      return setItem.call(this, key, value)
+    })
+
+    let ids: string[] = []
+    expect(() => { ids = drop([small('y1.jpg')]) }).not.toThrow()
+    expect(refusals).toBe(1)
+    const [y1] = ids
+
+    // The change is applied all the same, and Y's file is in.
+    expect(rowOf(x2)).toMatchObject({ status: 'failed', error: SWITCHED, ownerId: X })
+    expect(rowOf(y1)).toMatchObject({ status: 'queued', ownerId: Y })
+    // X's first file was created before the change: once its answer comes and
+    // its place frees, the queue starts Y's file.
+    server.initiates[0].resolve()
+    await settle()
+    expect(rowOf(x1)).toMatchObject({ status: 'interrupted', ownerId: X })
+    expect(server.names()).toEqual(['x1.mov', 'y1.jpg'])
+  })
+
   it('a row with no owner is never started, as anyone', async () => {
     fakeServer()
     useUploadStore.setState({ files: [{ ...interruptedRow(), ownerId: undefined }] })
@@ -452,6 +486,37 @@ describe('a hold and the actions, across a change of account', () => {
     const now = fakeServer()
     const [y1] = drop([small('y1.jpg')])
     await settle()
+    expect(now.names()).toEqual(['y1.jpg'])
+    expect(rowOf(y1).status).not.toBe('queued')
+    expect(server.names()).toEqual(['x1.jpg'])
+  })
+
+  it('a Held probe of the old account still hands the hold on when saving the change throws', async () => {
+    const server = fakeServer(() => new TypeError('Failed to fetch'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const [x1] = drop([small('x1.jpg')])
+    await settle()
+    expect(rowOf(x1)).toMatchObject({ status: 'queued', holdReason: 'connection' })
+
+    // Y signs in elsewhere and drops a file here before the event arrives, and
+    // the write that saves the change is refused (storage full).
+    writeTokenUnannounced(Y)
+    const setItem = Storage.prototype.setItem
+    let refusals = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === 'ff-uploads' && refusals === 0) {
+        refusals += 1
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+      }
+      return setItem.call(this, key, value)
+    })
+    const now = fakeServer()
+    const [y1] = drop([small('y1.jpg')])
+    await settle()
+
+    expect(refusals).toBe(1)
+    expect(rowOf(x1)).toMatchObject({ status: 'failed', error: SWITCHED, ownerId: X })
+    // The hold went with X's file: Y's file does not wait out X's backoff.
     expect(now.names()).toEqual(['y1.jpg'])
     expect(rowOf(y1).status).not.toBe('queued')
     expect(server.names()).toEqual(['x1.jpg'])
