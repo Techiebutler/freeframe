@@ -7,8 +7,9 @@
  * as Y holds X's rows only hidden, or not at all if another tab wrote them, so
  * without care Y's next write would erase them, and X would sign back in to an
  * empty panel. Rows saved before this release carry no owner at all; they are
- * kept stored until they are claimed or dropped (the claim itself is Task 4.5,
- * stood in for here by setting the owner by hand).
+ * kept stored until they are claimed or dropped. Some cases here stand in for
+ * the check with the server by setting the owner by hand; the check itself is
+ * covered in `upload-adopt-and-history.test.ts`.
  *
  * Every case asserts what localStorage holds, which is what the next page load
  * and every other tab read, and not only the store's state.
@@ -17,13 +18,20 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('@/lib/api', async (orig) => ({
-  ...(await orig<typeof import('@/lib/api')>()),
+// One set of mocks, and one `ApiError`, for every load of the store: a store
+// `loadAgain` imports asks the server through the same functions.
+const shared = vi.hoisted(() => ({
   api: { post: vi.fn(), get: vi.fn(), patch: vi.fn() },
+  ApiError: undefined as unknown,
 }))
+vi.mock('@/lib/api', async (orig) => {
+  const real = await orig<typeof import('@/lib/api')>()
+  shared.ApiError ??= real.ApiError
+  return { ...real, api: shared.api, ApiError: shared.ApiError }
+})
 vi.mock('swr', () => ({ mutate: vi.fn() }))
 
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import {
   useUploadStore, visibleFiles, currentTabId, LIVE_WINDOW_MS, __uploadQueueTesting as testing,
 } from '../upload-store'
@@ -55,6 +63,13 @@ function ownerless(id: string, over: Partial<UploadFile> = {}): UploadFile {
   })
   delete r.ownerId
   return r
+}
+
+/** A promise settled by hand. */
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((r) => { resolve = r })
+  return { promise, resolve }
 }
 
 /** Any write at all from this tab: the panel opening is the most ordinary one. */
@@ -213,7 +228,10 @@ describe('saved rows of this account that this tab never held', () => {
     useUploadStore.setState({ files: [xh] })
     expect(storedIds()).toEqual(['xh'])
     let answer!: (info: unknown) => void
-    vi.mocked(api.get).mockImplementation((() => new Promise((r) => { answer = r })) as never)
+    // Only the discard's `/parts` waits; Y's sign-in also fetches Y's history.
+    vi.mocked(api.get).mockImplementation(((path: string) => (path.startsWith('/me/assets')
+      ? Promise.resolve([])
+      : new Promise((r) => { answer = r }))) as never)
     vi.mocked(api.post).mockResolvedValue({} as never)
 
     const said = useUploadStore.getState().discardUpload('xh')
@@ -258,9 +276,12 @@ describe('rows saved before this release', () => {
     const x1 = asStored(row({ id: 'x1', ownerId: X, status: 'failed', failedBeforeStart: true }))
     expect(opts.migrate!({ files: [o1, x1] }, 0)).toEqual({ files: [o1, x1] })
 
-    // A real page load of a blob the pre-release bundle wrote.
+    // A real page load of a blob the pre-release bundle wrote. The server
+    // says the row is another account's, so it stays ownerless.
     anotherTabWrites([o1, x1], 0)
+    vi.mocked(api.get).mockRejectedValue(new ApiError(403, 'Not authorized for this upload'))
     const loaded = await loadAgain()
+    await settle()
 
     const state = loaded.useUploadStore.getState()
     expect(state.files.find((f) => f.id === 'o1')).toMatchObject({ status: 'interrupted', versionId: 'o1-v' })
@@ -279,13 +300,17 @@ describe('rows saved before this release', () => {
     thisTabWrites()
     expect(storedRow('o1')).toEqual(asStored(o1))
 
+    // The next load checks it with the server, which says it is Y's.
+    const check = deferred<unknown>()
+    vi.mocked(api.get).mockReturnValue(check.promise as never)
     const loaded = await loadAgain()
     expect(loaded.useUploadStore.getState().files.map((f) => f.id)).toEqual(['o1'])
     expect(loaded.useUploadStore.getState().files[0].ownerId).toBeUndefined()
 
-    // Claimed for Y, as the server check does on a 200.
-    loaded.useUploadStore.setState((s) => ({ files: s.files.map((f) => ({ ...f, ownerId: Y })) }))
+    check.resolve({ state: 'uploading', parts: [] })
+    await settle()
 
+    expect(api.get).toHaveBeenCalledWith('/upload/o1-v/parts', { pinSubject: Y })
     expect(storedRow('o1')).toMatchObject({ ownerId: Y, versionId: 'o1-v' })
     expect(loaded.visibleFiles(loaded.useUploadStore.getState()).map((f) => f.id)).toEqual(['o1'])
   })

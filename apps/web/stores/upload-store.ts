@@ -16,6 +16,12 @@ import type { AssetResponse } from '@/types'
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
 const HISTORY_PAGE_SIZE = 20
+/**
+ * Moves on with each change of account. A history answer is used only while
+ * the generation it was asked in is still current: after a change, history
+ * has been reset and asked for again as the new account.
+ */
+let historyGeneration = 0
 const PART_MAX_ATTEMPTS = 8 // per part, including the first try
 const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per part
 /**
@@ -1771,8 +1777,14 @@ function applySubject(next: string | null): void {
   // Built before the write, so only the write itself is guarded below: a
   // mistake in building it still surfaces.
   const s = useUploadStore.getState()
+  const accountChanged = s.subject !== next
+  // History is per account: a change starts it again, from the first page.
+  if (accountChanged) historyGeneration++
   const changed: Partial<UploadStore> = {
     subject: next,
+    ...(accountChanged
+      ? { historyLoaded: false, historyLoading: false, historySkip: 0, historyHasMore: true }
+      : {}),
     files: [
       ...s.files.map((f) => (newRows.has(f.id)
         ? { ...f, ...accountFailure(next) }
@@ -1781,7 +1793,7 @@ function applySubject(next: string | null): void {
           : f)),
       // Only on an actual change: the storage event for an account that a
       // start has already noticed must not read storage in again.
-      ...(s.subject !== next ? returningRows(s.files) : []),
+      ...(accountChanged ? returningRows(s.files) : []),
     ],
   }
   try {
@@ -1796,6 +1808,28 @@ function applySubject(next: string | null): void {
   // The probe was one of them: the hold passes to whoever still waits, or ends.
   if (probe !== null && (newRows.has(probe) || resumes.has(probe)) && !runners.has(probe)) passOnProbe()
   pump()
+  if (accountChanged) {
+    // The new account's history, and its claim on rows saved before rows had
+    // owners, including any that came back in from storage just now. Each
+    // asks the server once; neither repeats on its own.
+    void useUploadStore.getState().fetchHistory()
+    void adoptOwnerlessRows()
+  }
+}
+
+/**
+ * Whether a history answer has to be thrown away because the account changed
+ * while it was on its way (spec goal 10). Once a change has been applied,
+ * history was reset and asked for again, and that request owns the history
+ * state. A token another tab wrote that this tab has not heard of yet is
+ * applied here, as every start does, and that change asks again.
+ */
+function historyAnswerStale(asked: string, generation: number): boolean {
+  if (generation !== historyGeneration) return true
+  if (currentSubject() === asked) return false
+  useUploadStore.setState({ historyLoading: false })
+  noticeSubject()
+  return true
 }
 
 /**
@@ -3134,11 +3168,17 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
 
   fetchHistory: async () => {
     if (get().historyLoaded) return
+    // Asked as the account signed in now; with nobody signed in, nobody's.
+    const asked = currentSubject()
+    if (asked === null) return
+    const generation = historyGeneration
     set({ historyLoading: true })
     try {
       const assets = await api.get<AssetResponse[]>(
         `/me/assets?filter=owned&skip=0&limit=${HISTORY_PAGE_SIZE}`,
+        { pinSubject: asked },
       )
+      if (historyAnswerStale(asked, generation)) return
       const merged = mergeHistoryAssets(get().files, assets)
       set({
         historyLoaded: true,
@@ -3148,6 +3188,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         files: merged,
       })
     } catch {
+      if (historyAnswerStale(asked, generation)) return
       set({ historyLoaded: true, historyLoading: false })
     }
   },
@@ -3155,11 +3196,16 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   fetchMoreHistory: async () => {
     const { historyHasMore, historyLoading, historySkip } = get()
     if (!historyHasMore || historyLoading) return
+    const asked = currentSubject()
+    if (asked === null) return
+    const generation = historyGeneration
     set({ historyLoading: true })
     try {
       const assets = await api.get<AssetResponse[]>(
         `/me/assets?filter=owned&skip=${historySkip}&limit=${HISTORY_PAGE_SIZE}`,
+        { pinSubject: asked },
       )
+      if (historyAnswerStale(asked, generation)) return
       const merged = mergeHistoryAssets(get().files, assets)
       set((s) => ({
         historyLoading: false,
@@ -3168,6 +3214,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         files: merged,
       }))
     } catch {
+      if (historyAnswerStale(asked, generation)) return
       set({ historyLoading: false })
     }
   },
@@ -3389,6 +3436,65 @@ function dropSavedRow(id: string): void {
   useUploadStore.setState((s) => ({ files: s.files.filter((f) => f.id !== id) }))
 }
 
+/** Ownerless rows whose check with the server has not been answered yet. */
+const adopting = new Set<string>()
+
+/**
+ * Asks the server whose each ownerless row is (spec goal 10). A row saved
+ * before rows had owners shows to nobody. `GET /upload/{versionId}/parts`
+ * answers 200 only to the account that created the version, so:
+ *
+ *  * 200: the row is the signed-in account's from now on;
+ *  * 403: it is another account's. It stays stored, ownerless and hidden, and
+ *    is checked again when someone else signs in;
+ *  * 404 or 409: the upload is gone or finished, and the row is dropped;
+ *  * no `versionId`: there is nothing on the server to resume. Dropped too;
+ *  * anything else -- a network error, a 5xx, a 429, or an answer that came
+ *    after another account signed in -- settles nothing; the next load or
+ *    sign-in asks again.
+ *
+ * With nobody signed in nothing is asked and nothing changes. Run once after
+ * the page loads and once on each change of account, never on a timer. Every
+ * check is pinned to the account read as the pass starts, and a 200 claims
+ * the row for that account even if another has signed in since: the server
+ * said it is theirs. A row already being checked is not checked twice.
+ */
+async function adoptOwnerlessRows(): Promise<void> {
+  const owner = currentSubject()
+  if (owner === null) return
+  const rows = useUploadStore.getState().files.filter((f) => f.ownerId === undefined && !adopting.has(f.id))
+  await Promise.all(rows.map((f) => (f.versionId ? checkOwner(f, f.versionId, owner) : letGo(f))))
+}
+
+async function checkOwner(f: UploadFile, versionId: string, owner: string): Promise<void> {
+  adopting.add(f.id)
+  try {
+    await api.get<ResumeInfo>(`/upload/${versionId}/parts`, { pinSubject: owner })
+    useUploadStore.setState((s) => ({
+      files: s.files.map((r) => (r.id === f.id && r.ownerId === undefined ? { ...r, ownerId: owner } : r)),
+    }))
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 409)) letGo(f)
+  } finally {
+    adopting.delete(f.id)
+  }
+}
+
+/**
+ * An ownerless row that holds nothing anyone can resume leaves for good. A
+ * history row is only taken out of state, never tombstoned: its id is keyed
+ * on the asset, and the next history answer for that asset must still be
+ * able to save it. This tab loaded the row, so its next write removes it from
+ * storage all the same (`heldIds`).
+ */
+function letGo(f: UploadFile): void {
+  if (f.fromHistory || f.id.startsWith('history-')) {
+    useUploadStore.setState((s) => ({ files: s.files.filter((r) => r.id !== f.id) }))
+  } else {
+    dropSavedRow(f.id)
+  }
+}
+
 /**
  * The account this tab's views and actions act for. Read as the store has it;
  * the token's account stands in only while the store is still being created,
@@ -3589,6 +3695,20 @@ if (typeof window !== 'undefined') {
   watchSubject((next) => applySubject(next))
 }
 
+// Rows saved before this release are checked once the saved rows are loaded.
+// localStorage is synchronous, so that is normally done by now.
+if (typeof window !== 'undefined') {
+  const adoptOnce = () => { void adoptOwnerlessRows() }
+  if (useUploadStore.persist.hasHydrated()) {
+    adoptOnce()
+  } else {
+    const stop = useUploadStore.persist.onFinishHydration(() => {
+      stop()
+      adoptOnce()
+    })
+  }
+}
+
 // "Duplicate tab" copies sessionStorage, and with it this tab's id. Announce the
 // id; a live tab already holding it answers, and the copy takes a new one and
 // looks again at the rows it hydrated as its own.
@@ -3645,9 +3765,13 @@ export const __uploadQueueTesting = {
     tabProgressAt = -Infinity
     tombstones.clear()
     heldIds.clear()
+    adopting.clear()
+    historyGeneration++
   },
   /** Lets a saved row go for good, as the check with the server does on a 404 or 409. */
   dropSavedRow,
+  /** One pass of the check that claims or drops ownerless rows. */
+  adoptOwnerlessRows,
   hasAbortController: (id: string): boolean => abortControllers[id] !== undefined,
   /** Rows whose run has begun and not yet ended. */
   runningIds: (): string[] => Array.from(runners.keys()),

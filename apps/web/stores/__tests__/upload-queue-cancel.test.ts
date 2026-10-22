@@ -36,6 +36,8 @@ beforeEach(() => {
   window.localStorage.clear()
   useUploadStore.setState({ files: [], versionsRevision: 0, panelOpen: false })
   signInAs('user-1')
+  // A first sign-in fetches the account's upload history; no case here is about that.
+  vi.mocked(api.get).mockClear()
 })
 
 afterEach(() => {

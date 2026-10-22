@@ -49,6 +49,12 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 
 const storedRow = (id: string) => stored().find((f) => f.id === id)
+/**
+ * What the store asked the server with `GET`, apart from the upload history a
+ * sign-in fetches for the account signing in.
+ */
+const askedAboutUploads = () =>
+  vi.mocked(api.get).mock.calls.filter((c) => !String(c[0]).startsWith('/me/assets'))
 
 /**
  * Presigns answer with whatever `answer` returns: an error to reject with, or
@@ -78,9 +84,12 @@ beforeEach(() => {
   window.localStorage.clear()
   useUploadStore.setState({ files: [], versionsRevision: 0, panelOpen: false })
   // Out and in again, so the store has heard of X whatever the last case left.
+  // Answered before the sign-in, which fetches X's upload history: that
+  // request must not reach the real `api.get`.
+  vi.mocked(api.get).mockResolvedValue([] as never)
   signOutElsewhere()
   signInAs(X)
-  vi.mocked(api.get).mockResolvedValue([] as never)
+  vi.mocked(api.get).mockClear()
   vi.mocked(api.patch).mockResolvedValue({} as never)
 })
 
@@ -170,7 +179,7 @@ describe('an initiate that meets another account', () => {
       expect(storedRow(id)).toMatchObject({ status: 'failed', error: SWITCHED, ownerId: X })
     }
     // The resume asked the server nothing; it is X's to resume later.
-    expect(api.get).not.toHaveBeenCalled()
+    expect(askedAboutUploads()).toEqual([])
     expect(rowOf('r')).toMatchObject({ status: 'interrupted', versionId: 'rv', ownerId: X })
     expect(rowOf('r').queuedResume).toBeUndefined()
     // X's first file had been created when the answer came: kept, for X.
@@ -292,7 +301,10 @@ describe('an initiate that meets another account', () => {
   it('a /parts answer that arrives after a sub change keeps its ids for the owner and sends nothing', async () => {
     const server = fakeServer()
     let answer!: (info: unknown) => void
-    vi.mocked(api.get).mockImplementation((() => new Promise((r) => { answer = r })) as never)
+    // Only the resume's `/parts` waits; Y's sign-in also fetches Y's history.
+    vi.mocked(api.get).mockImplementation(((path: string) => (path.startsWith('/me/assets')
+      ? Promise.resolve([])
+      : new Promise((r) => { answer = r }))) as never)
     useUploadStore.setState({ files: [{ ...interruptedRow(), uploadId: undefined, s3Key: undefined }] })
     useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4', MB))
     await settle()
@@ -344,7 +356,7 @@ describe('when the account changes in another tab', () => {
     server.initiates[0].resolve()
     await settle()
     // Its turn never comes: nothing asked the server about it.
-    expect(api.get).not.toHaveBeenCalled()
+    expect(askedAboutUploads()).toEqual([])
     expect(rowOf('r').status).toBe('interrupted')
     expect(storedRow('r')).toMatchObject({ status: 'interrupted', versionId: 'rv', ownerId: X })
     // Back as X, it is X's to resume.
@@ -366,7 +378,7 @@ describe('when the account changes in another tab', () => {
     expect(rowOf('r').queuedResume).toBeUndefined()
     server.initiates[0].resolve()
     await settle()
-    expect(api.get).not.toHaveBeenCalled()
+    expect(askedAboutUploads()).toEqual([])
     expect(storedRow('r')).toMatchObject({ status: 'interrupted', versionId: 'rv', uploadId: 'ru', ownerId: X })
     expect(useUploadStore.getState().canResume('r')).toBe(true)
   })
