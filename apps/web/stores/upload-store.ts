@@ -3877,6 +3877,34 @@ export function visibleFiles(state: UploadStore): UploadFile[] {
 }
 
 /**
+ * A row this tab would lose if the page went away now (spec goal 12): waiting
+ * for its turn, being started, or being sent. That is `queued` (new, or held),
+ * `starting`, `uploading` (finalizing is a flag on it), and a resume the user
+ * asked for that is waiting for its turn.
+ *
+ * Only what this tab itself runs or queues has these statuses. A row another
+ * tab is sending is read out of storage as `elsewhere` or `interrupted`, never
+ * as `uploading` or `starting` (`standingOfStoredRow`, `savedRow`), and
+ * `queued` and `queuedResume` are never saved. So no check of who is sending is
+ * needed here. `processing` is not on the list: the server carries on without
+ * the page.
+ */
+export function wouldStopOnLeave(f: UploadFile): boolean {
+  return (
+    f.status === 'queued' || f.status === 'starting' || f.status === 'uploading' ||
+    (f.status === 'interrupted' && f.queuedResume === true)
+  )
+}
+
+/**
+ * How many of the signed-in account's uploads Log out would stop. Another
+ * account's rows are hidden here and are not counted.
+ */
+export function uploadsThatWouldStop(): number {
+  return visibleFiles(useUploadStore.getState()).filter(wouldStopOnLeave).length
+}
+
+/**
  * `visibleFiles` for a component. Compared row by row: the filter builds a new
  * array every time, and a bare selector returning one re-renders forever.
  */

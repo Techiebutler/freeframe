@@ -17,10 +17,14 @@ vi.mock('@/stores/auth-store', () => ({
   useAuthStore: () => ({ fetchUser: vi.fn() }),
 }))
 vi.mock('@/stores/upload-store', () => ({
+  // `files` and the two helpers are what the leave guard the shell mounts
+  // reads; with no uploads it stays disarmed.
   useUploadStore: (select?: (s: object) => unknown) => {
-    const state = { fetchHistory: vi.fn() }
+    const state = { fetchHistory: vi.fn(), files: [] }
     return select ? select(state) : state
   },
+  visibleFiles: (s: { files: unknown[] }) => s.files,
+  wouldStopOnLeave: () => false,
 }))
 vi.mock('@/components/layout/sidebar', () => ({
   Sidebar: () => <div data-testid="rail">rail</div>,

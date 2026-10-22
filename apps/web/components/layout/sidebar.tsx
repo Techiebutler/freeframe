@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
-import { useUploadStore, visibleFiles, isOnItsWay } from '@/stores/upload-store'
+import { useUploadStore, visibleFiles, isOnItsWay, uploadsThatWouldStop } from '@/stores/upload-store'
 import { useNotificationStore } from '@/stores/notification-store'
 import { useBranding } from '@/components/shared/branding-provider'
 import { useResolvedTheme } from '@/hooks/use-resolved-theme'
@@ -26,6 +26,7 @@ import { NotificationDrawer } from './notification-drawer'
 import useSWR from 'swr'
 import { api } from '@/lib/api'
 import { StorageUsage, StorageRing } from '@/components/shared/storage-usage'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import type { InstanceSettings } from '@/types'
 
 interface NavItem {
@@ -63,6 +64,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     lightUrl: orgLogoLight,
   })
   const [notifOpen, setNotifOpen] = React.useState(false)
+  // The Log out confirmation, and how many uploads it says will stop. Counted
+  // when the item is picked and left alone after, so the sentence does not
+  // change under the pointer, or while the dialog fades out.
+  const [logoutAsk, setLogoutAsk] = React.useState({ open: false, uploads: 0 })
+
+  // Logging out loads /login, which takes every upload this tab is running or
+  // holding with it, so ask first. Nothing is cleared until the answer is yes.
+  function requestLogout() {
+    const n = uploadsThatWouldStop()
+    if (n === 0) logout()
+    else setLogoutAsk({ open: true, uploads: n })
+  }
   const { data: instance } = useSWR<InstanceSettings>(
     '/instance/settings',
     () => api.get<InstanceSettings>('/instance/settings'),
@@ -274,7 +287,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator className="my-1 h-px bg-border" />
                 <DropdownMenu.Item
-                  onSelect={logout}
+                  onSelect={requestLogout}
                   className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-status-error hover:bg-status-error/10 focus:outline-none"
                 >
                   <LogOut className="h-4 w-4" />
@@ -309,6 +322,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         open={notifOpen}
         onClose={() => setNotifOpen(false)}
         railCollapsed={collapsed}
+      />
+
+      <ConfirmDialog
+        open={logoutAsk.open}
+        onOpenChange={(open) => setLogoutAsk((ask) => ({ ...ask, open }))}
+        title={`${logoutAsk.uploads} ${logoutAsk.uploads === 1 ? 'upload' : 'uploads'} will stop. Log out anyway?`}
+        confirmLabel="Log out"
+        variant="danger"
+        onConfirm={logout}
       />
     </>
   )

@@ -24,8 +24,38 @@ export function setTokens(access: string, refresh: string): void {
   document.cookie = `${REFRESH_TOKEN_KEY}=${refresh}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
 }
 
+/**
+ * Set once the session is being ended on purpose, so the leave-page warning
+ * (`hooks/use-upload-leave-guard.ts`) stays quiet for the navigation that
+ * follows. Never cleared in a real page: the next thing that happens to this
+ * document is that it goes away.
+ */
+let leaveGuardSuppressed = false
+
+/** Whether the navigation to /login is one the browser must not stop with a prompt. */
+export function isLeaveGuardSuppressed(): boolean {
+  return leaveGuardSuppressed
+}
+
+/** Exported for tests. */
+export function resetLeaveGuardSuppression(): void {
+  leaveGuardSuppressed = false
+}
+
+/**
+ * Ends the session in this tab: the tokens go and the page loads /login.
+ *
+ * Every caller means it. A refresh the server refused, or one with no token to
+ * send, ends the session by force, and a Log out has already asked about the
+ * uploads it would stop (`components/layout/sidebar.tsx`). Either way the
+ * tokens are gone before the page leaves, so the browser's "Leave site?"
+ * prompt has nothing to offer: "Stay" would leave a tab with no session that
+ * signs itself out again on the next request. The flag is set before the
+ * navigation, every time.
+ */
 export function clearTokens(): void {
   if (typeof window === 'undefined') return
+  leaveGuardSuppressed = true
   localStorage.removeItem(ACCESS_TOKEN_KEY)
   localStorage.removeItem(REFRESH_TOKEN_KEY)
   // Clear auth cookies
