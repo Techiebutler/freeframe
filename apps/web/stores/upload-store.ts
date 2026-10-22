@@ -1199,7 +1199,7 @@ export async function uploadAllParts(
 }
 
 /**
- * Keeps the machine awake while an upload is running.
+ * Keeps the machine awake while this account's files are moving (spec goal 13).
  *
  * An upload lives entirely in the browser tab. If the machine suspends
  * mid-transfer the loop pushing chunks dies with it — and unlike a failed part,
@@ -1207,30 +1207,39 @@ export async function uploadAllParts(
  * executes, so the version is left at `processing_status = 'uploading'` and
  * looks in the UI like a stalled transcode rather than a dead upload.
  *
+ * One lock for the whole queue, not one per run. It is wanted while any row of
+ * the account signed in now is moving: Initiating and Resuming are `starting`,
+ * Sending and Finalizing are `uploading` (finalizing is a flag on it). A row
+ * that only waits -- queued, held, or queued to resume -- is not moving, so a
+ * hold lets the machine sleep. That is the accepted cost: the tab is suspended
+ * with it, and the queue goes on once the machine wakes.
+ *
+ * Another account's rows do not count, the same as everywhere else that reads
+ * `visibleFiles`. Its run, if it is still sending after a sign-out, goes on
+ * without the lock.
+ *
  * Best-effort by design: without HTTPS, in low-power mode, or in a browser
  * without the API there is no lock — none of which is a reason to refuse the
  * upload.
- *
- * Reference-counted because several uploads can run at once; the lock is only
- * released when the last one finishes.
  */
 let wakeLock: WakeLockSentinel | null = null
 let wakeLockPending: Promise<void> | null = null
-let wakeLockHolders = 0
+/** Whether a row is moving now, as `syncWakeLock` last read it. */
+let wakeLockWanted = false
 
 function acquireWakeLock(): void {
-  // Dropping several files starts several uploads in the same tick, so this
-  // runs again long before the first request has resolved. Without the pending
-  // guard each one would request its own sentinel and only the last would be
-  // tracked, leaving the rest held for the life of the page.
+  // Several files can start in the same tick, so this runs again long before
+  // the first request has resolved. Without the pending guard each one would
+  // request its own sentinel and only the last would be tracked, leaving the
+  // rest held for the life of the page.
   if (wakeLock || wakeLockPending) return
   if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return
 
   wakeLockPending = (async () => {
     try {
       const sentinel = await navigator.wakeLock.request('screen')
-      if (wakeLockHolders === 0) {
-        // Every upload finished while the request was still in flight.
+      if (!wakeLockWanted) {
+        // Everything stopped moving while the request was still in flight.
         void sentinel.release().catch(() => {})
         return
       }
@@ -1247,26 +1256,39 @@ function acquireWakeLock(): void {
   })()
 }
 
-/** Exported for tests. */
-export function retainWakeLock(): void {
-  wakeLockHolders += 1
-  acquireWakeLock()
-}
-
-/** Exported for tests. */
-export function releaseWakeLock(): void {
-  wakeLockHolders = Math.max(0, wakeLockHolders - 1)
-  if (wakeLockHolders > 0) return
+function releaseWakeLock(): void {
   const held = wakeLock
   wakeLock = null
   void held?.release().catch(() => {})
 }
 
+/** Whether `state` has a row of the signed-in account that is moving. */
+function isMoving(state: UploadStore): boolean {
+  return state.files.some(
+    (f) =>
+      f.ownerId !== undefined && f.ownerId === state.subject &&
+      (f.status === 'starting' || f.status === 'uploading'),
+  )
+}
+
+/**
+ * Takes or gives back the lock when whether anything is moving has changed, and
+ * does nothing otherwise. It runs on every write to the store, a progress tick
+ * included, so a write that leaves the answer as it was must cost no request.
+ */
+function syncWakeLock(state: UploadStore): void {
+  const moving = isMoving(state)
+  if (moving === wakeLockWanted) return
+  wakeLockWanted = moving
+  if (moving) acquireWakeLock()
+  else releaseWakeLock()
+}
+
 // Coming back to the foreground needs a fresh lock: the one dropped on hide is
-// dead and cannot be reused.
+// dead and cannot be reused. Only while something is moving.
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && wakeLockHolders > 0) acquireWakeLock()
+    if (document.visibilityState === 'visible' && wakeLockWanted) acquireWakeLock()
   })
 }
 
@@ -2428,12 +2450,11 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
   // Everything the run takes is taken inside the `try`, so the `finally` gives
   // it all back and ends the run whatever throws. Even the first heartbeat is a
   // write to shared storage, which can throw (a full quota), and a run that
-  // threw before its `try` kept its place, its wake lock and, for a large file,
-  // the whole part budget for the life of the tab.
+  // threw before its `try` kept its place and, for a large file, the whole
+  // part budget for the life of the tab.
   let stopBeat = () => {}
   let watch: ReturnType<typeof transferWatch> | null = null
   try {
-    retainWakeLock()
     stopBeat = beatFor((patch) => patchRow(id, patch))
     const runWatch = transferWatch(id, file.size, (patch) => patchRow(id, patch))
     watch = runWatch
@@ -2638,7 +2659,6 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
   } finally {
     watch?.stop()
     stopBeat()
-    releaseWakeLock()
     if (abortControllers[id] === controller) delete abortControllers[id]
     endRun(id, runner, runKey)
   }
@@ -2671,8 +2691,6 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
   let claimNonce: string | undefined
   let watch: ReturnType<typeof transferWatch> | null = null
   try {
-    // Inside the `try`, as in `runNew`, so the `finally` always balances it.
-    retainWakeLock()
     // A resumed row may have stopped while finalizing.
     updateFile({
       status: 'starting', resuming: true, queuedResume: undefined, holdReason: undefined,
@@ -2940,7 +2958,6 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     watch?.stop()
     stopBeat()
     releaseClaim(id, claimNonce)
-    releaseWakeLock()
     if (abortControllers[id] === controller) delete abortControllers[id]
     endRun(id, runner, runKey)
   }
@@ -3910,6 +3927,12 @@ export function uploadsThatWouldStop(): number {
  */
 export const useVisibleFiles = (): UploadFile[] => useUploadStore(useShallow(visibleFiles))
 
+// The one wake lock follows the rows (see `syncWakeLock`), read on every write.
+// A row restored from storage is never moving: this tab is not running it.
+if (typeof window !== 'undefined') {
+  useUploadStore.subscribe(syncWakeLock)
+}
+
 // Another tab signed in as someone else, or signed out. Applied as the event
 // arrives, before this tab can send anything more.
 if (typeof window !== 'undefined') {
@@ -3982,7 +4005,10 @@ export const __uploadQueueTesting = {
     startTargets.clear()
     for (const id of Object.keys(abortControllers)) delete abortControllers[id]
     partBudget = createPartBudget(UPLOAD_CONCURRENCY)
-    wakeLockHolders = 0
+    // No lock held and none wanted. The next write to the store reads the rows
+    // again, so rows still moving ask for it afresh.
+    wakeLockWanted = false
+    releaseWakeLock()
     tabProgressAt = -Infinity
     tombstones.clear()
     heldIds.clear()
@@ -4007,5 +4033,6 @@ export const __uploadQueueTesting = {
   hasAbortController: (id: string): boolean => abortControllers[id] !== undefined,
   /** Rows whose run has begun and not yet ended. */
   runningIds: (): string[] => Array.from(runners.keys()),
-  wakeLockHolders: (): number => wakeLockHolders,
+  /** Whether a row of the signed-in account is moving, so that the lock is wanted. */
+  wakeLockWanted: (): boolean => wakeLockWanted,
 }

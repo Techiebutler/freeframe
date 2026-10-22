@@ -316,7 +316,8 @@ describe('a queued row', () => {
 
     expect(testing.hasAbortController(a)).toBe(true)
     expect(rowOf(a).ownerTab).toBeDefined()
-    expect(testing.wakeLockHolders()).toBe(1)
+    // The one lock is wanted for the row that is moving; the queued one adds nothing.
+    expect(testing.wakeLockWanted()).toBe(true)
 
     expect(testing.hasAbortController(b)).toBe(false)
     expect(rowOf(b).ownerTab).toBeUndefined()
@@ -610,7 +611,7 @@ describe('a run that throws before it reaches the server', () => {
     expect(server.names()).toEqual([])
     expect(testing.runningIds()).toEqual([])
     expect(testing.hasAbortController(a)).toBe(false)
-    expect(testing.wakeLockHolders()).toBe(0)
+    expect(testing.wakeLockWanted()).toBe(false)
     // Not left as an unhandled rejection.
     expect(errors).toHaveBeenCalled()
 

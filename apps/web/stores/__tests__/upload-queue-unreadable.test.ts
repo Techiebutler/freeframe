@@ -135,7 +135,7 @@ describe('a new file whose turn comes', () => {
     // The run gave everything back, and Dismiss is all the row offers.
     expect(testing.runningIds()).toEqual([])
     expect(testing.hasAbortController(idA)).toBe(false)
-    expect(testing.wakeLockHolders()).toBe(0)
+    expect(testing.wakeLockWanted()).toBe(false)
     expect(useUploadStore.getState().canRetry(idA)).toBe(false)
     useUploadStore.getState().retryUpload(idA)
     await settle()
