@@ -1567,9 +1567,15 @@ function mimeFromAssetType(assetType: string): string {
 }
 
 function mergeHistoryAssets(existing: UploadFile[], assets: AssetResponse[]): UploadFile[] {
-  const existingAssetIds = new Set(existing.map((f) => f.assetId).filter(Boolean))
+  // An asset is skipped only for a row that could stand in for its history
+  // row: one of the creator's own, or one with no owner yet, which a later
+  // check may give to the creator. Another account's row for it -- a version
+  // that account sent of an asset this one created -- is hidden from the
+  // creator, and must not hide the asset from the creator's history.
+  const standsIn = (a: AssetResponse) => existing.some((f) =>
+    f.assetId === a.id && (f.ownerId === undefined || f.ownerId === a.created_by))
   const newFiles: UploadFile[] = assets
-    .filter((a) => a.latest_version && !existingAssetIds.has(a.id))
+    .filter((a) => a.latest_version && !standsIn(a))
     .map((a) => {
       const v = a.latest_version!
       const file = v.files?.[0]
@@ -1872,6 +1878,12 @@ function noticeSubject(): string | null {
   const now = currentSubject()
   if (now !== useUploadStore.getState().subject) applySubject(now)
   return now
+}
+
+/** `noticeSubject`, saying whether it found a change and applied it. */
+function noticedChange(): boolean {
+  const before = useUploadStore.getState().subject
+  return noticeSubject() !== before
 }
 
 /**
@@ -3167,6 +3179,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   },
 
   fetchHistory: async () => {
+    // A change of account this tab has not heard of yet is applied first; the
+    // change itself fetches the new account's history.
+    if (noticedChange()) return
     if (get().historyLoaded) return
     // Asked as the account signed in now; with nobody signed in, nobody's.
     const asked = currentSubject()
@@ -3194,6 +3209,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   },
 
   fetchMoreHistory: async () => {
+    // As in `fetchHistory`: after a change, the new account's history starts
+    // from its first page, which the change has already asked for.
+    if (noticedChange()) return
     const { historyHasMore, historyLoading, historySkip } = get()
     if (!historyHasMore || historyLoading) return
     const asked = currentSubject()
@@ -3492,6 +3510,13 @@ function letGo(f: UploadFile): void {
     useUploadStore.setState((s) => ({ files: s.files.filter((r) => r.id !== f.id) }))
   } else {
     dropSavedRow(f.id)
+  }
+  // History that has already arrived skipped this row's asset, which it left
+  // to the row. Asked again, once: the asset is listed with its real status.
+  // A fetch already on its way has not answered yet, and will list it.
+  if (f.assetId && useUploadStore.getState().historyLoaded) {
+    useUploadStore.setState({ historyLoaded: false })
+    void useUploadStore.getState().fetchHistory()
   }
 }
 

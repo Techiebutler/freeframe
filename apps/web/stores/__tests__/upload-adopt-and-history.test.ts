@@ -425,4 +425,96 @@ describe('history rows', () => {
     expect(new Set(all).size).toBe(all.length)
     expect(shown()).toHaveLength(2 * PAGE)
   })
+  it("another account's row for an asset does not hide it from its creator's history; an ownerless row still does", async () => {
+    // Y sent a new version of an asset X created; this tab still holds Y's row.
+    const yRow = row({ id: 'y-version', ownerId: Y, status: 'failed', assetId: 'ax', versionId: 'ax-v2' })
+    // A row saved before rows had owners, for another asset of X's, that the
+    // server says is not X's. A later 200 for it must not make two rows.
+    const old = ownerless('o1', { assetId: 'ao' })
+    answers = { 'o1-v': 403 }
+    useUploadStore.setState({ files: [yRow] })
+    anotherTabWrites([...stored(), old])
+    history = { [X]: () => [asset('ax', X), asset('ao', X)] }
+
+    signInAs(X)
+    await settle()
+
+    expect(rowOf('history-ax').ownerId).toBe(X)
+    expect(shown()).toEqual(['history-ax'])
+    expect(files().some((f) => f.id === 'history-ao')).toBe(false)
+    expect(rowOf('y-version').ownerId).toBe(Y)
+  })
+
+  it("a row the check drops after history arrived brings its asset's history row back", async () => {
+    // The first load after the release: history and the check start together,
+    // and history answers first, skipping the asset the ownerless row is for.
+    const check = deferred<Answer>()
+    answers = { 'o1-v': check.promise }
+    anotherTabWrites([ownerless('o1', { assetId: 'a1' })])
+    history = { [X]: () => [asset('a1', X)] }
+
+    signInAs(X)
+    await settle()
+    expect(files().some((f) => f.id === 'history-a1')).toBe(false)
+    expect(useUploadStore.getState().historyLoaded).toBe(true)
+
+    // The upload finished long ago: the row goes, and history is asked again.
+    check.resolve(409)
+    await settle()
+
+    expect(ids()).toEqual(['history-a1'])
+    expect(shown()).toEqual(['history-a1'])
+    expect(historyCalls().map((c) => c[1])).toEqual([{ pinSubject: X }, { pinSubject: X }])
+    await settle()
+    expect(historyCalls()).toHaveLength(2)
+
+    // Dropped while history is still on its way: that answer lists the asset,
+    // and nothing more is asked.
+    const page = deferred<AssetResponse[]>()
+    const check2 = deferred<Answer>()
+    answers = { 'o2-v': check2.promise }
+    anotherTabWrites([...stored(), ownerless('o2', { assetId: 'a2' })])
+    history = { [Y]: () => page.promise }
+    h.get.mockClear()
+    signInAs(Y)
+    await settle()
+    check2.resolve(409)
+    await settle()
+    page.resolve([asset('a2', Y)])
+    await settle()
+
+    expect(historyCalls()).toHaveLength(1)
+    expect(shown()).toEqual(['history-a2'])
+  })
+
+  it("an account change this tab has not heard of yet, met by a later page, fetches the new account's history from the start", async () => {
+    history = { [Y]: (skip) => pageOf(`y${skip}-`, Y), [X]: () => [asset('x0', X)] }
+    await useUploadStore.getState().fetchHistory()
+    expect(useUploadStore.getState().historySkip).toBe(PAGE)
+    h.get.mockClear()
+
+    writeTokenUnannounced(X)
+    await useUploadStore.getState().fetchMoreHistory()
+    await settle()
+
+    expect(useUploadStore.getState().subject).toBe(X)
+    expect(historyCalls()).toEqual([[`/me/assets?filter=owned&skip=0&limit=${PAGE}`, { pinSubject: X }]])
+    expect(shown()).toEqual(['history-x0'])
+    expect(useUploadStore.getState()).toMatchObject({ historySkip: PAGE, historyHasMore: false })
+
+    // The first page too: the change is applied before anything is asked, so
+    // the page is the new account's and shows at once.
+    history = { [Y]: () => [asset('y-first', Y)] }
+    useUploadStore.setState({ historyLoaded: false })
+    h.get.mockClear()
+    writeTokenUnannounced(Y)
+    const first = useUploadStore.getState().fetchHistory()
+    expect(useUploadStore.getState().subject).toBe(Y)
+    await first
+    await settle()
+
+    expect(historyCalls()).toEqual([[`/me/assets?filter=owned&skip=0&limit=${PAGE}`, { pinSubject: Y }]])
+    // Alongside Y's rows from before, which were only hidden while X was in.
+    expect(shown()).toContain('history-y-first')
+  })
 })
