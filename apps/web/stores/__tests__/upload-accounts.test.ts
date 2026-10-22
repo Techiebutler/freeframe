@@ -237,6 +237,42 @@ describe('an initiate that meets another account', () => {
     expect(server.names()).toEqual(['x1.mov', 'y1.jpg'])
   })
 
+  it('a refused storage write when a run\'s answer notices a new account does not cut the run short', async () => {
+    const server = fakeServer(() => 'wait')
+    const [x1] = drop([fileOf('x1.mov')])
+    await settle()
+
+    writeTokenUnannounced(Y)
+    // The write that saves the account change is refused (storage full). It
+    // is the first write once the store has moved to Y: zustand sets the
+    // state before it saves.
+    const setItem = Storage.prototype.setItem
+    let refusals = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === 'ff-uploads' && refusals === 0 && useUploadStore.getState().subject === Y) {
+        refusals += 1
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+      }
+      return setItem.call(this, key, value)
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // X's initiate answers; the run reads the token and finds Y.
+    server.initiates[0].resolve()
+    await settle()
+
+    expect(refusals).toBe(1)
+    // The run went on to keep what the server created, for X, and ended.
+    expect(rowOf(x1)).toMatchObject({ status: 'interrupted', uploadId: 'u1', versionId: 'v1', ownerId: X })
+    expect(storedRow(x1)).toMatchObject({ status: 'interrupted', uploadId: 'u1', versionId: 'v1', ownerId: X })
+    expect(testing.runningIds()).toEqual([])
+    expect(errors).not.toHaveBeenCalled()
+    // Its place is free: Y's file starts.
+    drop([small('y1.jpg')])
+    await settle()
+    expect(server.names()).toEqual(['x1.mov', 'y1.jpg'])
+  })
+
   it('a row with no owner is never started, as anyone', async () => {
     fakeServer()
     useUploadStore.setState({ files: [{ ...interruptedRow(), ownerId: undefined }] })

@@ -1777,16 +1777,20 @@ function applySubject(next: string | null): void {
           : resumes.has(f.id)
             ? { ...f, queuedResume: undefined, holdReason: undefined }
             : f)),
-        ...returningRows(s.files),
+        // Only on an actual change: the storage event for an account that a
+        // start has already noticed must not read storage in again.
+        ...(s.subject !== next ? returningRows(s.files) : []),
       ],
     }))
-  } finally {
-    // Also when saving the change threw (storage full): the change is in
-    // memory either way, and the queue must not stall behind it.
-    // The probe was one of them: the hold passes to whoever still waits, or ends.
-    if (probe !== null && (newRows.has(probe) || resumes.has(probe)) && !runners.has(probe)) passOnProbe()
-    pump()
+  } catch {
+    // Saving the change was refused (storage full). zustand sets the state
+    // before it saves, so the change is in memory, and it is saved with the
+    // next write that succeeds. Nothing that noticed the change -- a start in
+    // the middle of a batch, a run reading an answer, a drop -- is cut short.
   }
+  // The probe was one of them: the hold passes to whoever still waits, or ends.
+  if (probe !== null && (newRows.has(probe) || resumes.has(probe)) && !runners.has(probe)) passOnProbe()
+  pump()
 }
 
 /**
@@ -1810,8 +1814,11 @@ function returningRows(have: UploadFile[]): UploadFile[] {
   const now = Date.now()
   return (saved ?? []).flatMap((f) => {
     if (held.has(f.id) || tombstones.has(f.id)) return []
+    heldIds.add(f.id)
     const kept = savedRow(f)
     if (!kept) return []
+    // Defensive only: a row this tab is sending is always in its state, so
+    // `held` has already skipped it. Kept so the rule holds on its own here.
     return [isSendingHere(f.id) ? kept : standingOfStoredRow(kept, now)]
   })
 }
@@ -2741,13 +2748,8 @@ function enqueueNew(
   if (items.length === 0) return []
   const owner = currentSubject()
   if (owner === null) return []
-  try {
-    noticeSubject()
-  } catch {
-    // Saving the account change threw (storage full). It is applied in memory
-    // and the queue has moved on from it; this drop goes ahead, and its own
-    // write below saves again.
-  }
+  // Never throws: a refused save of the change is handled in `applySubject`.
+  noticeSubject()
   const dropSeq = ++dropSeqs
   const createdAt = Date.now()
   const rows: UploadFile[] = items.map(({ file, assetName, target }) => {
@@ -3363,6 +3365,16 @@ function savedRow(f: UploadFile): UploadFile | null {
  */
 const tombstones = new Set<string>()
 
+/**
+ * Ids of every saved row this page load has held: the rows it loaded, every
+ * row it has written, and the rows it read back in on a change of account. A
+ * stored row this tab is not writing is removed only when it is one of these
+ * (or tombstoned), because then its absence is this tab's own doing -- a
+ * Dismiss, a Discard, a finished upload. A row this tab never held is another
+ * tab's, whatever its account or its stamp, and the next page load picks it up.
+ */
+const heldIds = new Set<string>()
+
 /** Lets a saved row go for good, from this tab's state and from storage. */
 function dropSavedRow(id: string): void {
   tombstones.add(id)
@@ -3404,16 +3416,13 @@ function runningHere(id: string): boolean {
  * it. Owner filtering applies to views and actions, never to what is kept here:
  *
  *  * A row in `tombstones` is never written, from either side.
- *  * A stored row this tab does not have is kept when it is another account's
- *    or has no owner, whatever its stamp: this tab, signed in as someone else,
- *    has no say over it, and erasing it would leave its owner signing back in
- *    to nothing. The one exception is a row this tab wrote itself (its
- *    `ownerTab`): every such row is in this tab's state until this tab lets it
- *    go, so its absence is this tab's own decision. A row of the signed-in
- *    account is kept only while another tab is still stamping it; otherwise
- *    one tab's write erases another tab's in-flight row outright, and if that
- *    tab then dies, history answers with the display version, which skips
- *    `uploading`, so a second version's upload has no row anywhere.
+ *  * A stored row this tab is not writing is removed only if this page load
+ *    held it (`heldIds`): then its absence is this tab's own doing. Any other
+ *    is kept as stored, whatever its account, owner or stamp. Erasing a row
+ *    another tab saved after this one loaded -- a transfer that tab was
+ *    sending when it closed, say -- loses the upload outright: history
+ *    answers with the display version, which skips `uploading`, so a second
+ *    version's upload would have no row anywhere and no offer to resume.
  *  * For one id, a copy with an owner beats a copy without one: a row claimed
  *    for its owner must not be un-claimed by the stale copy it was claimed from.
  *  * A row of another account, or with no owner, that this tab has no run for
@@ -3434,17 +3443,15 @@ function mergeWithStored(name: string, outgoing: string): string {
 
     const mine = currentTabId()
     const subject = appliedSubject()
-    const now = Date.now()
     const byId = new Map(ours.filter((f) => !tombstones.has(f.id)).map((f) => [f.id, f]))
+    byId.forEach((_, id) => heldIds.add(id))
     const notTheSubjects = (f: UploadFile) => f.ownerId === undefined || f.ownerId !== subject
 
     for (const row of stored ?? []) {
       if (tombstones.has(row.id)) continue
       const here = byId.get(row.id)
       if (!here) {
-        if (row.ownerTab === mine) continue
-        const beating = row.heartbeatAt !== undefined && now - row.heartbeatAt < LIVE_WINDOW_MS
-        if (notTheSubjects(row) || (row.ownerTab && beating)) byId.set(row.id, row)
+        if (!heldIds.has(row.id)) byId.set(row.id, row)
         continue
       }
       if (row.ownerId === undefined && here.ownerId !== undefined) continue
@@ -3535,6 +3542,9 @@ export const useUploadStore = create<UploadStore>()(
         // `savedRow` again: a row written by an older build, or by another tab
         // through `mergeWithStored`, is held to the same rules.
         files: stored.flatMap((f) => {
+          // Held even when this build will not keep it: its absence from the
+          // next write is then this tab's decision.
+          heldIds.add(f.id)
           const saved = savedRow(f)
           return saved ? [standingOfStoredRow(saved, now)] : []
         }),
@@ -3620,6 +3630,7 @@ export const __uploadQueueTesting = {
     wakeLockHolders = 0
     tabProgressAt = -Infinity
     tombstones.clear()
+    heldIds.clear()
   },
   /** Lets a saved row go for good, as the check with the server does on a 404 or 409. */
   dropSavedRow,

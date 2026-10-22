@@ -28,8 +28,8 @@ import {
   useUploadStore, visibleFiles, currentTabId, LIVE_WINDOW_MS, __uploadQueueTesting as testing,
 } from '../upload-store'
 import type { UploadFile } from '../upload-store'
-import { signInAs, signOutElsewhere, row } from '@/test/upload-session'
-import { fakeServer, fileOf, drop, rowOf, files, stored, settle } from '@/test/upload-queue-server'
+import { signInAs, signOutElsewhere, writeTokenUnannounced, row } from '@/test/upload-session'
+import { fakeServer, fileOf, small, drop, rowOf, files, stored, settle, resumable } from '@/test/upload-queue-server'
 
 const KEY = 'ff-uploads'
 const X = 'user-x'
@@ -172,6 +172,79 @@ describe('saved rows of other accounts', () => {
     expect(rowOf('xo')).toMatchObject({ status: 'interrupted', ownerId: X })
     expect(visibleFiles(useUploadStore.getState()).map((f) => f.id).sort()).toEqual([x1, 'xo'].sort())
     expect(storedIds()).toEqual([x1, 'xo'].sort())
+  })
+})
+
+describe('saved rows of this account that this tab never held', () => {
+  it('a same-account row another tab saved after this tab loaded survives this tab\'s writes once its heartbeat is stale, and comes back on the next load', async () => {
+    // Tab B, signed in as Y too, was sending a second version when it was
+    // closed. History answers with the display version, so this row is the
+    // only record of the upload: erasing it would lose the Resume outright.
+    const b1 = row({
+      id: 'b1', ownerId: Y, status: 'uploading', progress: 40, assetId: 'b1-a', versionId: 'b1-v', uploadId: 'b1-u',
+      ownerTab: OTHER_TAB, heartbeatAt: Date.now() - LIVE_WINDOW_MS * 2,
+    })
+    anotherTabWrites([b1])
+
+    thisTabWrites()
+    thisTabWrites()
+
+    expect(storedRow('b1')).toEqual(asStored(b1))
+
+    const loaded = await loadAgain()
+    const state = loaded.useUploadStore.getState()
+    expect(state.files.find((f) => f.id === 'b1')).toMatchObject({ status: 'interrupted', versionId: 'b1-v', ownerId: Y })
+    expect(loaded.visibleFiles(state).map((f) => f.id)).toEqual(['b1'])
+
+    // Held by that load, so it is that tab's to dismiss.
+    loaded.useUploadStore.getState().removeFile('b1')
+    expect(storedIds()).toEqual([])
+  })
+
+  it('a hidden row whose discard drop lands after a switch is not resurrected', async () => {
+    // X discards an upload loaded from a tab that has since closed; the
+    // server's answer arrives after Y signed in. The row is gone for X, and
+    // Y's writes must not put the stored copy back.
+    signInAs(X)
+    const xh = row({
+      id: 'xh', ownerId: X, status: 'interrupted', assetId: 'xh-a', versionId: 'xh-v', uploadId: 'xh-u', s3Key: 'xh-k',
+      ownerTab: OTHER_TAB, heartbeatAt: Date.now() - LIVE_WINDOW_MS * 2,
+    })
+    useUploadStore.setState({ files: [xh] })
+    expect(storedIds()).toEqual(['xh'])
+    let answer!: (info: unknown) => void
+    vi.mocked(api.get).mockImplementation((() => new Promise((r) => { answer = r })) as never)
+    vi.mocked(api.post).mockResolvedValue({} as never)
+
+    const said = useUploadStore.getState().discardUpload('xh')
+    await settle()
+    signInAs(Y)
+    answer(resumable({ version_id: 'xh-v', upload_id: 'xh-u', s3_key: 'xh-k', asset_id: 'xh-a' }))
+    await said
+    await settle()
+
+    expect(files().map((f) => f.id)).toEqual([])
+    expect(storedIds()).toEqual([])
+    thisTabWrites()
+    expect(storedIds()).toEqual([])
+  })
+
+  it('the storage event for an account a start already noticed changes nothing', async () => {
+    signInAs(X)
+    fakeServer(() => 'wait')
+    // Y signs in elsewhere; Y's drop here notices it before the event arrives.
+    writeTokenUnannounced(Y)
+    drop([small('y1.jpg')])
+    // Another tab saves a row of Y's in between.
+    const late = row({ id: 'late', ownerId: Y, status: 'interrupted', versionId: 'late-v', ownerTab: OTHER_TAB })
+    anotherTabWrites([...stored(), late])
+    const before = files()
+
+    signInAs(Y)
+
+    expect(files()).toEqual(before)
+    expect(files().filter((f) => f.id === 'late')).toEqual([])
+    expect(storedRow('late')).toEqual(asStored(late))
   })
 })
 

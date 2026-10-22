@@ -622,7 +622,10 @@ describe('writing to storage every tab shares', () => {
 
   it('lets a row that nobody is sending be removed', () => {
     // Otherwise Discard, Dismiss and "clear completed" could never take effect.
-    seedStorage([{ id: 'row-1', ownerTab: 'tab-A', heartbeatAt: Date.now() - LIVE_WINDOW_MS - 1 }])
+    // The row is one this tab held (it wrote it), and then let go of.
+    const stale = { id: 'row-1', ownerTab: 'tab-A', heartbeatAt: Date.now() - LIVE_WINDOW_MS - 1 }
+    seedStorage([stale])
+    write([stale])
 
     write([])
 
@@ -630,7 +633,9 @@ describe('writing to storage every tab shares', () => {
   })
 
   it('lets this tab remove its own row', () => {
-    seedStorage([{ id: 'row-1', ownerTab: currentTabId(), heartbeatAt: Date.now() }])
+    const own = { id: 'row-1', ownerTab: currentTabId(), heartbeatAt: Date.now() }
+    seedStorage([own])
+    write([own])
 
     write([])
 
