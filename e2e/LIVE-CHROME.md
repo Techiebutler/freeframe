@@ -425,11 +425,11 @@ change after the drop is exactly what those scenarios want. Not exercised.
 | Block a request class | `window.__ffq.block('/upload/initiate')` or `window.__ffq.block(/:19000/)` (a string is matched literally, a RegExp as given); `window.__ffq.unblock()`. The stand-in for DevTools' "Network request blocking", which the MCP lacks. Matching `fetch` calls reject at once with `TypeError: Failed to fetch (blocked by __ffq)`; matching `XMLHttpRequest`s are re-pointed at `http://127.0.0.1:9/blocked-by-ffq`, a port Chromium refuses to connect to (`net::ERR_UNSAFE_PORT`, so nothing is sent; to the app it is the same as any network error, status 0). The probe records them as `blocked` (fetch) and `network-error` (XHR). **Counting: for a blocked class the probe's `report()` is the authoritative count.** A blocked `fetch` never reaches DevTools; a blocked XHR is listed by `list_network_requests` under the substitute URL (a `PUT` and its `OPTIONS` preflight, both `ERR_UNSAFE_PORT`), not under the original. **Limits:** the block is lost on reload or navigation (so is the probe: reinstall with `initScript`); it does not change `navigator.onLine` or fire `offline` / `online` events, so N1 and N2 need `emulate` `Offline`; it covers page-level `fetch` and `XMLHttpRequest` only (not workers, `sendBeacon` or `EventSource`); and it fails requests instantly, never as a hang or a timeout (use the throttle or the docker faults for those). | verified on a fetch and on an XHR, with the DevTools side (outputs in the baseline report, "Tooling checks") |
 | Storage down | `STORAGE=$($E2E_COMPOSE ps -q minio)`; `docker stop $STORAGE`; later `docker start $STORAGE`. (ffe2e: container `ffe2e-minio-1`.) The browser's part PUTs fail, and so does `/upload/initiate` (the API creates the multipart upload in storage); presigning signs locally, so expect it to keep answering. | verified in phase 2 (S1): with the container stopped, `/upload/initiate` answered the coded `503` (`storage_unavailable`, `retry_after` 5) in about 150 ms, seven times in 30 s; `docker start` and the container was healthy in 6 s and the next try went through |
 | Storage black hole | `NET=$(docker inspect $STORAGE --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')` (ffe2e: `ffe2e_default`), then `docker network disconnect $NET $STORAGE`. Reconnect with `docker network connect --alias minio $NET $STORAGE` (the compose service name must come back as an alias or the API cannot resolve the host). Requests hang instead of being refused. | not exercised; check the reconnect before relying on it |
-| Files changed mid-queue | `touch` / `rm` / rewrite on the files in `e2e/.live-files/` (section 3). | not exercised |
+| Files changed mid-queue | `touch` / `rm` / rewrite / replace-by-rename on the files in `e2e/.live-files/` (section 3). A file whose parts are all in flight survives an `rm` (macOS keeps the unlinked file open); one with a part still to send fails that part at once (`net::ERR_FILE_NOT_FOUND`). | verified in phase 3 (U1, U2, X1, X1b, X3) |
 | Second tab, same account | `new_page` with the **same** `isolatedContext` name. It shares localStorage and cookies with the first tab (verified: a second tab opened in the same context was already signed in; a page in a differently named context was not). Probe it too: `navigate_page` with the `initScript`. | verified (baseline report, "Tooling checks") |
 | Second account at once | `new_page` with a **different** `isolatedContext` name, sign in as `secondary` there. In the same context, signing in as `secondary` replaces `primary`'s session for both tabs, which is what A2 and A3 want. | not exercised |
 | `beforeunload` dialog (L1) | `navigate_page` takes `handleBeforeUnload` (`accept` or `dismiss`); for a dialog that is already open, `handle_dialog`. | not exercised |
-| Laptop sleep (wake and resume cases) | Close the lid for 2 minutes with the queue running, open it, and record what the rows show. `pmset sleepnow` does the same from a terminal. A person has to be present; the DevTools session may need `list_pages` afterwards to find its tab. | not exercised |
+| Laptop sleep (wake and resume cases) | Close the lid for 2 minutes with the queue running, open it, and record what the rows show. `pmset sleepnow` does the same from a terminal. A person has to be present; the DevTools session may need `list_pages` afterwards to find its tab. An unattended agent must not do this (it ends the session): it belongs to the manual pass. | not exercised (phase 3: moved to the manual pass) |
 | Busy main thread (Q2) | Optional: `emulate` with `cpuThrottlingRate: 4`. Report it if used. | not exercised |
 
 The DevTools MCP can hold, delay and answer nothing, so the Playwright faults that scenarios use have in-page stand-ins
@@ -599,6 +599,17 @@ in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section)
   whichever tab is selected; pick All.
 - A file named like an earlier run's file (the same set dropped twice) puts two rows of that name in the panel; give each run's
   files their own prefix, as the Playwright specs do.
+- **A held part is still on the watchdog's clock.** `hold()` stops the part PUT at `XMLHttpRequest.send`, but the app armed its watchdog
+  when it called `send`, so a hold longer than about 90 s ends in an abort and a retry (that is how U3 uses it). Release within a minute
+  when the scenario is about something else.
+- **`emulate` Offline after a throttle releases the throttled uploads.** Going from `Fast 4G` to `Offline` let the PUTs that were
+  crawling answer 200 at once (every byte stored), so the next step, `/upload/complete`, met the outage (the rows went Interrupted
+  with "Failed to fetch"). For an outage in the middle of a part, put the part on `route['name'] = 'stall'` (ffq-route.js) first: an
+  emulated outage leaves a pending request pending, and only the watchdog ends it.
+- **The tool calls between two commands cost seconds.** A 20 s outage written as "emulate Offline, wait, emulate back" took 27.7 s
+  in N2; read the real times from the `online`/`offline` events (`window.addEventListener`) and report them, not the intended ones.
+- **The access token expires mid-pass** (15 minutes by default): a burst of 401s followed by a `POST /auth/refresh` 200 in the console and the
+  network list is the app refreshing it, not an upload fault.
 
 ## 9. Phase 2 stand-ins (`live-tools/`)
 
@@ -611,6 +622,8 @@ the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript`
 | `live-tools/ffq-extras.js` | `hold()` / `release()` / `held()`, `pace(bytesPerSecond)`, `delayInitiateMs`, `failInitiate`, `initiates` (name, file, bytes, status, `uploadId`, `chunk`, `code`, `retryAfter`), `partLog`, `presignLog`, `watch(rowId)` / `saved` (every write of `ff-uploads` and whether the row is in it), `rows()`, `tally()`, `openAll()`, `addInput()`, `drop()`, `summary()` |
 | `live-tools/ffq-helpers.js` | `newProject(name)` (through the UI, SPA navigation, the probe survives), `clickRow(name, title)`, `dropFrom(inputId)`, `addInput2(id, offset)`, `assets()`, `waitRows()`, `closePanel()` |
 | `live-tools/ffq-fast.js` | a stand-in file chooser for Resume (`pickNext = true` then click Resume: the next file input the app clicks gets the files of `#ffq-pick`) and `delayPartsMs` (a deferred `/parts` answer, R3's route) |
+| `live-tools/ffq-route.js` | per-file faults for part PUTs (phase 3): `route['name.png'] = 'stall'` or `'hang'` sends that file's next part PUT to the throwaway server below (real upload progress, then nothing; or every byte sent and no answer), `holdFile['name.png'] = n` holds its first n part PUTs unsent; `routeLog` has the times |
+| `live-tools/stall-server.js` | the throwaway server for `route` (`node e2e/live-tools/stall-server.js [port]`, default 18777, on 127.0.0.1): answers the CORS preflight, then `/stall` stops reading after 256 KB and `/hang` reads everything and never answers. Stop it with `kill <pid>` when done |
 
 After a reload, one script reinstalls everything and adds the two inputs (`ffq-drop-input` and `ffq-pick`) and the hold:
 

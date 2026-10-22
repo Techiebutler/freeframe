@@ -26,11 +26,11 @@ version.
 | C1 | Cancel a queued file | the row disappears; no initiate for it (`countRequests`) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#c1-cancel-a-queued-file-pass) | — | — |
 | C2 | "Cancel all queued" mid-run | active files continue; every queued row disappears | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#c2-cancel-all-queued-mid-run-pass) | — | — |
 | C3 | Cancel the active file | the next file starts; `/upload/abort` sent once | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#c3-cancel-the-active-file-pass) | — | — |
-| U1 | `touch` a queued file before its turn | that row: "The file changed or was moved after it was added. Add it again.", Dismiss only (no Retry); no initiate for it; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | — | — | — |
-| U2 | `remove` the sending file mid-part | the row ends Interrupted with the same copy within 90 s + backoff (Chromium errors the send at once; in WebKit the send hangs with no event and the part watchdog ends it); nothing is aborted; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | — | — | — |
-| U3 | `hangParts` / `stallParts` for parts of a file | the part watchdog aborts a part and retries it, and the queue does not freeze. A part that has sent its first byte and then stops is aborted after 90 s without upload progress. A part that has not sent a byte yet is aborted only when the whole tab has had no upload progress for 90 s, or when it has itself waited 5 min (the hard cap, so a part held behind busy sockets is not mistaken for a stalled one). A part that sent its last byte waits 5 min for the answer. The retry goes through; the 5 min cap alone is not automated (see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` (U3: parts that never start, tab silent; U3b: a part that stops after progress, tab busy) | — | — | — |
-| N1 | `context.setOffline(true)` at enqueue, back online after 30 s | rows show "Waiting for connection"; none failed; all complete after reconnect (WebKit: `networkSwitch` aborts the API and bucket requests instead, see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | — | — | — |
-| N2 | Offline mid-part for 20 s | the sending file's ladder recovers; queued files never fail | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | — | — | — |
+| U1 | `touch` a queued file before its turn | that row: "The file changed or was moved after it was added. Add it again.", Dismiss only (no Retry); no initiate for it; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#u1-touch-a-queued-file-before-its-turn-pass) | — | — |
+| U2 | `remove` the sending file mid-part | the row ends Interrupted with the same copy within 90 s + backoff (Chromium errors the send at once; in WebKit the send hangs with no event and the part watchdog ends it); nothing is aborted; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#u2-rm-the-sending-file-mid-part-pass) | — | — |
+| U3 | `hangParts` / `stallParts` for parts of a file | the part watchdog aborts a part and retries it, and the queue does not freeze. A part that has sent its first byte and then stops is aborted after 90 s without upload progress. A part that has not sent a byte yet is aborted only when the whole tab has had no upload progress for 90 s, or when it has itself waited 5 min (the hard cap, so a part held behind busy sockets is not mistaken for a stalled one). A part that sent its last byte waits 5 min for the answer. The retry goes through; the 5 min cap alone is not automated (see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` (U3: parts that never start, tab silent; U3b: a part that stops after progress, tab busy) | [PASS](live-runs/2026-10-22-phase-3.md#u3-parts-that-never-start-tab-silent-pass-stand-in-parts-held-nothing-sent), and [U3b](live-runs/2026-10-22-phase-3.md#u3b-a-part-that-stops-after-progress-tab-busy-pass-real-socket-stall-server) and [the two 5 min clocks](live-runs/2026-10-22-phase-3.md#u3c-the-two-5-min-clocks-u3s-text-the-5-min-cap-alone-is-not-automated-pass-real-sockets), run live | — | — |
+| N1 | `context.setOffline(true)` at enqueue, back online after 30 s | rows show "Waiting for connection"; none failed; all complete after reconnect (WebKit: `networkSwitch` aborts the API and bucket requests instead, see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#n1-offline-at-enqueue-pass) | — | — |
+| N2 | Offline mid-part for 20 s | the sending file's ladder recovers; queued files never fail | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#n2-offline-mid-part-pass) | — | — |
 | S1 | `failInitiate` coded 503 three times | "Waiting for storage", then the queue continues; 3 retries spaced ≥ 5 s | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#s1-failinitiate-coded-503-pass-with-the-real-fault) | — | — |
 | S2 | `failParts(503)` on every PUT for 60 s | presign requests ≤ budget × 8 over the window (`countRequests`) | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#s2-failparts503-for-60-s-pass-stand-in-network-errors) | — | — |
 | S3 | Infra: `docker stop` storage mid-queue, start after 60 s | queued files hold; the sending file ends Interrupted (as today) or recovers | Chromium | 6 | — | — | — | — |
@@ -244,6 +244,27 @@ Observation for the app, not asserted (N1): when several files ask at once and a
 probe and the others are put back at the front in the order their failures arrive, which is arbitrary. In one Chromium run of N1 the files
 were created in the order 01, 03, 02, 04, 05 (in the one later run that logged the order it was 01, 02, 03, 04, 05). Files of 5 MiB or less count as one part while they initiate,
 so the first three do ask together. No data is lost; the order among those three can change after an outage.
+
+## Phase 3 live Chrome results
+
+Run by hand in real, headed Chrome 154.0.8037.100 on the phase 3 branch (`0eb50cc1`), 2026-10-22: [`live-runs/2026-10-22-phase-3.md`](live-runs/2026-10-22-phase-3.md).
+The "Live Chrome run" column above links each scenario's section.
+
+- **Passing**: U1, U2, U3, N1, N2, plus the checks the brief asked for and two the live pass added: U3b (a part that sent 1.08 MB and
+  then stopped, tab busy: aborted 90.0 s after its own last progress, not 140 s), U3c (the two 5 min clocks the automated suite cannot
+  run: a never-started part with a busy tab is aborted at 300.0 s, a part with every byte sent and no answer 299.98 s after its last
+  byte), `rm` of a file that is sending (X1: all parts in flight, the upload completes from the unlinked file; X1b: a part still to
+  start fails at once and the row is Interrupted with the changed-file copy 2.1 s later), DevTools offline for 125 s with a part in
+  flight (X2b: the row holds at "Uploading", queued rows "Waiting for connection", everything completes 26 s after the network
+  returns with no click), and the three changes a sync client makes to queued files (X3: touch, replace by rename, in-place rewrite:
+  all three Failed with the exact copy, no initiate for any).
+- **No app bug was found** in this pass. Observations (not failures): after a reconnect the app waits out its backoff (22 to 30 s here)
+  rather than waking on the browser's `online` event; an outage that lands on `/upload/complete` leaves the row Interrupted with the
+  browser's text "Failed to fetch" (X2), recoverable with Resume without re-sending.
+- **Laptop sleep: moved to the manual pass** (controller ruling R9: the machine is not put to sleep in an automated run).
+- "Touch a file in a synced folder" used a plain local folder: the Google Drive, OneDrive and iCloud folders on the machine are the
+  user's, not test locations.
+- Not run here: the manual real Safari and real Firefox pass (matrix row M).
 
 ## Already covered
 
