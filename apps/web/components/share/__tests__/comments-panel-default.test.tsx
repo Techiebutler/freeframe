@@ -1,9 +1,9 @@
 /**
- * A share link used to land with the right-hand comments pane open on desktop,
- * so the first thing a guest saw was a "Select an asset to view comments"
- * placeholder eating a third of the grid. The pane now belongs to the asset
- * viewer: the folder grid starts closed (the header toggle still opens it), and
- * the review screen opens its own sidebar as it always has.
+ * A share link used to load with the right-hand comments pane open on a desktop
+ * screen, so the first thing a visitor saw was a "Select an asset to view
+ * comments" placeholder (folder grid) or the comment list beside a media they
+ * had not looked at yet (viewer). The pane now starts closed on both, and opens
+ * only from the header toggle.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -40,11 +40,11 @@ function renderViewer() {
   )
 }
 
-describe('the share-link folder grid', () => {
+describe('the share-link comments pane', () => {
   beforeEach(stubDesktop)
   afterEach(() => { vi.unstubAllGlobals() })
 
-  it('loads with the comments pane closed on a desktop viewport', async () => {
+  it('loads the folder grid closed', async () => {
     renderViewer()
 
     await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
@@ -54,7 +54,7 @@ describe('the share-link folder grid', () => {
     expect(screen.queryByTitle('Hide panel')).toBeNull()
   })
 
-  it('opens the pane from the header toggle', async () => {
+  it('opens the folder grid panel from the header toggle', async () => {
     renderViewer()
 
     await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
@@ -63,14 +63,22 @@ describe('the share-link folder grid', () => {
     expect(await screen.findByText('Select an asset to view comments')).toBeInTheDocument()
   })
 
-  it('opens the comments pane once the viewer is entered, with no extra click', async () => {
+  it('opens the viewer closed and shows its comments from the toggle', async () => {
     renderViewer()
 
     await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
     fireEvent.doubleClick(screen.getByText('Clip.mp4'))
 
-    // The tabs live in the review screen's sidebar, so they only show if that
-    // sidebar came up open.
+    // The grid unmounts (its search box goes) and the review screen's own top
+    // bar lands, closed. The tabs live in its sidebar, so they only show once
+    // that sidebar is opened.
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('Search assets…')).toBeNull()
+      expect(screen.getAllByTitle('Show panel')).toHaveLength(1)
+    }, { timeout: 3000 })
+    expect(screen.queryByText('Fields')).toBeNull()
+    fireEvent.click(screen.getByTitle('Show panel'))
+
     await waitFor(() => expect(screen.getByText('Fields')).toBeInTheDocument(), { timeout: 3000 })
     expect(screen.getByText('Comments')).toBeInTheDocument()
   })

@@ -98,7 +98,11 @@ function ShareReviewInner({
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime } = useReviewStore()
-  const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
+  // Starts closed on every viewport. A guest following a link came to look at
+  // the media; the panel opens from the toggle in the top bar. (The mobile
+  // sheet still shows its peek band — that is the transport strip, not the
+  // comment list.)
+  const [sidebarOpen, setSidebarOpen] = React.useState(false)
 
   // Same rule as the project review screen: a bottom sheet on a portrait phone
   // so the media stays in view, the side-by-side column on a landscape one.
@@ -107,6 +111,9 @@ function ShareReviewInner({
   const useSheet = !isWide && !isLandscape
   const [sheetState, setSheetState] = React.useState<SheetState>('peek')
   const [sheetHeight, setSheetHeight] = React.useState(PEEK_PX)
+  // One expression for the top-bar toggle's icon and its label, so the two
+  // cannot disagree about whether the panel is up.
+  const panelShown = useSheet ? sheetState !== 'peek' : sidebarOpen
   const { isPlaying, togglePlay } = useMediaTransport()
   const reviewRootRef = React.useRef<HTMLDivElement>(null)
   const handleSheetHeight = React.useCallback((px: number) => setSheetHeight(px), [])
@@ -303,8 +310,8 @@ function ShareReviewInner({
               </button>
             </DownloadMenu>
           )}
-          <button onClick={() => (useSheet ? setSheetState(st => (st === 'peek' ? 'half' : 'peek')) : setSidebarOpen(v => !v))} className="flex items-center justify-center h-8 w-8 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
-            {(useSheet ? sheetState !== 'peek' : sidebarOpen) ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+          <button onClick={() => (useSheet ? setSheetState(st => (st === 'peek' ? 'half' : 'peek')) : setSidebarOpen(v => !v))} title={panelShown ? 'Hide panel' : 'Show panel'} className="flex items-center justify-center h-8 w-8 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
+            {panelShown ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
           </button>
         </div>
       </div>
