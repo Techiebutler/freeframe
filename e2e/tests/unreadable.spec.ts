@@ -73,21 +73,26 @@ test('U2: the sending file deleted mid-part ends Interrupted with the changed-fi
   test.setTimeout(10 * 60_000)
   const { project } = await openProject(page, 'U2')
   const calls = recordUploadCalls(page)
-  const hold = await holdParts(page)
+  const uploads = trackUploads(page)
   // A is two parts (12 MB); the rest are small.
   const files = await pngs('u2', [12 * MB, ...Array(4).fill(1 * MB)])
   const [a, ...rest] = files
+  // Every part waits at the network until released. A's own wait is the later route, so it sees A's parts
+  // first and counts them: the test knows A itself is mid-part, not just that three parts are out.
+  const hold = await holdParts(page)
+  const holdA = await holdParts(page, { only: uploads.partsOf(a.fileName) })
 
   await dropFiles(page, 'project', files.map((f) => f.file))
   await openUploads(page)
   await until(page, files, '3 uploading and 2 queued', (m) => m.length === 5 && count(m, 'uploading') === 3 && count(m, 'queued') === 2)
-  // Each of the three has a part PUT on its way (held at the network): A is mid-part.
-  await expect.poll(() => hold.held(), { timeout: 30_000 }).toBeGreaterThanOrEqual(3)
+  // A is mid-part: a PUT of its own is on its way, held at the network.
+  await expect.poll(() => holdA.held(), { timeout: 30_000 }).toBeGreaterThanOrEqual(1)
   expect(initiatesOf(calls, rest.slice(2))).toEqual([])
 
   await remove(a.file)
   const releasedAt = Date.now()
   hold.release()
+  holdA.release()
 
   // A ends Interrupted, not hung and not Failed: its upload is still on the server to be finished.
   // Chromium errors the send at once; in WebKit it hangs until the part watchdog (90 s) ends it.
@@ -110,7 +115,6 @@ test('U2: the sending file deleted mid-part ends Interrupted with the changed-fi
   const aUpload = initiatesOf(calls, [a])[0]
   expect(aUpload?.uploadId).toBeTruthy()
   expect(calls.puts.filter((p) => p.uploadId === aUpload.uploadId).length, 'A is not sent a second time').toBeLessThanOrEqual(2)
-  expect(summary(mineOf(await rows(page), files))).toContain(`${a.name}:interrupted/interrupted`)
 })
 
 // ─── U3 ────────────────────────────────────────────────────────────────────────

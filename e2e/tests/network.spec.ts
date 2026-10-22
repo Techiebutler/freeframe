@@ -40,7 +40,7 @@ test('N1: files dropped while offline wait for the connection, none fails, and a
     page, files, 'a row Waiting for connection',
     (m) => m.length === 5 && m.some((r) => r.kind === 'waiting-for-connection'), 30_000,
   )
-  expect(waiting.filter((r) => r.kind === 'waiting-for-connection').map((r) => r.detail)).not.toEqual([])
+  expect(waiting.filter((r) => r.kind === 'waiting-for-connection').map((r) => r.detail)).toContain('Waiting for connection')
 
   // For 30 s offline: nothing fails, nothing is created, every row is either waiting for the connection,
   // waiting its turn, or (during a try) Starting.
@@ -72,10 +72,11 @@ test('N1: files dropped while offline wait for the connection, none fails, and a
   testInfo.annotations.push({ type: 'recovered', description: `all five uploaded ${((Date.now() - backAt) / 1000).toFixed(1)} s after reconnecting; the probe asked ${Math.max(...asked)} times while offline` })
   expect(done.filter((r) => GONE_WRONG.includes(r.status))).toEqual([])
 
-  // Each file was created once, when the connection allowed it. (Not asserted: the order. The files that
-  // asked together when the drop landed fail together and go back in the order their failures arrive.)
+  // Each file was created once, when the connection allowed it, and they started in the order they were
+  // dropped: the three that asked together when the drop landed failed together, in whatever order the
+  // network gave up on them, and still went first, in drop order, ahead of the two that never asked.
   const answered = calls.initiates.filter((c) => c.status === 200)
-  expect(answered.map((c) => c.file).sort()).toEqual(files.map((f) => f.fileName).sort())
+  expect(answered.map((c) => c.file), 'files created, in the order they were asked for').toEqual(files.map((f) => f.fileName))
   await expect.poll(() => assetNames(project.id), { timeout: 60_000 }).toHaveLength(5)
 })
 
