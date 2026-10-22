@@ -20,7 +20,13 @@ import { useViewStore } from '@/stores/view-store'
 // directly, starting from the share defaults; "Use my current view" copies
 // the folder view in once, at the click, and nothing after that re-reads it.
 
-function renderDialog() {
+function renderDialog({
+  items = [{ type: 'folder', id: 'f1', name: 'F' }],
+  currentViewAvailable,
+}: {
+  items?: { type: 'folder' | 'asset'; id: string; name: string }[]
+  currentViewAvailable?: boolean
+} = {}) {
   return render(
     <ShareCreateDialog
       open
@@ -29,7 +35,8 @@ function renderDialog() {
       currentFolderId={null}
       assets={[]}
       folders={[]}
-      preselectedItems={[{ type: 'folder', id: 'f1', name: 'F' }]}
+      preselectedItems={items}
+      currentViewAvailable={currentViewAvailable}
       onShareCreated={() => {}}
     />,
   )
@@ -98,17 +105,48 @@ describe('ShareCreateDialog appearance', () => {
     expect(scrollBox!.className).toContain('[scrollbar-gutter:stable]')
   })
 
-  it('offers no theme, accent or open-in-viewer control', () => {
-    // Those are not editable on a link: it keeps whatever it stored, new
-    // links take the defaults (theme accent, open in viewer, dark theme),
-    // and the values still travel with every whole-appearance patch.
+  it('theme, accent and open in viewer go out with the create request', () => {
     renderDialog()
     openAppearanceBlock()
-    expect(screen.queryByRole('button', { name: 'Dark theme' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Light theme' })).toBeNull()
-    expect(screen.queryByLabelText('Accent colour hex')).toBeNull()
-    expect(screen.queryByRole('button', { name: /pick an accent colour/i })).toBeNull()
-    expect(screen.queryByText('Open in viewer')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Light' }))
+    const hex = screen.getByLabelText('Accent colour hex')
+    fireEvent.change(hex, { target: { value: 'FF5500' } })
+    fireEvent.blur(hex)
+    fireEvent.click(screen.getByRole('switch', { name: 'Open in Viewer' }))
+
+    const appearance = createAndSentAppearance()
+    expect(appearance.theme).toBe('light')
+    expect(appearance.accent_color).toBe('#ff5500')
+    expect(appearance.open_in_viewer).toBe(false)
+  })
+
+  it('an accent that is not a 6-digit hex snaps back instead of being sent', () => {
+    renderDialog()
+    openAppearanceBlock()
+    const hex = screen.getByLabelText('Accent colour hex') as HTMLInputElement
+    fireEvent.change(hex, { target: { value: 'f50' } })
+    fireEvent.blur(hex)
+    expect(hex.value).toBe('')
+    expect(createAndSentAppearance().accent_color).toBeNull()
+  })
+
+  it('a single-asset link offers only theme and accent', () => {
+    // The asset link opens straight into the viewer, which reads nothing else.
+    renderDialog({ items: [{ type: 'asset', id: 'a1', name: 'A' }] })
+    openAppearanceBlock()
+    expect(screen.getByRole('button', { name: 'Light' })).toBeTruthy()
+    expect(screen.getByLabelText('Accent colour hex')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Layout' })).toBeNull()
+    expect(screen.queryByLabelText('Sort By')).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Open in Viewer' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /use my current view/i })).toBeNull()
+  })
+
+  it('no "Use my current view" when the dialog is not over a folder view', () => {
+    renderDialog({ currentViewAvailable: false })
+    openAppearanceBlock()
+    expect(screen.getByRole('group', { name: 'Layout' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /use my current view/i })).toBeNull()
   })
 
   it('Use my current view fills the link from my view, once', () => {

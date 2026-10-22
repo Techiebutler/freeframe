@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import * as Switch from "@radix-ui/react-switch";
 import useSWR from "swr";
 import {
   ArrowLeft,
@@ -29,6 +28,8 @@ import {
   ShareAppearanceFields,
   DEFAULT_SHARE_APPEARANCE,
 } from "@/components/projects/share-appearance-fields";
+import { ToggleRow } from "@/components/ui/setting-controls";
+import { SHARE_ASSETS_PAGE_SIZE } from "@/lib/share-page";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
@@ -123,46 +124,6 @@ function Section({
         )}
       </button>
       {open && <div className="px-4 pb-4 space-y-3">{children}</div>}
-    </div>
-  );
-}
-
-// ─── Toggle Row ──────────────────────────────────────────────────────────────
-
-function ToggleRow({
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <p className="text-sm text-text-primary">{label}</p>
-        {description && (
-          <p className="text-xs text-text-tertiary mt-0.5">{description}</p>
-        )}
-      </div>
-      <Switch.Root
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        className={cn(
-          "relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-          checked ? "bg-accent" : "bg-bg-hover",
-        )}
-      >
-        <Switch.Thumb
-          className={cn(
-            "block h-4 w-4 rounded-full bg-white transition-transform",
-            checked ? "translate-x-[18px]" : "translate-x-[2px]",
-          )}
-        />
-      </Switch.Root>
     </div>
   );
 }
@@ -572,6 +533,8 @@ export function ShareLinkContent({
       created_at: string;
     }[]
   >([]);
+  // The link's whole asset count, for the label: the preview shows six.
+  const [previewTotal, setPreviewTotal] = React.useState(0);
   const [previewFolders, setPreviewFolders] = React.useState<
     { id: string; name: string; item_count: number }[]
   >([]);
@@ -600,15 +563,16 @@ export function ShareLinkContent({
           file_size?: number | null;
           created_at?: string;
         }>(`/assets/${shareLink.asset_id}`)
-        .then((asset) =>
+        .then((asset) => {
+          setPreviewTotal(1);
           setPreviewThumbnails([
             {
               ...asset,
               file_size: asset.file_size ?? null,
               created_at: asset.created_at ?? "",
             },
-          ]),
-        )
+          ]);
+        })
         .catch(() => setPreviewThumbnails([]));
       setPreviewFolders([]);
     } else if (folderId || isProjectShare) {
@@ -620,12 +584,14 @@ export function ShareLinkContent({
         const t = localStorage.getItem('ff_access_token');
         if (t) headers['Authorization'] = `Bearer ${t}`;
       } catch {}
-      fetch(`${API_URL}/share/${token}/assets?page=1&per_page=50`, { headers })
+      fetch(`${API_URL}/share/${token}/assets?page=1&per_page=${SHARE_ASSETS_PAGE_SIZE}`, { headers })
         .then((r) => r.ok ? r.json() : Promise.reject())
         .then((data) => {
+          setPreviewTotal(data.total ?? (data.assets || []).length);
           setPreviewThumbnails(
-            // Keep the whole page: the appearance sort is applied at render,
-            // before the slice to six, so it must see every asset fetched.
+            // The share page's first page, kept whole: the appearance sort is
+            // applied at render, before the slice to six, as the page sorts
+            // what it has loaded.
             (data.assets || []).map((a: any) => ({
               id: a.id,
               name: a.name,
@@ -787,8 +753,8 @@ export function ShareLinkContent({
             {shownAssets.length > 0 && (
               <>
                 <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {shownAssets.length}{" "}
-                  {shownAssets.length === 1 ? "Asset" : "Assets"}
+                  {Math.max(previewTotal, shownAssets.length)}{" "}
+                  {Math.max(previewTotal, shownAssets.length) === 1 ? "Asset" : "Assets"}
                 </span>
                 {isGridLayout ? (
                   <div className={cn("grid gap-3", gridCols)}>
@@ -839,16 +805,13 @@ export function ShareLinkContent({
                       >
                         <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md bg-bg-tertiary">
                           {asset.thumbnail_url ? (
+                            // Always cropped, as the share page's list rows
+                            // are (ListRowThumb): Fit/Fill is a grid setting.
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={asset.thumbnail_url}
                               alt={asset.name}
-                              className={cn(
-                                "h-full w-full",
-                                thumbnailScale === "fill"
-                                  ? "object-cover"
-                                  : "object-contain",
-                              )}
+                              className="h-full w-full object-cover"
                             />
                           ) : (
                             <Eye className="absolute inset-0 m-auto h-4 w-4 text-text-tertiary/40" />
@@ -1117,7 +1080,7 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
 
             {/* Appearance — the same block the create dialog shows, minus the
                 current-view copy: editing a saved link, there is no folder view
-                on screen to copy from. */}
+                on screen to copy from. An asset link gets only theme and accent. */}
             <Section
               title="Appearance"
               icon={<Paintbrush className="h-3.5 w-3.5" />}
@@ -1125,6 +1088,7 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
             >
               <ShareAppearanceFields
                 appearance={appearance}
+                kind={shareLink.asset_id ? "asset" : "collection"}
                 onChange={updateAppearance}
               />
             </Section>

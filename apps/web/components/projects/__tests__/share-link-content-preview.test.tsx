@@ -149,4 +149,24 @@ describe('ShareLinkContent preview', () => {
     renderContent({ ...APPEARANCE, sort_by: 'name' })
     expect(await screen.findByText('AA-first.png')).toBeTruthy()
   })
+
+  it('fetches the share page\'s first page and labels the whole count', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ assets: ASSETS, subfolders: [], total: 40 }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderContent(APPEARANCE)
+    await assetsShown()
+    // The share page loads 24 at a time and sorts what it has loaded.
+    expect(String(fetchMock.mock.calls[0][0])).toContain('per_page=24')
+    expect(screen.getByText(/40\s+Assets/)).toBeTruthy()
+  })
+
+  it('list rows always crop, as the share page\'s do', async () => {
+    const { container } = renderContent({ ...APPEARANCE, layout: 'list', thumbnail_scale: 'fit' })
+    await assetsShown()
+    expect(container.querySelector('img.object-contain')).toBeNull()
+    expect(container.querySelector('img.object-cover')).not.toBeNull()
+  })
 })

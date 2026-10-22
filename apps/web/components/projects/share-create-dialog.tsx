@@ -52,6 +52,11 @@ interface ShareCreateDialogProps {
   initialResult?: CreatedShareResult | null
   onShareCreated: () => void
   onAdvancedSettings?: (token: string) => void
+  /**
+   * Whether the dialog opens over a folder view, so "Use my current view" has
+   * something on screen to copy. The asset review page passes false.
+   */
+  currentViewAvailable?: boolean
 }
 
 type SelectedItem =
@@ -310,9 +315,12 @@ interface ConfigurePhaseProps {
   /** Set once the link exists; the settings lock and the footer offers Copy and Close */
   createdUrl: string | null
   onClose: () => void
+  /** A single asset makes an asset link, which only takes a theme and accent */
+  linkKind: 'asset' | 'collection'
+  canCopyCurrentView: boolean
 }
 
-function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, onClose }: ConfigurePhaseProps) {
+function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, onClose, linkKind, canCopyCurrentView }: ConfigurePhaseProps) {
   const [title, setTitle] = React.useState(defaultTitle)
   // Comments on, downloads off, matching ShareLinkCreate on the API. Both have to
   // move together or a link created through the API keeps the old behaviour while
@@ -530,9 +538,12 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
             <div className="rounded-lg border border-border bg-bg-tertiary/50 p-3">
               <ShareAppearanceFields
                 appearance={appearance}
+                kind={linkKind}
                 onChange={(patch) => setAppearance((a) => ({ ...a, ...patch }))}
-                onUseCurrentView={() =>
-                  setAppearance((a) => ({ ...a, ...appearanceFromView() }))
+                onUseCurrentView={
+                  canCopyCurrentView
+                    ? () => setAppearance((a) => ({ ...a, ...appearanceFromView() }))
+                    : undefined
                 }
               />
             </div>
@@ -1117,6 +1128,7 @@ export function ShareCreateDialog({
   initialResult,
   onShareCreated,
   onAdvancedSettings,
+  currentViewAvailable = true,
 }: ShareCreateDialogProps) {
   type Phase = 'selection' | 'configure' | 'result'
 
@@ -1320,6 +1332,13 @@ export function ShareCreateDialog({
               creating={creating}
               createdUrl={createdUrl}
               onClose={handleDone}
+              linkKind={
+                selectedItems.size === 1 &&
+                Array.from(selectedItems.values())[0].type === 'asset'
+                  ? 'asset'
+                  : 'collection'
+              }
+              canCopyCurrentView={currentViewAvailable}
             />
           ) : (
             <SelectionPhase

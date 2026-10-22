@@ -64,10 +64,36 @@ describe('ShareLinkSettingsPanel appearance', () => {
     expect(
       screen.queryByRole('button', { name: /use my current view/i }),
     ).toBeNull()
-    // And no theme/accent/open-in-viewer controls: the link keeps what it stored.
-    expect(screen.queryByRole('button', { name: /theme/i })).toBeNull()
-    expect(screen.queryByLabelText('Accent colour hex')).toBeNull()
-    expect(screen.queryByText('Open in viewer')).toBeNull()
+  })
+
+  it('shows the stored theme, accent and open in viewer, and can clear the accent', async () => {
+    renderPanel()
+    await openAppearanceSection()
+    expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true')
+    expect((screen.getByLabelText('Accent colour hex') as HTMLInputElement).value).toBe('ff0000')
+    expect(screen.getByRole('switch', { name: 'Open in Viewer' }).getAttribute('aria-checked')).toBe('false')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear accent colour' }))
+    await waitFor(() => expect(patch).toHaveBeenCalled())
+    expect(patch.mock.calls[0]).toEqual([
+      '/share/tok',
+      { appearance: { ...LINK_APPEARANCE, accent_color: null } },
+    ])
+  })
+
+  it('an asset link offers only theme and accent', async () => {
+    get.mockResolvedValue({
+      id: 'l1', token: 'tok', title: 'Link', asset_id: 'a1', folder_id: null,
+      permission: 'comment', visibility: 'public', allow_download: false,
+      show_versions: true, show_watermark: false, is_enabled: true, has_password: false,
+      appearance: LINK_APPEARANCE, created_at: '2026-10-01T00:00:00Z', expires_at: null,
+    })
+    renderPanel()
+    await openAppearanceSection()
+    expect(screen.getByRole('button', { name: 'Light' })).toBeTruthy()
+    expect(screen.getByLabelText('Accent colour hex')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Layout' })).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Open in Viewer' })).toBeNull()
   })
 
   it('editing one setting still patches the whole stored appearance', async () => {

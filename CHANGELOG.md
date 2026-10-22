@@ -12,11 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`next.config.js` no longer takes an `eslint` key.** If you run a custom `next.config.js`, remove it; Next 16 ignores the key and warns on every build.
 
 ### Added
-- **Appearance settings in the Create Share Link dialog.** Set a link's layout, card size, aspect ratio, Fit/Fill, card info and sort before you create it, or click **Use my current view** to copy them from the project view. The link panel's preview now shows the link with these settings. (#517 by @jdanna)
+- **Appearance settings in the Create Share Link dialog.** Set a link's layout, card size, aspect ratio, Fit/Fill, card info, sort, theme, accent colour and Open in viewer before you create it, or click **Use my current view** to copy the card settings from the project view. A single-asset link offers only theme and accent, the two its viewer uses. The link panel's preview now shows the link with these settings. (#517 by @jdanna)
 
 ### Changed
-- **One Appearance section for share links.** The link panel's Settings → Appearance uses the same controls as the create dialog, and Sort By moves into it. In list layout the grid-only settings (card size, aspect ratio, Fit/Fill) are hidden. The Theme, Accent Color and Open in viewer controls are removed; existing links keep their saved values. (#517 by @jdanna)
-- **Folder share links open with the comments pane closed.** The header toggle opens it. Single-asset links, and assets opened from a folder link, still open with comments showing. (#517 by @jdanna)
+- **One Appearance section for share links.** The link panel's Settings → Appearance uses the same controls as the create dialog: card settings, with Sort By moved in, then a Page group with Theme, Accent Color and Open in viewer. In list layout the grid-only settings (card size, aspect ratio, Fit/Fill) are hidden. An accent that isn't a 6-digit hex is no longer sent, and a new clear button removes the accent. (#517 by @jdanna)
+- **Folder, project and multi-item share links open with the comments pane closed.** The header toggle opens it. Single-asset links, and assets opened from these links, still open with comments showing. (#517 by @jdanna)
 
 ### Changed
 - **The web app moves to Next.js 16.4.2 and React 19.** It was on Next 14.2.35 and React 18. `middleware.ts` is now `proxy.ts` (Next 16 renamed the file; the checks are unchanged), route `params` are read as promises, and `next lint` is replaced by `eslint .` with an ESLint 9 flat config (`apps/web/eslint.config.mjs`), because Next 16 removed `next lint`. No API, environment variable or Docker setting changes. Node 20.19 or newer (or 22.12+, 24+) is required; the Docker images and CI already use Node 20.
@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The database URL pins the psycopg2 driver.** SQLAlchemy 2.1 changed the default driver for a bare `postgresql://` URL from psycopg2 to psycopg (v3), which is not installed; the API now names `psycopg2` explicitly, so the connection keeps working across the upgrade. A `DATABASE_URL` that already names a driver (for example `postgresql+psycopg://` for psycopg v3) is left as is. (#544)
 - **Switching layout in the share dialog's Settings tab keeps the link's other appearance settings.** It used to reset sort, card size, aspect ratio, Fit/Fill and card info to the defaults. (#517 by @jdanna)
 - **Branding colours reach hover and focus borders.** With an instance branding colour or a share link accent set, those borders stayed the default blue. (#517 by @jdanna)
-- **Button focus rings follow the accent colour.** (#517 by @jdanna)
+- **Button focus rings follow the accent colour.** Their old class compiled to no CSS, so they were always a faint stock blue. (#517 by @jdanna)
+- **Appearance controls work with screen readers and the keyboard.** In the project view's and share links' Appearance settings, segmented controls report which option is selected, switches are named, and the selects show a focus ring. (#517 by @jdanna)
 
 ### Security
 - **The web app leaves the Next.js 14 line, which no longer gets security fixes.** 14.2.35 is affected by [GHSA-2xp9-vwfh-vxw4](https://github.com/advisories/GHSA-2xp9-vwfh-vxw4) and [GHSA-p293-qw3h-jr36](https://github.com/advisories/GHSA-p293-qw3h-jr36) (both critical, fixed in 15.5.24 and 16.3.3), and by [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw) and [GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) (fixed in 15.5.28 and 16.4.1). 16.4.2 also carries the fix for [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr), which affects 16.0.0 through 16.4.0.

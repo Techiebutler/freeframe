@@ -29,6 +29,7 @@ import { DownloadMenu } from '@/components/shared/download-menu'
 import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import { ShareReviewScreen } from './share-review-screen'
 import { usePageTitle } from '@/hooks/use-page-title'
+import { SHARE_ASSETS_PAGE_SIZE } from '@/lib/share-page'
 import { Avatar } from '@/components/shared/avatar'
 import type {
   SharePermission,
@@ -683,7 +684,7 @@ export function FolderShareViewer({
   const thumbnailScale = appearance.thumbnail_scale ?? 'fill'
   const showCardInfo = appearance.show_card_info !== false
   const isGridLayout = appearance.layout !== 'list'
-  const perPage = 24
+  const perPage = SHARE_ASSETS_PAGE_SIZE
 
   // Grid column classes based on card_size
   const gridCols = cardSize === 's'

@@ -1,17 +1,20 @@
 'use client'
 
 import * as React from 'react'
-import * as Switch from '@radix-ui/react-switch'
 import {
-  ChevronDown,
   LayoutGrid,
   List,
+  Moon,
   RectangleHorizontal,
   RectangleVertical,
   Square,
+  Sun,
   Wand2,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { SegmentRow, SelectRow, SettingRow, ToggleRow } from '@/components/ui/setting-controls'
+import { parseHex } from '@/lib/accent'
 import { cn } from '@/lib/utils'
 import { useViewStore } from '@/stores/view-store'
 import type { ShareLinkAppearance } from '@/types'
@@ -44,6 +47,11 @@ export const DEFAULT_SHARE_APPEARANCE: ShareLinkAppearance = {
  * the copy skips them. A view sorted by custom, status or type has no share
  * equivalent either, so the link keeps its own sort in that case.
  *
+ * The sort is an approximation until sort direction is a share setting: the
+ * view's Date sort is by last update in either direction, while a share page
+ * always sorts `created_at` newest first. A view on Date ascending therefore
+ * copies into a link that lists the other way round.
+ *
  * This is a one-time fill: the caller merges the patch into the link's
  * appearance once, at the click, and nothing after that re-reads the view.
  */
@@ -62,133 +70,124 @@ export function appearanceFromView(): Partial<ShareLinkAppearance> {
   return patch
 }
 
-// ─── Rows and controls ──────────────────────────────────────────────────────
-// Deliberately the same shapes as the folder view's Appearance popover
-// (appearance-popover.tsx): a label row with a compact segmented control on
-// the right, plain switches, and a compact select with a chevron. The share
-// block edits the same settings the popover edits for your own view, so the
-// two read as one system.
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-sm text-text-secondary">{label}</span>
-      {children}
-    </div>
-  )
-}
-
-interface SegmentOption<T extends string> {
-  value: T
-  label?: string
-  icon?: React.ReactNode
-  ariaLabel?: string
-}
-
-function Segment<T extends string>({
-  options,
+/**
+ * A link's own accent: a hex field and a colour picker. The field commits on
+ * blur or Enter; blank clears the accent (the page falls back to the
+ * project's branding, then the theme's), and anything that isn't a 6-digit hex
+ * snaps back rather than being sent for the API to refuse.
+ */
+function AccentRow({
   value,
   onChange,
 }: {
-  options: SegmentOption<T>[]
-  value: T
-  onChange: (v: T) => void
+  value: string | null
+  onChange: (accent: string | null) => void
 }) {
-  return (
-    <div className="flex rounded-md border border-border overflow-hidden">
-      {options.map((opt) => (
-        <button
-          key={opt.value}
-          type="button"
-          aria-label={opt.ariaLabel}
-          onClick={() => onChange(opt.value)}
-          className={cn(
-            'flex items-center justify-center px-3 py-1.5 text-xs transition-colors min-w-[36px]',
-            value === opt.value
-              ? 'bg-accent text-white'
-              : 'bg-bg-tertiary text-text-tertiary hover:bg-bg-hover hover:text-text-secondary',
-          )}
-        >
-          {opt.icon ?? opt.label}
-        </button>
-      ))}
-    </div>
-  )
-}
+  const stored = value?.replace('#', '') ?? ''
+  const [draft, setDraft] = React.useState(stored)
+  React.useEffect(() => setDraft(stored), [stored])
 
-function ToggleRow({
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  label: string
-  description?: string
-  checked: boolean
-  onCheckedChange: (checked: boolean) => void
-}) {
+  function commit() {
+    const hex = draft.trim().replace(/^#/, '')
+    if (!hex) {
+      if (value) onChange(null)
+      return
+    }
+    const color = `#${hex.toLowerCase()}`
+    if (!parseHex(color)) {
+      setDraft(stored)
+      return
+    }
+    if (color !== value?.toLowerCase()) onChange(color)
+  }
+
   return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <p className="text-sm text-text-primary">{label}</p>
-        {description && (
-          <p className="text-xs text-text-tertiary mt-0.5">{description}</p>
+    <SettingRow label="Accent Color">
+      <div className="flex items-center gap-2">
+        <div className="flex items-center rounded-md border border-border bg-bg-tertiary pl-2 focus-within:ring-2 focus-within:ring-accent">
+          <span className="text-xs text-text-tertiary">#</span>
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commit()
+              }
+            }}
+            placeholder="Default"
+            maxLength={7}
+            aria-label="Accent colour hex"
+            className="w-16 bg-transparent px-1 py-1 text-xs font-mono text-text-primary placeholder:text-text-tertiary outline-none"
+          />
+        </div>
+        <label
+          className="relative h-6 w-6 shrink-0 cursor-pointer overflow-hidden rounded-full border border-border focus-within:ring-2 focus-within:ring-accent"
+          style={{ backgroundColor: value ?? 'var(--accent)' }}
+        >
+          <input
+            type="color"
+            value={value ?? '#5b8def'}
+            onChange={(e) => onChange(e.target.value)}
+            aria-label="Accent colour picker"
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          />
+        </label>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            aria-label="Clear accent colour"
+            className="rounded p-0.5 text-text-tertiary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         )}
       </div>
-      <Switch.Root
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        className={cn(
-          'relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-          checked ? 'bg-accent' : 'bg-bg-hover',
-        )}
-      >
-        <Switch.Thumb
-          className={cn(
-            'block h-4 w-4 rounded-full bg-white transition-transform',
-            checked ? 'translate-x-[18px]' : 'translate-x-[2px]',
-          )}
-        />
-      </Switch.Root>
-    </div>
+    </SettingRow>
   )
 }
 
 /**
- * The Appearance block a share link edits: layout, card size, aspect ratio,
- * fit/fill, card info and sort.
+ * The Appearance block a share link edits.
  *
- * The card rows follow the folder Appearance popover: in list layout the
- * grid-only settings (card size, aspect ratio, fit/fill) are hidden, their
- * values kept on the link in case it goes back to grid. Theme, accent colour
- * and open-in-viewer are not offered at all — a link keeps whatever it stored
- * and new links take the defaults above (the theme's own accent, open in
- * viewer, dark theme).
+ * Card settings first — layout, card size, aspect ratio, fit/fill, card info
+ * and sort — following the folder Appearance popover: in list layout the
+ * grid-only rows are hidden, their values kept on the link in case it goes
+ * back to grid. Then the Page group: theme, accent colour and open-in-viewer.
+ *
+ * A single-asset link opens straight into the viewer, which reads only the
+ * theme and accent, so `kind="asset"` shows just those two.
  *
  * One component for both places that edit it — the create dialog and the
- * link panel's Settings > Appearance — so the two can't drift. It holds no
- * state of its own; the caller owns the appearance and merges every patch it
- * is handed.
+ * link panel's Settings > Appearance — so the two can't drift. The caller owns
+ * the appearance and merges every patch it is handed.
  */
 export function ShareAppearanceFields({
   appearance,
   onChange,
   onUseCurrentView,
+  kind = 'collection',
 }: {
   appearance: ShareLinkAppearance
   onChange: (patch: Partial<ShareLinkAppearance>) => void
   /**
    * Renders the "Use my current view" action (see `appearanceFromView`).
-   * Only the create dialog passes it: there the folder view sits behind the
-   * modal, so "my current view" is something the person can see. The link
-   * panel edits a saved link with no view on screen, so it has nothing to
-   * copy from and omits the action.
+   * Only the create dialog passes it, and only when it opens over a folder
+   * view, so "my current view" is something the person can see. Not shown
+   * for an asset link, which has no card settings to fill.
    */
   onUseCurrentView?: () => void
+  kind?: 'asset' | 'collection'
 }) {
+  const isCollection = kind === 'collection'
+  const isGrid = appearance.layout === 'grid'
+
   return (
     <div className="space-y-3">
-      {onUseCurrentView && (
+      {isCollection && onUseCurrentView && (
         <Button
           type="button"
           variant="secondary"
@@ -201,88 +200,100 @@ export function ShareAppearanceFields({
         </Button>
       )}
 
-      {/* Layout — same icons as the folder view's Appearance popover */}
-      <Row label="Layout">
-        <Segment<ShareLinkAppearance['layout']>
-          options={[
-            { value: 'grid', icon: <LayoutGrid className="h-3.5 w-3.5" />, ariaLabel: 'Grid' },
-            { value: 'list', icon: <List className="h-3.5 w-3.5" />, ariaLabel: 'List' },
-          ]}
-          value={appearance.layout}
-          onChange={(layout) => onChange({ layout })}
-        />
-      </Row>
-
-      {/* Card Size — only in grid mode */}
-      {appearance.layout === 'grid' && (
-        <Row label="Card Size">
-          <Segment<ShareLinkAppearance['card_size']>
+      {isCollection && (
+        <>
+          {/* Same icons as the folder view's Appearance popover */}
+          <SegmentRow<ShareLinkAppearance['layout']>
+            label="Layout"
             options={[
-              { value: 's', label: 'S' },
-              { value: 'm', label: 'M' },
-              { value: 'l', label: 'L' },
+              { value: 'grid', icon: <LayoutGrid className="h-3.5 w-3.5" />, ariaLabel: 'Grid' },
+              { value: 'list', icon: <List className="h-3.5 w-3.5" />, ariaLabel: 'List' },
             ]}
-            value={(appearance.card_size || 'm') as ShareLinkAppearance['card_size']}
-            onChange={(card_size) => onChange({ card_size })}
+            value={appearance.layout}
+            onChange={(layout) => onChange({ layout })}
           />
-        </Row>
-      )}
 
-      {/* Aspect Ratio — only in grid mode */}
-      {appearance.layout === 'grid' && (
-        <Row label="Aspect Ratio">
-          <Segment<ShareLinkAppearance['aspect_ratio']>
-            options={[
-              { value: 'landscape', icon: <RectangleHorizontal className="h-3.5 w-3.5" />, ariaLabel: 'Landscape' },
-              { value: 'square', icon: <Square className="h-3.5 w-3.5" />, ariaLabel: 'Square' },
-              { value: 'portrait', icon: <RectangleVertical className="h-3.5 w-3.5" />, ariaLabel: 'Portrait' },
-            ]}
-            value={(appearance.aspect_ratio || 'landscape') as ShareLinkAppearance['aspect_ratio']}
-            onChange={(aspect_ratio) => onChange({ aspect_ratio })}
+          {isGrid && (
+            <>
+              <SegmentRow<ShareLinkAppearance['card_size']>
+                label="Card Size"
+                options={[
+                  { value: 's', label: 'S' },
+                  { value: 'm', label: 'M' },
+                  { value: 'l', label: 'L' },
+                ]}
+                value={appearance.card_size || 'm'}
+                onChange={(card_size) => onChange({ card_size })}
+              />
+              <SegmentRow<ShareLinkAppearance['aspect_ratio']>
+                label="Aspect Ratio"
+                options={[
+                  { value: 'landscape', icon: <RectangleHorizontal className="h-3.5 w-3.5" />, ariaLabel: 'Landscape' },
+                  { value: 'square', icon: <Square className="h-3.5 w-3.5" />, ariaLabel: 'Square' },
+                  { value: 'portrait', icon: <RectangleVertical className="h-3.5 w-3.5" />, ariaLabel: 'Portrait' },
+                ]}
+                value={appearance.aspect_ratio || 'landscape'}
+                onChange={(aspect_ratio) => onChange({ aspect_ratio })}
+              />
+              <SegmentRow<ShareLinkAppearance['thumbnail_scale']>
+                label="Thumbnail Scale"
+                options={[
+                  { value: 'fit', label: 'Fit' },
+                  { value: 'fill', label: 'Fill' },
+                ]}
+                value={appearance.thumbnail_scale || 'fill'}
+                onChange={(thumbnail_scale) => onChange({ thumbnail_scale })}
+              />
+            </>
+          )}
+
+          <ToggleRow
+            label="Show Card Info"
+            description="Display name, type, and size below thumbnail"
+            checked={appearance.show_card_info !== false}
+            onCheckedChange={(checked) => onChange({ show_card_info: checked })}
           />
-        </Row>
-      )}
 
-      {/* Thumbnail Scale — only in grid mode */}
-      {appearance.layout === 'grid' && (
-        <Row label="Thumbnail Scale">
-          <Segment<ShareLinkAppearance['thumbnail_scale']>
-            options={[
-              { value: 'fit', label: 'Fit' },
-              { value: 'fill', label: 'Fill' },
-            ]}
-            value={(appearance.thumbnail_scale || 'fill') as ShareLinkAppearance['thumbnail_scale']}
-            onChange={(thumbnail_scale) => onChange({ thumbnail_scale })}
-          />
-        </Row>
-      )}
-
-      {/* Show Card Info */}
-      <ToggleRow
-        label="Show Card Info"
-        description="Display name, type, and size below thumbnail"
-        checked={appearance.show_card_info !== false}
-        onCheckedChange={(checked) => onChange({ show_card_info: checked })}
-      />
-
-      {/* Sort */}
-      <Row label="Sort By">
-        <div className="relative">
-          <select
+          <SelectRow<ShareLinkAppearance['sort_by']>
+            label="Sort By"
             value={appearance.sort_by}
-            onChange={(e) =>
-              onChange({ sort_by: e.target.value as ShareLinkAppearance['sort_by'] })
-            }
-            aria-label="Sort By"
-            className="appearance-none bg-bg-tertiary border border-border rounded-md pl-2.5 pr-7 py-1 text-xs text-text-primary outline-none cursor-pointer hover:bg-bg-hover transition-colors [color-scheme:auto]"
-          >
-            <option value="name">Name</option>
-            <option value="created_at">Date created</option>
-            <option value="file_size">Size</option>
-          </select>
-          <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-text-tertiary pointer-events-none" />
-        </div>
-      </Row>
+            options={[
+              { value: 'name', label: 'Name' },
+              { value: 'created_at', label: 'Date created' },
+              { value: 'file_size', label: 'Size' },
+            ]}
+            onChange={(sort_by) => onChange({ sort_by })}
+          />
+        </>
+      )}
+
+      {/* Page — how the share page itself looks and behaves */}
+      <div className={cn('space-y-3', isCollection && 'pt-3 border-t border-border')}>
+        {isCollection && (
+          <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">Page</p>
+        )}
+        <SegmentRow<ShareLinkAppearance['theme']>
+          label="Theme"
+          options={[
+            { value: 'dark', icon: <Moon className="h-3.5 w-3.5" />, ariaLabel: 'Dark' },
+            { value: 'light', icon: <Sun className="h-3.5 w-3.5" />, ariaLabel: 'Light' },
+          ]}
+          value={appearance.theme === 'light' ? 'light' : 'dark'}
+          onChange={(theme) => onChange({ theme })}
+        />
+        <AccentRow
+          value={appearance.accent_color}
+          onChange={(accent_color) => onChange({ accent_color })}
+        />
+        {isCollection && (
+          <ToggleRow
+            label="Open in Viewer"
+            description="Clicking an asset opens it in the full viewer"
+            checked={appearance.open_in_viewer !== false}
+            onCheckedChange={(checked) => onChange({ open_in_viewer: checked })}
+          />
+        )}
+      </div>
     </div>
   )
 }

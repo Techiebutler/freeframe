@@ -236,6 +236,7 @@ export function ShareDialog({
           assets={stableAssets}
           folders={emptyFolders}
           preselectedItem={stablePreselectedItem}
+          currentViewAvailable={false}
           onShareCreated={() => {
             mutateShareLinks();
           }}
