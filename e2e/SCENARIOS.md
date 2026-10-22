@@ -349,8 +349,20 @@ Observations (not failures of these scenarios):
   login code is the same as on `main`; it is not part of the upload queue. A1 therefore makes its next request an API call
   (Notifications), the path the spec names.
 - The A2 invitee address is `e2e-invitee-<ms>@example.com`: the API refuses the reserved `.test` domain (422,
-  "special-use or reserved name"). Each run leaves one more invited user in the stack.
+  "special-use or reserved name"). The test deactivates and deletes its invitee when it ends.
 - Not run here: the manual real Safari and real Firefox pass (matrix row M). The live Chrome pass is below.
+
+### Phase 4 gate (2026-10-22, at `641c1461`)
+
+- Chromium: the whole suite, 49 passed, 2 skipped (12.5 min).
+- WebKit, first run: 47 passed, 2 failed (R2, and the fixture test `countRequests()`), with `accounts.spec.ts` taking 40 min,
+  longer than its four tests' time limits added together. The run's artifacts were overwritten by the Firefox run that followed, so
+  the cause is not known; a stalled browser or stack is the likely reading, not confirmed. Re-run straight after: `accounts.spec.ts`
+  alone 4/4 (3.2 min), the whole suite 49 passed, 2 skipped (13.3 min), then R2 three more times, 3/3. R2 has passed 8 WebKit runs in a
+  row since the APP-BUG-2 fix; watch it in the Phase 5 and 6 gates.
+- Firefox (Playwright `firefox` project): does not launch on this Mac (macOS 27, `firefox-1511`): `browserType.launch` times out
+  after 180 s with `sandbox_extension_issue_file_to_process failed ... Operation not permitted`. No test ran.
+- Not run yet: the manual real Safari and real Firefox pass of this phase's scenarios (row M), owed before PR 4 merges.
 
 ## Phase 4 live Chrome results
 
