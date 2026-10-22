@@ -2064,7 +2064,7 @@ function refuseTurn(row: UploadFile, kind: 'new' | 'resume', now: string | null)
 }
 
 function rowById(id: string): UploadFile | undefined {
-  return useUploadStore.getState().files.find((f) => f.id === id)
+  return findRow(useUploadStore.getState(), id)
 }
 
 function patchRow(id: string, patch: Partial<UploadFile>): void {
@@ -3288,11 +3288,11 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   },
 
   canRetry: (fileId) => {
-    const row = get().files.find((f) => f.id === fileId)
+    const row = findRow(get(), fileId)
     return row !== undefined && retryable(row)
   },
 
-  canResume: (fileId) => resumableNow(get().files.find((f) => f.id === fileId)),
+  canResume: (fileId) => resumableNow(findRow(get(), fileId)),
 
   renameUpload: async (fileId, name) => {
     const row = get().files.find((f) => f.id === fileId)
@@ -3891,6 +3891,27 @@ export const useUploadStore = create<UploadStore>()(
  */
 export function visibleFiles(state: UploadStore): UploadFile[] {
   return state.files.filter((f) => f.ownerId !== undefined && f.ownerId === state.subject)
+}
+
+/** The `files` array `rowIndex` was built from, and the index itself. */
+let rowIndexOf: UploadFile[] | null = null
+let rowIndex = new Map<string, UploadFile>()
+
+/**
+ * The row with `id`, or undefined. Every row of the panel asks this of the
+ * store on every write, for itself and for `canRetry` and `canResume`, so a
+ * linear `find` costs rows times rows per progress report: measured at 2,000
+ * rows, it was most of a 20 ms write. The index is built once per `files`
+ * array, which every write replaces and none mutates, so it cannot go stale.
+ * The first row with an id wins, as with `find`.
+ */
+export function findRow(state: Pick<UploadStore, 'files'>, id: string): UploadFile | undefined {
+  if (rowIndexOf !== state.files) {
+    rowIndex = new Map()
+    for (const f of state.files) if (!rowIndex.has(f.id)) rowIndex.set(f.id, f)
+    rowIndexOf = state.files
+  }
+  return rowIndex.get(id)
 }
 
 /**
