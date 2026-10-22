@@ -193,9 +193,9 @@ function beatingInAnotherTab(fileId: string, now: number): boolean {
  * the same one, so at most one goes ahead; this holds while a localStorage
  * write reaches the other tab within the settle window (`CLAIM_SETTLE_MS`).
  *
- * The settle delays every Resume by that long, alone or not, and meanwhile the
- * resuming row is `starting` and counts against the start rule as an
- * unfinished upload of unknown size.
+ * The settle delays every Resume by that long, alone or not. Meanwhile the
+ * resuming row is `starting`, and the start rule counts it as an active file
+ * whose unfinished parts are still `'unknown'` (`Runner.unfinished`).
  *
  * A key per row, not one shared map: a tab writes a map from what it last
  * read, and a tab that had not yet seen another tab's claim on one row
@@ -1810,7 +1810,7 @@ let queue = createUploadQueue()
  */
 interface Runner {
   sizeBytes: number
-  /** Parts not yet finished; 'unknown' until the initiate or `/parts` answers. */
+  /** Parts not yet finished; 'unknown' until the initiate answers, or for a resume until `/parts` answers and its claim settles. */
   unfinished: number | 'unknown'
   /** Cancelled while its initiate was out: the row leaves the list once the run has settled. */
   removeWhenSettled?: true
