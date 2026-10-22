@@ -54,13 +54,14 @@ let tabProgressAt = -Infinity
 /**
  * How long this tab has sent nothing, counting from `since` at the latest.
  *
- * `performance.now()` never runs backwards within a page, so a stamp ahead of
- * now can only come from another clock -- a test installs a fresh fake one per
- * test -- and is ignored rather than read as recent progress.
+ * The stamp lives as long as the module, which in a page is the page, on the
+ * one clock that never runs backwards. Tests share the module across tests and
+ * install a fresh fake clock for each, so a stamp left by one test would be
+ * read by the next as progress on its own clock: `__uploadQueueTesting.reset()`
+ * clears it.
  */
 function tabQuietFor(since: number, now: number): number {
-  const last = tabProgressAt <= now ? tabProgressAt : -Infinity
-  return now - Math.max(last, since)
+  return now - Math.max(tabProgressAt, since)
 }
 
 /**
@@ -3164,7 +3165,10 @@ if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
  * run hanging would otherwise hold places in the next test's queue.
  */
 export const __uploadQueueTesting = {
-  /** An empty queue, no runs, no hold, and a fresh part budget. Runs still in flight are forgotten, not stopped. */
+  /**
+   * An empty queue, no runs, no hold, a fresh part budget, and no progress
+   * heard in the tab. Runs still in flight are forgotten, not stopped.
+   */
   reset(): void {
     if (probeTimer !== null) clearTimeout(probeTimer)
     probeTimer = null
@@ -3177,6 +3181,7 @@ export const __uploadQueueTesting = {
     for (const id of Object.keys(abortControllers)) delete abortControllers[id]
     partBudget = createPartBudget(UPLOAD_CONCURRENCY)
     wakeLockHolders = 0
+    tabProgressAt = -Infinity
   },
   hasAbortController: (id: string): boolean => abortControllers[id] !== undefined,
   /** Rows whose run has begun and not yet ended. */

@@ -8,7 +8,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api } from '@/lib/api'
-import { uploadAllParts, PartStalledError } from '../upload-store'
+import { uploadAllParts, PartStalledError, __uploadQueueTesting } from '../upload-store'
 import { installXhrFake, ok, fail, type FakeXhr, type PartHandler } from '@/test/xhr-fake'
 import { createPartBudget, type PartBudget } from '@/lib/upload-budget'
 
@@ -54,6 +54,12 @@ function mockPresignPerPart() {
 function partOf(url: string): number {
   return Number(url.split('-').pop())
 }
+
+// The part watchdog reads when any part of the tab last moved, which outlives
+// a test; each test starts from a tab that has heard nothing.
+beforeEach(() => {
+  __uploadQueueTesting.reset()
+})
 
 describe('uploadAllParts', () => {
   let controller: AbortController
