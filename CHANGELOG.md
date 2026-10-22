@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Project settings keep a chosen poster and unsaved edits while open.** Choosing a poster used to flash the preview and then drop it on return from the file picker, so Save uploaded nothing; name and description edits were lost the same way. Reopening the dialog now starts from the saved project. (#465, #512 by @jay23606)
 - **The notification drawer no longer covers an expanded sidebar.** (#513 by @jay23606)
 
 ## [1.19.0] - 2026-10-19
