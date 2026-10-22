@@ -161,7 +161,7 @@ describe('a rename made while initiate is in flight', () => {
     vi.mocked(api.patch).mockClear()
     await useUploadStore.getState().renameUpload(id, 'Ep04')
 
-    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04' })
+    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04' }, { pinSubject: 'user-1' })
     const row = useUploadStore.getState().files.find((f) => f.id === id)
     expect(row?.assetName).toBe('Ep04')
     expect(row?.renameError).toBeUndefined()

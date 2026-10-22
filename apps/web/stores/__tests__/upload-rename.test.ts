@@ -62,7 +62,7 @@ describe('renaming a row that is uploading', () => {
     const error = await useUploadStore.getState().renameUpload('row-1', 'Ep04 — Rohschnitt')
 
     expect(error).toBeNull()
-    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04 — Rohschnitt' })
+    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04 — Rohschnitt' }, { pinSubject: 'u1' })
     expect(names()).toEqual(['Ep04 — Rohschnitt'])
   })
 
@@ -72,7 +72,7 @@ describe('renaming a row that is uploading', () => {
 
     await useUploadStore.getState().renameUpload('row-1', '  Ep04  ')
 
-    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04' })
+    expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04' }, { pinSubject: 'u1' })
   })
 
   it('does nothing for a name that did not change', async () => {

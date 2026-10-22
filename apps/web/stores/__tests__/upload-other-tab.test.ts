@@ -217,7 +217,7 @@ describe('discarding or resuming an upload that is still moving somewhere else',
 
     await useUploadStore.getState().discardUpload('row-1')
 
-    expect(api.post).toHaveBeenCalledWith('/upload/abort', expect.objectContaining({ discard: true }))
+    expect(api.post).toHaveBeenCalledWith('/upload/abort', expect.objectContaining({ discard: true }), { pinSubject: 'u1' })
     expect(useUploadStore.getState().files).toEqual([])
   })
 
@@ -233,7 +233,7 @@ describe('discarding or resuming an upload that is still moving somewhere else',
 
     await useUploadStore.getState().discardUpload('row-1')
 
-    expect(api.post).toHaveBeenCalledWith('/upload/abort', expect.objectContaining({ discard: true }))
+    expect(api.post).toHaveBeenCalledWith('/upload/abort', expect.objectContaining({ discard: true }), { pinSubject: 'u1' })
   })
 
   it('refuses to discard an upload another device has taken over', async () => {

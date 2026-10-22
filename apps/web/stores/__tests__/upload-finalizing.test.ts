@@ -98,7 +98,7 @@ describe('finalizing an upload', () => {
     await vi.waitFor(() => expect(rowOf(id).finalizing).toBe(true))
 
     expect(rowOf(id).status).toBe('uploading')
-    expect(api.post).not.toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' })
+    expect(vi.mocked(api.post).mock.calls.filter(([p]) => p === '/upload/complete')).toHaveLength(0)
     answer(ok('"etag-1"'))
     await vi.waitFor(() =>
       expect(api.post).toHaveBeenCalledWith('/upload/complete', expect.anything(), { pinSubject: 'u1' }),

@@ -2692,9 +2692,10 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
  * Each row belongs to the account whose token is in storage now. With no token
  * nothing is added and none is returned: an upload nobody owns could never be
  * started as anyone. A token for an account the store has not heard of yet is
- * another tab's sign-in whose `storage` event is still on its way. The views
- * follow it now, so the rows just added show; the rows of the account before
- * it are hidden, and each fails at its turn, or when the event arrives.
+ * another tab's sign-in whose `storage` event is still on its way, and the
+ * account change is applied here, as at a start: the rows of the account before
+ * it that have not started fail at once, saved with their owner, before the new
+ * account's rows join the queue.
  */
 function enqueueNew(
   set: (fn: (s: UploadStore) => Partial<UploadStore>) => void,
@@ -2705,6 +2706,7 @@ function enqueueNew(
   if (items.length === 0) return []
   const owner = currentSubject()
   if (owner === null) return []
+  noticeSubject()
   const dropSeq = ++dropSeqs
   const createdAt = Date.now()
   const rows: UploadFile[] = items.map(({ file, assetName, target }) => {
@@ -2732,7 +2734,7 @@ function enqueueNew(
   for (const r of rows) r.queueSeq = queue.queueSeq(r.id)
   try {
     // Newest first, as rows have always been listed.
-    set((s) => ({ files: [...rows.slice().reverse(), ...s.files], panelOpen: true, subject: owner }))
+    set((s) => ({ files: [...rows.slice().reverse(), ...s.files], panelOpen: true }))
   } finally {
     // The rows are in state even when saving them threw: they still get their turn.
     pump()
@@ -2806,6 +2808,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       // reaper, and the row would keep offering a resume in the meantime.
       const row = get().files.find((f) => f.id === fileId)
       if (!row) return null
+      const asOwner = { pinSubject: row.ownerId }
       // A queued resume gives up its turn first, before any round trip: its turn
       // coming while this asks the server would start sending into the upload
       // this is about to abort.
@@ -2830,7 +2833,10 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
 
       let info: ResumeInfo
       try {
-        info = await api.get<ResumeInfo>(`/upload/${row.versionId}/parts`)
+        // As the row's owner, like everything below: the panel follows the
+        // account only once this tab hears of a change, and a Discard clicked
+        // before then must not be sent as whoever signed in since.
+        info = await api.get<ResumeInfo>(`/upload/${row.versionId}/parts`, asOwner)
       } catch (err) {
         // 404 or 409: the version is gone or no longer uploading, so the row has
         // nothing to offer. The multipart upload behind it may still be open --
@@ -2845,7 +2851,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
                 upload_id: row.uploadId,
                 version_id: row.versionId,
                 discard: true,
-              })
+              }, asOwner)
             } catch (abortErr) {
               // The upload is already gone too: the same answer from the other
               // side, and what Discard wanted to happen has happened.
@@ -2892,7 +2898,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           upload_id: info.upload_id,
           version_id: info.version_id,
           discard: true,
-        })
+        }, asOwner)
       } catch (err) {
         return reportDiscardFailure(set, fileId, err)
       }
@@ -3040,7 +3046,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     if (!row.assetId) return null
 
     try {
-      await api.patch(`/assets/${row.assetId}`, { name: trimmed })
+      // As the row's owner, never as an account that signed in since.
+      await api.patch(`/assets/${row.assetId}`, { name: trimmed }, { pinSubject: row.ownerId })
     } catch (err) {
       applyName(previous)
       return err instanceof Error ? err.message : 'Rename failed'

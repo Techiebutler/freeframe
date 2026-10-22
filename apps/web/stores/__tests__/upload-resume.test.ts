@@ -414,7 +414,7 @@ describe('discardUpload', () => {
       upload_id: 'u1',
       version_id: VERSION_ID,
       discard: true,
-    })
+    }, { pinSubject: 'u1' })
     expect(useUploadStore.getState().files).toEqual([])
   })
 

@@ -86,7 +86,7 @@ describe('discardUpload when /parts says the version is gone', () => {
       upload_id: UPLOAD_ID,
       version_id: VERSION_ID,
       discard: true,
-    })
+    }, { pinSubject: 'u1' })
     expect(useUploadStore.getState().files).toEqual([])
     expect(useUploadStore.getState().versionsRevision).toBe(before + 1)
   })

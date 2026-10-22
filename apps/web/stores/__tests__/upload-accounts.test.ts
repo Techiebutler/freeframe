@@ -87,6 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   testing.reset()
 })
 
@@ -148,35 +149,91 @@ describe('an initiate that meets another account', () => {
   it('a row whose owner differs from the token fails at its turn while the current account\'s rows start', async () => {
     const server = fakeServer((_, i) => (i === 0 ? 'wait' : 'answer'))
     useUploadStore.setState({ files: [interruptedRow()] })
-    const [x1, x2] = drop([fileOf('x1.mov'), fileOf('x2.mov')])
+    const [x1, x2, x3] = drop([fileOf('x1.mov'), fileOf('x2.mov'), fileOf('x3.mov')])
     await settle()
     expect(server.names()).toEqual(['x1.mov'])
     // And a resume of X's, waiting behind the file that is starting.
     useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4', MB))
 
     // Another tab signs in as Y, and its storage event has not reached this
-    // tab yet. Y adds a file here, and sees it.
+    // tab yet: nothing here has noticed.
     writeTokenUnannounced(Y)
-    const [y1] = drop([small('y1.jpg')])
-    await settle()
-    expect(rowOf(y1).ownerId).toBe(Y)
-    expect(visibleFiles(useUploadStore.getState()).map((f) => f.id)).toEqual([y1])
-    // X's rows are still waiting: nothing has come to its turn.
     expect(rowOf(x2).status).toBe('queued')
-    expect(rowOf('r').queuedResume).toBe(true)
 
+    // X1's answer comes, and with it the queue's next start: the check before
+    // it finds Y, and every waiting row of X's is dealt with at once.
     server.initiates[0].resolve()
     await settle()
 
-    expect(rowOf(x2)).toMatchObject({ status: 'failed', failedBeforeStart: true, error: SWITCHED, ownerId: X })
-    // The resume's turn asked the server nothing; it is X's to resume later.
+    for (const id of [x2, x3]) {
+      expect(rowOf(id)).toMatchObject({ status: 'failed', failedBeforeStart: true, error: SWITCHED, ownerId: X })
+      expect(storedRow(id)).toMatchObject({ status: 'failed', error: SWITCHED, ownerId: X })
+    }
+    // The resume asked the server nothing; it is X's to resume later.
     expect(api.get).not.toHaveBeenCalled()
     expect(rowOf('r')).toMatchObject({ status: 'interrupted', versionId: 'rv', ownerId: X })
     expect(rowOf('r').queuedResume).toBeUndefined()
-    expect(server.names()).toEqual(['x1.mov', 'y1.jpg'])
     // X's first file had been created when the answer came: kept, for X.
-    expect(rowOf(x1)).toMatchObject({ status: 'interrupted', versionId: 'v1', ownerId: X })
-    expect(server.calls.filter((c) => c === 'presign u1')).toEqual([])
+    expect(rowOf(x1)).toMatchObject({ status: 'interrupted', uploadId: 'u1', versionId: 'v1', ownerId: X })
+    expect(storedRow(x1)).toMatchObject({ status: 'interrupted', uploadId: 'u1', versionId: 'v1', ownerId: X })
+    expect(server.others()).toEqual([])
+
+    // Y's files start.
+    const [y1] = drop([small('y1.jpg')])
+    await settle()
+    expect(server.names()).toEqual(['x1.mov', 'y1.jpg'])
+    expect(visibleFiles(useUploadStore.getState()).map((f) => f.id)).toEqual([y1])
+  })
+
+  it("a new account's drop fails the old account's waiting rows at once", async () => {
+    const server = fakeServer(() => 'wait')
+    const [, x2] = drop([fileOf('x1.mov'), fileOf('x2.mov')])
+    await settle()
+
+    // Y signs in elsewhere and drops a file here before the event arrives.
+    writeTokenUnannounced(Y)
+    const [y1] = drop([small('y1.jpg')])
+
+    // No await: the drop itself applied the change.
+    expect(rowOf(x2)).toMatchObject({ status: 'failed', failedBeforeStart: true, error: SWITCHED, ownerId: X })
+    expect(storedRow(x2)).toMatchObject({ status: 'failed', error: SWITCHED, ownerId: X })
+    expect(rowOf(y1)).toMatchObject({ status: 'queued', ownerId: Y })
+    expect(visibleFiles(useUploadStore.getState()).map((f) => f.id)).toEqual([y1])
+    await settle()
+    expect(server.names()).toEqual(['x1.mov'])
+  })
+
+  it('a row with no owner is never started, as anyone', async () => {
+    fakeServer()
+    useUploadStore.setState({ files: [{ ...interruptedRow(), ownerId: undefined }] })
+
+    useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4', MB))
+    await settle()
+
+    expect(api.get).not.toHaveBeenCalled()
+    expect(rowOf('r').status).toBe('interrupted')
+    expect(rowOf('r').queuedResume).toBeUndefined()
+  })
+
+  it('a /parts answer that arrives after a sub change keeps its ids for the owner and sends nothing', async () => {
+    const server = fakeServer()
+    let answer!: (info: unknown) => void
+    vi.mocked(api.get).mockImplementation((() => new Promise((r) => { answer = r })) as never)
+    useUploadStore.setState({ files: [{ ...interruptedRow(), uploadId: undefined, s3Key: undefined }] })
+    useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4', MB))
+    await settle()
+    expect(rowOf('r').status).toBe('starting')
+
+    signInAs(Y)
+    answer(resumable({ version_id: 'rv', upload_id: 'ru2', s3_key: 'rk2', file_size_bytes: MB }))
+    await settle()
+
+    expect(rowOf('r')).toMatchObject({ status: 'interrupted', uploadId: 'ru2', s3Key: 'rk2', versionId: 'rv', ownerId: X })
+    // Saved as X's interrupted row. Which ids storage keeps for a row another
+    // tab may have written is the merge's rule (`mergeWithStored`), unchanged here.
+    expect(storedRow('r')).toMatchObject({ status: 'interrupted', versionId: 'rv', ownerId: X })
+    expect(server.others()).toEqual([])
+    expect(testing.runningIds()).toEqual([])
   })
 })
 
@@ -374,5 +431,45 @@ describe('the account a run sends as', () => {
     useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4', MB))
     await settle()
     expect(vi.mocked(api.get).mock.calls.find(([p]) => p === '/upload/rv/parts')?.[1]).toEqual({ pinSubject: X })
+  })
+})
+
+describe('a hold and the actions, across a change of account', () => {
+  it("a Held probe of the old account fails on a sub change, and the new account's file starts at once", async () => {
+    // X's file found the connection down: it is the hold's probe, waiting
+    // its backoff before trying again.
+    const server = fakeServer(() => new TypeError('Failed to fetch'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const [x1] = drop([small('x1.jpg')])
+    await settle()
+    expect(rowOf(x1)).toMatchObject({ status: 'queued', holdReason: 'connection' })
+
+    signInAs(Y)
+    expect(rowOf(x1)).toMatchObject({ status: 'failed', error: SWITCHED, ownerId: X })
+    expect(rowOf(x1).holdReason).toBeUndefined()
+
+    // The hold went with it: Y's file does not wait out X's backoff.
+    const now = fakeServer()
+    const [y1] = drop([small('y1.jpg')])
+    await settle()
+    expect(now.names()).toEqual(['y1.jpg'])
+    expect(rowOf(y1).status).not.toBe('queued')
+    expect(server.names()).toEqual(['x1.jpg'])
+  })
+
+  it('a Discard after an unannounced switch sends nothing under the new account', async () => {
+    // The real request chain: nothing may reach the network as Y.
+    vi.mocked(api.get).mockReset()
+    vi.mocked(api.post).mockReset()
+    const fetchMock = vi.fn(async () => json(200, {}))
+    vi.stubGlobal('fetch', fetchMock)
+    useUploadStore.setState({ files: [interruptedRow()] })
+
+    writeTokenUnannounced(Y)
+    const said = await useUploadStore.getState().discardUpload('r')
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(said).toBeTruthy()
+    expect(rowOf('r')).toMatchObject({ status: 'interrupted', versionId: 'rv', ownerId: X })
   })
 })

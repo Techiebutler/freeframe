@@ -91,7 +91,7 @@ describe('renaming from the uploads panel', () => {
     fireEvent.keyDown(field(), { key: 'Enter' })
 
     await waitFor(() =>
-      expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04 Rohschnitt' }),
+      expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04 Rohschnitt' }, { pinSubject: 'u1' }),
     )
     expect(screen.getByRole('button', { name: 'Ep04 Rohschnitt' })).toBeTruthy()
   })
@@ -103,7 +103,7 @@ describe('renaming from the uploads panel', () => {
     fireEvent.change(field(), { target: { value: 'Ep04' } })
     fireEvent.blur(field())
 
-    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04' }))
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/assets/a1', { name: 'Ep04' }, { pinSubject: 'u1' }))
   })
 
   it('discards the edit on Escape', async () => {
