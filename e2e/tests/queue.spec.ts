@@ -760,11 +760,15 @@ test('R1: a Resume made while ten files are queued starts next, and stays saved 
 
   // Its entry in ff-uploads existed at every write from the Resume click until the upload was
   // across (once it is Processing or Ready the panel gets it back from the server's history,
-  // and the app stops saving it). A 250 ms margin keeps the test's clock off the page's.
+  // and the app stops saving it). Bounded by when the test saw the completion go out: the page
+  // sent it before that, and it was answered after, so every write before it is from before the
+  // upload was across. (A bound 250 ms before the answer arrived left out the whole send when the
+  // resume sent its two parts and completed in under 250 ms, which it does once the queue ahead
+  // of it has drained: seen in WebKit, 2026-10-22.)
   const writes = await page2.evaluate(() => (window as any).__e2eUploadWrites as Array<{ at: number; has: boolean | null; status: string | null }>)
   const completed = traffic.completes.find((c) => c.uploadId === saved.uploadId)
   expect(completed?.doneAt, 'the resumed upload was completed').toBeTruthy()
-  const throughout = writes.filter((w) => w.at >= resumedAt && w.at < completed!.doneAt! - 250)
+  const throughout = writes.filter((w) => w.at >= resumedAt && w.at < completed!.at)
   expect(throughout.length, 'the app wrote the upload list while the resume ran').toBeGreaterThan(5)
   expect(throughout.filter((w) => w.has !== true), 'writes that lost the row').toEqual([])
   // It went from saved as Interrupted (while it waited) to saved as Uploading (while it sent).
