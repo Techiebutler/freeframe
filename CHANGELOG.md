@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`next.config.js` no longer takes an `eslint` key.** If you run a custom `next.config.js`, remove it; Next 16 ignores the key and warns on every build.
 
 ### Added
-- **Appearance settings in the Create Share Link dialog.** Set a link's layout, card size, aspect ratio, Fit/Fill, card info, sort, theme, accent colour and Open in viewer before you create it, or click **Use my current view** to copy the card settings from the project view. A single-asset link offers only theme and accent, the two its viewer uses. The link panel's preview now shows the link with these settings. (#517 by @jdanna)
+- **Appearance settings in the Create Share Link dialog.** Set a link's layout, card size, aspect ratio, Fit/Fill, card info, sort, theme, accent colour and Open in viewer before you create it, or click **Use my current view** to copy the card settings from the project view. A single-asset link offers only theme and accent, the two its viewer uses. The link panel's preview now shows the link with these settings, in its own theme and accent colour. (#517 by @jdanna)
 
 ### Changed
 - **One Appearance section for share links.** The link panel's Settings → Appearance uses the same controls as the create dialog: card settings, with Sort By moved in, then a Page group with Theme, Accent Color and Open in viewer. In list layout the grid-only settings (card size, aspect ratio, Fit/Fill) are hidden. An accent that isn't a 6-digit hex is no longer sent, and a new clear button removes the accent. (#517 by @jdanna)

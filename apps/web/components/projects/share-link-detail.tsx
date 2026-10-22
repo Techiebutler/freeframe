@@ -30,6 +30,8 @@ import {
 } from "@/components/projects/share-appearance-fields";
 import { ToggleRow } from "@/components/ui/setting-controls";
 import { SHARE_ASSETS_PAGE_SIZE } from "@/lib/share-page";
+import { accentVars } from "@/lib/accent";
+import { useBranding } from "@/components/shared/branding-provider";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
@@ -533,6 +535,10 @@ export function ShareLinkContent({
       created_at: string;
     }[]
   >([]);
+  // An asset link's page takes the project's branding colour when the link has
+  // no accent of its own (GET /share/{token} sends it only for asset links).
+  const [projectAccent, setProjectAccent] = React.useState<string | null>(null);
+  const { primaryColor: instanceAccent } = useBranding();
   // The link's whole asset count, for the label: the preview shows six.
   const [previewTotal, setPreviewTotal] = React.useState(0);
   const [previewFolders, setPreviewFolders] = React.useState<
@@ -616,6 +622,22 @@ export function ShareLinkContent({
     }
   }, [shareLink, projectId]);
 
+  const isAssetLink = !!shareLink?.asset_id;
+  React.useEffect(() => {
+    if (!isAssetLink) {
+      setProjectAccent(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .get<{ primary_color?: string | null }>(`/projects/${projectId}/branding`)
+      .then((b) => !cancelled && setProjectAccent(b?.primary_color ?? null))
+      .catch(() => !cancelled && setProjectAccent(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [isAssetLink, projectId]);
+
   const shareUrl = `${frontendUrl}${withBasePath(`/share/${token}`)}`;
 
   // Mirror how the share page itself renders this link (folder-share-viewer):
@@ -623,8 +645,17 @@ export function ShareLinkContent({
   // box and image, card info the name strip, layout the grid-vs-list switch,
   // and the same client-side sort orders assets. The settings panel mutates
   // the same SWR key, so a save re-renders this preview immediately.
-  // Theme and accent are deliberately not mirrored: they repaint the share
-  // page's own chrome, and repainting this panel would repaint the app.
+  // Theme and accent apply to the preview frame alone: `data-theme` swaps the
+  // palette for that subtree, and the accent goes on it as inline variables,
+  // so the app around it keeps its own. The accent resolves as the share page
+  // does (useShareAppearance): the link's own, then for an asset link the
+  // project's, then the instance branding, else the theme's built-in one.
+  const previewTheme = appearance.theme === "light" ? "light" : "dark";
+  const previewAccent =
+    appearance.accent_color ?? (isAssetLink ? projectAccent : null) ?? instanceAccent;
+  const previewAccentStyle = (accentVars(previewAccent) ?? undefined) as
+    | React.CSSProperties
+    | undefined;
   const isGridLayout = appearance.layout !== "list";
   const cardSize = appearance.card_size ?? "m";
   // The page scales its grid against the viewport; this preview lives in a
@@ -703,140 +734,167 @@ export function ShareLinkContent({
           className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
         />
 
-        {/* Content preview — matches project view style */}
-        {previewFolders.length > 0 || previewThumbnails.length > 0 ? (
-          <div className="space-y-4">
-            {/* Folders */}
-            {previewFolders.length > 0 && (
-              <>
-                <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {previewFolders.length}{" "}
-                  {previewFolders.length === 1 ? "Folder" : "Folders"}
-                </span>
-                <div className={cn("grid gap-3", gridCols)}>
-                  {previewFolders.map((folder) => (
-                    <div
-                      key={folder.id}
-                      className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
-                    >
-                      <div className="aspect-[4/3] flex items-center justify-center bg-bg-tertiary">
-                        <svg
-                          className="h-10 w-10 text-text-tertiary/50"
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="24"
-                          height="24"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-                        </svg>
-                      </div>
-                      <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
-                          {folder.name}
-                        </p>
-                        <p className="text-xs text-text-tertiary mt-0.5">
-                          {folder.item_count}{" "}
-                          {folder.item_count === 1 ? "Item" : "Items"}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
+        {/* Content preview — the link as its page renders it, in the link's
+            own theme and accent */}
+        <div
+          data-theme={previewTheme}
+          data-testid="share-preview-frame"
+          style={previewAccentStyle}
+          className="rounded-xl border border-border bg-bg-primary overflow-hidden"
+        >
+          {/* The share page's header, cut down to what shows the accent */}
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 h-11">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-text-inverse">
+                {(shareLink.title || "FF").substring(0, 2).toUpperCase()}
+              </div>
+              <span className="truncate text-[13px] font-medium text-text-primary">
+                {shareLink.title || "Untitled Share Link"}
+              </span>
+            </div>
+            {shareLink.allow_download && (
+              <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[11px] font-medium text-white">
+                <Download className="h-3 w-3" />
+                Download All
+              </span>
             )}
-            {/* Assets — rendered the way the link's appearance says */}
-            {shownAssets.length > 0 && (
-              <>
-                <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {Math.max(previewTotal, shownAssets.length)}{" "}
-                  {Math.max(previewTotal, shownAssets.length) === 1 ? "Asset" : "Assets"}
-                </span>
-                {isGridLayout ? (
-                  <div className={cn("grid gap-3", gridCols)}>
-                    {shownAssets.map((asset) => (
-                      <div
-                        key={asset.id}
-                        className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
-                      >
+          </div>
+          <div className="p-4">
+            {previewFolders.length > 0 || previewThumbnails.length > 0 ? (
+              <div className="space-y-4">
+                {/* Folders */}
+                {previewFolders.length > 0 && (
+                  <>
+                    <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
+                      {previewFolders.length}{" "}
+                      {previewFolders.length === 1 ? "Folder" : "Folders"}
+                    </span>
+                    <div className={cn("grid gap-3", gridCols)}>
+                      {previewFolders.map((folder) => (
                         <div
-                          className={cn(
-                            "bg-bg-tertiary flex items-center justify-center overflow-hidden",
-                            aspectClass,
-                          )}
+                          key={folder.id}
+                          className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
                         >
-                          {asset.thumbnail_url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={asset.thumbnail_url}
-                              alt={asset.name}
-                              className={cn(
-                                "h-full w-full",
-                                thumbnailScale === "fill"
-                                  ? "object-cover"
-                                  : "object-contain",
-                              )}
-                            />
-                          ) : (
-                            <Eye className="h-8 w-8 text-text-tertiary/40" />
-                          )}
-                        </div>
-                        {showCardInfo && (
+                          <div className="aspect-[4/3] flex items-center justify-center bg-bg-tertiary">
+                            <svg
+                              className="h-10 w-10 text-text-tertiary/50"
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="24"
+                              height="24"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+                            </svg>
+                          </div>
                           <div className="px-3 py-2">
                             <p className="text-sm font-medium text-text-primary truncate">
+                              {folder.name}
+                            </p>
+                            <p className="text-xs text-text-tertiary mt-0.5">
+                              {folder.item_count}{" "}
+                              {folder.item_count === 1 ? "Item" : "Items"}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {/* Assets — rendered the way the link's appearance says */}
+                {shownAssets.length > 0 && (
+                  <>
+                    <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
+                      {Math.max(previewTotal, shownAssets.length)}{" "}
+                      {Math.max(previewTotal, shownAssets.length) === 1 ? "Asset" : "Assets"}
+                    </span>
+                    {isGridLayout ? (
+                      <div className={cn("grid gap-3", gridCols)}>
+                        {shownAssets.map((asset) => (
+                          <div
+                            key={asset.id}
+                            className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
+                          >
+                            <div
+                              className={cn(
+                                "bg-bg-tertiary flex items-center justify-center overflow-hidden",
+                                aspectClass,
+                              )}
+                            >
+                              {asset.thumbnail_url ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={asset.thumbnail_url}
+                                  alt={asset.name}
+                                  className={cn(
+                                    "h-full w-full",
+                                    thumbnailScale === "fill"
+                                      ? "object-cover"
+                                      : "object-contain",
+                                  )}
+                                />
+                              ) : (
+                                <Eye className="h-8 w-8 text-text-tertiary/40" />
+                              )}
+                            </div>
+                            {showCardInfo && (
+                              <div className="px-3 py-2">
+                                <p className="text-sm font-medium text-text-primary truncate">
+                                  {asset.name}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      // Same list layout the share page switches to.
+                      <div className="rounded-lg border border-border overflow-hidden divide-y divide-border">
+                        {shownAssets.map((asset) => (
+                          <div
+                            key={asset.id}
+                            className="flex items-center gap-3 px-3 py-2"
+                          >
+                            <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md bg-bg-tertiary">
+                              {asset.thumbnail_url ? (
+                                // Always cropped, as the share page's list rows
+                                // are (ListRowThumb): Fit/Fill is a grid setting.
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={asset.thumbnail_url}
+                                  alt={asset.name}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <Eye className="absolute inset-0 m-auto h-4 w-4 text-text-tertiary/40" />
+                              )}
+                            </div>
+                            <p className="min-w-0 flex-1 truncate text-sm text-text-primary">
                               {asset.name}
                             </p>
                           </div>
-                        )}
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  // Same list layout the share page switches to.
-                  <div className="rounded-lg border border-border overflow-hidden divide-y divide-border">
-                    {shownAssets.map((asset) => (
-                      <div
-                        key={asset.id}
-                        className="flex items-center gap-3 px-3 py-2"
-                      >
-                        <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md bg-bg-tertiary">
-                          {asset.thumbnail_url ? (
-                            // Always cropped, as the share page's list rows
-                            // are (ListRowThumb): Fit/Fill is a grid setting.
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={asset.thumbnail_url}
-                              alt={asset.name}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <Eye className="absolute inset-0 m-auto h-4 w-4 text-text-tertiary/40" />
-                          )}
-                        </div>
-                        <p className="min-w-0 flex-1 truncate text-sm text-text-primary">
-                          {asset.name}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
+                    )}
+                  </>
                 )}
-              </>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-border bg-bg-tertiary/50 p-8 flex flex-col items-center justify-center text-center space-y-3">
+                <div className="h-12 w-12 rounded-full bg-bg-tertiary flex items-center justify-center">
+                  <Eye className="h-6 w-6 text-text-tertiary" />
+                </div>
+                <p className="text-sm font-medium text-text-primary">
+                  No content yet
+                </p>
+              </div>
             )}
           </div>
-        ) : (
-          <div className="rounded-xl border border-border bg-bg-tertiary/50 p-8 flex flex-col items-center justify-center text-center space-y-3">
-            <div className="h-12 w-12 rounded-full bg-bg-tertiary flex items-center justify-center">
-              <Eye className="h-6 w-6 text-text-tertiary" />
-            </div>
-            <p className="text-sm font-medium text-text-primary">
-              No content yet
-            </p>
-          </div>
-        )}
+        </div>
 
         {/* Action buttons */}
         <div className="flex items-center gap-3">

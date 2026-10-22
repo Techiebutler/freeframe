@@ -14,6 +14,7 @@ vi.mock('@/lib/api', () => ({
 
 import { ShareLinkContent } from '../share-link-detail'
 import type { ShareLinkAppearance } from '@/types'
+import { useBrandingStore } from '@/stores/branding-store'
 
 // The share link detail preview mirrors how the share page renders the link
 // (folder-share-viewer): card size → grid columns, aspect ratio → thumbnail
@@ -81,6 +82,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  useBrandingStore.setState({ loaded: false, primaryColor: null })
 })
 
 describe('ShareLinkContent preview', () => {
@@ -168,5 +170,64 @@ describe('ShareLinkContent preview', () => {
     await assetsShown()
     expect(container.querySelector('img.object-contain')).toBeNull()
     expect(container.querySelector('img.object-cover')).not.toBeNull()
+  })
+
+  describe('theme and accent', () => {
+    const frame = () => screen.getByTestId('share-preview-frame')
+
+    it('the frame takes the link\'s theme, and only the frame', async () => {
+      renderContent({ ...APPEARANCE, theme: 'light' })
+      await assetsShown()
+      expect(frame().getAttribute('data-theme')).toBe('light')
+      // The app around the preview keeps its own palette.
+      expect(document.documentElement.getAttribute('data-theme')).not.toBe('light')
+    })
+
+    it('a dark link previews dark', async () => {
+      renderContent(APPEARANCE)
+      await assetsShown()
+      expect(frame().getAttribute('data-theme')).toBe('dark')
+    })
+
+    it('the link\'s accent paints the frame, not the app', async () => {
+      renderContent({ ...APPEARANCE, accent_color: '#ff5500' })
+      await assetsShown()
+      expect(frame().style.getPropertyValue('--accent')).toBe('#ff5500')
+      expect(document.documentElement.style.getPropertyValue('--accent')).toBe('')
+    })
+
+    it('with no accent of its own, the link previews the instance branding', async () => {
+      useBrandingStore.setState({ loaded: true, primaryColor: '#00aa00' })
+      renderContent(APPEARANCE)
+      await assetsShown()
+      expect(frame().style.getPropertyValue('--accent')).toBe('#00aa00')
+    })
+
+    it('with no accent anywhere, the frame keeps the theme\'s own', async () => {
+      renderContent(APPEARANCE)
+      await assetsShown()
+      expect(frame().style.getPropertyValue('--accent')).toBe('')
+    })
+
+    it('an asset link falls back to the project\'s branding first', async () => {
+      useBrandingStore.setState({ loaded: true, primaryColor: '#00aa00' })
+      get.mockReset().mockImplementation((url: string) => {
+        if (url === '/projects/p1/branding') return Promise.resolve({ primary_color: '#0000cc' })
+        if (url === '/assets/a1') return Promise.resolve({ ...ASSETS[0], id: 'a1' })
+        return Promise.resolve({
+          id: 'l1', token: 'tok', title: 'Link', folder_id: null, asset_id: 'a1',
+          permission: 'comment', visibility: 'public', allow_download: false,
+          show_versions: true, show_watermark: false, is_enabled: true,
+          has_password: false, appearance: APPEARANCE, created_at: '2026-10-01T00:00:00Z',
+          expires_at: null,
+        })
+      })
+      render(
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+          <ShareLinkContent token="tok" projectId="p1" onBack={() => {}} frontendUrl="http://localhost:3000" />
+        </SWRConfig>,
+      )
+      await waitFor(() => expect(frame().style.getPropertyValue('--accent')).toBe('#0000cc'))
+    })
   })
 })
