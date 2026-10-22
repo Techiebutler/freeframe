@@ -7,9 +7,11 @@ sees it. Every phase of the upload queue therefore ends with a **live Chrome pas
 scenarios of that phase from `SCENARIOS.md`, driven through Chrome DevTools, with evidence
 recorded in `e2e/live-runs/YYYY-MM-DD-phase-N.md`.
 
-Never fall back to headless Chrome or to Playwright for this pass. If the DevTools browser
+Never fall back to headless Chrome or to Playwright's bundled browser for this pass. If the DevTools browser
 cannot start (profile locked by another Chrome), close only the Chrome that the DevTools MCP
-started, or give the MCP its own profile; do not switch to a headless run.
+started, or give the MCP its own profile; do not switch to a headless run. If the Chrome holding the
+profile belongs to another session (phase 4: started the day before by another session's MCP server), leave it
+alone and drive a headed Google Chrome of your own over the DevTools protocol (section 10).
 
 The first run of this protocol is the **baseline** on unchanged `main`
 (`live-runs/2026-10-21-baseline.md`, scenario Q1). Later phases compare against it.
@@ -427,7 +429,10 @@ change after the drop is exactly what those scenarios want. Not exercised.
 | Storage black hole | `NET=$(docker inspect $STORAGE --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')` (ffe2e: `ffe2e_default`), then `docker network disconnect $NET $STORAGE`. Reconnect with `docker network connect --alias minio $NET $STORAGE` (the compose service name must come back as an alias or the API cannot resolve the host). Requests hang instead of being refused. | not exercised; check the reconnect before relying on it |
 | Files changed mid-queue | `touch` / `rm` / rewrite / replace-by-rename on the files in `e2e/.live-files/` (section 3). A file whose parts are all in flight survives an `rm` (macOS keeps the unlinked file open); one with a part still to send fails that part at once (`net::ERR_FILE_NOT_FOUND`). | verified in phase 3 (U1, U2, X1, X1b, X3) |
 | Second tab, same account | `new_page` with the **same** `isolatedContext` name. It shares localStorage and cookies with the first tab (verified: a second tab opened in the same context was already signed in; a page in a differently named context was not). Probe it too: `navigate_page` with the `initScript`. | verified (baseline report, "Tooling checks") |
-| Second account at once | `new_page` with a **different** `isolatedContext` name, sign in as `secondary` there. In the same context, signing in as `secondary` replaces `primary`'s session for both tabs, which is what A2 and A3 want. | not exercised |
+| Second account at once | `new_page` with a **different** `isolatedContext` name, sign in as `secondary` there. In the same context, signing in as `secondary` replaces `primary`'s session for both tabs, which is what A2 and A3 want. | same-profile switch verified in phase 4 (A1 to A3, section 10's driver): a sign-in, log out or invite accepted in one tab or window reaches the others as `storage` events for `ff_access_token` / `ff_refresh_token` within a millisecond; a separate context not exercised |
+| Sign-out or account switch elsewhere (A1 to A3) | In the second tab or window: the sidebar's account menu (narrow rail: `button[aria-haspopup="menu"][title="<account name>"]`), then the menu item "Log out"; sign in through the login form (`live-tools/ffq-login.js`); an invite: `POST /users/invite` from the first tab with its own token, open `/invite/<token>`, fill the form. `live-tools/ffq-auth.js` records the `storage` events and, per request, the account it was sent as. | verified in phase 4 |
+| Short access tokens | Recreate only the stack's api container with `ACCESS_TOKEN_EXPIRE_MINUTES=1`: one extra compose file holding just that variable under `services.api.environment`, added after the stack's own `-f` files and `--env-file` (read them from the container's `com.docker.compose.project.config_files` / `working_dir` labels), `up -d --no-deps --no-build api`. Restore with the same command without the extra file and check `printenv ACCESS_TOKEN_EXPIRE_MINUTES` is empty and a refresh returns a 900 s token. A token in hand keeps its old lifetime: refresh once to get a short one. | verified in phase 4 (the restored container had its original config hash) |
+| Offline exactly while a refresh is due | `ffq-auth.js`: `holdRefresh = true` holds the app's `POST /auth/refresh` at the page's `fetch`; once `refreshHeld()` is 1, go offline, then `releaseRefresh()`: the refresh goes out offline and fails `ERR_INTERNET_DISCONNECTED`. Set `holdRefresh = false` before going back online. | verified in phase 4 (T2) |
 | `beforeunload` dialog (L1) | `navigate_page` takes `handleBeforeUnload` (`accept` or `dismiss`); for a dialog that is already open, `handle_dialog`. | not exercised |
 | Laptop sleep (wake and resume cases) | Close the lid for 2 minutes with the queue running, open it, and record what the rows show. `pmset sleepnow` does the same from a terminal. A person has to be present; the DevTools session may need `list_pages` afterwards to find its tab. An unattended agent must not do this (it ends the session): it belongs to the manual pass. | not exercised (phase 3: moved to the manual pass) |
 | Busy main thread (Q2) | Optional: `emulate` with `cpuThrottlingRate: 4`. Report it if used. | not exercised |
@@ -610,10 +615,25 @@ in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section)
   in N2; read the real times from the `online`/`offline` events (`window.addEventListener`) and report them, not the intended ones.
 - **The access token expires mid-pass** (15 minutes by default): a burst of 401s followed by a `POST /auth/refresh` 200 in the console and the
   network list is the app refreshing it, not an upload fault.
+- **A second open tab keeps the first tab's token fresh.** The live-event connection of any tab on a project page refreshes a token about
+  to expire, and the new token reaches every tab as a `storage` event. To see an upload's own 401, refresh and resend, keep a single tab
+  open (phase 4: with two tabs the uploading tab never saw a 401 in four minutes of 1-minute tokens).
+- **The injected file inputs cover the narrow sidebar's account button.** `ffq-drop-input` and `ffq-pick` sit at the bottom left, over the
+  account menu of the collapsed rail, so a real click on it times out ("intercepts pointer events"). Remove them (or skip them in a tab that
+  only signs in and out) before using the menu.
+- **A panel row read in the same call as `openAll()` comes back empty**: the click on "All" renders on the next frame. Read the rows in the
+  next call, or after a short wait.
+- **`sampleRows` counts every row the panel shows**, and the panel lists the account's earlier rows too (Failed and Interrupted ones from
+  earlier scenarios), so its counts say nothing about one scenario after the first. Sample the scenario's own rows by name prefix
+  (`q.rows(prefix)` in a `setInterval`).
+- **The login rate limit** is 10 `POST /auth/login` per 600 s per IP. A pass that switches accounts back and forth (phase 4 signed in 6 times
+  in 8 minutes) has to count them.
+- **A tab sees another tab's new rows only when the account changes** (or from the server's history): a row added in tab B is not listed in
+  tab A of the same account. Read each tab's own rows, and Local Storage (`ff-uploads`) for what is saved.
 
 ## 9. Phase 2 stand-ins (`live-tools/`)
 
-Six files (five scripts for the page and the throwaway server), loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
+Nine files (seven scripts for the page, plus the throwaway server and the section 10 driver), loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
 the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript` is only needed for a page that sends at load):
 
 | File | Gives you |
@@ -623,6 +643,9 @@ the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript`
 | `live-tools/ffq-helpers.js` | `newProject(name)` (through the UI, SPA navigation, the probe survives), `clickRow(name, title)`, `dropFrom(inputId)`, `addInput2(id, offset)`, `assets()`, `waitRows()`, `closePanel()` |
 | `live-tools/ffq-fast.js` | a stand-in file chooser for Resume (`pickNext = true` then click Resume: the next file input the app clicks gets the files of `#ffq-pick`) and `delayPartsMs` (a deferred `/parts` answer, R3's route) |
 | `live-tools/ffq-route.js` | per-file faults for part PUTs (phase 3): `route['name.png'] = 'stall'` or `'hang'` sends that file's next part PUT to the throwaway server below (real upload progress, then nothing; or every byte sent and no answer), `holdFile['name.png'] = n` holds its first n part PUTs unsent; `routeLog` has the times |
+| `live-tools/ffq-auth.js` | phase 4: `apiLog` (every request to the API: method, path with ids replaced, the account it was sent as from the bearer token's `sub` (first 8 characters of the user id, never the token), status, time), `storageLog` (token and resume-claim writes, from this tab and the others), `me()` (account and seconds left on the token), `authSummary()`, `uploadCallsAs()`, `savedRows(prefix)` and `savedOwners()` (Local Storage `ff-uploads`, with `ownerId`), `claims()`; stand-ins `holdRefresh` / `releaseRefresh()` and `partsAnswerAt` (the `/parts` answer reaches the app at that wall time: two tabs learn "nobody is sending" in the same millisecond). Needs `ffq-probe.js` first; set `q.apiHost` when the API is not `localhost:18000` |
+| `live-tools/ffq-login.js` | phase 4: on a login page, adds `#pwin`; put the mode-0600 password files (named `<account>.pw`) into it, then `__ffqLogin(email, account)` reads the file in the page, fills the form and clicks "Sign in" |
+| `live-tools/cdp-driver.js` | phase 4: the section 10 driver |
 | `live-tools/stall-server.js` | the throwaway server for `route` (`node e2e/live-tools/stall-server.js [port]`, default 18777, on 127.0.0.1): answers the CORS preflight, then `/stall` stops reading after 256 KB and `/hang` reads everything and never answers. Stop it with `kill <pid>` when done |
 
 After a reload, one script reinstalls everything and adds the two inputs (`ffq-drop-input` and `ffq-pick`) and the hold:
@@ -655,4 +678,37 @@ concatenated, then your scenario) that reads the files back from IndexedDB, buil
 3 Uploading and the rest queued, sets `pickNext` and clicks Resume. Record the heartbeat age at the click (`Date.now() - row.heartbeatAt` from `ff-uploads`).
 To exercise APP-BUG-1 hold the queue for more than 30 s after the click. **Do not pass `File`s between tabs** (a second tab and a `BroadcastChannel`
 crashed the renderer and took both tabs with it).
+
+## 10. When the MCP's profile is held by another session: your own headed Chrome over the DevTools protocol
+
+Verified in phase 4. The chrome-devtools MCP refuses to start ("The browser is already running for
+`~/.cache/chrome-devtools-mcp/chrome-profile`") while any Chrome holds that profile. When that Chrome is not one this run started
+(`ps -o ppid` names another session's `chrome-devtools-mcp`), do not close it. Start Google Chrome yourself, headed, with a profile of its
+own, and drive it over the DevTools protocol:
+
+```bash
+SCR=$(mktemp -d)            # scratch: profile, screenshots, pid files
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir=$SCR/profile --remote-debugging-port=9333 \
+  --no-first-run --no-default-browser-check --window-size=1400,900 about:blank &   # note its pid; kill only that pid at the end
+node e2e/live-tools/cdp-driver.js "$PWD/e2e/node_modules/playwright" 9333 9334 &  # Playwright 1.59 connectOverCDP; note its pid
+c() { curl -s -X POST "http://127.0.0.1:9334/$1" -d "${2:-}"; echo; }             # c <command> '<json>'
+```
+
+The driver answers JSON on `127.0.0.1:9334`: `pages`, `new {url, window}` (`window: true` opens a new window, otherwise a tab),
+`goto`, `reload`, `url`, `eval {page, fn}` (a function's source), `evalfile {page, path}` (the `ffq-*.js` scripts), `files {page,
+selector, paths}` (the stand-in for `upload_file`), `click {page, selector}` and `fill` (trusted input), `shot {page, path}`,
+`emulate {page, offline}` or `{page, preset: "Fast 4G"}` or `{page}` to lift it, `net {page, match, since}` (the page's requests
+with status or `net::` error, the "DevTools list"), `console {page, since}` (with `pageerror` for uncaught errors), `dialogs`,
+`close`. All pages are in the profile's one browser context, so every tab and window shares localStorage and cookies.
+
+How it differs from the MCP:
+
+- Network conditions are `Network.emulateNetworkConditions` on a DevTools session the driver keeps open per page (the condition ends if
+  the driver stops). Offline behaves as with the MCP: `navigator.onLine` false, `offline` / `online` events, `ERR_INTERNET_DISCONNECTED`.
+- `net` comes from Playwright's page events and does not list CORS preflights.
+- **Every page reads `document.visibilityState` "visible" and `hasFocus()` true**, even a background tab: Playwright enables focus
+  emulation on the pages it attaches to. Background-tab timer throttling is therefore not in play; a scenario about a hidden tab needs the
+  MCP or the manual pass.
+- Screenshots and the network list are Playwright's, not DevTools'.
+- Stop the driver and the Chrome by the pids you noted, and delete the profile directory.
 
