@@ -7,9 +7,18 @@ const http = require('node:http')
 const CDP = Number(process.argv[3] || 9333)
 const PORT = Number(process.argv[4] || 9334)
 
-/** Replaces the value of every `token=` query parameter, so no access token leaves the driver. */
+/**
+ * Replaces the value of every `token=` query parameter, so no access token leaves the driver. The value stops at the next
+ * `&`, `#`, whitespace, quote, `<`, `>` or backslash, so a URL inside JSON text is redacted without eating the rest of it.
+ */
 function redact(text) {
-  return String(text).replace(/([?&]token=)[^&]*/g, '$1<redacted>')
+  return String(text).replace(/([?&]token=)[^&#\s"'<>\\]*/g, '$1<redacted>')
+}
+
+/** `redact` applied to every string inside a JSON-able value (what a handler returns). */
+function redactValue(value) {
+  if (value === undefined) return value
+  return JSON.parse(redact(JSON.stringify(value)))
 }
 
 /**
@@ -22,7 +31,7 @@ function allowed(headers, port) {
   return headers.host === `127.0.0.1:${port}` || headers.host === `localhost:${port}`
 }
 
-module.exports = { redact, allowed }
+module.exports = { redact, redactValue, allowed }
 if (require.main !== module) return
 const { chromium } = require(process.argv[2])
 
@@ -65,7 +74,7 @@ const PRESETS = {
   const cdpOf = async (rec) => (rec.cdp ??= await ctx.newCDPSession(rec.page))
 
   const handlers = {
-    pages: async () => [...pages].filter(([, r]) => !r.closed).map(([id, r]) => ({ id, url: r.page.url() })),
+    pages: async () => [...pages].filter(([, r]) => !r.closed).map(([id, r]) => ({ id, url: redact(r.page.url()) })),
     // window: true opens a new window (Target.createTarget newWindow), else a tab in the current window.
     new: async ({ url, window }) => {
       const s = await browser.newBrowserCDPSession()
@@ -76,35 +85,39 @@ const PRESETS = {
       await page.waitForLoadState('domcontentloaded').catch(() => {})
       return [...pages].find(([, r]) => r.page === page)[0]
     },
-    goto: async ({ page, url }) => { await get(page).page.goto(url, { waitUntil: 'domcontentloaded' }); return get(page).page.url() },
-    // nowait: start the browser's own Reload and return at once (a dismissed beforeunload leaves Playwright's promise unsettled).
+    goto: async ({ page, url }) => { await get(page).page.goto(url, { waitUntil: 'domcontentloaded' }); return redact(get(page).page.url()) },
+    // Page.reload over the protocol (not a person's Reload button). nowait: return at once, since a dismissed beforeunload
+    // leaves Playwright's promise unsettled.
     reload: async ({ page, nowait }) => {
       const p = get(page).page.reload({ waitUntil: 'domcontentloaded' })
       if (nowait) { p.catch(() => {}); return { started: Date.now() } }
       await p
-      return get(page).page.url()
+      return redact(get(page).page.url())
     },
     // A script run on every new document of this page before the app's own (Page.addScriptToEvaluateOnNewDocument).
     init: async ({ page, path }) => { await get(page).page.addInitScript({ path }); return path },
-    // enabled: false lets the page see its real visibility and focus (Playwright turns focus emulation on when it attaches).
+    // Emulation.setFocusEmulationEnabled on the driver's own session. enabled: false does NOT reveal the page's real
+    // visibility: Playwright's session keeps its focus emulation, and a background tab still read "visible" (measured in
+    // phase 5; only `hasFocus()` went false). For a really hidden tab, stop the driver and use cdp-raw.js.
     focus: async ({ page, enabled }) => {
       const s = await cdpOf(get(page))
       await s.send('Emulation.setFocusEmulationEnabled', { enabled: !!enabled })
       return { enabled: !!enabled, at: Date.now() }
     },
-    // The window holding this page, for an OS screenshot of the browser's own dialog.
+    // The window holding this page (Browser.getWindowForTarget). Unverified for its purpose: it answered in phase 5, but the OS
+    // screenshot of the browser's dialog it was meant for was never taken (`screencapture -R` lacked permission).
     bounds: async ({ page }) => {
       const s = await cdpOf(get(page))
       const { targetInfo } = await s.send('Target.getTargetInfo')
       const b = await browser.newBrowserCDPSession()
       return b.send('Browser.getWindowForTarget', { targetId: targetInfo.targetId })
     },
-    url: async ({ page }) => get(page).page.url(),
+    url: async ({ page }) => redact(get(page).page.url()),
     eval: async ({ page, fn, timeout }) => {
       const p = get(page).page.evaluate(`(${fn})()`)
-      return timeout ? Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('eval timeout')), timeout))]) : p
+      return redactValue(await (timeout ? Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('eval timeout')), timeout))]) : p))
     },
-    evalfile: async ({ page, path }) => get(page).page.evaluate(require('node:fs').readFileSync(path, 'utf8')),
+    evalfile: async ({ page, path }) => redactValue(await get(page).page.evaluate(require('node:fs').readFileSync(path, 'utf8'))),
     files: async ({ page, selector, paths }) => { await get(page).page.setInputFiles(selector, paths); return paths.length },
     click: async ({ page, selector, text }) => {
       const p = get(page).page
@@ -135,7 +148,8 @@ const PRESETS = {
       if (delayMs !== undefined) rec.dialogDelayMs = delayMs
       return rec.dialogs
     },
-    // runBeforeUnload: close the tab the way the browser does when a person closes it, so the page may ask first.
+    // Page.close over the protocol. runBeforeUnload: the page's beforeunload runs first, so it may ask (not a person's close
+    // button or Cmd+W, which the protocol cannot press).
     close: async ({ page, runBeforeUnload }) => { await get(page).page.close({ runBeforeUnload: !!runBeforeUnload }); return { closed: !!get(page).closed, at: Date.now() } },
     closed: async ({ page }) => ({ closed: get(page).closed ?? null }),
     now: async () => Date.now(),

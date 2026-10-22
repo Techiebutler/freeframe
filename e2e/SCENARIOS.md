@@ -41,7 +41,7 @@ version.
 | A1 | Two pages, one context: log out in B with files queued in A | A redirects to /login; after signing back in, A's queued files show as Failed with the signed-out message | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | [PASS](live-runs/2026-10-22-phase-4.md#a1-log-out-in-another-tab-with-files-queued-pass) | — | — |
 | A2 | Accept an invite as `secondary` in tab B while A sends | A's sending row ends Interrupted; A's queued rows fail with the account message; no asset lands in `secondary`'s account | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | [PASS](live-runs/2026-10-22-phase-4.md#a2-accept-an-invite-in-another-window-while-a-sends-pass) | — | — |
 | A3 | Sign in as `secondary` in the same browser after `primary` left interrupted rows | `secondary` sees none of them; `primary` sees them again after switching back | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | [PASS](live-runs/2026-10-22-phase-4.md#a3-another-account-in-the-same-browser-after-primary-left-interrupted-rows-pass) | — | — |
-| L1 | Reload with files queued | the beforeunload dialog appears (`page.on('dialog')`, type `beforeunload`) in Chromium and WebKit | Chromium, WebKit, Firefox | 5 | `tests/leave.spec.ts` (L1, and L1 negative: nothing on its way, no prompt) | [PASS](live-runs/2026-10-23-phase-5.md#l1-reload-with-files-queued-pass), and [closing the tab](live-runs/2026-10-23-phase-5.md#l1-close-the-tab-with-files-queued-pass) | — | — |
+| L1 | Reload with files queued | the beforeunload dialog appears (`page.on('dialog')`, type `beforeunload`) in Chromium and WebKit | Chromium, WebKit, Firefox | 5 | `tests/leave.spec.ts` (L1, and L1 negative: nothing on its way, no prompt) | [PASS](live-runs/2026-10-23-phase-5.md#l1-reload-with-files-queued-pass) (L1 negative: PASS, console not read), and [closing the tab](live-runs/2026-10-23-phase-5.md#l1-close-the-tab-with-files-queued-pass) | — | — |
 | L2 | Log out with files queued | in-app confirm "N uploads will stop. Log out anyway?"; confirming navigates with no beforeunload dialog | Chromium, WebKit, Firefox | 5 | `tests/leave.spec.ts` (L2 with Cancel then Log out, L2 one file, L2 negative: nothing on its way, no confirm) | [PASS](live-runs/2026-10-23-phase-5.md#l2-log-out-with-files-queued-pass) | — | — |
 | L3 | Expired session (clear both tokens, then trigger a request) | redirect to /login, no dialog | Chromium, WebKit, Firefox | 5 | `tests/leave.spec.ts` | [PASS, both tokens cleared and the refresh refused](live-runs/2026-10-23-phase-5.md#l3-a-session-that-ends-by-force-pass) | — | — |
 | V1 | New Version during a long queue | the asset page shows "New version queued, waiting for other uploads."; the version appears without reload | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#v1-new-version-during-a-long-queue-pass) | — | — |
@@ -511,33 +511,49 @@ Chrome over the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` 
 outside the app (`live-tools/ffq-wakelock.js`, a wrapper on `WakeLock.prototype.request` installed before the app runs) and
 from the OS (`pmset -g assertions`: Chrome's "Blink Wake Lock" assertion).
 
+The wake-lock checks have no rows of their own in the matrix; the live report labels them:
+
+- **W1**: the lock while six files send (`Fast 4G`).
+- **V**: the lock given up when the tab is hidden and taken again when it is shown (a real tab switch).
+- **W2** and **W2b**: the lock during a storage hold ("Waiting for storage"; 3 and 9 refused initiates).
+- **W3**: the lock while rows only wait (offline, "Waiting for connection").
+- **W4**: the lock when another tab of the same browser signs out, then signs back in.
+
 **Visibility caveat.** Through the driver every page reads visible (Playwright's focus emulation, which a second DevTools
 session cannot turn off: measured). The re-acquire on visibility (V) was therefore run with the driver stopped, over a plain
 DevTools connection (`live-tools/cdp-raw.js`), with a real foreground tab and a real tab switch back; no minimize. Every other
-step, W4's background tab included, ran with every page treated as visible, so a hidden tab's timer throttling was not in play
-there.
+step ran with every page treated as visible, so a hidden tab's timer throttling was not in play there. **W4 is the weakest of
+these**: its uploading tab was a background tab that the emulation reported visible, so W4 shows only the app's own logic
+(release on the other tab's sign-out, a new request on sign-in). It is not what a real browser does with that tab: a truly
+hidden tab holds no wake lock (the browser drops it on hide, as V measured), and the re-request on sign-in would be refused
+until the tab is shown. The real-browser outcome of W4 is owed to the manual pass.
 
 - **Passing**: L1, L2, L3 and the brief's checks:
   - L1: a Reload with 3 sending and 2 queued raised Chrome's own `beforeunload` 4 ms later; Stay (dismissed after 3 s, the page
     held meanwhile) kept the document, the rows and the wake lock; Leave reloaded and the three that had started came back
-    Interrupted. A Reload with nothing on its way, or with only Interrupted rows, asked nothing. Closing the tab
-    (`Page.close` with `beforeunload`) with files queued asked each time; Stay kept the tab, Leave closed it.
+    Interrupted. A Reload with only Interrupted rows asked nothing. **L1 negative** (a Reload with nothing on its way): no
+    prompt, **PASS (console not read)**. Closing the tab (`Page.close` with `beforeunload`) asked each time: the first close
+    with 3 sending and 0 queued (two queued rows had been cancelled by a tooling slip), the second and third with 3 sending and
+    2 queued; Stay kept the tab, Leave closed it.
   - L2: "5 uploads will stop. Log out anyway?" opened 13 ms after the account menu closed; Cancel kept the tokens, the rows, the
     lock and a clickable page; Log out went to `/login` with no browser prompt. "1 upload will stop. Log out anyway?" behaved the
     same. With nothing on its way Log out asked nothing.
   - L3: with both tokens removed nothing reacted until the next request (401), then `/login` 0.43 s later with no prompt; with
     both tokens spoiled the server refused the refresh (401) and the page was on `/login` 0.5 s after the first 401, no prompt.
-  - Wake lock: one lock from 12 ms after the drop to the moment the last of six files went to Processing, never re-asked between
-    files (W1); during a 35 s "Waiting for storage" hold (W2b) and a 62 s offline wait (W3) no lock was held between tries, each
-    probe try took it for 3 to 11 ms; hidden by a real tab switch, the browser dropped it, and the app asked again in the same
-    millisecond the tab was shown (V); a sign-out in another tab released it at once, and signing back in took it again while
-    the rows still moved (W4). While on a hold the leave warning stays armed though the lock is not (by design).
-- **No app bug was found.** Observations (not failures): a hold costs one short lock per probe try; leaving the page in the tab
-  that ends the session reaches `pagehide` with the lock held and the browser drops it with the document; the queue does not
-  wake on `online` (29.8 s in W3, as in phase 3); own-tab Log out and Leave lose the never-started rows, which the confirmation's
-  count includes.
-- Not run here: the manual real Safari and real Firefox pass (matrix row M), and a view of the dialog itself on screen (the
-  driver answered it after 1.5 to 3 s; `screencapture` lacked permission).
+  - Wake lock: **W1, PASS (console not read)**: one lock from 12 ms after the drop to the moment the last of six files went to
+    Processing, never re-asked between files. W2b and W3, PASS: during a 35 s "Waiting for storage" hold and a 62 s offline wait
+    no lock was held between tries, and each probe try took it for 3 to 11 ms. **V, PASS (console not read)**: hidden by a real
+    tab switch, the browser dropped it, and the app asked again in the same millisecond the tab was shown. W4, PASS for the
+    app's logic only (see the caveat): a sign-out in another tab released it at once, and signing back in took it again while
+    the rows still moved. While on a hold the leave warning stays armed though the lock is not (by design).
+- **No app bug was found** in what was read. The console was **not read** for W1, V and the L1 negative (the first driver
+  session's records ended with it, and V ran with no recorder), so an uncaught error there would have gone unseen; every other
+  step's console was read and had none. Observations (not failures): a hold costs one short lock per probe try (whether those
+  pulses reset the OS idle timer was not measured, see the live report); leaving the page in the tab that ends the session
+  reaches `pagehide` with the lock held and the browser drops it with the document; the queue does not wake on `online` (29.8 s
+  in W3, as in phase 3); own-tab Log out and Leave lose the never-started rows, which the confirmation's count includes.
+- Not run here: the manual real Safari and real Firefox pass (matrix row M), W4 with a truly hidden tab, the idle-timer check
+  above, and a view of the dialog itself on screen (the driver answered it after 1.5 to 3 s; `screencapture` lacked permission).
 
 ## Already covered
 
