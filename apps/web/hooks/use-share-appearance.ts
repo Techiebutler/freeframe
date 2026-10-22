@@ -55,9 +55,9 @@ export function useShareAppearance(accentColor: string | null | undefined, isDar
       el.id = ACCENT_STYLE_ID
       document.head.appendChild(el)
     }
-    // All three tokens, not just --accent: overriding the base colour alone
-    // left the hover and muted shades on the instance's colour, so a button
-    // repainted but its hover state did not.
+    // Every token in accentVars, not just --accent: overriding the base colour
+    // alone left the hover and muted shades and the hover/focus border token on
+    // the instance's colour, so a button repainted but its hover state did not.
     el.textContent = `:root { ${Object.entries(vars)
       .map(([k, v]) => `${k}: ${v} !important;`)
       .join(' ')} }`

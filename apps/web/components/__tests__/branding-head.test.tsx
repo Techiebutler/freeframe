@@ -30,6 +30,9 @@ describe('BrandingHead accent wiring', () => {
     expect(style.getPropertyValue('--accent-muted')).toBe(
       'color-mix(in srgb, #e2571f 18%, var(--bg-secondary))',
     )
+    // The secondary button's hover border (and every focus border) resolves
+    // through this; when branding skipped it those surfaces stayed stock blue.
+    expect(style.getPropertyValue('--border-focus')).toBe('#e2571f')
   })
 
   it('lightens the hover shade for a dark accent and darkens it for a light one', () => {
@@ -56,6 +59,7 @@ describe('BrandingHead accent wiring', () => {
     render(<BrandingHead />)
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('')
     expect(document.documentElement.style.getPropertyValue('--accent-hover')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--border-focus')).toBe('')
   })
 
   it('ignores a value that is not a 6-digit hex rather than writing garbage', () => {
@@ -119,9 +123,14 @@ describe('BrandingHead icons', () => {
 
 
 describe('accentVars', () => {
-  it('gives a share link the same three tokens instance branding sets', () => {
+  it('gives a share link the same tokens instance branding sets', () => {
     const vars = accentVars('#e2571f')
     expect(Object.keys(vars!).sort()).toEqual([...ACCENT_VAR_NAMES].sort())
+  })
+
+  it('paints the focus-border token with the colour, not the product default', () => {
+    const vars = accentVars('#e2571f')
+    expect(vars!['--border-focus']).toBe('#e2571f')
   })
 
   it('returns null for anything that is not a 6-digit hex', () => {

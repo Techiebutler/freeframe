@@ -8,8 +8,12 @@
  * state stays the instance's colour.
  */
 
-/** The tokens every accent-painted surface resolves through. */
-export const ACCENT_VAR_NAMES = ['--accent', '--accent-hover', '--accent-muted'] as const
+/** The tokens every accent-painted surface resolves through.
+ *  --border-focus is in here because it is a pure alias of the accent in both
+ *  palettes (globals.css), and it is the only colour on many neutral surfaces —
+ *  the secondary button's hover border, for instance. Branding that skipped it
+ *  left those surfaces on the product's stock blue. */
+export const ACCENT_VAR_NAMES = ['--accent', '--accent-hover', '--accent-muted', '--border-focus'] as const
 
 export function parseHex(hex: string): [number, number, number] | null {
   const m = /^#([0-9a-f]{6})$/i.exec(hex.trim())
@@ -32,7 +36,7 @@ function shift(rgb: [number, number, number], amount: number): string {
   return `rgb(${r} ${g} ${b})`
 }
 
-/** The three accent variables for a colour, or null if it isn't a 6-digit hex. */
+/** The accent variables for a colour, or null if it isn't a 6-digit hex. */
 export function accentVars(color: string | null | undefined): Record<string, string> | null {
   const rgb = color ? parseHex(color) : null
   if (!rgb || !color) return null
@@ -43,6 +47,9 @@ export function accentVars(color: string | null | undefined): Record<string, str
     // change its appearance; blending with the theme's secondary surface gives
     // every consumer one stable, readable color instead.
     '--accent-muted': `color-mix(in srgb, ${color} 18%, var(--bg-secondary))`,
+    // Alias of the accent in both default palettes; hover and focus borders
+    // resolve through it.
+    '--border-focus': color,
   }
 }
 
