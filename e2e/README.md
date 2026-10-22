@@ -143,7 +143,7 @@ key in the stack's Redis: `docker exec <redis container> redis-cli del rl:login:
 
 | File          | Gives you |
 | ------------- | --------- |
-| `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm`, `createProject`, `resetUploads`, `openUploads`, `closeUploads`, `dropFiles`, `rows`, `uploadRow` |
+| `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm` (and `submitLoginForm`, for a login page already on screen), `createProject`, `resetUploads`, `openUploads`, `closeUploads`, `dropFiles`, `rows`, `uploadRow` |
 | `files.ts`    | `makeFiles` (real random-content files on disk), `touch`, `remove`, `rewrite`, `liveFilesDir` |
 | `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `holdParts`, `stallParts`, `failInitiate`, `countRequests`, all on `page.route` (`throttleParts` also reads part sizes the page records); `trackUploads` (which S3 key is which file's, to aim `hangParts`, `holdParts` and `stallParts` at one file with `only`); `networkSwitch` (the browser's network down and up) |
 | `scenario.ts` | What the Phase 3 specs share: `openProject`, `pngs` (PNGs in a folder the test may change, backdated), `removeScenarioFiles`, `recordUploadCalls` (initiates, part PUTs, presigns, aborts, with times), `until` and the panel helpers |
@@ -172,6 +172,13 @@ reset (`PUT /instance/settings` with `storage_limit_bytes: 0` and `upload_part_s
 where a deleted file hangs the send) wait out the 90 s part watchdog, so each takes about 95 s (`test.setTimeout`
 is 10 min); the files they change are under
 `.live-files/` and are removed when each test ends. The watchdog's 5 min cap is not run here (see `SCENARIOS.md`).
+
+`tests/accounts.spec.ts` holds the Phase 4 scenarios (A1 to A3: a log out, an accepted invite or another account's
+sign-in in a second tab; R2: two tabs that Resume the same upload at once). Each runs two pages of one browser context,
+which share localStorage as two tabs do. They sign in mid-test by writing the two tokens the way the login form does,
+not through the form, to stay under `/auth/login`'s limit (A1 uses the form once). A2 invites a new user through the
+admin API every run (`e2e-invitee-<ms>@example.com`; the API refuses the reserved `.test` domain), so each run leaves
+one more user behind. R2 waits out the 150 s live window first, so it takes about three minutes.
 
 `tests/fixtures.spec.ts` checks each fixture's observable effect (a throttled part really is
 slow, an injected 500 reaches the page, a folder drop lands in the folder, ...) on every engine.

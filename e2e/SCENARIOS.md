@@ -36,11 +36,11 @@ version.
 | S3 | Infra: `docker stop` storage mid-queue, start after 60 s | queued files hold; the sending file ends Interrupted (as today) or recovers | Chromium | 6 | — | — | — | — |
 | S4 | Infra: black-hole storage (`docker network disconnect`) | "Waiting for storage" within 20 s of the next file's turn | Chromium | 6 | — | — | — | — |
 | R1 | Interrupt an upload (close the page), reopen, Resume while 10 files are queued | the Resume starts next; its `ff-uploads` entry exists throughout | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` (R1, and R1b, the APP-BUG-1 regression test, fixed 2026-10-22) | [PASS after the fix, 2026-10-22](live-runs/2026-10-22-phase-2.md#r1-re-run-after-app-bug-1-fix-pass) (first run: [FAIL, APP-BUG-1](live-runs/2026-10-22-phase-2.md#r1-interrupt-reopen-resume-while-files-are-queued-fail-app-bug-1)) | — | — |
-| R2 | Two tabs, Resume the same interrupted row in both | exactly one tab presigns | Chromium, WebKit, Firefox | 4 | — | — | — | — |
+| R2 | Two tabs, Resume the same interrupted row in both | exactly one tab presigns | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` (failed in WebKit until the APP-BUG-2 fix, 2026-10-22) | — | — | — |
 | R3 | Cancel during Resuming | the row returns to Interrupted; no `/upload/abort` | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#r3-cancel-during-resuming-pass) | — | — |
-| A1 | Two pages, one context: log out in B with files queued in A | A redirects to /login; after signing back in, A's queued files show as Failed with the signed-out message | Chromium, WebKit, Firefox | 4 | — | — | — | — |
-| A2 | Accept an invite as `secondary` in tab B while A sends | A's sending row ends Interrupted; A's queued rows fail with the account message; no asset lands in `secondary`'s account | Chromium, WebKit, Firefox | 4 | — | — | — | — |
-| A3 | Sign in as `secondary` in the same browser after `primary` left interrupted rows | `secondary` sees none of them; `primary` sees them again after switching back | Chromium, WebKit, Firefox | 4 | — | — | — | — |
+| A1 | Two pages, one context: log out in B with files queued in A | A redirects to /login; after signing back in, A's queued files show as Failed with the signed-out message | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | — | — | — |
+| A2 | Accept an invite as `secondary` in tab B while A sends | A's sending row ends Interrupted; A's queued rows fail with the account message; no asset lands in `secondary`'s account | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | — | — | — |
+| A3 | Sign in as `secondary` in the same browser after `primary` left interrupted rows | `secondary` sees none of them; `primary` sees them again after switching back | Chromium, WebKit, Firefox | 4 | `tests/accounts.spec.ts` | — | — | — |
 | L1 | Reload with files queued | the beforeunload dialog appears (`page.on('dialog')`, type `beforeunload`) in Chromium and WebKit | Chromium, WebKit, Firefox | 5 | — | — | — | — |
 | L2 | Log out with files queued | in-app confirm "N uploads will stop. Log out anyway?"; confirming navigates with no beforeunload dialog | Chromium, WebKit, Firefox | 5 | — | — | — | — |
 | L3 | Expired session (clear both tokens, then trigger a request) | redirect to /login, no dialog | Chromium, WebKit, Firefox | 5 | — | — | — | — |
@@ -265,6 +265,88 @@ The "Live Chrome run" column above links each scenario's section.
 - "Touch a file in a synced folder" used a plain local folder: the Google Drive, OneDrive and iCloud folders on the machine are the
   user's, not test locations.
 - Not run here: the manual real Safari and real Firefox pass (matrix row M).
+
+## Phase 4 automated results
+
+`tests/accounts.spec.ts` (A1, A2, A3, R2), run against the phase 4 branch (`feat/upload-queue-4-accounts`) on the
+e2e stack, 2026-10-22. Every test runs two pages of one browser context, which share localStorage as two tabs of one
+browser do, so a sign-in or log out in one reaches the other as a `storage` event.
+
+| Engine | Result | Duration |
+|---|---|---|
+| Chromium (Playwright 1.59, Chromium headless shell 1217) | `accounts.spec.ts --repeat-each=3`: 12 of 12 passed (setup skipped, saved sessions reused) | 9.5 min |
+| WebKit (Playwright 1.59) | the same: 12 of 12 passed | 9.7 min |
+| Firefox (Playwright's Firefox 1511) | **does not launch on this macOS machine** (Darwin 27), as before. Not run. The scenarios are engine-neutral; run `pnpm test:firefox` wherever it launches, and do the manual real-Firefox pass | n/a |
+
+Per scenario (seconds, Chromium / WebKit, the three runs): A1 9.7 8.8 8.7 / 11.6 11.6 11.4, A2 6.1 5.9 5.6 / 6.2 6.5 6.5,
+A3 7.3 8.6 7.4 / 8.0 9.0 9.1, R2 166 166 166 / 167 167 168 (R2 waits out the 150 s live window first). No retry (`retries` is 0),
+no flake. The whole suite afterwards (every spec, setup included), on the code of this commit: 98 passed, 2 skipped (saved sessions
+reused), 26.7 min: 49 per engine, the previous 45 and these 4 (the `test.fail()` fixtures test is drawn as a cross and counts
+as passed).
+
+The first whole-suite run, before `0d574180`, failed `queue.spec.ts` R1 once in WebKit: its check that the resumed row was
+saved throughout stopped counting writes 250 ms before the completion's answer, and once the resume claims its row
+(APP-BUG-2 below) it sends after the queue ahead of it has drained, two parts and a completion in 230 to 340 ms (measured),
+so the window could leave out every write of the send (2 of 5 runs). R1 now stops at the moment the completion went out,
+which is sound without a margin; 10 of 10 runs passed the check after the change. Separately, R1 in WebKit sometimes never
+sees its first upload start ("Timed out after 60000 ms waiting for the upload hanging", the drop lands nowhere): 1 in 10
+with the fix and 1 in 12 on the app before it, so it is not from this change (pre-existing, not chased here).
+
+What each one observed:
+
+- **A1** five 1 MB PNGs, parts on hold: three uploading, two queued. B logs out through the sidebar menu. In A the two queued
+  rows are saved at once as Failed, "Signed out in another tab. Add these files again after signing in.", with primary as
+  owner, and nothing is sent for them. On release the three that had started send their already-presigned parts and then
+  nothing more (no `/upload/complete`: it would need the owner's token), and are saved Interrupted. A goes to `/login` with
+  no prompt at its next request to the API: the person opens Notifications, the request answers 401, there is no refresh
+  token, and `clearTokens` sends the page to `/login` (the spec's "Token removed" chain). Nothing in A asks the server
+  anything on its own once its uploads have stopped, so A does not move until the tab is used. B then signs in as
+  `secondary`, whose panel shows none of these rows. A signs back in as primary through the login form it was sent to: the
+  two queued rows are Failed with the signed-out message, the three others Interrupted.
+- **A2** a new user is invited through the admin API each run and made an editor of the project, so a file sent with their
+  token would be accepted and land in their account. Same frozen queue in A; B opens `/invite/<token>` and accepts it
+  through the form. In A the two queued rows are saved at once as Failed with "Another account signed in. Add these files
+  again after signing back in.", primary's; the three sending end Interrupted, primary's; A's panel now shows the invitee's
+  uploads, none of these. No initiate for a queued file and no completion was sent. The invitee's
+  `/me/assets?filter=owned` is empty, while primary's lists exactly the three that started (so the check sees unfinished
+  uploads at all). Back as primary, A shows them again: two Failed with the account message, three Interrupted.
+- **A3** two uploads of primary's are interrupted by closing their page (parts hang), and the closed tab is reopened: both
+  Interrupted. In B primary logs out and `secondary` signs in: A's panel at once shows none of them, B's neither, and the
+  name is nowhere on B's page; both rows are still saved, Interrupted, with primary as owner. B logs out and primary signs in
+  again: A shows both Interrupted again, and so does B (Interrupted or, for its 150 s window, Elsewhere: B is another tab).
+- **R2** a 12 MB upload (two parts) interrupted by closing its page, then 160 s for the closed tab's last heartbeat and the
+  server's last sight of it to leave the live window (inside it both new tabs read Elsewhere and offer no Resume). Two new
+  tabs show it Interrupted; each clicks Resume and opens its file picker, then both pick the file at once. Both ask
+  `/parts` in the same millisecond or the next. In all six runs after the fix exactly one tab presigned (2 presigns, 2 PUTs,
+  1 completion) and the other showed Elsewhere and sent nothing.
+
+**APP-BUG-2 (fixed, `71793505`): two tabs resuming at once both sent the upload.** Before the fix R2 failed in WebKit in
+2 of 3 runs (Chromium passed 3 of 3): both tabs asked `/parts` at +0 ms, both presigned and PUT both parts, and both
+completed; in one run one tab was then left Failed, "Upload is incomplete: 1 part(s) missing, starting at part 1.". Each tab
+looks in shared storage for the other's heartbeat once `/parts` answers (spec goal 11, step 2), and a write to localStorage
+reaches another tab's process a moment later, so each looked before the other's first stamp arrived. Now a resume that
+has been told nobody is sending writes a claim (`ff-upload-claims`), waits 500 ms for a competing claim still on its way,
+and goes on only if its claim stands; the other shows Elsewhere. The unit test in `upload-other-tab.test.ts` ("two tabs
+resuming the same upload at the same moment") reproduces it: the other tab's moves land just after this tab has looked,
+and before the fix this tab sent and completed.
+
+Each scenario was checked, on Chromium, against a temporary mutation of the app (reverted, never committed) and failed
+for the intended reason: the `storage` listener for the token ignored (A1 and A2 fail: the queued rows are not failed when
+the other tab logs out or signs in), and every account's rows shown to whoever is signed in (A3 fails: `secondary` sees
+primary's rows). R2 failed on the app as it was before the APP-BUG-2 fix (above).
+
+Observations (not failures of these scenarios):
+
+- **A pre-existing sign-in trap, not fixed here.** If A's next request is a click on a link (the sidebar's Projects) rather
+  than an API call, the middleware answers it (the cookies are gone) and Next's client router lands on
+  `/login?from=%2Fprojects`. Signing in on that page then does nothing: the login form's `router.replace('/projects')`
+  reuses the redirect the router remembers, the URL stays `/login?from=%2Fprojects` (measured: no request at all, and 35 s
+  later only a refetch of the login page), and the person sits on the login page with valid tokens until a reload. The
+  login code is the same as on `main`; it is not part of the upload queue. A1 therefore makes its next request an API call
+  (Notifications), the path the spec names.
+- The A2 invitee address is `e2e-invitee-<ms>@example.com`: the API refuses the reserved `.test` domain (422,
+  "special-use or reserved name"). Each run leaves one more invited user in the stack.
+- Not run here: the live Chrome pass and the manual real Safari and real Firefox pass (matrix row M).
 
 ## Already covered
 

@@ -49,6 +49,17 @@ export async function signIn(page: Page, account: Account): Promise<void> {
  */
 export async function signInThroughForm(page: Page, account: Account): Promise<void> {
   await page.goto('/login')
+  await submitLoginForm(page, account)
+}
+
+/**
+ * Fill in and send the login form the page is already showing, as `account`,
+ * ending on `/projects`. For a login page reached some other way than
+ * `signInThroughForm` loading it: one the app redirected to, say, that a
+ * person goes on to use even after another tab has signed in (the login page
+ * looks for a token only when it loads). One `POST /auth/login`.
+ */
+export async function submitLoginForm(page: Page, account: Account): Promise<void> {
   // The form opens in magic-code mode unless the instance defaults to a password.
   const toPassword = page.getByRole('button', { name: 'Sign in with password instead' })
   const password = page.getByPlaceholder('Your password')
