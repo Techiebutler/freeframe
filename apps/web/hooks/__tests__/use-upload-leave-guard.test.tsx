@@ -18,13 +18,13 @@ vi.mock('@/lib/api', async (orig) => ({
 }))
 
 import { useUploadLeaveGuard } from '../use-upload-leave-guard'
-import { refreshAccessToken, resetLeaveGuardSuppression } from '@/lib/auth'
+import { clearTokens, refreshAccessToken, resetLeaveGuardSuppression, setTokens } from '@/lib/auth'
 import {
   useUploadStore, uploadsThatWouldStop, __uploadQueueTesting as testing,
   type UploadFile, type UploadStatus,
 } from '@/stores/upload-store'
 import { rehydrate } from '@/test/upload-queue-server'
-import { signInAs, signOutElsewhere, row } from '@/test/upload-session'
+import { signInAs, signOutElsewhere, tokenFor, row } from '@/test/upload-session'
 
 type Spy = { mock: { calls: unknown[][] }; mockClear: () => unknown }
 let addSpy: Spy
@@ -223,5 +223,22 @@ describe('the leave guard', () => {
       expect(event.preventDefault).not.toHaveBeenCalled()
       expect(event.returnValue).toBe('unset')
     }
+  })
+
+  it('prompts again once the session is back', () => {
+    // The suppression is for the navigation that follows `clearTokens`. If that
+    // load is aborted and the user signs in again on the same document, or the
+    // page comes back from the back/forward cache, the session is there and the
+    // uploads are at risk again.
+    vi.stubGlobal('location', { href: '' })
+    renderHook(() => useUploadLeaveGuard())
+    setRows([row({ id: 'r', status: 'uploading' })])
+    expect(leaves()).toBe(true)
+
+    clearTokens()
+    expect(leaves()).toBe(false)
+
+    setTokens(tokenFor('u1'), 'refresh-u1')
+    expect(leaves()).toBe(true)
   })
 })

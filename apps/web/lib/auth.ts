@@ -25,16 +25,23 @@ export function setTokens(access: string, refresh: string): void {
 }
 
 /**
- * Set once the session is being ended on purpose, so the leave-page warning
- * (`hooks/use-upload-leave-guard.ts`) stays quiet for the navigation that
- * follows. Never cleared in a real page: the next thing that happens to this
- * document is that it goes away.
+ * Set when the session is ended on purpose, so the leave-page warning
+ * (`hooks/use-upload-leave-guard.ts`) stays quiet for the navigation to /login
+ * that follows. Never cleared in a real page: the next thing that happens to
+ * this document is that it goes away. If it does not (the load is aborted, or
+ * the page comes back from the back/forward cache), `isLeaveGuardSuppressed`
+ * stops honouring it as soon as there is a session again.
  */
 let leaveGuardSuppressed = false
 
-/** Whether the navigation to /login is one the browser must not stop with a prompt. */
+/**
+ * Whether the browser must not be asked to prompt for the navigation in
+ * progress: the session was ended on purpose and has not come back since. The
+ * prompt exists for a session worth keeping the page for, and with a token in
+ * storage again, signed in on this document or in another tab, there is one.
+ */
 export function isLeaveGuardSuppressed(): boolean {
-  return leaveGuardSuppressed
+  return leaveGuardSuppressed && getAccessToken() === null
 }
 
 /** Exported for tests. */

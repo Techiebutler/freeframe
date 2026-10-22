@@ -27,6 +27,7 @@ import useSWR from 'swr'
 import { api } from '@/lib/api'
 import { StorageUsage, StorageRing } from '@/components/shared/storage-usage'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { useAfterClose } from '@/components/shared/item-menu'
 import type { InstanceSettings } from '@/types'
 
 interface NavItem {
@@ -71,10 +72,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   // Logging out loads /login, which takes every upload this tab is running or
   // holding with it, so ask first. Nothing is cleared until the answer is yes.
+  //
+  // The question is asked once the menu has fully closed, not from inside the
+  // pick: a dialog that opens while the closing menu still holds <body> at
+  // `pointer-events: none` saves that lock as the value to restore, and the
+  // page can stay unclickable after Cancel. See `useAfterClose`.
+  const { schedule: afterMenuCloses, onCloseAutoFocus } = useAfterClose()
   function requestLogout() {
     const n = uploadsThatWouldStop()
     if (n === 0) logout()
-    else setLogoutAsk({ open: true, uploads: n })
+    else afterMenuCloses(() => setLogoutAsk({ open: true, uploads: n }))
   }
   const { data: instance } = useSWR<InstanceSettings>(
     '/instance/settings',
@@ -266,6 +273,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 align={collapsed ? 'start' : 'end'}
                 sideOffset={8}
                 className="z-50 min-w-[180px] rounded-lg border border-border bg-bg-elevated p-1 shadow-xl animate-slide-up"
+                onCloseAutoFocus={onCloseAutoFocus}
               >
                 <DropdownMenu.Item asChild>
                   <Link

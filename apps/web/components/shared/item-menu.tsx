@@ -37,7 +37,9 @@ const useMenuKind = () => React.useContext(MenuKindContext)
  */
 const AfterCloseContext = React.createContext<((action: () => void) => void) | null>(null)
 
-function useAfterClose() {
+/** Exported for the Log out confirmation in the sidebar, which opens a dialog
+ *  from a menu item the same way. */
+export function useAfterClose() {
   const pending = React.useRef<(() => void) | null>(null)
   const schedule = React.useCallback((action: () => void) => {
     pending.current = action

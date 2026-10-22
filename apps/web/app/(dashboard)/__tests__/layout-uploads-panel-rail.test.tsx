@@ -15,7 +15,7 @@ vi.stubGlobal(
     disconnect() {}
   },
 )
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/projects/p1' }))
 vi.mock('@/stores/auth-store', () => ({ useAuthStore: () => ({ fetchUser: vi.fn() }) }))
@@ -30,6 +30,7 @@ vi.mock('@/lib/api', () => ({ api: { get: vi.fn().mockResolvedValue([]), post: v
 
 import DashboardLayout from '../layout'
 import { useUploadStore } from '@/stores/upload-store'
+import { signInAs, signOutElsewhere, row } from '@/test/upload-session'
 
 /** The panel's own box: the element that carries its left offset. */
 function panelBox(): HTMLElement {
@@ -65,5 +66,37 @@ describe('the uploads panel beside the sidebar', () => {
     fireEvent.click(screen.getByText('toggle'))
 
     expect(panelBox().className).toContain('[--ff-left:52px]')
+  })
+})
+
+describe('the leave warning in the shell', () => {
+  /** What the browser does as the page is about to go: true when it is asked to prompt. */
+  function leaves(): boolean {
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+
+  it('asks the browser to confirm while the signed-in account has an upload sending', () => {
+    signOutElsewhere()
+    signInAs('u1')
+    useUploadStore.setState({ files: [], panelOpen: false, historyLoaded: true, historyHasMore: false })
+    render(<DashboardLayout><div>page</div></DashboardLayout>)
+    expect(leaves()).toBe(false)
+
+    act(() => { useUploadStore.setState({ files: [row({ id: 'sending', status: 'uploading' })] }) })
+
+    expect(leaves()).toBe(true)
+  })
+
+  it('stays out of the way for anyone else\'s upload', () => {
+    signOutElsewhere()
+    signInAs('u2')
+    const theirs = row({ id: 'theirs', status: 'uploading' })
+    signInAs('u1')
+    useUploadStore.setState({ files: [theirs], panelOpen: false, historyLoaded: true, historyHasMore: false })
+    render(<DashboardLayout><div>page</div></DashboardLayout>)
+
+    expect(leaves()).toBe(false)
   })
 })
