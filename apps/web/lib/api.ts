@@ -1,4 +1,5 @@
 import { getAccessToken, refreshAccessToken } from './auth'
+import { subjectOf } from './upload-owner'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -77,6 +78,60 @@ async function toApiError(
 
 interface RequestOptions {
   headers?: Record<string, string>
+  /**
+   * The account (token `sub`) this request must be sent as. Tokens are shared
+   * by every tab, so another tab can sign in as someone else at any moment; a
+   * pinned request is never sent, nor resent after a refresh, under another
+   * account. It throws a 401 `ApiError` instead, with `code`:
+   * - `identity_changed`: another account's token is present;
+   * - `session_ended`: no token is left (signed out, or the refresh refused);
+   * - `refresh_unavailable`: a 401 whose refresh got no answer (network, 5xx,
+   *   429) while the tokens are still present, so the session may yet recover.
+   */
+  pinSubject?: string
+}
+
+function pinnedError(code: 'identity_changed' | 'session_ended' | 'refresh_unavailable'): ApiError {
+  const detail = {
+    identity_changed: 'identity changed',
+    session_ended: 'session ended',
+    refresh_unavailable: 'refresh unavailable',
+  }[code]
+  return new ApiError(401, detail, { code })
+}
+
+/**
+ * Sends with the current token and, on a 401, refreshes and resends once.
+ *
+ * With `pinSubject`, the token is checked before the first send, in the same
+ * tick as the fetch, so an account switched in another tab after the caller's
+ * own owner check still sends nothing. After a 401, the refreshed token is
+ * resent only if it belongs to the same account.
+ */
+async function sendWithAuth(
+  execute: (token: string | null) => Promise<Response>,
+  pinSubject: string | undefined,
+): Promise<Response> {
+  const token = getAccessToken()
+  if (pinSubject !== undefined) {
+    const sub = subjectOf(token)
+    if (sub !== pinSubject) throw pinnedError(sub ? 'identity_changed' : 'session_ended')
+  }
+
+  const response = await execute(token)
+  if (response.status !== 401) return response
+
+  const newToken = await refreshAccessToken()
+  if (pinSubject === undefined) {
+    return newToken ? execute(newToken) : response
+  }
+  if (newToken) {
+    if (subjectOf(newToken) !== pinSubject) throw pinnedError('identity_changed')
+    return execute(newToken)
+  }
+  // `refreshAccessToken` keeps the tokens when the refresh got no answer and
+  // clears them when the server refused it.
+  throw pinnedError(getAccessToken() ? 'refresh_unavailable' : 'session_ended')
 }
 
 async function request<T>(
@@ -104,16 +159,8 @@ async function request<T>(
     })
   }
 
-  let token = getAccessToken()
-  let response = await execute(token)
-
   // On 401, attempt a token refresh and retry once
-  if (response.status === 401) {
-    const newToken = await refreshAccessToken()
-    if (newToken) {
-      response = await execute(newToken)
-    }
-  }
+  const response = await sendWithAuth(execute, options?.pinSubject)
 
   if (!response.ok) {
     throw await toApiError(response, { joinValidationMessages: true })
@@ -137,7 +184,11 @@ async function request<T>(
   return JSON.parse(text) as T
 }
 
-async function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
+async function uploadRequest<T>(
+  path: string,
+  formData: FormData,
+  options?: Pick<RequestOptions, 'pinSubject'>,
+): Promise<T> {
   const buildHeaders = (token: string | null): Record<string, string> => {
     const headers: Record<string, string> = {}
     if (token) headers['Authorization'] = `Bearer ${token}`
@@ -152,13 +203,7 @@ async function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
     })
   }
 
-  let token = getAccessToken()
-  let response = await execute(token)
-
-  if (response.status === 401) {
-    const newToken = await refreshAccessToken()
-    if (newToken) response = await execute(newToken)
-  }
+  const response = await sendWithAuth(execute, options?.pinSubject)
 
   if (!response.ok) {
     throw await toApiError(response, { joinValidationMessages: false })
@@ -185,8 +230,8 @@ export const api = {
   delete: <T>(path: string, options?: RequestOptions) =>
     request<T>('DELETE', path, undefined, options),
 
-  upload: <T>(path: string, formData: FormData) =>
-    uploadRequest<T>(path, formData),
+  upload: <T>(path: string, formData: FormData, options?: Pick<RequestOptions, 'pinSubject'>) =>
+    uploadRequest<T>(path, formData, options),
 }
 
 export type { ApiError as ApiErrorType }
