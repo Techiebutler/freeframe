@@ -17,19 +17,51 @@ const HISTORY_PAGE_SIZE = 20
 const PART_MAX_ATTEMPTS = 8 // per part, including the first try
 const PART_RETRY_BASE_MS = 2000 // 2s, 4s, 8s … ≈254s of total tolerance per part
 /**
- * The part watchdog (spec goal 5). A part PUT is aborted, and retried, when no
- * upload progress has come for `PART_STALL_MS` while bytes remain to send, or
- * when `PART_RESPONSE_WAIT_MS` has passed since its last byte with no answer.
+ * The part watchdog (spec goal 5). A part PUT is aborted, and retried, when it
+ * stops moving:
  *
- * In WebKit a part whose file changed on disk after it was picked hangs with no
- * event at all, so only a clock can tell. A browser reports upload progress
- * every 50 ms or so while bytes move, so 90 s of silence is not a slow uplink
- * but a stopped one. The wait after the last byte is longer because a large
- * part can legitimately sit with storage, or with a proxy that buffers the
- * whole body, before the answer comes.
+ * - once it has sent its first byte, when no upload progress has come for
+ *   `PART_STALL_MS` while bytes remain. A browser reports progress every 50 ms
+ *   or so while bytes move, so 90 s of silence from a part that was moving is
+ *   a stopped part, not a slow uplink;
+ * - before its first byte, only when the whole tab has sent nothing for a full
+ *   `PART_STALL_MS`, or when the part itself has waited `PART_RESPONSE_WAIT_MS`.
+ *   Silence before the first byte is not proof of anything: a request the
+ *   browser holds for a socket gets no progress at all, and over HTTP/1.1 a
+ *   browser opens at most 6 connections per host, shared by every tab. Parts
+ *   past the sixth wait for a socket while the first six send (measured: about
+ *   12.5 s for 24 MiB parts on a local server in Chromium and WebKit, so
+ *   minutes for large parts on an ordinary uplink). While another part of the
+ *   tab is moving, the link is busy, not dead; the 5 min cap still ends a part
+ *   that will never start, such as a WebKit PUT of a file that changed on disk,
+ *   which hangs with no event at all;
+ * - after its last byte, when `PART_RESPONSE_WAIT_MS` passes with no answer. A
+ *   large part can legitimately sit with storage, or with a proxy that buffers
+ *   the whole body, before the answer comes.
  */
 const PART_STALL_MS = 90_000
 const PART_RESPONSE_WAIT_MS = 300_000
+
+/**
+ * When any part in this tab last reported upload progress, on the
+ * `performance.now()` clock, so a part that has not sent its first byte can
+ * tell a busy link from a dead one (see `PART_STALL_MS`). One timestamp every
+ * part writes, read only when a waiting part's watchdog fires. That clock is
+ * monotonic, so a change of the wall clock cannot make the tab look silent.
+ */
+let tabProgressAt = -Infinity
+
+/**
+ * How long this tab has sent nothing, counting from `since` at the latest.
+ *
+ * `performance.now()` never runs backwards within a page, so a stamp ahead of
+ * now can only come from another clock -- a test installs a fresh fake one per
+ * test -- and is ignored rather than read as recent progress.
+ */
+function tabQuietFor(since: number, now: number): number {
+  const last = tabProgressAt <= now ? tabProgressAt : -Infinity
+  return now - Math.max(last, since)
+}
 
 /**
  * How often a tab that is transferring says so, and how long that is believed.
@@ -407,11 +439,14 @@ function etagOf(xhr: XMLHttpRequest): string {
  * - a network error, a timeout or an abort the browser started itself rejects
  *   with a plain error, which is retried, as fetch's TypeError was;
  * - a part that stops moving is aborted by the watchdog and rejects with a
- *   `PartStalledError`, which is retried too. The clock runs `PART_STALL_MS`
- *   from the send and from every progress event while bytes remain, and
- *   `PART_RESPONSE_WAIT_MS` from the progress event that reports the last
- *   byte. Progress is measured against the chunk's own size, since a
- *   progress event's `total` is 0 when the length is not computable;
+ *   `PartStalledError`, which is retried too. Before the part's first byte,
+ *   it ends when no part of the tab has sent anything for `PART_STALL_MS`
+ *   (counted from the send at the earliest), or `PART_RESPONSE_WAIT_MS` after
+ *   the send. After it, the clock runs `PART_STALL_MS`
+ *   from every progress event while bytes remain, and `PART_RESPONSE_WAIT_MS`
+ *   from the one that reports the last byte. Progress is measured against the
+ *   chunk's own size, since a progress event's `total` is 0 when the length
+ *   is not computable;
  * - a non-2xx rejects with `permanent` set for a 4xx, so a status of 0 never
  *   counts as one;
  * - no Content-Type is set. `chunk` is a slice taken without a type, so the
@@ -439,32 +474,62 @@ function putPart(
     // Set only by the watchdog, just before its own abort, so `onabort` can
     // tell that abort from a cancel and from one the browser started.
     let stalled: PartStalledError | null = null
+    // Once set, nothing arms the watchdog again: a stray progress event after
+    // the request settled must not leave a timer behind.
+    let settled = false
     const settle = () => {
+      settled = true
       clearTimeout(watchdog)
       signal.removeEventListener('abort', abort)
     }
-    // Every byte sent re-arms the stall clock; the last one swaps it for the
-    // longer wait on the answer.
+    const giveUp = (why: string) => {
+      stalled = new PartStalledError(`Part ${partNumber} failed: ${why}`)
+      xhr.abort()
+      // `abort` fires synchronously on the hung request (measured in WebKit),
+      // and `onabort` rejects with `stalled`. Rejecting here too keeps the
+      // part from hanging should some browser not fire it.
+      settle()
+      reject(stalled)
+    }
+    // Before the first byte: the part ends when the whole tab has sent
+    // nothing for `PART_STALL_MS`, or when it has waited the cap itself.
+    // Otherwise it looks again when the tab's silence or the cap could next
+    // be reached, whichever is sooner.
+    const sentAt = performance.now()
+    const armBeforeStart = (delay: number) => {
+      watchdog = setTimeout(() => {
+        const now = performance.now()
+        const quiet = tabQuietFor(sentAt, now)
+        if (now - sentAt >= PART_RESPONSE_WAIT_MS) {
+          giveUp(`not started in ${PART_RESPONSE_WAIT_MS / 60_000} min`)
+        } else if (quiet >= PART_STALL_MS) {
+          giveUp(`no progress for ${PART_STALL_MS / 1000} s`)
+        } else {
+          armBeforeStart(Math.min(PART_STALL_MS - quiet, sentAt + PART_RESPONSE_WAIT_MS - now))
+        }
+      }, delay)
+    }
+    // After it: every byte sent re-arms the stall clock, and the last one
+    // swaps it for the longer wait on the answer.
     const arm = (sent: number) => {
+      if (settled) return
       clearTimeout(watchdog)
       const done = sent >= chunk.size
-      watchdog = setTimeout(() => {
-        stalled = new PartStalledError(
+      watchdog = setTimeout(
+        () => giveUp(
           done
-            ? `Part ${partNumber} failed: no answer ${PART_RESPONSE_WAIT_MS / 60_000} min after its last byte`
-            : `Part ${partNumber} failed: no progress for ${PART_STALL_MS / 1000} s`,
-        )
-        xhr.abort()
-        // `abort` fires synchronously on the hung request (measured in
-        // WebKit), and `onabort` rejects with `stalled`. Rejecting here too
-        // keeps the part from hanging should some browser not fire it.
-        settle()
-        reject(stalled)
-      }, done ? PART_RESPONSE_WAIT_MS : PART_STALL_MS)
+            ? `no answer ${PART_RESPONSE_WAIT_MS / 60_000} min after its last byte`
+            : `no progress for ${PART_STALL_MS / 1000} s`,
+        ),
+        done ? PART_RESPONSE_WAIT_MS : PART_STALL_MS,
+      )
     }
 
     xhr.upload.onprogress = (event) => {
       onBytes(event.loaded)
+      // An event that reports nothing sent says nothing moved.
+      if (event.loaded <= 0) return
+      tabProgressAt = performance.now()
       arm(event.loaded)
     }
     xhr.onload = () => {
@@ -510,7 +575,9 @@ function putPart(
 
     xhr.open('PUT', url)
     signal.addEventListener('abort', abort, { once: true })
-    arm(0)
+    // An empty part has nothing to send, so it waits only on its answer.
+    if (chunk.size === 0) arm(0)
+    else armBeforeStart(PART_STALL_MS)
     try {
       xhr.send(chunk)
     } catch (err) {
