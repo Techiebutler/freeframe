@@ -1016,6 +1016,9 @@ describe('CompareOverlay stream failure (#170)', () => {
     expect(within(stage).getByText('v3')).toBeInTheDocument()
     expect(within(stage).getByText('Stream unavailable for v1')).toBeInTheDocument()
     expect(within(stage).queryByText('Stream unavailable for v3')).not.toBeInTheDocument()
+    // The side that did load still shows its picture, as side-by-side does.
+    expect(within(stage).getByAltText('v3')).toHaveAttribute('src', '/img.webp')
+    expect(within(stage).queryByAltText('v1')).not.toBeInTheDocument()
   })
 
   it('image wipe: while both streams are still loading, shows the badges and no error', () => {

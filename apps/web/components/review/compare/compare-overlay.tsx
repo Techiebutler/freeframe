@@ -592,16 +592,21 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
               />
             ) : (
               // A wipe needs both pictures. While either stream is loading or
-              // after one fails, keep the side-by-side panes' badges and say
-              // which stream is unavailable instead of an empty black stage.
+              // after one fails, fall back to side-by-side style panes: both
+              // badges, whichever picture did load, and which stream is
+              // unavailable, instead of an empty black stage.
               <div data-testid="wipe-fallback" className="relative flex min-h-0 flex-1 items-stretch overflow-hidden bg-black">
                 <div className="relative flex min-w-0 flex-1 items-center justify-center">
                   <span className="absolute left-3 top-3 z-10 rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeA}</span>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {urlA && <img src={urlA} alt={badgeA} className="max-h-full max-w-full object-contain" draggable={false} />}
                   {errA && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeA}</span>}
                 </div>
                 <div className="w-px bg-border" />
                 <div className="relative flex min-w-0 flex-1 items-center justify-center">
                   <span className="absolute right-3 top-3 z-10 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white">{badgeB}</span>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {urlB && <img src={urlB} alt={badgeB} className="max-h-full max-w-full object-contain" draggable={false} />}
                   {errB && <span className="absolute text-[12px] text-text-tertiary">Stream unavailable for {badgeB}</span>}
                 </div>
               </div>
