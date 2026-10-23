@@ -28,7 +28,7 @@ import {
   assetNameFromFile,
   uploadNameForFile,
 } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -308,12 +308,17 @@ export default function ProjectDetailPage() {
   const canComment = currentRole !== "viewer";
   // Until the members and the signed-in user have both answered, the role
   // above reads "viewer" without anyone being one. A file dropped then is held
-  // rather than refused, and decided once they answer. A failed members
-  // request, or a user that never loads, hands the drop to the queue instead:
-  // the server checks the role on every upload, and the queue says "Sign in to
-  // upload" when there is no session.
-  const dropRole: "wait" | "allow" | "refuse" =
-    members !== undefined && user
+  // rather than refused, and decided once they answer. A 403 from the members
+  // request is an answer: the caller is not a member (a public project lets
+  // anyone in to view), so they may not upload. Any other failure, or a user
+  // that never loads, hands the drop to the queue instead: the server checks
+  // the role on every upload, and the queue says "Sign in to upload" when there
+  // is no session.
+  const notAMember =
+    membersError instanceof ApiError && membersError.status === 403;
+  const dropRole: "wait" | "allow" | "refuse" = notAMember
+    ? "refuse"
+    : members !== undefined && user
       ? canUpload
         ? "allow"
         : "refuse"
@@ -426,7 +431,8 @@ export default function ProjectDetailPage() {
   );
 
   // Drops made while the role is still loading, each with the project it was
-  // made on so a drop never lands in a project the user has since left.
+  // made on so a drop never lands in a project the user has since left. Drops
+  // held for a project the user has left are discarded on purpose.
   const heldDrops = React.useRef<
     { projectId: string; folderId: string | null; files: File[] }[]
   >([]);

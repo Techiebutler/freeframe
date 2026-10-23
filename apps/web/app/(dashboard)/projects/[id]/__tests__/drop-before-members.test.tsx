@@ -7,8 +7,10 @@
  * cursor and nothing else (#520). Not knowing the role is not the same as
  * being a viewer: the drop is accepted and held, then started once the role
  * says the user may upload, or answered with one toast when it says they may
- * not. If the members request fails the drop goes to the queue, and the
- * server's answer to the upload decides it.
+ * not. A 403 from the members request says the user is not a member, which is
+ * an answer too: a public project lets them view, never upload. If the members
+ * request fails any other way the drop goes to the queue, and the server's
+ * answer to the upload decides it.
  *
  * Everything but the page, the drop region and the upload store is replaced.
  */
@@ -83,12 +85,25 @@ vi.mock('@/lib/api', async (orig) => ({
   // An initiate that never answers: the row stays in the queue for the test to read.
   api: { get: vi.fn().mockResolvedValue([]), post: vi.fn(() => new Promise(() => {})), patch: vi.fn() },
 }))
-// The page's grid stands in as a plain box inside the drop region.
+// The page's grid stands in as a plain box inside the drop region. It and the
+// sidebar tree each show a folder that takes a file drop only when the page
+// hands them a handler for one, the way the real folder cards and rows do.
+const { folderDrop } = vi.hoisted(() => ({
+  folderDrop: (label: string, onDrop?: (folderId: string, files: File[]) => void) =>
+    onDrop ? (
+      <button onClick={() => onDrop('f1', [new File([new Uint8Array(1)], `${label}.mov`)])}>{label}</button>
+    ) : null,
+}))
 vi.mock('@/components/projects/asset-grid', () => ({
-  AssetGrid: () => <div data-testid="grid" />,
+  AssetGrid: (p: { onDropFilesToFolder?: (folderId: string, files: File[]) => void }) => (
+    <div data-testid="grid">{folderDrop('grid-folder', p.onDropFilesToFolder)}</div>
+  ),
 }))
 vi.mock('@/components/review/comment-panel', () => ({ CommentPanel: () => null }))
-vi.mock('@/components/projects/folder-tree', () => ({ FolderTree: () => null }))
+vi.mock('@/components/projects/folder-tree', () => ({
+  FolderTree: (p: { onDropFiles?: (folderId: string, files: File[]) => void }) =>
+    folderDrop('sidebar-folder', p.onDropFiles),
+}))
 vi.mock('@/components/projects/share-links-table', () => ({ ShareLinksTable: () => null }))
 vi.mock('@/components/projects/share-link-detail', () => ({
   ShareLinkContent: () => null,
@@ -100,7 +115,8 @@ vi.mock('@/components/projects/project-members-dialog', () => ({ ProjectMembersD
 import ProjectDetailPage from '../page'
 import { ToastProvider } from '@/components/shared/toast'
 import { useUploadStore, __uploadQueueTesting as testing } from '@/stores/upload-store'
-import { signInAs } from '@/test/upload-session'
+import { ApiError } from '@/lib/api'
+import { signInAs, signOutElsewhere } from '@/test/upload-session'
 
 const NO_PERMISSION = "You don't have permission to upload to this project"
 // A new element each time: `rerender` with the same one would skip the page.
@@ -205,5 +221,53 @@ describe('a drop before the role is known', () => {
 
     expect(rowNames()).toEqual(['take-1.mov'])
     expect(screen.queryByText(NO_PERMISSION)).toBeNull()
+  })
+
+  it('answers a held drop with one toast and no rows when the members request says not a member', () => {
+    const { rerender } = render(page())
+    dropFiles(screen.getByTestId('grid'), [take()])
+    dropFiles(screen.getByTestId('grid'), [take()])
+
+    // A public project: the user may view it, but is no member of it.
+    members.error = new ApiError(403, 'Not a project member')
+    rerender(page())
+
+    expect(rowNames()).toEqual([])
+    expect(screen.getAllByText(NO_PERMISSION)).toHaveLength(1)
+
+    // The role is known now, so a later drag is refused like a viewer's.
+    const dataTransfer = { types: ['Files'], files: [], dropEffect: 'none' }
+    const event = createEvent.dragOver(screen.getByTestId('grid'), { dataTransfer })
+    fireEvent(screen.getByTestId('grid'), event)
+    expect(dataTransfer.dropEffect).not.toBe('copy')
+    expect(screen.queryByText('grid-folder')).toBeNull()
+    expect(screen.queryByText('sidebar-folder')).toBeNull()
+  })
+
+  it('answers a held drop with "Sign in to upload" when the user fetch ends with no user', () => {
+    signOutElsewhere()
+    auth.user = null
+    auth.userFetched = false
+    const { rerender } = render(page())
+    dropFiles(screen.getByTestId('grid'), [take()])
+    expect(screen.queryByText('Sign in to upload')).toBeNull()
+
+    auth.userFetched = true
+    rerender(page())
+
+    expect(rowNames()).toEqual([])
+    expect(screen.getAllByText('Sign in to upload')).toHaveLength(1)
+  })
+
+  it('holds drops on grid and sidebar folders too, then starts them once the members say editor', () => {
+    const { rerender } = render(page())
+    fireEvent.click(screen.getByText('grid-folder'))
+    fireEvent.click(screen.getByText('sidebar-folder'))
+    expect(rowNames()).toEqual([])
+
+    members.data = [{ user_id: 'u1', role: 'editor' }]
+    rerender(page())
+
+    expect(rowNames().sort()).toEqual(['grid-folder.mov', 'sidebar-folder.mov'])
   })
 })
