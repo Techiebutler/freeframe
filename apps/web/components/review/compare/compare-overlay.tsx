@@ -135,7 +135,8 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     timingA,
     timingB,
     audibleSide: isVideo ? (audioSide === 'none' ? null : audioSide) : null,
-    fps,
+    fpsA: mediaA.fps ?? null,
+    fpsB: mediaB.fps ?? null,
   })
 
   // Reactive element-duration fallback: re-render when metadata loads (a render-time

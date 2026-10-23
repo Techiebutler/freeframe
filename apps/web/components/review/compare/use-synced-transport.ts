@@ -83,8 +83,9 @@ interface UseSyncedTransportArgs {
   timingB: SideTiming
   /** The side whose audio is unmuted — it becomes the clock master while active. */
   audibleSide?: 'a' | 'b' | null
-  /** Frame rate — sets the paused drift tolerance to ~one frame (see applySideState). */
-  fps?: number | null
+  /** Each side's native frame rate sets its own paused drift tolerance. */
+  fpsA?: number | null
+  fpsB?: number | null
 }
 
 /**
@@ -97,7 +98,7 @@ interface UseSyncedTransportArgs {
  * monotonicity. Both videos are slaved to T every frame via applySideState
  * (50ms drift rule).
  */
-export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide = null, fps = null }: UseSyncedTransportArgs) {
+export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide = null, fpsA = null, fpsB = null }: UseSyncedTransportArgs) {
   const playerA = useVideoPlayer(urlA, { detached: true })
   const playerB = useVideoPlayer(urlB, { detached: true })
 
@@ -114,14 +115,16 @@ export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide =
   timingBRef.current = timingB
   const audibleSideRef = React.useRef(audibleSide)
   audibleSideRef.current = audibleSide
-  const pausedTolRef = React.useRef(frameStep(fps))
-  pausedTolRef.current = frameStep(fps)
+  const pausedTolARef = React.useRef(frameStep(fpsA))
+  const pausedTolBRef = React.useRef(frameStep(fpsB))
+  pausedTolARef.current = frameStep(fpsA)
+  pausedTolBRef.current = frameStep(fpsB)
 
   const slaveBoth = React.useCallback((time: number, playing: boolean) => {
     const a = playerA.videoRef.current
     const b = playerB.videoRef.current
-    if (a) applySideState(a, time, timingARef.current, playing, pausedTolRef.current)
-    if (b) applySideState(b, time, timingBRef.current, playing, pausedTolRef.current)
+    if (a) applySideState(a, time, timingARef.current, playing, pausedTolARef.current)
+    if (b) applySideState(b, time, timingBRef.current, playing, pausedTolBRef.current)
   }, [playerA.videoRef, playerB.videoRef])
 
   // rAF clock
