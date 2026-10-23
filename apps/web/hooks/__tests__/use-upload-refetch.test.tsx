@@ -3,10 +3,10 @@
  * It used to watch the whole `files` array, so every progress write (up to ~100 an
  * upload, plus every transcode progress event) fired two GETs.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useUploadStore, type UploadFile, type UploadStatus } from '@/stores/upload-store'
-import { useRefetchOnUploadStatus } from '../use-upload-refetch'
+import { GRID_REFETCH_GAP_MS, useRefetchOnUploadStatus } from '../use-upload-refetch'
 
 function row(id: string, status: UploadStatus, projectId = 'p'): UploadFile {
   return {
@@ -26,7 +26,11 @@ function patch(id: string, change: Partial<UploadFile>) {
 
 describe('useRefetchOnUploadStatus', () => {
   beforeEach(() => {
+    vi.useFakeTimers()
     useUploadStore.setState({ files: [] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('does not refetch on progress writes', () => {
@@ -74,13 +78,74 @@ describe('useRefetchOnUploadStatus', () => {
     renderHook(() => useRefetchOnUploadStatus('p', refetch))
     refetch.mockClear()
 
+    act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
     patch('up', { progress: 100, status: 'processing' })
     expect(refetch).toHaveBeenCalledTimes(1)
 
+    act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
     act(() => {
       useUploadStore.setState((s) => ({ files: [...s.files, { ...row('new', 'uploading'), assetId: 'a-new' }] }))
     })
     expect(refetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('a 300-file drop refetches at most once per gap, and once more after the last change', () => {
+    // Q2 (e2e/SCENARIOS.md), APP-BUG-3: each file passes through three states the grid can see
+    // (uploading with an asset, processing, complete), and each move refetched at once, two GETs
+    // each. 300 files of 200 KB, done in about 25 s, sent over 2 000 reads and spent the account's
+    // 600-a-minute read limit inside the drop; every read after that, the grid's included, was
+    // refused with 429 until the minute ran out.
+    useUploadStore.setState({ files: [] })
+    const refetch = vi.fn()
+    renderHook(() => useRefetchOnUploadStatus('p', refetch))
+
+    const ids = Array.from({ length: 300 }, (_, i) => `f${i}`)
+    act(() => {
+      useUploadStore.setState({ files: ids.map((id) => row(id, 'queued')) })
+    })
+    // Three at a time, about 250 ms a file: 25 s in all.
+    for (const id of ids) {
+      patch(id, { status: 'uploading', assetId: `a-${id}` })
+      act(() => { vi.advanceTimersByTime(40) })
+      patch(id, { status: 'processing', progress: 100 })
+      act(() => { vi.advanceTimersByTime(40) })
+      patch(id, { status: 'complete' })
+      act(() => { vi.advanceTimersByTime(3) })
+    }
+    const elapsed = 300 * 83
+    const during = refetch.mock.calls.length
+    expect(during).toBeLessThanOrEqual(Math.ceil(elapsed / GRID_REFETCH_GAP_MS) + 1)
+
+    // The last change is not left behind: one more refetch once the gap has passed, and no other.
+    act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
+    expect(refetch.mock.calls.length).toBe(during + 1)
+    act(() => { vi.advanceTimersByTime(10 * GRID_REFETCH_GAP_MS) })
+    expect(refetch.mock.calls.length).toBe(during + 1)
+  })
+
+  it('the first change after a quiet spell refetches at once', () => {
+    useUploadStore.setState({ files: [row('up', 'uploading')] })
+    const refetch = vi.fn()
+    renderHook(() => useRefetchOnUploadStatus('p', refetch))
+
+    act(() => { vi.advanceTimersByTime(60_000) })
+    patch('up', { progress: 100, status: 'complete' })
+
+    expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refetch still due when the page goes away is not made', () => {
+    useUploadStore.setState({ files: [row('a', 'uploading'), row('b', 'uploading')] })
+    const refetch = vi.fn()
+    const { unmount } = renderHook(() => useRefetchOnUploadStatus('p', refetch))
+    patch('a', { status: 'complete' })
+    patch('b', { status: 'complete' })
+    expect(refetch).toHaveBeenCalledTimes(1)
+
+    unmount()
+    act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
+
+    expect(refetch).toHaveBeenCalledTimes(1)
   })
 
   it('a 10-file queue moving from queued to starting triggers no refetch', () => {
@@ -90,6 +155,8 @@ describe('useRefetchOnUploadStatus', () => {
     const refetch = vi.fn()
     renderHook(() => useRefetchOnUploadStatus('p', refetch))
     refetch.mockClear()
+    // Past the gap the mount's refetch opened, so the next change refetches at once.
+    act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
 
     const queued = Array.from({ length: 10 }, (_, i) => row(`q${i}`, 'queued'))
     act(() => {
@@ -132,6 +199,8 @@ describe('useRefetchOnUploadStatus', () => {
     const refetch = vi.fn()
     renderHook(() => useRefetchOnUploadStatus('p', refetch))
     refetch.mockClear()
+    // Past the gap the mount's refetch opened, so the next change refetches at once.
+    act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
 
     act(() => {
       useUploadStore.setState((s) => ({
