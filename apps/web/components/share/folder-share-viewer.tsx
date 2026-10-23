@@ -28,6 +28,7 @@ import { fetchDownloadUrl, fetchShareDownloadOptions, handleDownload, triggerDow
 import { DownloadMenu } from '@/components/shared/download-menu'
 import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import { ShareReviewScreen } from './share-review-screen'
+import { ShareBrandMark } from './share-brand-mark'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { SHARE_ASSETS_PAGE_SIZE } from '@/lib/share-page'
 import { Avatar } from '@/components/shared/avatar'
@@ -901,20 +902,9 @@ export function FolderShareViewer({
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
-          ) : branding?.logo_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={branding.logo_url}
-              alt=""
-              className="h-7 w-7 rounded-full object-cover shrink-0"
-            />
           ) : (
-            <div
-              className="flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold text-text-primary shrink-0"
-              style={{ backgroundColor: accentColor }}
-            >
-              {(branding?.custom_title ?? folderName ?? 'FF').substring(0, 2).toUpperCase()}
-            </div>
+            // The same mark the asset view shows once one is opened (#308).
+            <ShareBrandMark />
           )}
 
           {/* Breadcrumb */}
