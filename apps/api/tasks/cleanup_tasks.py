@@ -303,7 +303,7 @@ def _reap_stale_uploads(db) -> int:
         # 0 (or negative) DISABLES the reaper — matching the 0 = unlimited/disabled convention
         # of MAX_UPLOAD_BYTES / storage_limit_bytes. Without this guard, cutoff would be `now()`
         # and the sweep would destroy every in-progress upload on the next run.
-        log.info("reaper: disabled (stale_upload_timeout_hours=%s)", hours)
+        log.warning("reaper: disabled (stale_upload_timeout_hours=%s)", hours)
         return 0
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -408,7 +408,7 @@ def _purge_soft_deleted(db, counts: PurgeCounts) -> None:
     if days <= 0:
         # 0/negative DISABLES the purge — guard BEFORE computing a cutoff so a misconfigured 0
         # can never make cutoff == now() and hard-delete every soft-deleted row.
-        log.info("cleanup: disabled (soft_delete_retention_days=%s)", days)
+        log.warning("cleanup: disabled (soft_delete_retention_days=%s)", days)
         return
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -482,7 +482,7 @@ def requeue_stuck_processing():
     """
     hours = settings.stuck_processing_timeout_hours
     if hours <= 0:
-        log.info("requeue: disabled (stuck_processing_timeout_hours=%s)", hours)
+        log.warning("requeue: disabled (stuck_processing_timeout_hours=%s)", hours)
         return 0
 
     # The cutoff must clear the transcoder's own 4-hour ceiling, or a legitimately
@@ -532,8 +532,12 @@ def cleanup_soft_deleted():
     try:
         counts = _run_cleanup(db)
         db.commit()
-        log.info("cleanup: %s", asdict(counts))
-        return asdict(counts)
+        result = asdict(counts)
+        # The only record of what an irreversible purge removed: WARNING so it
+        # survives a quiet worker log level. A run that removed nothing stays INFO.
+        did_work = any(v for k, v in result.items() if k != "retention_days")
+        log.log(logging.WARNING if did_work else logging.INFO, "cleanup: %s", result)
+        return result
     finally:
         db.close()
 
@@ -577,7 +581,7 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
     grace = settings.orphan_sweep_grace_hours
     counts = OrphanSweepCounts(grace_hours=grace, delete_enabled=settings.orphan_sweep_delete)
     if grace <= 0:
-        log.info("orphan-sweep: disabled (orphan_sweep_grace_hours=%s)", grace)
+        log.warning("orphan-sweep: disabled (orphan_sweep_grace_hours=%s)", grace)
         return counts
     cutoff = datetime.now(timezone.utc) - timedelta(hours=grace)
 
@@ -672,8 +676,9 @@ def _sweep_orphan_s3(db) -> OrphanSweepCounts:
                 # orphan total here would report storage as freed that is still
                 # being paid for, which is the same defect as counting attempts.
                 counts.deleted_bytes += size
-        log.info("orphan-sweep: deleted %d/%d orphan key(s), %d of %d bytes",
-                 counts.deleted, counts.orphans, counts.deleted_bytes, counts.orphan_bytes)
+        log.log(logging.WARNING if counts.deleted else logging.INFO,
+                "orphan-sweep: deleted %d/%d orphan key(s), %d of %d bytes",
+                counts.deleted, counts.orphans, counts.deleted_bytes, counts.orphan_bytes)
     else:
         log.info("orphan-sweep: REPORT-ONLY — %d orphan key(s) under %s, %d bytes "
                  "(set ORPHAN_SWEEP_DELETE=true to reclaim). sample=%s",

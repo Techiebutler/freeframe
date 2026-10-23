@@ -11,6 +11,24 @@ from .services.email_service import mail_is_configured
 from .middleware.global_rate_limit import GlobalRateLimitMiddleware
 from .middleware.setup_guard import SetupGuardMiddleware
 
+
+class _DropQueryStringFilter(logging.Filter):
+    """Keep credentials out of the access log. Some URLs carry them in the query
+    string, because the client cannot send a header there: `?token=` on /hls
+    (hls.js segment fetches) and /events (EventSource), `?share_session=` on the
+    share routes. uvicorn logs the path with its query as the third argument."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            record.args = args[:2] + (args[2].split("?", 1)[0],) + args[3:]
+        return True
+
+
+# On the logger rather than a handler: gunicorn's UvicornWorker replaces this
+# logger's handlers with its own (--access-logfile) but leaves its filters alone.
+logging.getLogger("uvicorn.access").addFilter(_DropQueryStringFilter())
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Run bucket setup off the request path (daemon thread) so a slow or unreachable

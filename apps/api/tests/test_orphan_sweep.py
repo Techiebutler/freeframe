@@ -62,6 +62,22 @@ def test_orphan_sweep_deletes_only_orphan_when_enabled(real_db, monkeypatch):
     assert deleted == ["raw/dead/dead/dead/original.mp4"]             # only the orphan; live keys untouched
 
 
+def test_orphan_sweep_deletion_result_is_a_warning(real_db, monkeypatch, caplog):
+    # What the sweep irreversibly removed has to reach an operator running the
+    # worker at WARNING (#262); a deleting run that found nothing stays INFO.
+    import logging
+    caplog.set_level(logging.INFO, logger="celery.cleanup")
+    _, _, _, raw = _seed_media(real_db)
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    _run(real_db, monkeypatch, [(raw, old, 100), ("raw/dead/dead/dead/original.mp4", old, 500)],
+         grace=24, delete=True)
+    _run(real_db, monkeypatch, [(raw, old, 100)], grace=24, delete=True)
+
+    levels = [r.levelno for r in caplog.records if r.getMessage().startswith("orphan-sweep: deleted")]
+    assert levels == [logging.WARNING, logging.INFO]
+
+
 def test_orphan_sweep_disabled_when_grace_zero(mock_db, monkeypatch):
     monkeypatch.setattr(settings, "orphan_sweep_grace_hours", 0)
     called = []
