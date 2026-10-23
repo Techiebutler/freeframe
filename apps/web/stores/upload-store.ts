@@ -363,14 +363,14 @@ function activeElsewhere(
   row: UploadFile,
   info: ResumeInfo,
   now: number,
-  attempt?: AbortController,
   click?: ResumeClick,
 ): boolean {
-  // `attempt` is the caller's own controller, where the caller is the one
-  // trying to start a transfer: `resumeUpload` registers it before it asks the
-  // server anything, so without excluding it here every resume would count as
-  // this tab already sending and the guard would never refuse.
-  if (isSendingHere(row.id, attempt)) return false
+  // Whether this tab holds a controller for the row is not asked. A resume
+  // asking holds the row's only run (`runners`), so the controller there is
+  // its own; and a resume cancelled while its `/parts` was out keeps its
+  // controller until the answer comes, sending nothing. Counted as this tab
+  // sending, that let a Discard abort another device's live transfer. A
+  // transfer this tab really runs stamps the row, which `ownAndRecentAt` reads.
   // Another tab of this browser is stamping it. The server's
   // `last_activity_at` cannot say so: it records that bytes moved, and a tab
   // that has just taken the upload up has not moved any yet. Read before the
@@ -1564,9 +1564,8 @@ const abortControllers: Record<string, AbortController> = {}
  * unlike `ownerTab`, which a row keeps carrying after the transfer behind it
  * has died, and across a reload that killed it.
  */
-function isSendingHere(fileId: string, except?: AbortController): boolean {
-  const running = abortControllers[fileId]
-  return running !== undefined && running !== except
+function isSendingHere(fileId: string): boolean {
+  return abortControllers[fileId] !== undefined
 }
 
 /** Claims a row for this tab and keeps stamping it until the returned stop is
@@ -2837,7 +2836,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     const answeredAt = Date.now()
     const requestedAt = resumeRequestedAt.get(id)
     const click = requestedAt === undefined ? undefined : { requestedAt, askedAt, rtt: answeredAt - askedAt }
-    const elsewhere = activeElsewhere(row, info, answeredAt, controller, click)
+    const elsewhere = activeElsewhere(row, info, answeredAt, click)
     resumeRequestedAt.delete(id)
     if (elsewhere) {
       const refusedAt = info.last_activity_at
@@ -3725,6 +3724,14 @@ const tombstones = new Set<string>()
  */
 const heldIds = new Set<string>()
 
+/**
+ * Each row as this tab last offered it to `mergeWithStored`, before the merge,
+ * as JSON. A row that reads the same now has not changed here since, so on a
+ * stamp tie storage keeps whatever another tab wrote in between. A row with no
+ * entry, the first write after a load say, is judged as unchanged.
+ */
+let lastOutgoing = new Map<string, string>()
+
 /** Lets a saved row go for good, from this tab's state and from storage. */
 function dropSavedRow(id: string): void {
   tombstones.add(id)
@@ -3847,8 +3854,11 @@ function runningHere(id: string): boolean {
  *  * A row this tab owns is written as this tab has it: nobody else is in a
  *    position to know better -- unless another tab has stamped it more
  *    recently, which means that tab took the upload up after this one stopped.
- *  * Any other row is kept as stored whenever the stored copy was stamped at
- *    least as recently. This tab has nothing newer to say about it.
+ *  * Any other row is kept as stored when the stored copy was stamped more
+ *    recently. On a tie -- which is every write of a row nobody stamps, such
+ *    as a history row -- it is kept as stored unless this tab has changed it
+ *    since its own last write (`lastOutgoing`); otherwise this tab has nothing
+ *    newer to say about it.
  */
 function mergeWithStored(name: string, outgoing: string): string {
   try {
@@ -3864,6 +3874,7 @@ function mergeWithStored(name: string, outgoing: string): string {
     const byId = new Map(ours.filter((f) => !tombstones.has(f.id)).map((f) => [f.id, f]))
     byId.forEach((_, id) => heldIds.add(id))
     const notTheSubjects = (f: UploadFile) => f.ownerId === undefined || f.ownerId !== subject
+    const sending = new Map(ours.map((f) => [f.id, JSON.stringify(f)]))
 
     for (const row of stored ?? []) {
       if (tombstones.has(row.id)) continue
@@ -3895,8 +3906,13 @@ function mergeWithStored(name: string, outgoing: string): string {
         if (takenUp) byId.set(row.id, row)
         continue
       }
-      if ((row.heartbeatAt ?? 0) >= (here.heartbeatAt ?? 0)) byId.set(row.id, row)
+      const storedBeat = row.heartbeatAt ?? 0
+      const ourBeat = here.heartbeatAt ?? 0
+      const sent = lastOutgoing.get(row.id)
+      const changedHere = sent !== undefined && sent !== sending.get(row.id)
+      if (storedBeat > ourBeat || (storedBeat === ourBeat && !changedHere)) byId.set(row.id, row)
     }
+    lastOutgoing = sending
 
     // Array.from rather than a spread: this repo's target does not allow
     // iterating a Map without downlevelIteration.
@@ -4140,6 +4156,7 @@ export const __uploadQueueTesting = {
     tabProgressAt = -Infinity
     tombstones.clear()
     heldIds.clear()
+    lastOutgoing = new Map()
     adopting.clear()
     historyGeneration++
     claimSettleMs = CLAIM_SETTLE_MS

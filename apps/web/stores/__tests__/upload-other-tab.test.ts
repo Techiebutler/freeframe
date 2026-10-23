@@ -260,6 +260,33 @@ describe('discarding or resuming an upload that is still moving somewhere else',
     expect(rowOf('row-1').status).toBe('elsewhere')
   })
 
+  it('refuses to discard while a cancelled resume of it is still waiting for /parts', async () => {
+    // Cancel puts the resume back to plain `interrupted`, which offers Discard,
+    // but its run keeps its controller until `/parts` answers. That controller
+    // sends nothing, and counting it as this tab sending let the Discard abort
+    // an upload the server had just seen another device move.
+    useUploadStore.setState({ files: [row({ status: 'interrupted', ownerTab: undefined })] })
+    let answerResume: (info: unknown) => void = () => {}
+    vi.mocked(api.get)
+      .mockImplementationOnce(() => new Promise((resolve) => { answerResume = resolve }) as never)
+      .mockResolvedValue(resumeInfo(secondsAgo(2)) as never)
+
+    useUploadStore.getState().resumeUpload('row-1', new File([new Uint8Array(10)], 'clip.mp4'))
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(1))
+    useUploadStore.getState().cancelUpload('row-1')
+    expect(rowOf('row-1').status).toBe('interrupted')
+    expect(__uploadQueueTesting.hasAbortController('row-1')).toBe(true)
+
+    const refused = await useUploadStore.getState().discardUpload('row-1')
+
+    expect(refused).toMatch(/another tab or on another device/)
+    expect(vi.mocked(api.post).mock.calls.map(([path]) => path)).not.toContain('/upload/abort')
+    expect(rowOf('row-1').status).toBe('elsewhere')
+    answerResume(resumeInfo(secondsAgo(2)))
+    await vi.waitFor(() => expect(__uploadQueueTesting.runningIds()).toEqual([]))
+    expect(put).not.toHaveBeenCalled()
+  })
+
   it('does not resume into an upload another tab is still sending parts into', async () => {
     // Two tabs PUTting the same part numbers leave the completing tab with
     // ETags that no longer match what is stored.
@@ -643,6 +670,37 @@ describe('writing to storage every tab shares', () => {
     write([])
 
     expect(storedFiles().map((f) => f.id)).toEqual(['row-1'])
+  })
+
+  it('writes its own change to a row nobody stamps', () => {
+    // History rows carry no tab and no heartbeat. Judged on the stamp alone,
+    // the two missing stamps tied and storage won, so a refused Discard's
+    // `elsewhere`, or a Discard's error, never left this tab.
+    const createdAt = Date.now() - 60_000
+    const before = { id: 'history-asset-1', status: 'interrupted' as const, createdAt, uploadId: undefined }
+    seedStorage([before])
+    write([before])
+
+    const until = Date.now() + 60_000
+    write([{ ...before, status: 'elsewhere', elsewhereUntil: until }])
+
+    expect(storedFiles()[0].status).toBe('elsewhere')
+    expect(storedFiles()[0].elsewhereUntil).toBe(until)
+  })
+
+  it('does not write its unchanged copy of an unstamped row over another tab\'s change', () => {
+    // The other half of the same tie: a tab that has not touched the row since
+    // its last write has nothing newer to say than the tab that did.
+    const createdAt = Date.now() - 60_000
+    const before = { id: 'history-asset-1', status: 'interrupted' as const, createdAt, uploadId: undefined }
+    write([before])
+    const until = Date.now() + 60_000
+    seedStorage([{ ...before, status: 'elsewhere', elsewhereUntil: until }])
+
+    write([before])
+
+    expect(storedFiles()[0].status).toBe('elsewhere')
+    expect(storedFiles()[0].elsewhereUntil).toBe(until)
   })
 
   it('lets this tab remove its own row', () => {
