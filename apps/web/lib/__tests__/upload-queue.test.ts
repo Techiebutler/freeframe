@@ -583,28 +583,44 @@ describe('hold backoff', () => {
     expect(queue.hold.nextDelayMs()).toBe(4_000)
   })
 
-  it('a server answering Retry-After: 0 to every try is not asked again at once', () => {
+  it('a server answering Retry-After: 0 to every try is not asked again at once, and still backs off', () => {
     // `begin` runs again after each failed try, with the fresh retry-after.
     const queue = createUploadQueue()
     const delays: number[] = []
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 7; i++) {
       queue.hold.begin('p', 'storage', 0)
       delays.push(queue.hold.nextDelayMs())
     }
 
-    expect(Math.min(...delays)).toBeGreaterThanOrEqual(2_000)
+    expect(delays).toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000])
   })
 
-  it('a fresh retry-after for the same probe replaces the next delay but keeps the ladder', () => {
+  it('a server answering the same Retry-After to every try still backs off: 5 s, 10 s, 20 s, 40 s, 60 s', () => {
+    // The API's coded 503 always says `retry_after: 5`.
+    const queue = createUploadQueue()
+    const delays: number[] = []
+    for (let i = 0; i < 7; i++) {
+      queue.hold.begin('p', 'storage', 5_000)
+      delays.push(queue.hold.nextDelayMs())
+    }
+
+    expect(delays).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000])
+  })
+
+  it('a fresh retry-after for the same probe is a floor on the next wait, never a step back down the ladder', () => {
     const queue = createUploadQueue()
     queue.hold.begin('p', 'storage', undefined)
     expect(queue.hold.nextDelayMs()).toBe(2_000)
     expect(queue.hold.nextDelayMs()).toBe(4_000)
 
+    // Longer than the doubled wait: the server's wait is kept.
     queue.hold.begin('p', 'storage', 9_000)
-
     expect(queue.hold.nextDelayMs()).toBe(9_000)
     expect(queue.hold.nextDelayMs()).toBe(18_000)
+
+    // Shorter than the doubled wait: the ladder goes on.
+    queue.hold.begin('p', 'storage', 3_000)
+    expect(queue.hold.nextDelayMs()).toBe(36_000)
   })
 
   it('a repeated begin for the same probe can change the reason', () => {

@@ -565,6 +565,25 @@ describe('an initiate that cannot get through', () => {
   })
 })
 
+describe('a storage outage that answers the same retry-after every time', () => {
+  it('backs off: 5 initiates in the first 2 minutes, not one every 5 s', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const server = fakeServer(() =>
+      new ApiError(503, 'Storage is not answering', { code: 'storage_unavailable', retryAfter: 5 }))
+
+    const [a] = drop([fileOf('a.mov')])
+    await flush()
+    expect(rowOf(a)).toMatchObject({ status: 'queued', holdReason: 'storage' })
+
+    await vi.advanceTimersByTimeAsync(120_000)
+    await flush()
+
+    // Tries at 0, 5, 15, 35 and 75 s; the next is due at 135 s.
+    expect(server.names()).toHaveLength(5)
+  })
+})
+
 // ---------------------------------------------------------------- a run that throws
 
 describe('a run that throws before it reaches the server', () => {
