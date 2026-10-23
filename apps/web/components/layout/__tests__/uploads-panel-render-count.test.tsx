@@ -205,11 +205,27 @@ describe('Uploads panel render cost', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  // Retried rather than loosened: a hosted CI runner is two or three times
-  // slower per core than the machine the bound was measured on (about 3 ms
-  // alone, 5.5 ms under the full suite), and one noisy run should not fail it.
-  it('2,000 queued rows render and one progress write costs under 16 ms', { retry: 2, timeout: 30_000 }, () => {
+  it('2,000 queued rows render, and a progress write re-renders only its own row', () => {
     // One upload under way at the top of the drop, and 1,999 waiting their turn.
+    openPanelWith(rows(2000, (i) => (i === 0 ? { status: 'uploading', progress: 0 } : { status: 'queued' })))
+    expect(screen.getAllByTestId('upload-row')).toHaveLength(2000)
+    dialogRenders.mockClear()
+    panelRenders.mockClear()
+
+    for (let p = 1; p <= 9; p++) act(() => patch('row-0', { progress: p, heartbeatAt: Date.now() }))
+
+    // What a progress report costs does not grow with the list: one row, nine times, and no panel.
+    expect(dialogRenders.mock.calls).toEqual(Array.from({ length: 9 }, () => [titleOf('file-0.mp4')]))
+    expect(panelRenders).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('progressbar', { name: 'Upload progress' })[0]).toHaveAttribute('aria-valuenow', '9')
+  })
+
+  // A wall-clock bound, so off by default: a hosted CI runner is two or three
+  // times slower per core than the machine the bound was measured on (about
+  // 3 ms alone, 5.5 ms under the full suite), and two suites run at once on
+  // that machine measured 21-27 ms. The render counts above are the guard that
+  // runs everywhere. `UPLOAD_PERF=1 pnpm vitest run <this file>` runs this one.
+  it.runIf(process.env.UPLOAD_PERF === '1')('2,000 queued rows: one progress write costs under 16 ms', { retry: 2, timeout: 30_000 }, () => {
     openPanelWith(rows(2000, (i) => (i === 0 ? { status: 'uploading', progress: 0 } : { status: 'queued' })))
     expect(screen.getAllByTestId('upload-row')).toHaveLength(2000)
 
