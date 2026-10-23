@@ -1563,6 +1563,10 @@ const abortControllers: Record<string, AbortController> = {}
  * a `finally`, so the entry exists for exactly as long as the transfer does --
  * unlike `ownerTab`, which a row keeps carrying after the transfer behind it
  * has died, and across a reload that killed it.
+ *
+ * A controller can outlive the sending, though: a run stood down while its
+ * `/parts` is out keeps its controller until the answer comes while sending
+ * nothing, which is why `activeElsewhere` no longer consults it.
  */
 function isSendingHere(fileId: string): boolean {
   return abortControllers[fileId] !== undefined
