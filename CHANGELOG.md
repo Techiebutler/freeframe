@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The notification drawer no longer covers an expanded sidebar.** (#513 by @jay23606)
 - **A failed notifications fetch no longer throws an uncaught error.** Opening Notifications in a tab whose session had ended in another tab, or any failed `GET /me/notifications` (offline, 429, 500), logged `Uncaught (in promise) ApiError` and showed the Next error overlay in development. The notifications store now handles the failure, keeping the current list and unread count and clearing the loading state. (#522, #534 by @ColumbusLabs)
 
+### Security
+- **The sign-in page could be used to send a visitor off-site or run script in the app.** A crafted `/login?from=...` link could redirect a signed-in visitor to another origin, or run script in the app through a `javascript:` target. The page now follows `from` only when it is a path inside the app. (by the FreeFrame team)
+
 ## [1.19.0] - 2026-10-19
 
 Security release: fixes [GHSA-w8vh-2j74-m3hw](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-w8vh-2j74-m3hw), which left a deleted project reachable through its share links and to its members until the retention purge. Upgrading is strongly recommended. Also right-click menus on projects, assets, folders and share links, comment counts on project thumbnails, and fixes to the player's back arrow and the Projects list view.
