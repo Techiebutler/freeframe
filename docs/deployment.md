@@ -342,7 +342,7 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `TRANSCODING_CONCURRENCY` | Parallel transcoding jobs | `2` |
 | `EMAIL_CONCURRENCY` | Parallel email jobs | `2` |
 | `MAINTENANCE_CONCURRENCY` | Parallel housekeeping jobs | `1` |
-| `CELERY_LOGLEVEL` | Log level of the Celery workers and beat. At `warning` they still log what the retention GC and orphan sweep deleted, and any sweep that is switched off | `info` |
+| `CELERY_LOGLEVEL` | Log level of the Celery workers and beat. At `warning` they still log what the retention GC, stale-upload reaper and orphan sweep deleted, and any sweep that is switched off | `info` |
 | `NEXT_PUBLIC_UPLOAD_CONCURRENCY` | Upload parts in flight across the whole browser tab, shared by every file being uploaded (the earliest file first), not per file. Values above 6 only help when the storage endpoint speaks HTTP/2: over HTTP/1.1 a browser opens at most 6 connections per host, shared by all its tabs, so parts past the sixth wait for a free connection before they send anything, which with large parts on a slow uplink can be minutes. The upload leaves such a waiting part alone while other parts in the tab are sending, and gives up on it (and retries it) only after 5 minutes without a first byte. Build-time: changing it needs a web image rebuild | `5` |
 | `TRANSCODER_PIPELINE` | GPU backend: `Auto`, `NVIDIA`, `Intel`, or `Software` | `Auto` |
 | `TRANSCODER_OUTPUT` | Output codec: `h264_8` (broad compatibility) or `h265_10` (HEVC 10-bit) | `h264_8` |

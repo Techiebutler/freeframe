@@ -355,7 +355,10 @@ def _reap_stale_uploads(db) -> int:
     except Exception as exc:  # noqa: BLE001 - a listing this backend cannot do is not fatal
         log.warning("reaper: could not list in-progress uploads: %s", exc)
 
-    log.info(
+    # Each reclaimed version had its S3 objects deleted: WARNING when anything was
+    # reclaimed, so it survives a quiet worker log level, as the GC result does.
+    log.log(
+        logging.WARNING if (versions or orphans) else logging.INFO,
         "reaper: soft-deleted %d stale version(s), %d asset(s) left with none, "
         "%d unreferenced upload(s) aborted",
         len(versions), stripped, orphans,
@@ -408,7 +411,7 @@ def _purge_soft_deleted(db, counts: PurgeCounts) -> None:
     if days <= 0:
         # 0/negative DISABLES the purge — guard BEFORE computing a cutoff so a misconfigured 0
         # can never make cutoff == now() and hard-delete every soft-deleted row.
-        log.warning("cleanup: disabled (soft_delete_retention_days=%s)", days)
+        # (The task reports "disabled" from `_run_cleanup`, which stops before this.)
         return
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -453,7 +456,10 @@ def _run_cleanup(db) -> PurgeCounts:
     days = _retention_days()
     counts = PurgeCounts(retention_days=days)  # report the clamped window actually used
     if days <= 0:
-        return counts  # disabled; skip the advisory lock and all work
+        # Disabled; skip the advisory lock and all work. WARNING so an operator
+        # running the worker at a quiet level still learns the GC is off.
+        log.warning("cleanup: disabled (soft_delete_retention_days=%s)", days)
+        return counts
     got_lock = db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": _PURGE_ADVISORY_LOCK_KEY}).scalar()
     if not got_lock:
         log.info("cleanup: another purge holds the advisory lock; skipping this run")
