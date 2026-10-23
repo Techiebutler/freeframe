@@ -1,16 +1,16 @@
-fastapi==0.141.1
+fastapi==0.143.3
 # Pinned transitive: fastapi declares `starlette>=0.46.0` with no upper bound,
 # so an unpinned build drifts across starlette MAJOR versions on rebuild alone.
 # Starlette is the ASGI layer under the SSE endpoint and the BaseHTTPMiddleware
 # stack, so that drift is invisible until it is not. Pinned to the version
 # already resolving today; bump it deliberately alongside fastapi.
-starlette==1.7.0
-uvicorn[standard]==0.53.0
-sqlalchemy==2.0.54
+starlette==1.8.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.4
 alembic==1.20.0
 psycopg2-binary==2.9.13
-pydantic==2.13.5
-pydantic-settings==2.15.0
+pydantic==2.14.1
+pydantic-settings==2.16.0
 # Signs and checks every token (access, refresh, HLS). Already installed as a
 # dependency of redis; pinned here because the code now imports it directly.
 PyJWT==2.15.1
@@ -21,12 +21,12 @@ PyJWT==2.15.1
 cryptography==50.0.2
 bcrypt==4.3.0
 python-multipart==0.0.32
-boto3==1.43.103
+boto3==1.43.115
 # Pinned transitive: boto3 allows any botocore in >=1.43.56,<1.44.0, and botocore
 # is where S3 request signing lives. Silent botocore moves have broken S3
 # compatibility here before (SigV4 presigning against non-AWS backends), so this
 # is pinned to make those changes arrive as a reviewable PR.
-botocore==1.43.103
+botocore==1.43.115
 celery[redis]==5.6.3
 redis==5.3.1
 httpx==0.28.1
