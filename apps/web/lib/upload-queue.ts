@@ -67,19 +67,22 @@
  *
  * Backoff. `hold.nextDelayMs()` is the wait before the probe's next try:
  *
- * - a retry-after passed to `begin` is used for the first try, kept between
- *   HOLD_INITIAL_DELAY_MS and HOLD_MAX_DELAY_MS; a negative or NaN value counts
- *   as absent. The floor matters because `begin` runs again on every failed
- *   try: a server that answers `Retry-After: 0` each time would otherwise
- *   be asked again at once, for as long as it keeps answering;
- * - otherwise the first wait is HOLD_INITIAL_DELAY_MS;
- * - every later wait doubles the previous one, never below HOLD_INITIAL_DELAY_MS,
- *   up to HOLD_MAX_DELAY_MS.
+ * - a retry-after passed to `begin` is kept between HOLD_INITIAL_DELAY_MS and
+ *   HOLD_MAX_DELAY_MS; a negative or NaN value counts as absent. The floor
+ *   matters because `begin` runs again on every failed try: a server that
+ *   answers `Retry-After: 0` each time would otherwise be asked again at once,
+ *   for as long as it keeps answering;
+ * - the first wait is that retry-after, or HOLD_INITIAL_DELAY_MS without one;
+ * - every later wait is `min(HOLD_MAX_DELAY_MS, max(retry-after, 2 × previous wait))`,
+ *   counting a missing retry-after as 0. A retry-after is a floor, never a step
+ *   back down: the API's coded 503 says `retry_after: 5` on every answer, and
+ *   taking it as given each time asked a storage backend that was down every
+ *   5 s for as long as it stayed down.
  *
  * With no retry-after the waits are 2 s, 4 s, 8 s, 16 s, 32 s, 60 s, 60 s, ...
- * With a retry-after of 5 s they are 5 s, 10 s, 20 s, 40 s, 60 s, 60 s, ...
- * A later `begin` for the same probe with a fresh retry-after replaces the next
- * wait and the doubling carries on from it.
+ * With a retry-after of 5 s, once or on every answer, they are 5 s, 10 s, 20 s,
+ * 40 s, 60 s, 60 s, ...  A later retry-after longer than the doubled wait
+ * replaces it, and the doubling carries on from there.
  */
 
 export type QueueKind = 'new' | 'resume'
@@ -171,8 +174,10 @@ export function createUploadQueue(): UploadQueue {
 
   let probeId: string | null = null
   let reason: 'connection' | 'storage' | null = null
-  /** A wait that is due on the next `nextDelayMs()`: a retry-after, or the delay handed down by `handOff`. */
+  /** The wait handed down by `handOff`, due as it is on the next `nextDelayMs()`. */
   let pendingDelay: number | undefined
+  /** The usable retry-after of the probe's last failure, a floor on the next `nextDelayMs()`. */
+  let pendingRetryAfter: number | undefined
   /** The wait `nextDelayMs()` returned last. */
   let lastDelay: number | undefined
 
@@ -187,6 +192,7 @@ export function createUploadQueue(): UploadQueue {
 
   function clearBackoff() {
     pendingDelay = undefined
+    pendingRetryAfter = undefined
     lastDelay = undefined
   }
 
@@ -204,7 +210,10 @@ export function createUploadQueue(): UploadQueue {
       reason = why
       removeWaiting(id)
       const given = usableRetryAfter(retryAfterMs)
-      if (given !== undefined) pendingDelay = given
+      if (given !== undefined) {
+        pendingRetryAfter = given
+        pendingDelay = undefined
+      }
       return true
     },
 
@@ -212,14 +221,17 @@ export function createUploadQueue(): UploadQueue {
       // No hold, no ladder: answering must not leave a rung behind for the next hold to inherit.
       if (probeId === null) return HOLD_INITIAL_DELAY_MS
       let delay: number
-      if (pendingDelay !== undefined) {
+      if (pendingRetryAfter !== undefined) {
+        delay = Math.min(HOLD_MAX_DELAY_MS, Math.max(pendingRetryAfter, (lastDelay ?? 0) * 2))
+      } else if (pendingDelay !== undefined) {
         delay = pendingDelay
-        pendingDelay = undefined
       } else if (lastDelay === undefined) {
         delay = HOLD_INITIAL_DELAY_MS
       } else {
         delay = Math.min(HOLD_MAX_DELAY_MS, Math.max(lastDelay * 2, HOLD_INITIAL_DELAY_MS))
       }
+      pendingRetryAfter = undefined
+      pendingDelay = undefined
       lastDelay = delay
       return delay
     },
@@ -236,7 +248,9 @@ export function createUploadQueue(): UploadQueue {
       removeWaiting(next.id)
       probeId = next.id
       // The new probe waits what the old one was waiting, unless a newer retry-after is already due.
-      if (pendingDelay === undefined && lastDelay !== undefined) pendingDelay = lastDelay
+      if (pendingRetryAfter === undefined && pendingDelay === undefined && lastDelay !== undefined) {
+        pendingDelay = lastDelay
+      }
       return next.id
     },
   }
