@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import type { ShareLinkListItem } from '@/types'
 
 const post = vi.fn()
@@ -52,6 +52,10 @@ beforeEach(() => {
   copyToClipboard.mockReset().mockResolvedValue(true)
   mutateShareLinks.mockReset()
   useShareLinks.mockReset().mockReturnValue({ shareLinks: links, isLoading: false, mutateShareLinks })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('ShareDialog on an asset (#470)', () => {
@@ -124,5 +128,55 @@ describe('ShareDialog on an asset (#470)', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Insufficient permissions')
     expect(screen.queryByText('Added to this link')).toBeNull()
+  })
+
+  it("does not let an earlier add's reset wipe a later add's error", async () => {
+    vi.useFakeTimers()
+    useShareLinks.mockReturnValue({
+      shareLinks: [...links, link('Second video', null)],
+      isLoading: false,
+      mutateShareLinks,
+    })
+    post
+      .mockResolvedValueOnce({ detail: 'Asset added to share link', added: true })
+      .mockRejectedValueOnce(new Error('Insufficient permissions'))
+    open()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Other video/ }))
+    })
+    expect(screen.getByText('Added to this link')).toBeInTheDocument()
+
+    // Within the first add's 2 s, a second add is refused.
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+      fireEvent.click(screen.getByRole('button', { name: /Second video/ }))
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('Insufficient permissions')
+
+    // Past the first add's reset: the error is still there.
+    await act(async () => {
+      vi.advanceTimersByTime(1500)
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('Insufficient permissions')
+  })
+
+  it("does not let an earlier copy's reset clear a later copy's state early", async () => {
+    vi.useFakeTimers()
+    open()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy link Trailer cut' }))
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(1500)
+      fireEvent.click(screen.getByRole('button', { name: 'Copy link Whole project' }))
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+    })
+    // 2.5 s after the first copy, 1 s after the second: the second still shows Copied.
+    expect(screen.getByRole('button', { name: 'Copy link Whole project' })).toHaveTextContent('Copied')
+    expect(screen.getByRole('button', { name: 'Copy link Trailer cut' })).toHaveTextContent(/^Copy$/)
   })
 })

@@ -49,6 +49,19 @@ export function ShareDialog({
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
   const sectionId = React.useId();
+  // One pending reset per message. A newer result cancels the older timer, so
+  // an earlier add or copy can never wipe a later result, or an error that
+  // should stay on screen.
+  const addResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(
+    () => () => {
+      if (addResetRef.current) clearTimeout(addResetRef.current);
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    },
+    [],
+  );
 
   const { shareLinks, isLoading, mutateShareLinks } = useShareLinks(projectId ?? "", assetId);
 
@@ -108,22 +121,37 @@ export function ShareDialog({
 
   async function handleCopy(link: ShareLinkListItem) {
     const ok = await copyToClipboard(shareUrl(link.token));
+    if (copyResetRef.current) clearTimeout(copyResetRef.current);
     setCopied({ token: link.token, ok });
-    setTimeout(() => setCopied(null), 2000);
+    copyResetRef.current = setTimeout(() => {
+      copyResetRef.current = null;
+      setCopied(null);
+    }, 2000);
+  }
+
+  function clearAddReset() {
+    if (addResetRef.current) clearTimeout(addResetRef.current);
+    addResetRef.current = null;
   }
 
   async function handleAddToLink(link: ShareLinkListItem) {
     setAddingToToken(link.token);
+    clearAddReset();
     setAddResult(null);
     try {
       const res = await api.post<{ added?: boolean }>(
         `/share/${link.token}/add-asset/${assetId}`,
         {},
       );
+      clearAddReset();
       setAddResult({ token: link.token, kind: res.added ? "added" : "already" });
       mutateShareLinks();
-      setTimeout(() => setAddResult(null), 2000);
+      addResetRef.current = setTimeout(() => {
+        addResetRef.current = null;
+        setAddResult(null);
+      }, 2000);
     } catch (err) {
+      clearAddReset();
       setAddResult({
         token: link.token,
         kind: "error",
