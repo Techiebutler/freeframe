@@ -612,7 +612,12 @@ DEFAULT_QUALITIES = ("1080p", "720p", "360p")
 
 
 def rung_height(name: str) -> int:
-    """The vertical resolution a rung encodes to (QUALITY_MAP holds `w:h`)."""
+    """The short-side resolution a rung names: 1080 for 1080p.
+
+    QUALITY_MAP holds landscape `w:h` boxes, so this is the box's height, and
+    it is what a source's short side is measured against: a 1080x1920 portrait
+    clip is a 1080p source (#452).
+    """
     return int(QUALITY_MAP[name][0].split(":")[1])
 
 
