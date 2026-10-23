@@ -128,7 +128,7 @@ export default function ProjectDetailPage() {
 
   const startUploads = useUploadStore((s) => s.startUploads);
   const toast = useToast();
-  const { user } = useAuthStore();
+  const { user, userFetched } = useAuthStore();
 
   const {
     tree,
@@ -275,7 +275,7 @@ export default function ProjectDetailPage() {
     return map;
   }, [authorUsers, user]);
 
-  const { data: members } = useSWR<ProjectMember[]>(
+  const { data: members, error: membersError } = useSWR<ProjectMember[]>(
     `/projects/${projectId}/members`,
     () => api.get<ProjectMember[]>(`/projects/${projectId}/members`),
   );
@@ -306,6 +306,21 @@ export default function ProjectDetailPage() {
   const canManageMembers = currentRole === "owner";
   const canSeeShareLinks = currentRole === "owner" || currentRole === "editor";
   const canComment = currentRole !== "viewer";
+  // Until the members and the signed-in user have both answered, the role
+  // above reads "viewer" without anyone being one. A file dropped then is held
+  // rather than refused, and decided once they answer. A failed members
+  // request, or a user that never loads, hands the drop to the queue instead:
+  // the server checks the role on every upload, and the queue says "Sign in to
+  // upload" when there is no session.
+  const dropRole: "wait" | "allow" | "refuse" =
+    members !== undefined && user
+      ? canUpload
+        ? "allow"
+        : "refuse"
+      : membersError !== undefined || (userFetched && !user)
+        ? "allow"
+        : "wait";
+  const mayDropFiles = dropRole !== "refuse";
 
   // One folder's share link, from its menu in the tree, grid or list.
   function openFolderShareDialog(folderId: string, folderName: string) {
@@ -375,10 +390,11 @@ export default function ProjectDetailPage() {
   // blank space below a short row of cards.
   //
   // Not the trash and not the share-link list: neither can receive an upload,
-  // and `canUpload` is owner/editor, so a reviewer never gets an affordance
-  // that ends in a 403. Whether a dialog is open is deliberately not part of
-  // it; see `useFileDropRegion` for why naming them one by one does not work.
-  const canDropFiles = canUpload && !showTrash && !showShareLinks;
+  // and `mayDropFiles` is owner/editor once the role is known, so a reviewer
+  // never gets an affordance that ends in a 403. Whether a dialog is open is
+  // deliberately not part of it; see `useFileDropRegion` for why naming them
+  // one by one does not work.
+  const canDropFiles = mayDropFiles && !showTrash && !showShareLinks;
 
   /**
    * Hands a drop or pick to the upload queue. With no session the queue takes
@@ -393,7 +409,7 @@ export default function ProjectDetailPage() {
     [startUploads, projectId, project?.name, toast],
   );
 
-  const startDroppedUploads = React.useCallback(
+  const queueDrop = React.useCallback(
     (folderId: string | null, files: File[]) => {
       // Straight to the queue rather than through the dialog. Dragging a file
       // onto the project has already said everything the dialog asks: which
@@ -408,6 +424,35 @@ export default function ProjectDetailPage() {
     },
     [queueUploads],
   );
+
+  // Drops made while the role is still loading, each with the project it was
+  // made on so a drop never lands in a project the user has since left.
+  const heldDrops = React.useRef<
+    { projectId: string; folderId: string | null; files: File[] }[]
+  >([]);
+
+  const startDroppedUploads = React.useCallback(
+    (folderId: string | null, files: File[]) => {
+      if (dropRole === "wait") {
+        heldDrops.current.push({ projectId, folderId, files });
+        return;
+      }
+      queueDrop(folderId, files);
+    },
+    [dropRole, projectId, queueDrop],
+  );
+
+  React.useEffect(() => {
+    if (dropRole === "wait") return;
+    const held = heldDrops.current.filter((d) => d.projectId === projectId);
+    heldDrops.current = [];
+    if (held.length === 0) return;
+    if (dropRole === "refuse") {
+      toast.error("You don't have permission to upload to this project");
+      return;
+    }
+    for (const d of held) queueDrop(d.folderId, d.files);
+  }, [dropRole, projectId, queueDrop, toast]);
 
   const {
     regionRef: dropRegion,
@@ -508,12 +553,12 @@ export default function ProjectDetailPage() {
               mutateSubfolders();
             }}
             onShareFolder={canShare ? openFolderShareDialog : undefined}
-            // `canUpload`, not `canDropFiles`. What the main pane is showing
+            // `mayDropFiles`, not `canDropFiles`. What the main pane is showing
             // says nothing about the sidebar: a folder row means "upload into
             // this folder" while the trash or the share-link list is open just
             // as much as it does beside the grid. Only the permission applies.
-            onDropFiles={canUpload ? handleDropFilesToFolder : undefined}
-            onFileDragOverFolder={canUpload ? setFolderTarget : undefined}
+            onDropFiles={mayDropFiles ? handleDropFilesToFolder : undefined}
+            onFileDragOverFolder={mayDropFiles ? setFolderTarget : undefined}
             fileDragTarget={fileDragFolderId}
             onDropItems={async (targetFolderId, assetIds, folderIds) => {
               await bulkMove(assetIds, folderIds, targetFolderId);
