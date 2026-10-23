@@ -904,7 +904,7 @@ test('V1: a New Version behind a long queue says so, and appears without a reloa
   await page.getByRole('button', { name: 'New Version' }).click()
   await (await chooser).setFiles(version.file)
 
-  const line = page.getByRole('status').filter({ hasText: 'New version queued, waiting for other uploads.' })
+  const line = page.getByRole('status').filter({ hasText: 'New version queued, waiting for other uploads' })
   await expect(line).toBeVisible()
   // It really is waiting: the server has not been asked for a version yet.
   expect(traffic.initiates.filter((c) => c.name !== base.name && c.file === `${version.name}.png`)).toEqual([])

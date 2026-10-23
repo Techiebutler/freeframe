@@ -410,6 +410,8 @@ describe('Cancel all queued', () => {
     expect(names()).toEqual(['a'])
     expect(rowOf(a).status).toBe('starting')
     expect(cancelAllQueued()).toBeNull()
+    // The button went with the rows; focus goes to the panel's heading, not to the page.
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: /^Uploads/ }))
   })
 
   it('is also offered for a resume waiting for its turn, and not for rows nobody waits on', () => {
@@ -578,6 +580,24 @@ describe('the actions of a row', () => {
 })
 
 // ---------------------------------------------------------------- Retry and Dismiss
+
+describe('the row actions to a screen reader', () => {
+  it('Retry, Cancel and Resume each name the file they act on', async () => {
+    fakeServer((_, i) => (i === 0 ? new ApiError(400, 'This file is too large.') : 'wait'))
+    drop([fileOf('big.mov')])
+    await settle()
+    drop([small('a.jpg')])
+    await settle()
+    useUploadStore.setState((s) => ({
+      files: [...s.files, row({ id: 'r', assetName: 'r', fileName: 'clip.mp4', status: 'interrupted', versionId: 'rv', assetId: 'ra' })],
+    }))
+    openPanel('All')
+
+    expect(within(rowNamed('big')).getByRole('button', { name: 'Retry big.mov' })).toBeInTheDocument()
+    expect(within(rowNamed('a')).getByRole('button', { name: 'Cancel upload of a.jpg' })).toBeInTheDocument()
+    expect(within(rowNamed('r')).getByRole('button', { name: 'Resume clip.mp4' })).toBeInTheDocument()
+  })
+})
 
 describe('a row that failed before it started', () => {
   /** A drop whose first file the server refuses, and the row that leaves. */

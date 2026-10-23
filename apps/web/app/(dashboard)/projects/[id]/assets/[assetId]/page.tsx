@@ -252,7 +252,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     const reason = queued.find((f) => f.holdReason)?.holdReason
     if (reason === 'connection') return 'Waiting for connection'
     if (reason === 'storage') return 'Waiting for storage'
-    return 'New version queued, waiting for other uploads.'
+    return 'New version queued, waiting for other uploads'
   })
 
   // Deep-link to a specific comment from notification (?commentId=...)

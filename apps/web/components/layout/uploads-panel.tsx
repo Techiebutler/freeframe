@@ -539,7 +539,7 @@ function UploadRow({ upload }: { upload: UploadFile }) {
           )}
           {upload.status === 'uploading' && (
             <span className="text-[11px] text-text-secondary">
-              {isFinalizing ? 'Finalizing...' : `Uploading ${upload.progress}%`}
+              {isFinalizing ? 'Finalizing…' : `Uploading ${upload.progress}%`}
             </span>
           )}
           {upload.status === 'uploading' && !isFinalizing && rate && (
@@ -550,7 +550,7 @@ function UploadRow({ upload }: { upload: UploadFile }) {
           )}
           {upload.status === 'processing' && (
             <span className="text-[11px] text-amber-400">
-              {upload.processingProgress > 0 ? `Processing ${upload.processingProgress}%` : 'Processing...'}
+              {upload.processingProgress > 0 ? `Processing ${upload.processingProgress}%` : 'Processing…'}
             </span>
           )}
           {upload.status === 'complete' && (
@@ -616,6 +616,7 @@ function UploadRow({ upload }: { upload: UploadFile }) {
                   onClick={() => filePicker.current?.click()}
                   className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
                   title={`Resume — pick ${upload.fileName} again`}
+                  aria-label={`Resume ${upload.fileName}`}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                 </button>
@@ -666,6 +667,7 @@ function UploadRow({ upload }: { upload: UploadFile }) {
             onClick={() => cancelUpload(upload.id)}
             className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
             title="Cancel upload"
+            aria-label={`Cancel upload of ${upload.fileName}`}
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -688,6 +690,7 @@ function UploadRow({ upload }: { upload: UploadFile }) {
                 onClick={() => retryUpload(upload.id)}
                 className="h-6 w-6 flex items-center justify-center rounded text-text-tertiary hover:text-accent hover:bg-bg-hover transition-colors"
                 title="Retry"
+                aria-label={`Retry ${upload.fileName}`}
               >
                 <RotateCcw className="h-3.5 w-3.5" />
               </button>
@@ -718,6 +721,7 @@ export function UploadsPanel({
 } = {}) {
   const panelOpen = useUploadStore((s) => s.panelOpen)
   const setPanelOpen = useUploadStore((s) => s.setPanelOpen)
+  const headingRef = React.useRef<HTMLHeadingElement>(null)
   const clearCompleted = useUploadStore((s) => s.clearCompleted)
   const cancelAllQueued = useUploadStore((s) => s.cancelAllQueued)
   const fetchHistory = useUploadStore((s) => s.fetchHistory)
@@ -813,7 +817,8 @@ export function UploadsPanel({
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
-          <h2 className="text-sm font-semibold text-text-primary">
+          {/* Focusable by script only: where focus goes when the button it was on goes away. */}
+          <h2 ref={headingRef} tabIndex={-1} className="text-sm font-semibold text-text-primary outline-none">
             Uploads
             {counts.active > 0 && (
               <span className="ml-1.5 text-xs font-normal text-accent">
@@ -824,7 +829,11 @@ export function UploadsPanel({
           <div className="flex items-center gap-1">
             {anyQueued && (
               <button
-                onClick={cancelAllQueued}
+                onClick={() => {
+                  cancelAllQueued()
+                  // The button goes with the queued rows; without this, focus fell to the page.
+                  headingRef.current?.focus()
+                }}
                 className="text-xs text-text-tertiary hover:text-text-secondary transition-colors px-2 py-1 rounded hover:bg-bg-hover"
               >
                 Cancel all queued

@@ -52,7 +52,7 @@ describe('a finalizing upload in the panel', () => {
     open(row({ finalizing: true }))
 
     expect(screen.getByText('Finalizing')).toBeInTheDocument()
-    expect(screen.getByText('Finalizing...')).toBeInTheDocument()
+    expect(screen.getByText('Finalizing…')).toBeInTheDocument()
     expect(screen.queryByText('Uploading 95%')).not.toBeInTheDocument()
     expect(cancelButton()).not.toBeInTheDocument()
   })
@@ -61,7 +61,7 @@ describe('a finalizing upload in the panel', () => {
     open(row())
 
     expect(screen.getByText('Uploading 95%')).toBeInTheDocument()
-    expect(screen.queryByText('Finalizing...')).not.toBeInTheDocument()
+    expect(screen.queryByText('Finalizing…')).not.toBeInTheDocument()
     expect(cancelButton()).toBeInTheDocument()
   })
 
@@ -69,6 +69,12 @@ describe('a finalizing upload in the panel', () => {
     open(row({ finalizing: true, status: 'processing', processingProgress: 12 }))
 
     expect(screen.getByText('Processing 12%')).toBeInTheDocument()
-    expect(screen.queryByText('Finalizing...')).not.toBeInTheDocument()
+    expect(screen.queryByText('Finalizing…')).not.toBeInTheDocument()
+  })
+
+  it('a processing row with no percentage yet uses the same ellipsis as the rest of the panel', () => {
+    open(row({ status: 'processing', processingProgress: 0 }))
+
+    expect(screen.getByText('Processing…')).toBeInTheDocument()
   })
 })

@@ -4,7 +4,7 @@
  * A new version waits for its turn like any other file, and the asset page is
  * where the user clicked "New Version", so it says what is happening instead of
  * looking as if nothing was picked: "New version queued, waiting for other
- * uploads." for as long as the file waits.
+ * uploads" for as long as the file waits, worded like its alternatives ("Waiting for storage").
  *
  * The version exists on the server only once its initiate has answered. The page
  * used to guess at that moment with two timers (800 ms and 2.5 s after the
@@ -124,7 +124,7 @@ import { useUploadStore, __uploadQueueTesting as testing } from '@/stores/upload
 import { signInAs, row } from '@/test/upload-session'
 import { MB, fakeServer, fileOf, drop, flush } from '@/test/upload-queue-server'
 
-const QUEUED_LINE = 'New version queued, waiting for other uploads.'
+const QUEUED_LINE = 'New version queued, waiting for other uploads'
 
 function renderPage() {
   // The page tells the user through a toast when a version cannot be added.
