@@ -532,7 +532,7 @@ report.
    ```bash
    node -e "
    const zlib=require('zlib'),fs=require('fs');
-   const j=JSON.parse(zlib.gunzipSync(fs.readFileSync(process.argv[1])).toString());
+   const raw=fs.readFileSync(process.argv[1]), j=JSON.parse((raw[0]===0x1f&&raw[1]===0x8b?zlib.gunzipSync(raw):raw).toString());
    const ev=Array.isArray(j)?j:j.traceEvents, names=new Map();
    for(const e of ev) if(e.ph==='M'&&e.name==='thread_name') names.set(e.pid+':'+e.tid,e.args.name);
    const mains=new Set([...names].filter(([k,v])=>v==='CrRendererMain').map(([k])=>k)), by={};
@@ -545,12 +545,17 @@ report.
    several tabs are open). The probe's `longtasks` (PerformanceObserver) should agree on the
    worst task within a millisecond or two, and it is the only source in a scenario that runs
    without a trace. The Q2 expectation is no main-thread task over 200 ms during the run.
-   Traces are 20 MB or more: keep them in the scratch directory, never commit them.
+   Traces are 20 MB or more (section 10's driver writes plain JSON, 380 MB for Q2's 24 s; the script reads gzip or plain JSON, and a
+   file that big needs `node --max-old-space-size=6000`): keep them in the scratch directory, never commit them. **A trace holds the
+   page's URLs unredacted, the live-event URL's `token=` (an access token) among them**: delete it when the numbers are read, or strip
+   the `token=` values before keeping it.
 
 ## 6. The report
 
 `e2e/live-runs/YYYY-MM-DD-phase-N.md` (the baseline is `YYYY-MM-DD-baseline.md`). Commit it
-without screenshots, traces or GIFs; link those from the scratch location. Record the result
+without screenshots or traces; link those from the scratch location. GIFs meant for a PR description may be committed under
+`e2e/live-runs/media/` when each is under 2 MB and has been reviewed frame by frame for tokens, email addresses and anything else
+that should not be published (the menu, the login form and error details are where they turn up); otherwise link them from scratch. Record the result
 in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section).
 
 ```markdown
@@ -742,6 +747,11 @@ Chrome with `--enable-precise-memory-info` when `performance.memory` is to be re
   ("Cannot transfer files larger than 50Mb to a browser not co-located with the server") and hands the page in-memory copies, so a
   `touch` or `rm` of the file on disk never reaches the page (U1, U2 and X1 to X3 would pass or fail for the wrong reason). Phases 4 and 5
   used it with small files that nothing changed. Use `filesraw`.
+- **`files` and `filesraw` put any local path into the page**: the driver's guard keeps web pages from calling it, but whatever path
+  a command names is read by the browser and can be uploaded to the stack. Point them only at files made for the pass (under
+  `e2e/.live-files/` or the scratch directory), never at a home directory, a key, or the accounts file.
+- **`screencast` frames are the page as drawn, unredacted**, and `trace` files carry every URL the page requested, `token=` included:
+  review frames before turning them into a GIF, and delete the frame directories and traces (or redact them) before keeping anything.
 - **The driver dismisses every dialog by default**, so with files on their way a `location.reload()` from the page meets the leave
   guard's `beforeunload` and does not happen (phase 6, R1's first take). Set `dialogs {page, answer: 'accept'}` before a reload meant to
   interrupt uploads.

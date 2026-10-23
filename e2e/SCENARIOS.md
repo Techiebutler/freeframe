@@ -28,7 +28,7 @@ version.
 | C3 | Cancel the active file | the next file starts; `/upload/abort` sent once | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#c3-cancel-the-active-file-pass); final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#c3-pass) | — | — |
 | U1 | `touch` a queued file before its turn | that row: "The file changed or was moved after it was added. Add it again.", Dismiss only (no Retry); no initiate for it; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#u1-touch-a-queued-file-before-its-turn-pass); final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#u1-pass) | — | — |
 | U2 | `remove` the sending file mid-part | the row ends Interrupted with the same copy within 90 s + backoff (Chromium errors the send at once; in WebKit the send hangs with no event and the part watchdog ends it); nothing is aborted; the queue continues | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#u2-rm-the-sending-file-mid-part-pass); final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#u2-pass) | — | — |
-| U3 | `hangParts` / `stallParts` for parts of a file | the part watchdog aborts a part and retries it, and the queue does not freeze. A part that has sent its first byte and then stops is aborted after 90 s without upload progress. A part that has not sent a byte yet is aborted only when the whole tab has had no upload progress for 90 s, or when it has itself waited 5 min (the hard cap, so a part held behind busy sockets is not mistaken for a stalled one). A part that sent its last byte waits 5 min for the answer. The retry goes through; the 5 min cap alone is not automated (see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` (U3: parts that never start, tab silent; U3b: a part that stops after progress, tab busy) | [PASS](live-runs/2026-10-22-phase-3.md#u3-parts-that-never-start-tab-silent-pass-stand-in-parts-held-nothing-sent), and [U3b](live-runs/2026-10-22-phase-3.md#u3b-a-part-that-stops-after-progress-tab-busy-pass-real-socket-stall-server) and [the two 5 min clocks](live-runs/2026-10-22-phase-3.md#u3c-the-two-5-min-clocks-u3s-text-the-5-min-cap-alone-is-not-automated-pass-real-sockets), run live; final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#u3-pass) | — | — |
+| U3 | `hangParts` / `stallParts` for parts of a file | the part watchdog aborts a part and retries it, and the queue does not freeze. A part that has sent its first byte and then stops is aborted after 90 s without upload progress. A part that has not sent a byte yet is aborted only when the whole tab has had no upload progress for 90 s, or when it has itself waited 5 min (the hard cap, so a part held behind busy sockets is not mistaken for a stalled one). A part that sent its last byte waits 5 min for the answer. The retry goes through; the 5 min cap alone is not automated (see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/unreadable.spec.ts` (U3: parts that never start, tab silent; U3b: a part that stops after progress, tab busy) | [PASS](live-runs/2026-10-22-phase-3.md#u3-parts-that-never-start-tab-silent-pass-stand-in-parts-held-nothing-sent), and [U3b](live-runs/2026-10-22-phase-3.md#u3b-a-part-that-stops-after-progress-tab-busy-pass-real-socket-stall-server) and [the two 5 min clocks](live-runs/2026-10-22-phase-3.md#u3c-the-two-5-min-clocks-u3s-text-the-5-min-cap-alone-is-not-automated-pass-real-sockets), run live; final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#u3-pass), [U3b](live-runs/2026-10-23-final.md#u3b-pass) and [U3c](live-runs/2026-10-23-final.md#u3c-pass) | — | — |
 | N1 | `context.setOffline(true)` at enqueue, back online after 30 s | rows show "Waiting for connection"; none failed; all complete after reconnect (WebKit: `networkSwitch` aborts the API and bucket requests instead, see Phase 3 results) | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#n1-offline-at-enqueue-pass); final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#n1-pass) | — | — |
 | N2 | Offline mid-part for 20 s | the sending file's ladder recovers; queued files never fail | Chromium, WebKit, Firefox | 3 | `tests/network.spec.ts` | [PASS](live-runs/2026-10-22-phase-3.md#n2-offline-mid-part-pass); final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#n2-pass) | — | — |
 | S1 | `failInitiate` coded 503 three times | "Waiting for storage", then the queue continues; 3 retries spaced ≥ 5 s | Chromium, WebKit, Firefox | 2 | `tests/queue.spec.ts` | [PASS](live-runs/2026-10-22-phase-2.md#s1-failinitiate-coded-503-pass-with-the-real-fault); final pass 2026-10-23: [PASS](live-runs/2026-10-23-final.md#s1-pass) | — | — |
@@ -693,24 +693,34 @@ The suite now has 57 tests per engine where Phase 5 had 55: Q2, and the `storage
 ## Phase 6 live Chrome results (the final pass)
 
 Run by hand in real, headed Chrome 154.0.8037.100 on top of the whole stack (`f3e0d9aa`, `feat/upload-queue-6-polish`),
-2026-10-23: [`live-runs/2026-10-23-final.md`](live-runs/2026-10-23-final.md). Every row from Q1 to P2 was run again and **passed**;
-the "Live Chrome run" column above links each one. The DevTools MCP's profile was held by another session's Chrome, so the pass
-drove two headed Chromes of its own over the DevTools protocol (`LIVE-CHROME.md` section 10), with the driver's new `trace`,
-`metrics`, `screencast` and `filesraw` standing in for the MCP's trace, memory, GIF and file tools.
+2026-10-23, with a fix round the same day: [`live-runs/2026-10-23-final.md`](live-runs/2026-10-23-final.md).
 
+- **Run and passed**: every matrix row from Q1 to P2, plus U3's two sub-cases (U3b, a part that stalls after progress, against the
+  stall server; U3c, the two 5 min clocks), L1's tab close and negative, L2's one-file variant and negative, and L3b (the refresh
+  refused). The "Live Chrome run" column above links each row.
+- **Not run here**: row M (real Safari, real Firefox), owed to the user; and the checks that have no matrix row (phase 2's E1 to E3,
+  phase 3's X1 to X3, phase 4's T1 to T3, phase 5's W1 to W4 and V).
+- How: the DevTools MCP's profile was held by another session's Chrome, so the pass drove headed Chromes of its own over the DevTools
+  protocol (`LIVE-CHROME.md` section 10), with the driver's new `trace`, `metrics`, `screencast` and `filesraw` standing in for the MCP's
+  trace, memory, GIF and file tools.
+- **Q1/Q3 wire concurrency**: the first run's `lsof` samples mixed two Chromes and are not evidence. Re-sampled per process in the fix
+  round: 9 storage sockets while throttled with 3 PUTs pending (the other 6 are the grid's thumbnail loads, a connection group of their
+  own), 11 just after the lift and then idle keep-alive. The verdicts rest on the probe's row samples and in-flight peaks.
 - **Q2 with a performance trace**: 300 uploaded in 19.2 s, Ready in 24.0 s; worst main-thread task 88 ms (trace) and 86 ms
-  (PerformanceObserver), none over 100 ms in the trace; frames p50 8.4 ms, p95 17.1 ms, max 116.8 ms on a 120 Hz display.
+  (PerformanceObserver), none over 100 ms in the trace; `requestAnimationFrame` intervals p50 8.4 ms, p95 17.1 ms, max 116.8 ms on a
+  120 Hz display (the trace's own frame events time the whole pipeline over a longer window; the trace was deleted for holding a token).
 - **500 files at Fast 3G for 30 minutes** (secondary, panel open): all 500 Ready, the last completion at 29.6 min; two token expiries
-  handled; worst long task 125 ms. Heap after a forced GC 19.6 MB before the drop, 63.8 MB at 16.6 min, 67.1 MB at 30.2 min (+3.3 MB
-  over the second half, DOM nodes flat after minute 6): no leak seen.
+  handled; worst long task 125 ms. 350 were complete at 16.6 min and 500 at 29.6 min: the second half ran at half the rate, for a
+  reason not measured. Heap after a forced GC 19.6 MB before the drop, 63.8 MB at 16.6 min, 67.1 MB at 30.2 min: no unbounded growth over
+  the 13.6 min measured (+3.3 MB between 350 and 500 complete). That is not a leak test.
 - **A 1.45 GB, 180 s 1080p video**: uploaded in 20 s (139 parts), transcoded in 323 s, Ready, and it plays at 1920 x 1080 with no
   dropped frames; the worker ran 317 tasks in that window, all succeeded.
 - GIFs of Q1, U2, A1 and L2 are in `live-runs/media/`.
 - **No app bug of the upload queue was found.** Observations (in the report): the Docker VM disk read 96% for one 20 s sample as the
-  video's transcode finished (94% after); the floating "Powered by FreeFrame" badge covers the project page's "Open in viewer to
-  comment" link (pre-existing); the pre-existing uncaught `ApiError` on a signed-out Notifications click (phase 4); the main thread is
-  busy (about 89% in Q2, 48% in the long run, mostly paint at 120 Hz in a development build) without breaking any bound.
-- Not run here: row M (real Safari, real Firefox), owed to the user; L2's one-file variant and L3b.
+  video's transcode finished (94% after); and the main thread is busy (about 89% in Q2, 48% in the long run, mostly paint at 120 Hz
+  in a development build) without breaking any bound. Outside the feature, pre-existing: the floating "Powered by FreeFrame" badge
+  covers the project page's "Open in viewer to comment" link; a signed-out Notifications click raises an uncaught `ApiError` (phase 4);
+  a drop on a project page before the account's role has loaded is ignored, silently (phase 5).
 
 ## Manual pass owed (real Safari, real Firefox)
 

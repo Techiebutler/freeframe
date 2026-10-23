@@ -1,8 +1,15 @@
 // Phase 6: turn the driver's screencast frames (cdp-driver.js `screencast`, a stand-in for gif_creator) into a GIF with ffmpeg.
 //   node live-tools/frames-to-gif.js <frames dir> <out.gif> [stepSeconds=1] [fps=8] [width=800] [fromSec=0] [toSec=end]
-// Picks the last frame at or before every `stepSeconds` of real time (frames come only when the page paints, so a quiet
-// stretch repeats the frame before it), plays them at `fps` (so the GIF runs stepSeconds * fps times faster than real time),
-// and writes a two-pass palette GIF. Prints the size, so it can be kept under the limit before it is committed.
+//   stepSeconds  pick the last frame at or before every stepSeconds of real time (frames come only when the page paints, so a
+//                quiet stretch repeats the frame before it)
+//   fps          playback rate: the GIF runs stepSeconds * fps times faster than real time
+//   width        output width in pixels (the height keeps the aspect ratio). The frames themselves are at most the driver's
+//                `screencast` `maxWidth` wide (1100 by default), so a width above that only upscales
+//   fromSec      seconds after the first frame to start at, to trim an idle opening (default 0)
+//   toSec        seconds after the first frame to stop at (default: the last frame)
+// Writes a two-pass palette GIF and prints its size, so it can be kept under the limit before it is committed.
+// ffmpeg: the FFMPEG environment variable, or /opt/homebrew/bin/ffmpeg when it is not set.
+// The frames are the page as drawn, unredacted: review them before keeping or committing the GIF, then delete the frame directory.
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
