@@ -112,7 +112,8 @@ class AdminUserResponse(UserResponse):
 
 class InviteRequest(BaseModel):
     email: NewUserEmail
-    name: str
+    # Unbounded, a long pasted name reached the INSERT as a DataError and a 500.
+    name: DisplayName
 
 # Magic code flow
 class SendMagicCodeRequest(BaseModel):

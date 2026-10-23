@@ -58,6 +58,10 @@ def deactivate_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     user.status = UserStatus.deactivated
+    # Deactivating a pending invitee withdraws the invite, so a later
+    # Reactivate doesn't bring the old link back to life.
+    user.invite_token = None
+    user.invite_token_expires_at = None
     db.commit()
     db.refresh(user)
     return user

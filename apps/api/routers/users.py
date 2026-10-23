@@ -230,9 +230,13 @@ def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db), current_user:
     user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if user.status != UserStatus.deactivated:
+    # Deleting a pending invitee is how the admin page revokes an invite, so it
+    # needs no deactivation first; anyone else does.
+    if user.status not in (UserStatus.deactivated, UserStatus.pending_invite):
         raise HTTPException(status_code=409, detail="Deactivate this user before deleting them")
     user.deleted_at = datetime.now(timezone.utc)
+    user.invite_token = None
+    user.invite_token_expires_at = None
     # The picture goes with the account: their comments show initials, and the
     # object is reclaimed rather than left in the bucket for good. A deleted
     # user can't be restored, so nothing would ever need it again.

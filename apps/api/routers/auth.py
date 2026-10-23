@@ -148,7 +148,9 @@ def get_invite_info(token: str, db: Session = Depends(get_db)):
         User.deleted_at.is_(None),
     ).first()
     
-    if not user:
+    # A deactivated invitee gets the same 404 as an unknown token: deactivating
+    # withdraws the invite, and a different answer would reveal the account.
+    if not user or user.status == UserStatus.deactivated:
         raise HTTPException(status_code=404, detail="Invalid invite link")
     
     if user.invite_token_expires_at and user.invite_token_expires_at < datetime.now(timezone.utc):
@@ -168,7 +170,9 @@ def accept_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
         User.deleted_at.is_(None),
     ).first()
     
-    if not user:
+    # Without the status check a deactivated invitee walked past the
+    # deactivation: everything below sets status=active and hands out tokens.
+    if not user or user.status == UserStatus.deactivated:
         raise HTTPException(status_code=404, detail="Invalid invite link")
     
     if user.invite_token_expires_at and user.invite_token_expires_at < datetime.now(timezone.utc):

@@ -510,6 +510,120 @@ def test_accept_invite_still_sets_password_and_activates(client, mock_db):
     assert user.invite_token_expires_at is None
 
 
+def _deactivated_invitee() -> MagicMock:
+    """A pending invitee an admin deactivated while the link was still live,
+    as rows deactivated before the token was cleared on deactivation still are."""
+    u = _pending_invitee()
+    u.status = UserStatus.deactivated
+    u.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    return u
+
+
+def test_accept_invite_refuses_a_deactivated_invitee(client, mock_db):
+    """POST /auth/accept-invite — deactivating an invitee withdraws the invite.
+
+    Issue #472: the lookup matched only the token and deleted_at, then set
+    status=active, so a deactivated invitee walked straight past the
+    deactivation with a fresh pair of tokens. The 404 is the same one an unknown
+    token gets, so the response says nothing about the account.
+    """
+    user = _deactivated_invitee()
+    mock_db.first.return_value = user
+
+    resp = client.post(
+        "/auth/accept-invite",
+        json={"token": "invite-token-1", "password": "securepassword", "name": "Patrick Rosen"},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Invalid invite link"
+    assert user.status == UserStatus.deactivated
+    assert user.password_hash is None
+    mock_db.commit.assert_not_called()
+
+
+def test_invite_info_refuses_a_deactivated_invitee(client, mock_db):
+    """GET /auth/invite/{token} — the set-password screen doesn't load for a
+    deactivated invitee either (#472)."""
+    mock_db.first.return_value = _deactivated_invitee()
+
+    resp = client.get("/auth/invite/invite-token-1")
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Invalid invite link"
+
+
+def test_deactivate_clears_a_pending_invite_token(client, auth_headers, mock_db, test_user):
+    """PATCH /admin/users/{id}/deactivate — the invite link dies with the
+    deactivation, so a later Reactivate doesn't bring a live link back (#472)."""
+    test_user.is_superadmin = True
+    target = _pending_invitee()
+    target.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    target.is_superadmin = False
+    target.preferences = {}
+    mock_db.first.return_value = target
+
+    resp = client.patch(f"/admin/users/{target.id}/deactivate", headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert target.status == UserStatus.deactivated
+    assert target.invite_token is None
+    assert target.invite_token_expires_at is None
+
+
+def test_delete_user_revokes_a_pending_invite(client, auth_headers, mock_db, test_user):
+    """DELETE /users/{id} — a pending invitee can be deleted without deactivating
+    first, which is how the admin page revokes an invite (#472). Still a soft
+    delete, and the link stops working."""
+    test_user.is_superadmin = True
+    target = _pending_invitee()
+    target.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    mock_db.first.return_value = target
+
+    resp = client.delete(f"/users/{target.id}", headers=auth_headers)
+
+    assert resp.status_code == 204
+    assert target.deleted_at is not None
+    assert target.invite_token is None
+    assert target.invite_token_expires_at is None
+    mock_db.delete.assert_not_called()
+
+
+def test_invite_rejects_a_name_longer_than_the_column(client, auth_headers, mock_db, test_user):
+    """POST /users/invite — a name past User.name's 255 characters is a 422.
+
+    Issue #318: InviteRequest.name had no bounds, so a long pasted name reached
+    the INSERT and came back as a DataError and a 500.
+    """
+    test_user.is_superadmin = True
+    mock_db.first.return_value = None
+
+    resp = client.post(
+        "/users/invite",
+        json={"email": "long@example.com", "name": "x" * 256},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 422
+    mock_db.add.assert_not_called()
+
+
+def test_invite_rejects_a_blank_name(client, auth_headers, mock_db, test_user):
+    """POST /users/invite — a whitespace-only name is refused, as on every other
+    path that writes a display name (#318)."""
+    test_user.is_superadmin = True
+    mock_db.first.return_value = None
+
+    resp = client.post(
+        "/users/invite",
+        json={"email": "blank@example.com", "name": "   "},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 422
+    mock_db.add.assert_not_called()
+
+
 # flag_modified needs a mapped instance; test_user is a MagicMock.
 _FLAG_MODIFIED = "sqlalchemy.orm.attributes.flag_modified"
 

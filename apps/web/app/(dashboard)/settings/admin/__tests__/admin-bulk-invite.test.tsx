@@ -66,4 +66,31 @@ describe('Admin users: Bulk Invite', () => {
     expect(textarea).toHaveValue(emails)
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
+
+  it('shows the name each address will be invited under, and sends that name', async () => {
+    // Issue #318: the name is derived from the address; the dialog now says so
+    // before sending instead of inventing it silently.
+    post.mockResolvedValue({})
+    render(<AdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: /bulk invite/i }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByRole('textbox'), {
+      target: { value: 'patrick.rosen@kit.edu\nb@x.com' },
+    })
+
+    const preview = within(dialog).getByRole('list', { name: /invite preview/i })
+    const rows = within(preview).getAllByRole('listitem')
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]).getByText('patrick.rosen@kit.edu')).toBeInTheDocument()
+    expect(within(rows[0]).getByText('patrick.rosen')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('b')).toBeInTheDocument()
+    expect(within(dialog).getByText(/sets their own name when they accept/i)).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /send invites/i }))
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/users/invite', { email: 'patrick.rosen@kit.edu', name: 'patrick.rosen' }),
+    )
+    expect(post).toHaveBeenCalledWith('/users/invite', { email: 'b@x.com', name: 'b' })
+  })
 })
