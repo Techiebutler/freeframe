@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-10-23
+
+A rebuilt upload experience. Files now upload through a queue instead of all at once, so a large drop finishes whole files rather than leaving many half-sent; uploads belong to the account that added them and survive account switches, sign-outs, files changed on disk, stalled parts and storage outages; the browser warns before you leave a page with uploads in flight, and Log out asks first; and the Uploads panel stays responsive under hundreds of files. This release also fixes a security issue in the sign-in redirect (see Security), and carries fixes to project settings, the notification drawer and failed notification fetches.
+
 ### Upgrade notes
 - **`NEXT_PUBLIC_UPLOAD_CONCURRENCY` now counts parts for the whole browser tab, not for each file.** If you raised it so that several files at once would upload faster, those files now share that many parts and take turns; a single file uploads as fast as before. Values above 6 only help when the storage endpoint speaks HTTP/2, because over HTTP/1.1 a browser opens at most 6 connections per host. The setting is still read at build time, so changing it needs a web image rebuild. (#535)
 - **A bucket lifecycle rule that aborts incomplete multipart uploads after a few days is now recommended.** Starting an upload now gives storage a single try, and a try that times out after storage had already created the upload leaves an empty multipart upload behind. `docs/deployment.md` shows the rule and how to apply it. The rule counts days from when an upload started, so pick a number above the longest upload you expect people to keep resuming. (#535)
@@ -38,7 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A failed notifications fetch no longer throws an uncaught error.** Opening Notifications in a tab whose session had ended in another tab, or any failed `GET /me/notifications` (offline, 429, 500), logged `Uncaught (in promise) ApiError` and showed the Next error overlay in development. The notifications store now handles the failure, keeping the current list and unread count and clearing the loading state. (#522, #534 by @ColumbusLabs)
 
 ### Security
-- **The sign-in page could be used to send a visitor off-site or run script in the app.** A crafted `/login?from=...` link could redirect a signed-in visitor to another origin, or run script in the app through a `javascript:` target. The page now follows `from` only when it is a path inside the app. (by the FreeFrame team)
+- **The sign-in page could be used to send a visitor off-site or run script in the app.** A crafted `/login?from=...` link could redirect a signed-in visitor to another origin, or run script in the app through a `javascript:` target. The page now follows `from` only when it is a path inside the app. ([GHSA-vq88-94mj-28ww](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-vq88-94mj-28ww), #519)
+
+### Contributors
+
+Thanks to @jay23606 and @ColumbusLabs for contributions in this release.
 
 ## [1.19.0] - 2026-10-19
 
