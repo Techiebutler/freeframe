@@ -1008,6 +1008,7 @@ def list_project_share_links(
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
             ShareLink.created_at,
+            ShareLink.expires_at,
         )
         .join(Asset, ShareLink.asset_id == Asset.id)
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
@@ -1032,6 +1033,7 @@ def list_project_share_links(
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
             ShareLink.created_at,
+            ShareLink.expires_at,
         )
         .join(Folder, ShareLink.folder_id == Folder.id)
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
@@ -1062,6 +1064,7 @@ def list_project_share_links(
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
             ShareLink.created_at,
+            ShareLink.expires_at,
         )
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
         .filter(
@@ -1082,6 +1085,9 @@ def list_project_share_links(
     # adaptation on a legacy Query union.
     results = sorted(results, key=lambda row: (row.created_at, str(row.id)), reverse=True)
 
+    # Same rule validate_share_link applies, so "expired" here means the share page refuses it.
+    now = datetime.now(timezone.utc)
+
     contains: dict[uuid.UUID, Optional[str]] = {}
     if asset is not None and results:
         links = db.query(ShareLink).filter(ShareLink.id.in_([row.id for row in results])).all()
@@ -1100,6 +1106,8 @@ def list_project_share_links(
             view_count=row.view_count,
             last_viewed_at=row.last_viewed_at,
             created_at=row.created_at,
+            expires_at=row.expires_at,
+            is_expired=bool(row.expires_at and row.expires_at < now),
             contains_asset=contains.get(row.id),
         )
         for row in results

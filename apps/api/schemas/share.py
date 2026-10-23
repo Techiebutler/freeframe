@@ -136,6 +136,9 @@ class ShareLinkListItem(BaseModel):
     view_count: int = 0
     last_viewed_at: Optional[datetime] = None
     created_at: datetime
+    expires_at: Optional[datetime] = None
+    # True once expires_at has passed: the share page no longer opens the link.
+    is_expired: bool = False
     # Set only when the list is asked about one asset (`?asset_id=`): "direct" when the
     # link is that asset or lists it, "indirect" when it shows it through a folder or the
     # whole project, None when it does not show it.

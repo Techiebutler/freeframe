@@ -273,11 +273,15 @@ export function ShareDialog({
                                     {name}
                                   </p>
                                   {addStatus(link.token) ??
-                                    ((!link.is_enabled || link.contains_asset === "indirect") && (
+                                    ((!link.is_enabled ||
+                                      link.is_expired ||
+                                      link.contains_asset === "indirect") && (
                                       <p className="text-[10px] text-text-tertiary truncate">
                                         {!link.is_enabled
                                           ? "Access disabled"
-                                          : "Through a folder or the whole project"}
+                                          : link.is_expired
+                                            ? "Expired"
+                                            : "Through a folder or the whole project"}
                                       </p>
                                     ))}
                                 </div>

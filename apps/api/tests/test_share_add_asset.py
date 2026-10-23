@@ -196,3 +196,33 @@ def test_list_refuses_an_asset_from_another_project(real_db, seed):
     with pytest.raises(HTTPException) as exc:
         _list(real_db, seed, asset_id=stray.id)
     assert exc.value.status_code == 404
+
+
+def test_list_marks_expired_links(real_db, seed):
+    from datetime import datetime, timedelta, timezone
+    from apps.api.routers.share import list_project_share_links
+
+    now = datetime.now(timezone.utc)
+    seed["links"]["single"].expires_at = now - timedelta(hours=1)
+    seed["links"]["whole"].expires_at = now - timedelta(days=3)
+    seed["links"]["folder_above"].expires_at = now + timedelta(days=3)
+    real_db.flush()
+
+    items = {
+        item.title: item
+        for item in list_project_share_links(
+            seed["project"].id, search=None, asset_id=seed["trailer"].id,
+            db=real_db, current_user=seed["owner"],
+        )
+    }
+
+    # One of each link kind (asset, project root, folder) to cover every arm of the union.
+    assert items["single"].is_expired is True
+    assert items["whole"].is_expired is True
+    assert items["folder_above"].is_expired is False
+    assert items["folder_above"].expires_at == seed["links"]["folder_above"].expires_at
+    assert items["multi_with"].is_expired is False
+    assert items["multi_with"].expires_at is None
+    # Expiry does not change how a link shows the asset.
+    assert items["single"].contains_asset == "direct"
+    assert items["whole"].contains_asset == "indirect"

@@ -32,6 +32,8 @@ function link(title: string, contains_asset: ShareLinkListItem['contains_asset']
     view_count: 0,
     last_viewed_at: null,
     created_at: '',
+    expires_at: null,
+    is_expired: false,
     contains_asset,
   }
 }
@@ -89,6 +91,26 @@ describe('ShareDialog on an asset (#470)', () => {
 
     expect(within(current).getAllByText('Through a folder or the whole project')).toHaveLength(1)
     expect(within(current).getByText('Access disabled')).toBeInTheDocument()
+  })
+
+  it('labels a link that has expired', () => {
+    useShareLinks.mockReturnValue({
+      shareLinks: [
+        { ...link('Lapsed cut', 'direct'), expires_at: '2026-01-01T23:59:59Z', is_expired: true },
+        { ...link('Lapsed project', 'indirect'), expires_at: '2026-01-01T23:59:59Z', is_expired: true },
+        { ...link('Later cut', 'direct'), expires_at: '2099-01-01T23:59:59Z' },
+      ],
+      isLoading: false,
+      mutateShareLinks,
+    })
+    open()
+    const current = screen.getByRole('region', { name: 'Links to this asset' })
+
+    expect(within(current).getAllByText('Expired')).toHaveLength(2)
+    // Expired wins over "through a folder": the link no longer opens at all.
+    expect(within(current).queryByText('Through a folder or the whole project')).toBeNull()
+    // A link with an expiry still ahead is an ordinary row.
+    expect(within(current).getByText('Later cut').parentElement).not.toHaveTextContent('Expired')
   })
 
   it('copies the share URL of a link that already shows the asset, without adding anything', async () => {

@@ -326,6 +326,9 @@ export interface ShareLinkListItem {
   view_count: number
   last_viewed_at: string | null
   created_at: string
+  expires_at: string | null
+  /** True once expires_at has passed: the share page no longer opens the link. */
+  is_expired: boolean
   /** Only when the list was asked about one asset: how this link shows it. */
   contains_asset?: "direct" | "indirect" | null
 }

@@ -40,6 +40,8 @@ const link: ShareLinkListItem = {
   view_count: 0,
   last_viewed_at: null,
   created_at: '2026-01-01T00:00:00Z',
+  expires_at: null,
+  is_expired: false,
 }
 
 const user = () => userEvent.setup({ pointerEventsCheck: 0 })
