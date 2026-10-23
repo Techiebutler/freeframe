@@ -209,6 +209,9 @@ describe('useSyncedTransport playback', () => {
     expect(transport.current.isPlaying).toBe(false)
     frame()
     expect(transport.current.t).toBe(0.04)
+    // This checks the ended-side freeze (both panes are past their end and
+    // park on the last frame), not the auto-stop itself, which is the
+    // isPlaying assertion above.
     expect(a.paused && b.paused).toBe(true)
   })
 
@@ -237,5 +240,21 @@ describe('useSyncedTransport playback', () => {
     expect(transport.current.t).toBe(62)
     act(() => transport.current.seekTo(-1))
     expect(transport.current.t).toBe(0)
+  })
+
+  it('seekTo while playing keeps both sides playing at the new position', () => {
+    const { a, b, transport } = mountPair()
+    act(() => transport.current.toggle())
+    frame()
+    expect(a.paused).toBe(false)
+    expect(b.paused).toBe(false)
+
+    act(() => transport.current.seekTo(5))
+    // No frame() yet: seekTo itself must re-slave with the live playing flag.
+    expect(transport.current.t).toBe(5)
+    expect(a.paused).toBe(false)
+    expect(b.paused).toBe(false)
+    expect(a.seeks.at(-1)).toBe(5)
+    expect(b.seeks.at(-1)).toBe(5)
   })
 })
