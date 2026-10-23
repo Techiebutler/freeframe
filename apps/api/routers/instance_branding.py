@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,7 @@ from ..schemas.instance_branding import (
 )
 from ..services import s3_service
 from ..services.owned_keys import (
-    INSTANCE_LOGO_SLOTS, instance_logo_prefix, is_instance_logo_key, sign_if_owned,
+    INSTANCE_LOGO_SLOTS, instance_logo_prefix, is_instance_logo_key,
 )
 
 router = APIRouter(tags=["instance_branding"])
@@ -55,17 +57,32 @@ def _get_or_create_instance_branding(db: Session) -> InstanceBranding:
     return row
 
 
+# A logo URL is a stable path into this API rather than a signed link, so the
+# browser, the web app's persisted store and server-rendered HTML can all keep it.
+# The path redirects to a freshly signed link. The redirect may be cached for an
+# hour, well inside the link's own lifetime, so a cached one never points at an
+# expired signature.
+LOGO_REDIRECT_MAX_AGE = 3600
+LOGO_SIGNED_URL_TTL = 24 * 3600
+
+
+def _logo_path(logo_type: str, key: str) -> str:
+    # The key's last segment is new on every upload, so a replaced logo gets a new
+    # URL and nothing cached under the old one is shown.
+    return f"/instance/branding/logo/{logo_type}?v={quote(key.rsplit('/', 1)[-1], safe='')}"
+
+
 def _enrich_branding_response(branding: InstanceBranding) -> InstanceBrandingResponse:
     resp = InstanceBrandingResponse.model_validate(branding)
-    # The public GET signs these for anonymous callers, so only a key the slot's
-    # own upload step issued is signed. Anything else (a row written before the
-    # check existed) is shown as an empty slot.
-    for column in LOGO_TYPES.values():
+    # The public logo route signs these for anonymous callers, so only a key the
+    # slot's own upload step issued gets a URL. Anything else (a row written
+    # before the check existed) is shown as an empty slot.
+    for logo_type, column in LOGO_TYPES.items():
         key = getattr(branding, column)
         owned = is_instance_logo_key(column, key)
         if not owned:
             setattr(resp, column, None)
-        setattr(resp, column.replace("_key", "_url"), sign_if_owned(owned, key))
+        setattr(resp, column.replace("_key", "_url"), _logo_path(logo_type, key) if owned else None)
     return resp
 
 
@@ -81,6 +98,27 @@ def get_instance_branding(
     """
     branding = db.query(InstanceBranding).first() or _default_instance_branding()
     return _enrich_branding_response(branding)
+
+
+@router.get("/instance/branding/logo/{logo_type}")
+def get_logo(logo_type: str, db: Session = Depends(get_db)):
+    """Anyone: redirect to a freshly signed link for a branding logo slot.
+
+    This is the URL `GET /instance/branding` hands out for each logo. The `v`
+    query parameter only busts caches after a re-upload; the slot's current
+    logo is always what is served.
+    """
+    column = LOGO_TYPES.get(logo_type)
+    branding = db.query(InstanceBranding).first() if column else None
+    key = getattr(branding, column) if branding else None
+    if not is_instance_logo_key(column, key):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Logo not found")
+    url = s3_service.generate_presigned_get_url(key, expires_in=LOGO_SIGNED_URL_TTL)
+    return RedirectResponse(
+        url,
+        status_code=status.HTTP_302_FOUND,
+        headers={"Cache-Control": f"public, max-age={LOGO_REDIRECT_MAX_AGE}"},
+    )
 
 
 @router.put("/instance/branding", response_model=InstanceBrandingResponse)

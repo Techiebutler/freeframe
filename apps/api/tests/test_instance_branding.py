@@ -293,3 +293,99 @@ def test_delete_logo_clears_key_and_deletes_object(client, auth_headers, mock_db
     assert delete_calls == ["branding/logo-light/old-key"]
     assert branding.logo_light_key is None
     mock_db.commit.assert_called_once()
+
+
+# ── GET /instance/branding/logo/{logo_type} ─────────────────────────────
+# The branding response carries a stable path for each logo instead of a signed
+# link that expires an hour later, so a browser, the persisted client store and
+# the server-rendered HTML can all keep it. The path redirects to a fresh link.
+
+def _branding_with(**keys):
+    now = datetime.now(timezone.utc)
+    branding = InstanceBranding(
+        id=uuid.uuid4(),
+        org_name="Acme",
+        powered_by_freeframe=True,
+        created_at=now,
+        updated_at=now,
+    )
+    for column, key in keys.items():
+        setattr(branding, column, key)
+    return branding
+
+
+def test_get_branding_returns_stable_logo_paths_not_signed_links(client, mock_db):
+    mock_db.first.return_value = _branding_with(
+        logo_light_key="branding/logo-light/3f6b0c1e",
+        favicon_key="branding/favicon/9a2d77e0",
+    )
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ) as sign:
+        r = client.get("/instance/branding")
+
+    assert r.status_code == 200
+    body = r.json()
+    # The key's last segment changes on every upload, so a replaced logo gets a new URL.
+    assert body["logo_light_url"] == "/instance/branding/logo/logo-light?v=3f6b0c1e"
+    assert body["favicon_url"] == "/instance/branding/logo/favicon?v=9a2d77e0"
+    assert body["logo_dark_url"] is None
+    assert body["apple_icon_url"] is None
+    assert body["login_logo_url"] is None
+    sign.assert_not_called()
+
+
+def test_logo_path_redirects_to_a_freshly_signed_url(client, mock_db):
+    """No sign-in: the sign-in and share pages show these logos too."""
+    mock_db.first.return_value = _branding_with(logo_dark_key="branding/logo-dark/k1")
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://s3.example.com/branding/logo-dark/k1?X-Amz-Signature=abc",
+    ) as sign:
+        r = client.get("/instance/branding/logo/logo-dark?v=k1", follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "https://s3.example.com/branding/logo-dark/k1?X-Amz-Signature=abc"
+    sign.assert_called_once()
+    assert sign.call_args.args[0] == "branding/logo-dark/k1"
+
+    # A cached redirect must never outlive the link it points at.
+    cache_control = r.headers["cache-control"]
+    assert "public" in cache_control
+    max_age = int(cache_control.split("max-age=")[1].split(",")[0])
+    expires_in = sign.call_args.kwargs["expires_in"]
+    assert 0 < max_age < expires_in
+
+
+@pytest.mark.parametrize(
+    "path,keys",
+    [
+        ("/instance/branding/logo/logo-light", {}),  # slot never set
+        ("/instance/branding/logo/logo-light", {"logo_light_key": "raw/p/a/v/original.mp4"}),  # not issued for it
+        ("/instance/branding/logo/logo-light", {"logo_light_key": "branding/logo-dark/k1"}),  # another slot's key
+        ("/instance/branding/logo/banana", {"logo_light_key": "branding/logo-light/k1"}),  # unknown slot
+    ],
+)
+def test_logo_path_answers_404_without_signing_anything(client, mock_db, path, keys):
+    mock_db.first.return_value = _branding_with(**keys)
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ) as sign:
+        r = client.get(path, follow_redirects=False)
+
+    assert r.status_code == 404
+    sign.assert_not_called()
+
+
+def test_logo_path_answers_404_before_branding_is_saved(client, mock_db):
+    mock_db.first.return_value = None
+
+    r = client.get("/instance/branding/logo/favicon", follow_redirects=False)
+
+    assert r.status_code == 404
+    mock_db.add.assert_not_called()

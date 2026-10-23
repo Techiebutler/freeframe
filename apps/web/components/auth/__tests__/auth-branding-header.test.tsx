@@ -12,7 +12,6 @@ const FRESH_LOGO = 'https://assets.test/fresh-logo.png'
 function setBranding(overrides: Partial<ReturnType<typeof useBrandingStore.getState>> = {}) {
   useBrandingStore.setState({
     ...HARDCODED_DEFAULTS,
-    brandingFetchedAt: null,
     loaded: true,
     loading: false,
     ...overrides,

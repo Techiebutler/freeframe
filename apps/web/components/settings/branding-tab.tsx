@@ -5,6 +5,7 @@ import { Upload, RotateCcw, Check } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { HARDCODED_DEFAULTS, useBrandingStore } from '@/stores/branding-store'
 import { api } from '@/lib/api'
+import { logoUrlFromApi } from '@/lib/branding-logo'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -71,7 +72,7 @@ function QuickUpload({
         if (!uploadRes.ok) throw new Error(`Failed to upload for ${slot}`)
 
         const data = await api.put<BrandingUrls>('/instance/branding', { [keyField]: s3Key })
-        const url = data[urlField]
+        const url = logoUrlFromApi(data[urlField])
         // Apply each slot as it lands, so a later failure doesn't discard the ones
         // the server already accepted.
         if (url) onSlotUpload(slot, url)

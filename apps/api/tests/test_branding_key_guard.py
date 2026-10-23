@@ -351,8 +351,11 @@ def test_instance_issued_key_is_accepted_and_replaces_the_old_one(api, real_db, 
 
     assert put.status_code == 200, put.text
     url_field = column.replace("_key", "_url")
-    assert put.json()[url_field] == _fake_sign(key)
-    assert public.json()[url_field] == _fake_sign(key)
+    path = f"/instance/branding/logo/{slot}?v={key.rsplit('/', 1)[-1]}"
+    assert put.json()[url_field] == path
+    assert public.json()[url_field] == path
+    served = api(None).get(path, follow_redirects=False)
+    assert served.status_code == 302 and served.headers["location"] == _fake_sign(key)
     assert s3["deleted"] == [old]
 
 

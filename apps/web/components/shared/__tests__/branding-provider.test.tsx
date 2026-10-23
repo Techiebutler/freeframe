@@ -51,7 +51,7 @@ function Probe() {
 }
 
 beforeEach(() => {
-  useBrandingStore.setState({ ...HARDCODED_DEFAULTS, loaded: false, loading: false, brandingFetchedAt: null })
+  useBrandingStore.setState({ ...HARDCODED_DEFAULTS, loaded: false, loading: false })
   vi.restoreAllMocks()
 })
 
