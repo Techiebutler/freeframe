@@ -134,7 +134,9 @@ def _process_video(
     from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, parse_qualities
     from packages.transcoder.base import TranscodeJob
 
-    transcoder = FFmpegTranscoder(s3, settings.s3_bucket, settings.s3_endpoint)
+    transcoder = FFmpegTranscoder(
+        s3, settings.s3_bucket, settings.s3_endpoint, storage_class=settings.s3_storage_class,
+    )
     # Progress is cosmetic; the transcode is not. If the broker stops answering,
     # every publish costs the socket timeout, and this runs inside the loop
     # draining ffmpeg's stdout -- so paying it ~100 times would stall the encode
@@ -205,7 +207,10 @@ def _process_video(
 
 def _process_audio(db, asset, version, media_file, s3, output_prefix):
     from packages.transcoder.image_processor import process_audio
-    result = process_audio(s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix)
+    result = process_audio(
+        s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix,
+        storage_class=settings.s3_storage_class,
+    )
     media_file.s3_key_processed = result.get("mp3_key")
     if result.get("waveform_key"):
         media_file.s3_key_thumbnail = result["waveform_key"]
@@ -216,7 +221,10 @@ def _process_audio(db, asset, version, media_file, s3, output_prefix):
 
 def _process_image(db, asset, version, media_file, s3, output_prefix):
     from packages.transcoder.image_processor import process_image
-    result = process_image(s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix)
+    result = process_image(
+        s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix,
+        storage_class=settings.s3_storage_class,
+    )
     media_file.s3_key_processed = result.get("webp_key")
     media_file.s3_key_thumbnail = result.get("thumbnail_key")
     db.flush()

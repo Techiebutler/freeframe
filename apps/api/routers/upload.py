@@ -401,9 +401,9 @@ def _held_part_numbers(stored: list[dict], chunk_size: int, total_bytes: int) ->
 
     Size, not ETag. ETag-as-MD5 holds on S3, MinIO and Garage, but it is a
     convention rather than a guarantee: bucket-level default encryption changes
-    it invisibly -- create_multipart_upload passes only Bucket, Key and
-    ContentType, so an operator's SSE-KMS default is not something this code can
-    see -- and rclone ships `use_multipart_etag: false` for R2 and SeaweedFS,
+    it invisibly -- create_multipart_upload passes no encryption settings, so
+    an operator's SSE-KMS default is not something this code can see -- and
+    rclone ships `use_multipart_etag: false` for R2 and SeaweedFS,
     which is the reference client saying the vendor docs are wrong. Size is
     reported by every backend and means the same thing on all of them.
 

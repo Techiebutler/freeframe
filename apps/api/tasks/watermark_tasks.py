@@ -106,7 +106,7 @@ def apply_watermark(
             # Upload watermarked file back to S3
             wm_key = f"watermarked/{asset_id}/output{output_ext}"
             with open(output_path, "rb") as f:
-                put_object(wm_key, f.read(), "video/mp4")
+                put_object(wm_key, f.read(), "video/mp4", media=True)
 
         # Publish SSE event (best-effort)
         _publish_event(

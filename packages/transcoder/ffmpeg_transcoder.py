@@ -1394,10 +1394,19 @@ _UPLOAD_THREADS = 8
 
 
 class FFmpegTranscoder(BaseTranscoder):
-    def __init__(self, s3_client, bucket: str, s3_endpoint: str = None):
+    def __init__(self, s3_client, bucket: str, s3_endpoint: str = None, storage_class: str | None = None):
         self.s3 = s3_client
         self.bucket = bucket
         self.s3_endpoint = s3_endpoint
+        # S3_STORAGE_CLASS, sent on every output; None leaves the bucket default.
+        self.storage_class = storage_class
+
+    def _extra_args(self, content_type: str, cache_control: str) -> dict:
+        """ExtraArgs for one output upload, with the storage class when set."""
+        extra = {"ContentType": content_type, "CacheControl": cache_control}
+        if self.storage_class:
+            extra["StorageClass"] = self.storage_class
+        return extra
     
     def _get_presigned_url(self, s3_key: str, expires_in: int = 7200) -> str:
         """Generate a presigned URL for streaming input to FFmpeg."""
@@ -1733,7 +1742,7 @@ class FFmpegTranscoder(BaseTranscoder):
             content_type, cache_control = self._get_content_type(path.name)
             self.s3.upload_file(
                 str(path), self.bucket, s3_key,
-                ExtraArgs={"ContentType": content_type, "CacheControl": cache_control},
+                ExtraArgs=self._extra_args(content_type, cache_control),
             )
             return s3_key
 
@@ -1805,7 +1814,7 @@ class FFmpegTranscoder(BaseTranscoder):
             )
             self.s3.upload_file(
                 str(mp4_path), self.bucket, key,
-                ExtraArgs={"ContentType": "video/mp4", "CacheControl": "max-age=86400"},
+                ExtraArgs=self._extra_args("video/mp4", "max-age=86400"),
             )
         except Exception as exc:  # noqa: BLE001 - never fail a good ladder over this
             print(
@@ -2501,7 +2510,7 @@ class FFmpegTranscoder(BaseTranscoder):
             if thumb_path.exists():
                 self.s3.upload_file(
                     str(thumb_path), self.bucket, thumbnail_key,
-                    ExtraArgs={"ContentType": "image/jpeg", "CacheControl": "max-age=86400"},
+                    ExtraArgs=self._extra_args("image/jpeg", "max-age=86400"),
                 )
                 uploaded_thumb = True
 

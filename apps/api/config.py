@@ -13,6 +13,9 @@ DEFAULT_S3_ENDPOINT = "http://minio:9000"
 # token rather than at startup.
 JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
 
+# Storage classes whose objects cannot be read until they are restored.
+ARCHIVE_STORAGE_CLASSES = ("GLACIER", "DEEP_ARCHIVE")
+
 
 def _is_aws_endpoint(url: str) -> bool:
     """True if `url`'s host is an AWS S3 endpoint (an ``*.amazonaws.com`` host)."""
@@ -50,6 +53,11 @@ class Settings(BaseSettings):
     s3_secret_key: str = "minioadmin"
     s3_region: str = "us-east-1"
     s3_public_endpoint: str | None = None  # External URL for presigned URLs (e.g. http://localhost:9000 when S3_ENDPOINT is http://minio:9000)
+    # Storage class for media: uploaded originals and every transcoder output.
+    # Sent when the object is created (CreateMultipartUpload for an original),
+    # never by the browser. Unset sends no class, so the bucket default applies;
+    # MinIO and Silo refuse everything but STANDARD and REDUCED_REDUNDANCY.
+    s3_storage_class: str | None = None
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
@@ -137,6 +145,27 @@ class Settings(BaseSettings):
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_use_tls: bool = True
+
+    @field_validator("s3_storage_class")
+    @classmethod
+    def _check_s3_storage_class(cls, value: str | None) -> str | None:
+        """Normalise S3_STORAGE_CLASS, and refuse a class FreeFrame cannot read.
+
+        Only the archive classes are refused: every object is streamed or
+        downloaded directly, and these need a restore before any read. Anything
+        else is passed through, because providers name their own tiers.
+        """
+        value = (value or "").strip().upper()
+        if not value:
+            return None
+        if value in ARCHIVE_STORAGE_CLASSES:
+            raise ValueError(
+                f"S3_STORAGE_CLASS={value} is an archive class. FreeFrame reads "
+                f"media directly, and objects in {value} need a restore before "
+                f"they can be read. Leave it unset or pick a class that can be "
+                f"read immediately."
+            )
+        return value
 
     @field_validator("jwt_secret")
     @classmethod

@@ -284,13 +284,26 @@ def get_content_type(key: str) -> tuple[str, str]:
     ext = os.path.splitext(key)[1].lower()
     return CONTENT_TYPE_MAP.get(ext, ("application/octet-stream", "no-cache"))
 
+def media_storage_class_args() -> dict:
+    """`{"StorageClass": ...}` for a media write when S3_STORAGE_CLASS is set, else `{}`.
+
+    Server-side writes only. A class in a browser presigned URL becomes a signed
+    `x-amz-storage-class` header the browser does not send.
+    """
+    return {"StorageClass": settings.s3_storage_class} if settings.s3_storage_class else {}
+
 def create_multipart_upload(s3_key: str, content_type: str) -> str:
-    """Initiate a multipart upload and return the upload_id."""
+    """Initiate a multipart upload and return the upload_id.
+
+    The storage class is fixed here, for the whole object: the part uploads the
+    browser sends afterwards carry none.
+    """
     s3 = _get_initiate_client()
     response = s3.create_multipart_upload(
         Bucket=settings.s3_bucket,
         Key=s3_key,
         ContentType=content_type,
+        **media_storage_class_args(),
     )
     return response["UploadId"]
 
@@ -583,14 +596,23 @@ def generate_internal_presigned_get_url(s3_key: str, expires_in: int = 3600) -> 
     )
 
 
-def put_object(s3_key: str, body: bytes, content_type: str | None = None, cache_control: str | None = None) -> None:
-    """Upload a small object directly (for processed files like thumbnails)."""
+def put_object(
+    s3_key: str, body: bytes, content_type: str | None = None, cache_control: str | None = None,
+    media: bool = False,
+) -> None:
+    """Upload a small object directly (for processed files like thumbnails).
+
+    `media=True` writes it in S3_STORAGE_CLASS; anything else (a project
+    poster) stays on the bucket default.
+    """
     s3 = get_s3_client()
     kwargs = {"Bucket": settings.s3_bucket, "Key": s3_key, "Body": body}
     if content_type:
         kwargs["ContentType"] = content_type
     if cache_control:
         kwargs["CacheControl"] = cache_control
+    if media:
+        kwargs.update(media_storage_class_args())
     s3.put_object(**kwargs)
 
 def delete_object(s3_key: str) -> None:
