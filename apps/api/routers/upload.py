@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import ssl
 import time
 from botocore.exceptions import (
     BotoCoreError, ClientError, HTTPClientError, SSLError,
@@ -214,21 +215,75 @@ def presign_part(
 _TRANSIENT_STORAGE_CODES = frozenset({"SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout"})
 
 
+# What a TLS failure says when the TLS setup itself is wrong: a certificate that
+# does not validate, a protocol version the two ends do not share, or TLS spoken
+# to a port that does not speak it. Matched lowercase against the whole error
+# chain. Anything else -- the peer closing the connection or resetting it during
+# the handshake, which a TCP proxy in front of restarting storage does -- is an
+# outage like any dropped connection.
+_TLS_CONFIG_MARKERS = (
+    "certificate",
+    "wrong version number",
+    "unsupported protocol",
+    "protocol version",
+    "no protocols available",
+    "unknown ca",
+    "hostname",
+)
+
+
+def _tls_misconfigured(exc: BaseException) -> bool:
+    """Whether an SSLError is a configuration fault that waiting will not fix.
+
+    botocore raises its SSLError around urllib3's, around the `ssl` module's, so
+    the whole chain is read: the wrapped error, causes and contexts, and their
+    text. The endpoint URL botocore puts in its message is left out, so a host
+    that happens to be called "certificates" decides nothing.
+    """
+    texts: list[str] = []
+    urls: list[str] = []
+    stack: list[object] = [exc]
+    seen: set[int] = set()
+    while stack:
+        e = stack.pop()
+        if e is None or id(e) in seen:
+            continue
+        seen.add(id(e))
+        if isinstance(e, ssl.SSLCertVerificationError):
+            return True
+        texts.append(str(e))
+        if not isinstance(e, BaseException):
+            continue
+        kwargs = getattr(e, "kwargs", None)
+        if isinstance(kwargs, dict):
+            stack.append(kwargs.get("error"))
+            if isinstance(kwargs.get("endpoint_url"), str):
+                urls.append(kwargs["endpoint_url"])
+        stack.extend([e.__cause__, e.__context__])
+        stack.extend(a for a in e.args if isinstance(a, BaseException))
+    text = " ".join(texts)
+    for url in urls:
+        text = text.replace(url, " ")
+    return any(marker in text.lower() for marker in _TLS_CONFIG_MARKERS)
+
+
 def storage_initiate_error(exc: Exception) -> HTTPException | None:
     """The coded answer for a storage failure while an upload is being started.
 
     503 `storage_unavailable` (with `Retry-After`) when waiting could help: storage
-    could not be reached, timed out, or is shedding load. 500 `storage_error` when
-    it answered and refused, or its certificate does not validate: waiting will not
-    fix either, and the admin has to. None for everything else, which the caller
-    re-raises: a bad argument or a bug is not a storage outage and must stay loud.
+    could not be reached, timed out, or is shedding load, including a TLS
+    handshake the peer cut short. 500 `storage_error` when it answered and refused,
+    or its TLS setup is wrong (a certificate that does not validate, a protocol
+    version mismatch): waiting will not fix either, and the admin has to. None for
+    everything else, which the caller re-raises: a bad argument or a bug is not a
+    storage outage and must stay loud.
 
     The web queue keys off `code` to decide between backing off and giving up.
     """
     transient = False
     if isinstance(exc, SSLError):
         # botocore files SSLError under ConnectionError, so this has to come first.
-        pass
+        transient = not _tls_misconfigured(exc)
     elif isinstance(exc, (BotoConnectionError, HTTPClientError)):
         transient = True
     elif isinstance(exc, ClientError):

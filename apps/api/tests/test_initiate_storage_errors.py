@@ -6,10 +6,12 @@ retries behind them, then an uncaught exception that surfaced as a bare 500. The
 web queue can only back off and retry when the answer says the outage is
 transient, so the call is bounded and its failures are coded.
 """
+import ssl
 import uuid
 from unittest.mock import MagicMock
 
 import pytest
+from urllib3.exceptions import SSLError as URLLib3SSLError
 from botocore.exceptions import (
     ClientError, ConnectionClosedError, ConnectTimeoutError, EndpointConnectionError,
     HTTPClientError, ParamValidationError, ProxyConnectionError, ReadTimeoutError, SSLError,
@@ -69,6 +71,18 @@ def _client_error(code, status, op="CreateMultipartUpload"):
     )
 
 
+def _tls(err):
+    """An SSLError the way botocore raises one: around urllib3's, around the ssl module's."""
+    wrapped = URLLib3SSLError(err)
+    try:
+        try:
+            raise wrapped
+        except URLLib3SSLError as e:
+            raise SSLError(endpoint_url=ENDPOINT, error=e)
+    except SSLError as e:
+        return e
+
+
 def _initiate_failing(client, auth_headers, mock_db, monkeypatch, path, exc):
     """Run one initiate route with storage raising `exc` when the upload is started."""
     def _raise(key, mime):
@@ -117,7 +131,19 @@ def _detail(resp):
     ReadTimeoutError(endpoint_url=ENDPOINT),
     ConnectionClosedError(endpoint_url=ENDPOINT),
     HTTPClientError(error="boom"),
-], ids=lambda e: type(e).__name__)
+    # TLS storage behind a TCP proxy that is restarting: the proxy accepts the
+    # connection and closes it mid-handshake. Nothing is misconfigured.
+    _tls(ssl.SSLEOFError(8, "EOF occurred in violation of protocol (_ssl.c:1006)")),
+    _tls(ssl.SSLZeroReturnError(6, "TLS/SSL connection has been closed (EOF) (_ssl.c:1006)")),
+    _tls(ConnectionResetError(54, "Connection reset by peer")),
+    SSLError(endpoint_url=ENDPOINT, error="EOF occurred in violation of protocol (_ssl.c:1006)"),
+    # The endpoint's name is not the error's.
+    SSLError(endpoint_url="https://certificates.example.com", error="EOF occurred in violation of protocol"),
+], ids=[
+    "EndpointConnectionError", "ConnectTimeoutError", "ProxyConnectionError", "ReadTimeoutError",
+    "ConnectionClosedError", "HTTPClientError", "SSLError-EOF", "SSLError-closed", "SSLError-reset",
+    "SSLError-EOF-text", "SSLError-EOF-named-host",
+])
 def test_connection_failures_answer_coded_503(
     client, auth_headers, mock_db, monkeypatch, path, exc
 ):
@@ -164,9 +190,15 @@ def test_storage_5xx_and_throttling_answer_coded_503(
     _client_error("AccessDenied", 403),
     _client_error("NoSuchBucket", 404),
     # A certificate problem is a configuration fault that waiting will not fix, even
-    # though botocore files SSLError under ConnectionError.
+    # though botocore files SSLError under ConnectionError. So is a protocol-version
+    # mismatch, or TLS spoken to a plain-HTTP port.
     SSLError(endpoint_url=ENDPOINT, error="certificate verify failed"),
-], ids=["AccessDenied", "NoSuchBucket", "SSLError"])
+    _tls(ssl.SSLCertVerificationError(
+        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1006)")),
+    _tls(ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1006)")),
+    _tls(ssl.SSLError(1, "[SSL: TLSV1_ALERT_PROTOCOL_VERSION] tlsv1 alert protocol version (_ssl.c:1006)")),
+], ids=["AccessDenied", "NoSuchBucket", "SSLError", "SSLError-cert", "SSLError-wrong-version",
+        "SSLError-protocol-version"])
 def test_storage_refusals_answer_coded_500(
     client, auth_headers, mock_db, monkeypatch, path, exc
 ):
