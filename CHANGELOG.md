@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 - **`middleware.ts` is now `proxy.ts`.** If you patched `apps/web/middleware.ts`, move the change into `apps/web/proxy.ts` and delete `middleware.ts`. Next 16 refuses to build with both files present.
-- **The `eslint` key in `next.config.js` is no longer supported.** If you run a custom `next.config.js`, remove the `eslint` key; Next 16 no longer supports it.
+- **`next.config.js` no longer takes an `eslint` key.** If you run a custom `next.config.js`, remove it; Next 16 ignores the key and warns on every build.
 
 ### Changed
 - **The web app moves to Next.js 16.4.2 and React 19.** It was on Next 14.2.35 and React 18. `middleware.ts` is now `proxy.ts` (Next 16 renamed the file; the checks are unchanged), route `params` are read as promises, and `next lint` is replaced by `eslint .` with an ESLint 9 flat config (`apps/web/eslint.config.mjs`), because Next 16 removed `next lint`. No API, environment variable or Docker setting changes. Node 20.19 or newer (or 22.12+, 24+) is required; the Docker images and CI already use Node 20.
