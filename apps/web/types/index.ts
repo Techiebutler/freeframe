@@ -326,6 +326,8 @@ export interface ShareLinkListItem {
   view_count: number
   last_viewed_at: string | null
   created_at: string
+  /** Only when the list was asked about one asset: how this link shows it. */
+  contains_asset?: "direct" | "indirect" | null
 }
 
 export type ShareActivityAction = "opened" | "viewed_asset" | "commented" | "approved" | "rejected" | "downloaded"

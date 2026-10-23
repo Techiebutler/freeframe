@@ -136,6 +136,10 @@ class ShareLinkListItem(BaseModel):
     view_count: int = 0
     last_viewed_at: Optional[datetime] = None
     created_at: datetime
+    # Set only when the list is asked about one asset (`?asset_id=`): "direct" when the
+    # link is that asset or lists it, "indirect" when it shows it through a folder or the
+    # whole project, None when it does not show it.
+    contains_asset: Optional[Literal["direct", "indirect"]] = None
     model_config = {"from_attributes": True}
 
 

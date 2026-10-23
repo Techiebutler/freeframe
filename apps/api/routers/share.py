@@ -973,10 +973,19 @@ def share_with_team(
 def list_project_share_links(
     project_id: uuid.UUID,
     search: Optional[str] = Query(default=None),
+    asset_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     require_project_role(db, project_id, current_user, ProjectRole.viewer)
+
+    asset = None
+    if asset_id:
+        asset = db.query(Asset).filter(
+            Asset.id == asset_id, Asset.project_id == project_id, Asset.deleted_at.is_(None),
+        ).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
 
     # Subquery for view_count and last_viewed_at
     activity_stats = db.query(
@@ -1073,6 +1082,11 @@ def list_project_share_links(
     # adaptation on a legacy Query union.
     results = sorted(results, key=lambda row: (row.created_at, str(row.id)), reverse=True)
 
+    contains: dict[uuid.UUID, Optional[str]] = {}
+    if asset is not None and results:
+        links = db.query(ShareLink).filter(ShareLink.id.in_([row.id for row in results])).all()
+        contains = {link.id: _link_shows_asset(db, link, asset) for link in links}
+
     return [
         ShareLinkListItem(
             id=row.id,
@@ -1086,6 +1100,7 @@ def list_project_share_links(
             view_count=row.view_count,
             last_viewed_at=row.last_viewed_at,
             created_at=row.created_at,
+            contains_asset=contains.get(row.id),
         )
         for row in results
     ]
@@ -1115,6 +1130,29 @@ def get_share_link_activity(
 
 
 # ── Add asset to existing share link ──────────────────────────────────────────
+
+def _link_shows_asset(db: Session, link: ShareLink, asset: Asset) -> Optional[str]:
+    """How a share link shows an asset: "direct" when the link is that asset or lists it as
+    an item, "indirect" when it reaches it through a folder or the whole project, None when
+    it does not show it.
+
+    "indirect" is whatever validate_asset_in_share accepts beyond that, so the answer agrees
+    with what the share page actually serves.
+    """
+    if link.asset_id == asset.id:
+        return "direct"
+    listed = db.query(ShareLinkItem.id).filter(
+        ShareLinkItem.share_link_id == link.id,
+        ShareLinkItem.asset_id == asset.id,
+    ).first()
+    if listed:
+        return "direct"
+    try:
+        validate_asset_in_share(db, link, asset)
+    except HTTPException:
+        return None
+    return "indirect"
+
 
 @router.post("/share/{token}/add-asset/{asset_id}", status_code=status.HTTP_200_OK)
 def add_asset_to_share_link(
@@ -1146,17 +1184,11 @@ def add_asset_to_share_link(
     if link_project_id and asset.project_id != link_project_id:
         raise HTTPException(status_code=403, detail="Asset does not belong to this share link's project")
 
-    # Check if asset is already the direct target
-    if link.asset_id == asset_id:
-        return {"detail": "Asset already included in this share link"}
-
-    # Check if asset is already in share_link_items
-    existing_item = db.query(ShareLinkItem).filter(
-        ShareLinkItem.share_link_id == link.id,
-        ShareLinkItem.asset_id == asset_id,
-    ).first()
-    if existing_item:
-        return {"detail": "Asset already included in this share link"}
+    # A link that already shows the asset is left alone. Through a folder or the whole
+    # project counts too: adding an item there would convert a folder link, or shrink a
+    # whole-project link to the items it lists.
+    if _link_shows_asset(db, link, asset) is not None:
+        return {"detail": "Asset already included in this share link", "added": False}
 
     # If this is a single-asset share link, migrate to multi-item mode
     if link.asset_id and not link.project_id:
@@ -1184,7 +1216,7 @@ def add_asset_to_share_link(
     # Add the new asset
     db.add(ShareLinkItem(share_link_id=link.id, asset_id=asset_id))
     db.commit()
-    return {"detail": "Asset added to share link"}
+    return {"detail": "Asset added to share link", "added": True}
 
 
 @router.post("/projects/{project_id}/share/multi", response_model=ShareLinkResponse, status_code=status.HTTP_201_CREATED)
