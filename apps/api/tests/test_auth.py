@@ -591,32 +591,53 @@ def test_delete_user_revokes_a_pending_invite(client, auth_headers, mock_db, tes
     mock_db.delete.assert_not_called()
 
 
-def test_verify_magic_code_activates_a_pending_invitee(client, mock_db):
-    """POST /auth/verify-magic-code — signing in with a code accepts the invite.
+def test_verify_magic_code_sends_a_pending_invitee_to_their_invite(client, mock_db):
+    """POST /auth/verify-magic-code — a code does not sign in a pending invitee.
 
-    An invitee who used the login page instead of the invite link got tokens
-    and used the app while the row stayed pending_invite for good, so Revoke
-    Invite would soft-delete a working account (#472).
+    An invite is accepted on the invite screen and nowhere else. Before, an
+    invitee who used the login page instead got tokens and used the app while
+    the row stayed pending_invite, so Revoke Invite soft-deleted a working
+    account (#472). The row is left exactly as the invite made it.
     """
     user = _pending_invitee()
-    user.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    expires = datetime.now(timezone.utc) + timedelta(days=7)
+    user.invite_token_expires_at = expires
     mock_db.first.return_value = user
 
     with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)), \
          patch("apps.api.routers.auth.redis_verify_magic_code", return_value=(True, "")):
         resp = client.post("/auth/verify-magic-code", json={"email": user.email, "code": "123456"})
 
-    assert resp.status_code == 200
-    assert resp.json()["needs_password"] is True
-    assert user.status == UserStatus.active
-    assert user.invite_token is None
-    assert user.invite_token_expires_at is None
+    from apps.api.routers.auth import INVITE_NOT_ACCEPTED_DETAIL
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == INVITE_NOT_ACCEPTED_DETAIL
+    assert "access_token" not in resp.json()
+    assert user.status == UserStatus.pending_invite
+    assert user.email_verified is False
+    assert user.invite_token == "invite-token-1"
+    assert user.invite_token_expires_at == expires
+
+
+def test_verify_magic_code_checks_the_code_before_naming_an_invite(client, mock_db):
+    """A wrong code for a pending invitee gets the generic failure, so the
+    invite message never tells someone without the mailbox that an invite exists."""
+    user = _pending_invitee()
+    mock_db.first.return_value = user
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)), \
+         patch("apps.api.routers.auth.redis_verify_magic_code", return_value=(False, "Invalid code")):
+        resp = client.post("/auth/verify-magic-code", json={"email": user.email, "code": "000000"})
+
+    from apps.api.routers.auth import MAGIC_CODE_FAILURE_DETAIL
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == MAGIC_CODE_FAILURE_DETAIL
+    assert user.status == UserStatus.pending_invite
 
 
 def test_delete_user_refuses_an_invitee_who_signed_in(client, auth_headers, mock_db, test_user):
     """DELETE /users/{id} — a row still marked pending_invite whose owner signed
-    in with a code (email_verified, from before that sign-in activated them) is
-    a working account, so it needs deactivating first like any other (#472)."""
+    in with a code (email_verified, from when a code still let a pending invitee
+    in) is a working account, so it needs deactivating first like any other (#472)."""
     test_user.is_superadmin = True
     target = _pending_invitee()
     target.email_verified = True

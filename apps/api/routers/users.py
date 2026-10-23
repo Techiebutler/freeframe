@@ -232,8 +232,8 @@ def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db), current_user:
         raise HTTPException(status_code=404, detail="User not found")
     # Deleting a pending invitee is how the admin page revokes an invite, so it
     # needs no deactivation first; anyone else does. email_verified marks an
-    # invitee who signed in with a code before that sign-in activated them: that
-    # is a working account, still listed as pending.
+    # invitee who signed in with a code while a code still let a pending invitee
+    # in: that is a working account, still listed as pending.
     revoking_invite = user.status == UserStatus.pending_invite and not user.email_verified
     if user.status != UserStatus.deactivated and not revoking_invite:
         raise HTTPException(status_code=409, detail="Deactivate this user before deleting them")

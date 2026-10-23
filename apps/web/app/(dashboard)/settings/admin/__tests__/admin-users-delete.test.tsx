@@ -51,7 +51,7 @@ const invited = makeUser({
   email_verified: false,
   invite_token: 'tok',
 })
-// Signed in with an email code before that sign-in activated an invitee.
+// Signed in with an email code back when a code still let a pending invitee in.
 const signedIn = makeUser({
   id: 'signed-in',
   name: 'Code Signer',

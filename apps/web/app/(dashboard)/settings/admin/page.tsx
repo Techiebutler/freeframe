@@ -469,7 +469,7 @@ export default function AdminPage() {
                           </Button>
                         )}
                         {/* A pending row with a verified email is an invitee who
-                            signed in with a code before that activated them: a
+                            signed in with a code while a code still let them in: a
                             working account, so it is deactivated, not revoked. */}
                         {u.id !== user?.id &&
                         (u.status === "active" ||

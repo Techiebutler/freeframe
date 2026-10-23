@@ -39,6 +39,10 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 MAGIC_CODE_FAILURE_DETAIL = (
     "Invalid or expired code. Request a new code if you've tried several times."
 )
+INVITE_NOT_ACCEPTED_DETAIL = (
+    "You have a pending invite. Open the invite link from your email to accept it, "
+    "or ask an admin for a new link."
+)
 
 MAGIC_CODE_EXPIRY_MINUTES = MAGIC_CODE_EXPIRY_SECONDS // 60
 
@@ -108,19 +112,19 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
     if not success:
         raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
     
+    # An invite is accepted on the invite screen, not by signing in. Without
+    # this an invitee who used the login page got tokens and used the app while
+    # still listed as pending, and Revoke Invite deleted a working account.
+    # Checked after the code, so only the mailbox's owner learns of the invite.
+    if user.status == UserStatus.pending_invite:
+        raise HTTPException(status_code=403, detail=INVITE_NOT_ACCEPTED_DETAIL)
+
     # Mark email as verified
     user.email_verified = True
     
     # If user was pending verification, activate them
     if user.status == UserStatus.pending_verification:
         user.status = UserStatus.active
-    # An invitee who signs in with a code instead of the invite link has
-    # accepted it just the same: without this they used the app while still
-    # listed as pending, and Revoke Invite deleted a working account.
-    if user.status == UserStatus.pending_invite:
-        user.status = UserStatus.active
-        user.invite_token = None
-        user.invite_token_expires_at = None
     
     db.commit()
     
