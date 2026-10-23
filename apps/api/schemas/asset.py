@@ -88,5 +88,7 @@ class NotificationResponse(BaseModel):
     # Enriched fields
     asset_name: Optional[str] = None
     actor_name: Optional[str] = None
+    # The actor is a share-link guest, not an account in the workspace
+    actor_is_guest: bool = False
     comment_preview: Optional[str] = None
     project_id: Optional[uuid.UUID] = None

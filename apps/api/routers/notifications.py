@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..middleware.auth import get_current_user
-from ..models.user import User
+from ..models.user import User, GuestUser
 from ..models.asset import Asset
 from ..models.project import Project
 from ..models.activity import Notification
@@ -41,6 +41,7 @@ def list_notifications(
     for n in notifications:
         asset_name = None
         actor_name = None
+        actor_is_guest = False
         comment_preview = None
         project_id = None
 
@@ -59,6 +60,12 @@ def list_notifications(
                     author = db.query(User).filter(User.id == comment.author_id).first()
                     if author:
                         actor_name = author.name
+                # A share-link guest has no account; the comment names them instead
+                elif comment.guest_author_id:
+                    guest = db.query(GuestUser).filter(GuestUser.id == comment.guest_author_id).first()
+                    if guest:
+                        actor_name = guest.name
+                        actor_is_guest = True
 
         results.append(NotificationResponse(
             id=n.id,
@@ -69,6 +76,7 @@ def list_notifications(
             created_at=n.created_at,
             asset_name=asset_name,
             actor_name=actor_name,
+            actor_is_guest=actor_is_guest,
             comment_preview=comment_preview,
             project_id=project_id,
         ))

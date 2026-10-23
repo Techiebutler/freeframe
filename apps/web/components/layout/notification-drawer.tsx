@@ -26,7 +26,7 @@ const notificationIcons: Record<NotificationType, React.ElementType> = {
 }
 
 function getNotificationText(n: Notification): { title: string; subtitle: string | null } {
-  const actor = n.actor_name || 'Someone'
+  const actor = n.actor_name ? (n.actor_is_guest ? `${n.actor_name} (guest)` : n.actor_name) : 'Someone'
   const asset = n.asset_name || 'an asset'
   switch (n.type) {
     case 'mention':

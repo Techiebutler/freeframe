@@ -447,6 +447,7 @@ export interface Notification {
   created_at: string;
   asset_name: string | null;
   actor_name: string | null;
+  actor_is_guest?: boolean;
   comment_preview: string | null;
   project_id: string | null;
 }
