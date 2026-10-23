@@ -138,7 +138,7 @@ with the before and after against the baseline. The "Live Chrome run" column abo
 - **Q1** at Fast 4G (the MCP has no 2 MB/s; same as the baseline): 6 initiates in the first second (baseline 50), at most 3 rows moving at all
   332 samples (baseline 50), start order exactly the drop order, at most 3 part PUTs in flight while throttled (baseline 61).
 - **Passing** (13 asked for, 12 passed the first time, 13 after the R1 re-run): Q1, Q3, Q4, C1, C2, C3, S1 (with the real fault, `docker stop` of the e2e MinIO), S2 (25 presigns in 60 s, bound 40),
-  R3, V1, P1 (0.5 file over the cap), P2. Plus the brief's exploratory checks: 50 files at Slow 3G (one initiate at a time, three files sending),
+  R3, V1, P1 (0.5 file over the cap), P2. Plus the test plan's exploratory checks: 50 files at Slow 3G (one initiate at a time, three files sending),
   `/upload/initiate` blocked for 30 s ("Waiting for connection", none failed), and a Resume while 20 files wait (starts next).
 - **R1 failed** in the first live pass (**APP-BUG-1**, fixed; see the re-run below): the Resume starts next, as expected, but a Resume that waits in the queue past the 30 s own-stop
   grace is read as "Still uploading in another tab or on another device" when its turn comes, and nothing is sent. Controlled
@@ -250,7 +250,7 @@ so the first three do ask together. No data is lost; the order among those three
 Run by hand in real, headed Chrome 154.0.8037.100 on the phase 3 branch (`0eb50cc1`), 2026-10-22: [`live-runs/2026-10-22-phase-3.md`](live-runs/2026-10-22-phase-3.md).
 The "Live Chrome run" column above links each scenario's section.
 
-- **Passing**: U1, U2, U3, N1, N2, plus the checks the brief asked for and two the live pass added: U3b (a part that sent 1.08 MB and
+- **Passing**: U1, U2, U3, N1, N2, plus the checks the test plan asked for and two the live pass added: U3b (a part that sent 1.08 MB and
   then stopped, tab busy: aborted 90.0 s after its own last progress, not 140 s), U3c (the two 5 min clocks the automated suite cannot
   run: a never-started part with a busy tab is aborted at 300.0 s, a part with every byte sent and no answer 299.98 s after its last
   byte), `rm` of a file that is sending (X1: all parts in flight, the upload completes from the unlinked file; X1b: a part still to
@@ -261,7 +261,7 @@ The "Live Chrome run" column above links each scenario's section.
 - **No app bug was found** in this pass. Observations (not failures): after a reconnect the app waits out its backoff (22 to 30 s here)
   rather than waking on the browser's `online` event; an outage that lands on `/upload/complete` leaves the row Interrupted with the
   browser's text "Failed to fetch" (X2), recoverable with Resume without re-sending.
-- **Laptop sleep: moved to the manual pass** (controller ruling R9: the machine is not put to sleep in an automated run).
+- **Laptop sleep: moved to the manual pass** (an automated run does not put the machine to sleep).
 - "Touch a file in a synced folder" used a plain local folder: the Google Drive, OneDrive and iCloud folders on the machine are the
   user's, not test locations.
 - Not run here: the manual real Safari and real Firefox pass (matrix row M).
@@ -368,12 +368,12 @@ Observations (not failures of these scenarios):
 
 Run by hand in real, headed Chrome 154.0.8037.100 on the phase 4 branch (`75618d4b`), 2026-10-22, with two tabs and two windows of
 one profile: [`live-runs/2026-10-22-phase-4.md`](live-runs/2026-10-22-phase-4.md). The "Live Chrome run" column above links each
-scenario's section. The DevTools MCP's profile was held by another session's Chrome, so the pass drove its own headed Chrome over
-the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` section 10). Through that driver every page read visible and
+scenario's section. The DevTools MCP's profile was held by a Chrome the pass had not started, so the pass drove its own headed
+Chrome over the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` section 10). Through that driver every page read visible and
 focused (Playwright's focus emulation), so the throttling of a hidden tab or an occluded window (which bears on the claim settle and
 the heartbeat) was not exercised in any multi-tab step (A1, A3, R2 and its two variants); that is owed to the manual pass (row M).
 
-- **Passing**: A1, A2, A3 and R2, plus the brief's three checks:
+- **Passing**: A1, A2, A3 and R2, plus the test plan's three checks:
   - A1: the log out in tab B failed A's two queued rows at once with the signed-out copy, kept for primary; the three sending sent
     their presigned parts and stopped, Interrupted, with no completion; A went to `/login` 0.38 s after its next API call
     (Notifications), with no prompt; back as primary the rows were as left, and Resume completed one without re-sending.
@@ -518,8 +518,8 @@ Observations (not failures of these scenarios):
 
 Run by hand in real, headed Chrome 154.0.8037.100 on the phase 5 branch (`eeb6048d`), 2026-10-23 (19:03 to 19:20 UTC on the
 22nd): [`live-runs/2026-10-23-phase-5.md`](live-runs/2026-10-23-phase-5.md). The "Live Chrome run" column above links each
-scenario's section. The DevTools MCP's profile was again held by another session's Chrome, so the pass drove its own headed
-Chrome over the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` section 10). The wake lock was watched from
+scenario's section. The DevTools MCP's profile was again held by a Chrome the pass had not started, so the pass drove its own
+headed Chrome over the DevTools protocol (`live-tools/cdp-driver.js`, `LIVE-CHROME.md` section 10). The wake lock was watched from
 outside the app (`live-tools/ffq-wakelock.js`, a wrapper on `WakeLock.prototype.request` installed before the app runs) and
 from the OS (`pmset -g assertions`: Chrome's "Blink Wake Lock" assertion).
 
@@ -540,7 +540,7 @@ these**: its uploading tab was a background tab that the emulation reported visi
 hidden tab holds no wake lock (the browser drops it on hide, as V measured), and the re-request on sign-in would be refused
 until the tab is shown. The real-browser outcome of W4 is owed to the manual pass.
 
-- **Passing**: L1, L2, L3 and the brief's checks:
+- **Passing**: L1, L2, L3 and the test plan's checks:
   - L1: a Reload with 3 sending and 2 queued raised Chrome's own `beforeunload` 4 ms later; Stay (dismissed after 3 s, the page
     held meanwhile) kept the document, the rows and the wake lock; Leave reloaded and the three that had started came back
     Interrupted. A Reload with only Interrupted rows asked nothing. **L1 negative** (a Reload with nothing on its way): no
@@ -663,7 +663,7 @@ Observations, not fixed here (outside the upload queue; each pre-dates it on `ma
 
 ### Phase 6 gate, fix round 1 (2026-10-23)
 
-The brief's step 2 in full, after fix round 1 (storage restored first in `afterEach`, the infra helpers refuse anything but
+The test plan's step 2 in full, after fix round 1 (storage restored first in `afterEach`, the infra helpers refuse anything but
 the `minio` service of an `ffe2e` compose project, the cancel order pinned by a unit test, S3 cancelling a sending file
 mid-outage). Each run had its own `--output` directory under `/tmp`, deleted afterwards.
 
@@ -700,8 +700,8 @@ Run by hand in real, headed Chrome 154.0.8037.100 on top of the whole stack (`f3
   refused). The "Live Chrome run" column above links each row.
 - **Not run here**: row M (real Safari, real Firefox), owed to the user; and the checks that have no matrix row (phase 2's E1 to E3,
   phase 3's X1 to X3, phase 4's T1 to T3, phase 5's W1 to W4 and V).
-- How: the DevTools MCP's profile was held by another session's Chrome, so the pass drove headed Chromes of its own over the DevTools
-  protocol (`LIVE-CHROME.md` section 10), with the driver's new `trace`, `metrics`, `screencast` and `filesraw` standing in for the MCP's
+- How: the DevTools MCP's profile was held by a Chrome the pass had not started, so the pass drove headed Chromes of its own over the
+  DevTools protocol (`LIVE-CHROME.md` section 10), with the driver's new `trace`, `metrics`, `screencast` and `filesraw` standing in for the MCP's
   trace, memory, GIF and file tools.
 - **Q1/Q3 wire concurrency**: the first run's `lsof` samples mixed two Chromes and are not evidence. Re-sampled per process in the fix
   round: 9 storage sockets while throttled with 3 PUTs pending (the other 6 are the grid's thumbnail loads, a connection group of their
@@ -715,9 +715,9 @@ Run by hand in real, headed Chrome 154.0.8037.100 on top of the whole stack (`f3
   the 13.6 min measured (+3.3 MB between 350 and 500 complete). That is not a leak test.
 - **A 1.45 GB, 180 s 1080p video**: uploaded in 20 s (139 parts), transcoded in 323 s, Ready, and it plays at 1920 x 1080 with no
   dropped frames; the worker ran 317 tasks in that window, all succeeded.
-- GIFs of Q1, U2, A1 and L2 are in `live-runs/media/`.
-- **No app bug of the upload queue was found.** Observations (in the report): the Docker VM disk read 96% for one 20 s sample as the
-  video's transcode finished (94% after); and the main thread is busy (about 89% in Q2, 48% in the long run, mostly paint at 120 Hz
+- GIFs of Q1, U2, A1 and L2 are attached to the pull request.
+- **No app bug of the upload queue was found.** Observations (in the report): a video run needs free storage, and a trash does not
+  give it back; and the main thread is busy (about 89% in Q2, 48% in the long run, mostly paint at 120 Hz
   in a development build) without breaking any bound. Outside the feature, pre-existing: the floating "Powered by FreeFrame" badge
   covers the project page's "Open in viewer to comment" link; a signed-out Notifications click raises an uncaught `ApiError` (phase 4);
   a drop on a project page before the account's role has loaded is ignored, silently (phase 5).
@@ -767,7 +767,7 @@ Fill in once per pass: Safari version `____`, Firefox version `____`, macOS vers
 | Idle timer | 5 | during a long "Waiting for storage" hold with the display idle, do the short lock pulses on each retry keep the Mac awake? `pmset -g assertionslog` while it holds | — | — |
 | Laptop sleep | 3 | close the lid mid-upload for a minute, open it; the rows recover or end Interrupted, none lost (by a person, not an automated run) | — | — |
 
-Q2 and S3/S4 are on the list though they are Chromium-only in the matrix's Engines column, because the brief for this phase
+Q2 and S3/S4 are on the list though they are Chromium-only in the matrix's Engines column, because the test plan for this phase
 asks for them by hand as well. S3 and S4 need the e2e stack (`-p ffe2e`) and must be put back afterwards
 (`docker start`, or `docker network connect` with the alias as above, then `curl http://localhost:19000/minio/health/live`).
 

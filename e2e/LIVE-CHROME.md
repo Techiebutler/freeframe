@@ -8,15 +8,14 @@ scenarios of that phase from `SCENARIOS.md`, driven through Chrome DevTools, wit
 recorded in `e2e/live-runs/YYYY-MM-DD-phase-N.md`.
 
 Never fall back to headless Chrome or to Playwright's bundled browser for this pass. If the DevTools browser
-cannot start (profile locked by another Chrome), close only the Chrome that the DevTools MCP
-started, or give the MCP its own profile; do not switch to a headless run. If the Chrome holding the
-profile belongs to another session (phase 4: started the day before by another session's MCP server), leave it
-alone and drive a headed Google Chrome of your own over the DevTools protocol (section 10).
+cannot start (profile locked by another Chrome), close that Chrome only if this run started it, or give the
+DevTools MCP a profile of its own; do not switch to a headless run. If the Chrome holding the profile is not
+yours, leave it alone and drive a headed Google Chrome of your own over the DevTools protocol (section 10).
 
 The first run of this protocol is the **baseline** on unchanged `main`
 (`live-runs/2026-10-21-baseline.md`, scenario Q1). Later phases compare against it.
 
-Status words used below: **verified** means it was run in Task 0.3 and behaved as written;
+Status words used below: **verified** means it was run in a pass and behaved as written;
 **not exercised** means the recipe is written from the tools' documentation and the stack's
 layout, and the first person to use it should check it before relying on it.
 
@@ -25,7 +24,7 @@ layout, and the first person to use it should check it before relying on it.
 | Tool | Use | Status |
 | --- | --- | --- |
 | `chrome-devtools` MCP (`chrome-devtools-mcp` 1.11.0 here) | `new_page` (with `isolatedContext`), `navigate_page` (`initScript`, `handleBeforeUnload`), `take_snapshot`, `upload_file`, `click`, `fill`, `type_text`, `press_key`, `emulate`, `list_network_requests`, `get_network_request`, `list_console_messages`, `evaluate_script`, `take_screenshot`, `performance_start_trace` / `performance_stop_trace`, `handle_dialog`, `close_page` | verified, except `handle_dialog` and `screencast_*` (`get_network_request` returns headers and status but no timing) |
-| `claude-in-chrome` tools with `gif_creator` | A recording of the user-visible flow, in the person's own Chrome. Use it for any failing scenario | not exercised (phase 6 made its GIFs with section 10's `screencast` and `live-tools/frames-to-gif.js`) |
+| Section 10's `screencast` with `live-tools/frames-to-gif.js`, or any screen recorder | A recording of the user-visible flow. Use it for any failing scenario | `screencast` verified in phase 6 |
 | `docker` | storage stop/start and network black hole (section 4) | `stop`/`start` of `ffe2e-minio-1` verified in phase 2 (S1); black hole not exercised |
 
 Limits of the DevTools MCP that shape the protocol:
@@ -185,7 +184,7 @@ makeFiles(process.argv[3], specs).then((p) => {
 ```
 
 The **Q2 set** is 300 files of 200 KB: `makeFiles(dir, Array.from({length: 300}, (_, i) => ({ name: 'q2-' + String(i + 1).padStart(3, '0') + '.png', bytes: 200 * 1024 })))`.
-(Task 0.3 ran a 40-file smoke of it, see the baseline.)
+(The baseline pass ran a 40-file smoke of it.)
 
 ### 2.4 Install the probe
 
@@ -520,9 +519,9 @@ report.
    `filePath` inside the workspace (`e2e/.live-files/shots/<id>-<what>.png`), then move it to the
    scratch location and link that path from the report. Do not commit images or recordings
    over 2 MB (none is committed by default; the report links the scratch path).
-7. **A GIF for any failure**: record the failing flow with the `claude-in-chrome` tools and
-   `gif_creator` in the person's own Chrome (the DevTools MCP also lists `screencast_start` /
-   `screencast_stop`, not exercised), and link it from the report.
+7. **A GIF for any failure**: record the failing flow (section 10's `screencast` and
+   `live-tools/frames-to-gif.js`, or any screen recorder; the DevTools MCP's `screencast_start` /
+   `screencast_stop` are not exercised), review it frame by frame (section 6), and link it from the report.
 8. **Q2 only, a performance trace with its long-task summary** (verified):
    `performance_start_trace` with `reload: false`, `autoStop: false` and a `filePath` inside the
    workspace; drop; wait for the run; `performance_stop_trace` with the same `filePath`. The
@@ -553,9 +552,9 @@ report.
 ## 6. The report
 
 `e2e/live-runs/YYYY-MM-DD-phase-N.md` (the baseline is `YYYY-MM-DD-baseline.md`). Commit it
-without screenshots or traces; link those from the scratch location. GIFs meant for a PR description may be committed under
-`e2e/live-runs/media/` when each is under 2 MB and has been reviewed frame by frame for tokens, email addresses and anything else
-that should not be published (the menu, the login form and error details are where they turn up); otherwise link them from scratch. Record the result
+without screenshots, recordings or traces; link those from the scratch location. A GIF meant for a PR goes in the PR description,
+not the repository, once it has been reviewed frame by frame for tokens, email addresses and anything else that should not be
+published (the menu, the login form and error details are where they turn up). Record the result
 in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section).
 
 ```markdown
@@ -674,7 +673,7 @@ the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript`
 | `live-tools/ffq-auth.js` | phase 4: `apiLog` (every request to the API: method, path with ids replaced, the account it was sent as from the bearer token's `sub` (first 8 characters of the user id, never the token), status, time), `storageLog` (token and resume-claim writes, from this tab and the others), `me()` (account and seconds left on the token), `authSummary()`, `uploadCallsAs()`, `savedRows(prefix)` and `savedOwners()` (Local Storage `ff-uploads`, with `ownerId`), `claims()`; stand-ins `holdRefresh` / `releaseRefresh()` and `partsAnswerAt` (the `/parts` answer reaches the app at that wall time: two tabs learn "nobody is sending" in the same millisecond). Needs `ffq-probe.js` first; set `q.apiHost` when the API is not `localhost:18000` |
 | `live-tools/ffq-login.js` | phase 4: on a login page, adds `#pwin`; put the mode-0600 password files (named `<account>.pw`) into it, then `__ffqLogin(email, account)` reads the file in the page, fills the form and clicks "Sign in". Delete the password files when the pass ends, at the latest |
 | `live-tools/cdp-driver.js` | phase 4: the section 10 driver (phase 5 added `init`, `focus`, `bounds`, `reload {nowait}`, `close {runBeforeUnload}`, `dialogs {answer, delayMs}`; phase 6 added `filesraw`, `press`, `trace`, `metrics`, `screencast` and the `Fast 3G` / `Slow 3G` presets) |
-| `live-tools/frames-to-gif.js` | phase 6: the driver's `screencast` frames to a GIF with ffmpeg (`node live-tools/frames-to-gif.js <dir> <out.gif> [stepSeconds] [fps] [width]`), the stand-in for `gif_creator`; prints the size |
+| `live-tools/frames-to-gif.js` | phase 6: the driver's `screencast` frames to a GIF with ffmpeg (`node live-tools/frames-to-gif.js <dir> <out.gif> [stepSeconds] [fps] [width]`); prints the size |
 | `live-tools/cdp-raw.js` | phase 5: plain DevTools-protocol commands with nothing of Playwright attached (`list`, `eval`, `new`, `activate`, `close`), for a real hidden tab (section 10). A unique id prefix, a timeout (`CDP_RAW_TIMEOUT_MS`), the driver's `token=` redaction on its output |
 | `live-tools/ffq-wakelock.js` | phase 5: install before the app (init script): `__wl.log` (request, granted, refused, release-called, released, visibility, pagehide), `__wl.prev` (the previous documents' entries, from sessionStorage), `held()`, `state()`, `watch(prefix, ms)` (a timeline of locks held and that prefix's rows, written on change), `stop()`, `clearPrev()` |
 | `live-tools/stall-server.js` | the throwaway server for `route` (`node e2e/live-tools/stall-server.js [port]`, default 18777, on 127.0.0.1): answers the CORS preflight, then `/stall` stops reading after 256 KB and `/hang` reads everything and never answers. Stop it with `kill <pid>` when done |
@@ -710,12 +709,12 @@ concatenated, then your scenario) that reads the files back from IndexedDB, buil
 To exercise APP-BUG-1 hold the queue for more than 30 s after the click. **Do not pass `File`s between tabs** (a second tab and a `BroadcastChannel`
 crashed the renderer and took both tabs with it).
 
-## 10. When the MCP's profile is held by another session: your own headed Chrome over the DevTools protocol
+## 10. Your own headed Chrome over the DevTools protocol
 
 Verified in phase 4. The chrome-devtools MCP refuses to start ("The browser is already running for
-`~/.cache/chrome-devtools-mcp/chrome-profile`") while any Chrome holds that profile. When that Chrome is not one this run started
-(`ps -o ppid` names another session's `chrome-devtools-mcp`), do not close it. Start Google Chrome yourself, headed, with a profile of its
-own, and drive it over the DevTools protocol:
+`~/.cache/chrome-devtools-mcp/chrome-profile`") while any Chrome holds that profile. When that Chrome is not one this run started,
+do not close it. Start Google Chrome yourself, headed, with a profile of its own, and drive it over the DevTools protocol. The same
+driver also covers what the MCP cannot do (a trace of plain JSON, a screencast, real file paths in a file input):
 
 ```bash
 SCR=$(mktemp -d)            # scratch: profile, screenshots, pid files

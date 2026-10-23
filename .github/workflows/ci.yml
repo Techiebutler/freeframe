@@ -235,6 +235,36 @@ jobs:
         run: pnpm lint
         working-directory: apps/web
 
+  # ─── E2E type check ───────────────────────────────────────────────────────────
+  # The Playwright suite in e2e/ drives a running stack, so CI does not run it,
+  # but it must keep compiling. A standalone package with its own lockfile;
+  # nothing here installs a browser.
+  e2e-typecheck:
+    name: E2E Type Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: e2e
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Type check
+        run: pnpm typecheck
+
   # ─── Docker Build ─────────────────────────────────────────────────────────────
   docker-build:
     name: Docker Build
