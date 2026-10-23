@@ -1,4 +1,5 @@
 import { withBasePath } from './base-path'
+import { subjectOf } from './jwt-subject'
 
 const ACCESS_TOKEN_KEY = 'ff_access_token'
 const REFRESH_TOKEN_KEY = 'ff_refresh_token'
@@ -112,6 +113,21 @@ export async function refreshAccessToken(): Promise<string | null> {
   }
 }
 
+/**
+ * What a refresh answers once the session in storage is no longer the one whose
+ * refresh token it sent. localStorage is shared by every tab, so another tab
+ * may have signed in, signed out or refreshed while the request was out, and
+ * writing this answer over it, or clearing it on a refusal, would replace or
+ * end that session in every tab. Nothing is written. If storage now holds the
+ * same account, another tab refreshed it or signed it in again, and its access
+ * token is the answer; otherwise null, "could not refresh".
+ */
+function sessionMovedOn(sentRefreshToken: string): string | null {
+  const access = getAccessToken()
+  const sub = subjectOf(access)
+  return sub !== null && sub === subjectOf(sentRefreshToken) ? access : null
+}
+
 async function _doRefresh(): Promise<string | null> {
   const refreshToken = getRefreshToken()
   if (!refreshToken) {
@@ -127,6 +143,7 @@ async function _doRefresh(): Promise<string | null> {
     })
 
     if (!response.ok) {
+      if (getRefreshToken() !== refreshToken) return sessionMovedOn(refreshToken)
       // Only a refusal ends the session. 401 or 403 is the server saying this
       // refresh token is no longer valid, which is what signing out is for.
       // Anything else -- a 502 from a proxy mid-deploy, a 500, a rate limit --
@@ -139,6 +156,7 @@ async function _doRefresh(): Promise<string | null> {
     }
 
     const data = await response.json()
+    if (getRefreshToken() !== refreshToken) return sessionMovedOn(refreshToken)
     const newAccessToken: string = data.access_token
     const newRefreshToken: string = data.refresh_token ?? refreshToken
 

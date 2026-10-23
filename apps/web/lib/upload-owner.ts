@@ -1,4 +1,7 @@
 import { getAccessToken, onSessionEnded } from './auth'
+import { subjectOf } from './jwt-subject'
+
+export { subjectOf }
 
 /**
  * Who an upload belongs to.
@@ -10,24 +13,6 @@ import { getAccessToken, onSessionEnded } from './auth'
  */
 
 const ACCESS_TOKEN_KEY = 'ff_access_token'
-
-/**
- * The `sub` claim of a JWT, or null for no token or anything that does not
- * decode to a payload with a non-empty string `sub`. The signature is not
- * checked: this only names the account the server will act as, it does not
- * vouch for it. Decoding follows `hooks/use-sse.ts` `isExpiringSoon`.
- */
-export function subjectOf(token: string | null): string | null {
-  if (!token) return null
-  try {
-    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
-    const payload = JSON.parse(atob(part)) as { sub?: unknown } | null
-    const sub = payload?.sub
-    return typeof sub === 'string' && sub !== '' ? sub : null
-  } catch {
-    return null
-  }
-}
 
 /** The account this tab is acting as right now, or null when signed out. */
 export function currentSubject(): string | null {
