@@ -925,7 +925,9 @@ def parse_audio_bitrate(raw: str | None) -> Optional[str]:
     if not text:
         return None
     low, high = _AUDIO_BITRATE_RANGE_K
-    match = re.fullmatch(r"(\d+)k", text)
+    # [0-9], not \d: \d also matches non-ASCII digits such as full-width
+    # "３２０k", which int() reads but ffmpeg refuses.
+    match = re.fullmatch(r"([0-9]+)k", text)
     if not match or not low <= int(match.group(1)) <= high:
         print(f"[transcoder] {_AUDIO_BITRATE_ENV}={raw!r} is not a bitrate between "
               f"{low}k and {high}k; leaving the audio at ffmpeg's default", flush=True)

@@ -43,7 +43,10 @@ def test_unset_means_ffmpeg_s_own_default(raw, capsys):
     assert capsys.readouterr().out == ""
 
 
-@pytest.mark.parametrize("raw", ["loud", "320", "320000", "320kb", "5000k", "32k", "0k", "-128k"])
+@pytest.mark.parametrize("raw", [
+    "loud", "320", "320000", "320kb", "5000k", "32k", "0k", "-128k",
+    "\uff13\uff12\uff10k",  # full-width "320k": int() reads it, ffmpeg does not
+])
 def test_an_unusable_value_falls_back_and_says_so(raw, capsys):
     # "320" would reach ffmpeg as 320 bits per second, so a bare number is
     # refused rather than guessed at.
