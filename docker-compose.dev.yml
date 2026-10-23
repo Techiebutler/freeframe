@@ -151,7 +151,8 @@ services:
   #
   # NOTE: this means your local stack really does delete things on a schedule.
   # Within the hour, reap_stale_uploads soft-deletes AssetVersions stuck in
-  # uploading/failed past STALE_UPLOAD_TIMEOUT_HOURS and drops their S3 objects;
+  # uploading/failed past STALE_UPLOAD_TIMEOUT_HOURS and drops their S3 objects
+  # (a failed version whose original is still in storage is kept);
   # at 03:00 UTC, cleanup_soft_deleted hard-deletes anything soft-deleted past
   # SOFT_DELETE_RETENTION_DAYS, cascade and S3 reclaim included. Both take `0`
   # in your .env to switch them off if you keep long-lived local data.
