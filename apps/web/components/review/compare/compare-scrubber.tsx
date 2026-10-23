@@ -97,7 +97,14 @@ function ScrubberCommentMarker({
       style={{ left: `${leftPercent}%` }}
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
-      onClick={onClick}
+      onClick={(e) => {
+        onClick()
+        // A mouse click (detail > 0; keyboard activation is 0) leaves focus
+        // here in Chromium, and the next Space would re-activate the marker
+        // instead of reaching the overlay's play/pause. Drop it, as the old
+        // div marker never took focus.
+        if (e.detail > 0) e.currentTarget.blur()
+      }}
       // The overlay plays/pauses on a window-level Space; this one is the
       // button's own activation key, so keep it from reaching that handler.
       onKeyDown={(e) => { if (e.key === ' ') e.stopPropagation() }}

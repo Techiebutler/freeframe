@@ -1067,4 +1067,21 @@ describe('CompareOverlay scrubber marker keyboard (#170)', () => {
     expect(transportSeekTo).toHaveBeenCalledWith(5)
     expect(transportToggle).not.toHaveBeenCalled()
   })
+
+  it('Space after a mouse click on a marker still plays/pauses', async () => {
+    // Chromium focuses a button on mousedown (user-event does the same), so
+    // without care the marker keeps focus and the next Space re-activates it
+    // instead of reaching the overlay's play/pause handler.
+    commentsByVersion['v-1'] = [makeComment('c1', 'v-1')]
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('marker-a-c1'))
+    expect(transportSeekTo).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('marker-a-c1')).not.toHaveFocus()
+    await user.keyboard(' ')
+    expect(transportToggle).toHaveBeenCalledTimes(1)
+    expect(transportSeekTo).toHaveBeenCalledTimes(1)
+  })
 })
