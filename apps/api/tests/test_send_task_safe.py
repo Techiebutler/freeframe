@@ -2,14 +2,35 @@
 
 It used to start a new daemon thread per call: a burst of dispatches opened one
 thread (and one broker connection, broker_pool_limit=0) each, and a dispatch still
-in flight at interpreter exit was killed instead of finished.
+in flight at interpreter exit was killed instead of finished. With a bounded pool,
+a dispatch that hangs on an unresponsive Redis must time out, or four of them
+would stall every later one.
 """
+import os
+import socket
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from apps.api.tasks import celery_app as celery_module
 from apps.api.tasks.celery_app import send_task_safe
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _run_script(script, timeout, **env):
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=_REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(_REPO_ROOT), **env},
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def _wait_until(predicate, timeout=5.0):
@@ -78,20 +99,7 @@ print("exiting", flush=True)
 
 
 def test_pending_dispatches_finish_before_interpreter_exit():
-    import os
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    repo_root = Path(__file__).resolve().parents[3]
-    result = subprocess.run(
-        [sys.executable, "-c", _EXIT_SCRIPT],
-        cwd=repo_root,
-        env={**os.environ, "PYTHONPATH": str(repo_root)},
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    result = _run_script(_EXIT_SCRIPT, timeout=60)
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
@@ -105,7 +113,7 @@ def test_pending_dispatches_finish_before_interpreter_exit():
 def test_dispatch_failure_is_logged_not_raised(caplog):
     task = MagicMock()
     task.name = "fake_task"
-    task.delay.side_effect = RuntimeError("broker exploded")
+    task.apply_async.side_effect = RuntimeError("broker exploded")
 
     with caplog.at_level("WARNING", logger="celery.dispatch"):
         send_task_safe(task, "x")
@@ -113,4 +121,66 @@ def test_dispatch_failure_is_logged_not_raised(caplog):
             lambda: any("Failed to dispatch task fake_task" in r.getMessage() for r in caplog.records)
         )
 
-    task.delay.assert_called_once_with("x")
+    task.apply_async.assert_called_once_with(args=("x",), kwargs={}, ignore_result=True)
+
+
+# Real dispatches of a real task against a Redis that accepts connections and
+# never answers (paused, or a network blackhole). Four of them fill the pool, and
+# a mock dispatch queued behind them has to run once they time out. The script
+# then returns, so the interpreter must also be able to exit.
+_HUNG_BROKER_SCRIPT = """
+import logging, time
+from unittest.mock import MagicMock
+from apps.api.tasks import celery_app as m
+
+logging.basicConfig(level=logging.WARNING)
+
+@m.celery_app.task(name="hung_broker_probe")
+def probe():
+    pass
+
+for _ in range(4):
+    m.send_task_safe(probe)
+queued = MagicMock()
+m.send_task_safe(queued)
+
+deadline = time.monotonic() + 40
+while not queued.apply_async.called and time.monotonic() < deadline:
+    time.sleep(0.05)
+print("queued dispatch ran:", queued.apply_async.called, flush=True)
+"""
+
+
+def test_unresponsive_broker_does_not_stall_later_dispatches():
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(16)
+    server.settimeout(0.2)
+    port = server.getsockname()[1]
+    accepted = []
+    stop = threading.Event()
+
+    def accept_and_never_reply():
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except socket.timeout:
+                continue
+            accepted.append(conn)
+
+    acceptor = threading.Thread(target=accept_and_never_reply, daemon=True)
+    acceptor.start()
+    try:
+        result = _run_script(_HUNG_BROKER_SCRIPT, timeout=60, REDIS_URL=f"redis://127.0.0.1:{port}/0")
+    finally:
+        stop.set()
+        acceptor.join(timeout=5)
+        for conn in accepted:
+            conn.close()
+        server.close()
+
+    assert result.returncode == 0, result.stderr
+    assert accepted, "the dispatches never reached the fake broker"
+    assert "queued dispatch ran: True" in result.stdout
+    # The four hung dispatches gave up through the logged path instead of hanging.
+    assert result.stderr.count("Failed to dispatch task hung_broker_probe") == 4
