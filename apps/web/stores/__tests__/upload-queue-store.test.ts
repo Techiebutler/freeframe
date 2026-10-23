@@ -599,6 +599,42 @@ describe('a run that throws before it reaches the server', () => {
     await settle()
     expect(server.names()).toEqual(['b.mov'])
   })
+
+  it("a hold probe whose retry throws passes the hold on, and the file waiting behind it starts", async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const server = fakeServer((_, i) => (i === 0 ? new TypeError('Failed to fetch') : 'answer'))
+    const [a] = drop([fileOf('a.mov')])
+    await flush()
+    expect(rowOf(a)).toMatchObject({ status: 'queued', holdReason: 'connection' })
+    const [b] = drop([fileOf('b.mov')])
+    await flush()
+    expect(rowOf(b).status).toBe('queued')
+
+    // At a's retry the first save of its run is refused (a full quota), so
+    // the run throws before it reaches the server.
+    const realSetItem = Storage.prototype.setItem
+    let refused = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === 'ff-uploads' && refused === 0) {
+        refused += 1
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+      }
+      return realSetItem.call(this, key, value)
+    })
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flush()
+    expect(refused).toBe(1)
+    expect(rowOf(a).status).toBe('failed')
+
+    // The hold passed to b, which probes on the same backoff.
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flush()
+    expect(server.names()).toEqual(['a.mov', 'b.mov'])
+    expect(rowOf(b).status).not.toBe('queued')
+    expect(testing.runningIds()).toEqual(expect.not.arrayContaining([a]))
+  })
 })
 
 // ---------------------------------------------------------------- resume and saving

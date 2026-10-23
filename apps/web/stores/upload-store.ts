@@ -1579,6 +1579,11 @@ function endRun(id: string, runner: Runner, runKey: string): void {
     useUploadStore.setState((s) => ({ files: s.files.filter((f) => f.id !== id) }))
   }
   const row = rowById(id)
+  // The hold's probe ended without a turn to come back to and without passing
+  // the role on: its run threw something no branch of it settles (a refused
+  // save, say). Nothing would ever try again, and `nextToStart` starts nothing
+  // while a probe is set, so the role passes on here, to the next waiting row.
+  if (queue.hold.probeId === id && turnKind(row) === null) passOnProbe()
   const stillWaiting = turnKind(row) !== null || queue.hold.probeId === id
   if (!stillWaiting && !row?.retryable) {
     fileRefs.delete(id)
