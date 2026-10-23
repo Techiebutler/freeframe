@@ -24,6 +24,7 @@ from packages.transcoder.base import TranscodeJob
 from packages.transcoder.ffmpeg_transcoder import (
     FFmpegTranscoder,
     _plan_attempts,
+    display_rotation,
     is_display_transformed,
 )
 
@@ -127,6 +128,10 @@ def _is_software(cmd):
     # A flip has no rotation to show for it, and ffmpeg still turns the frames.
     (VFLIP, True),
     ({"tags": {"rotate": "90"}}, True),
+    # A rotation nobody can read may still be one, so the frames go the way
+    # that turns them (#380).
+    ({"tags": {"rotate": "abc"}}, True),
+    ({"tags": {"rotate": "nan"}}, True),
     ({}, False),
     ({"tags": {"rotate": "0"}}, False),
     ({"side_data_list": [{"side_data_type": "Content Light Level"}]}, False),
@@ -135,6 +140,24 @@ def _is_software(cmd):
 ])
 def test_a_display_matrix_is_what_ffmpeg_turns_the_frames_for(stream, expected):
     assert is_display_transformed(stream) is expected
+
+
+@pytest.mark.parametrize("rotate", ["nan", "inf", "-inf", "abc"])
+def test_a_rotation_that_cannot_be_read_is_never_a_nan(rotate):
+    # float() accepts "nan" and "inf", and `% 360` keeps them NaN, which the
+    # NVENC sizing then hands to round(). What the copy gate needs from such a
+    # value is rotation_unreadable(), not a number (#380).
+    assert display_rotation({"tags": {"rotate": rotate}}) == 0.0
+
+
+def test_a_rotate_tag_of_nan_still_builds_an_nvenc_command():
+    # round(nan) raised ValueError while sizing the rungs, failing the job.
+    result, calls = _transcode({**H264, "tags": {"rotate": "nan"}})
+
+    assert result.success is True
+    assert len(calls) == 1
+    assert _decodes_into_memory_on_nvdec(calls[0]), calls[0]
+    assert _boxes(calls[0]) == {"1080p": "1920:1080", "720p": "1280:720", "360p": "640:360"}
 
 
 @pytest.mark.parametrize("primary, encode, stream, expected", [

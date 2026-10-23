@@ -352,6 +352,23 @@ def test_a_rotated_source_is_encoded():
     assert not _copies(cmd)
 
 
+@pytest.mark.parametrize("video_stream", [
+    {**_H264_8BIT, "side_data_list": [
+        {"side_data_type": "Display Matrix", "rotation": "n/a"},
+    ]},
+    {**_H264_8BIT, "tags": {"rotate": "abc"}},
+    {**_H264_8BIT, "tags": {"rotate": "nan"}},
+    {**_H264_8BIT, "tags": {"rotate": "inf"}},
+], ids=["side-data-text", "tag-text", "tag-nan", "tag-inf"])
+def test_a_rotation_that_cannot_be_read_is_encoded(video_stream):
+    # A rotation that is there but says nothing readable is an unanswered
+    # question, and every other unanswered question in this gate encodes.
+    # Reading it as 0 copied it, the one case that fell the other way (#380).
+    cmd, _, _ = _transcode(["1080p"], video_stream=video_stream)
+
+    assert not _copies(cmd)
+
+
 def test_an_upright_source_is_not_mistaken_for_a_rotated_one():
     # Side data is where rotation lives, but it is not only rotation that lives
     # there, and a zero rotation is not a rotation.

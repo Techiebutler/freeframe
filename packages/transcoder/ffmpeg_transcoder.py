@@ -991,20 +991,41 @@ def display_rotation(stream: dict) -> float:
 
     `rotate` in the stream tags is the older spelling of the same thing and is
     still what some files carry, so both are read.
+
+    A value that is there but is not a finite number also comes back as 0, so
+    callers can size with it; whether to trust that 0 is rotation_unreadable().
     """
     for side_data in stream.get("side_data_list") or []:
         if side_data.get("rotation") is not None:
-            try:
-                return abs(float(side_data["rotation"])) % 360
-            except (TypeError, ValueError):
-                return 0.0
+            return _rotation_degrees(side_data["rotation"]) or 0.0
     tag = (stream.get("tags") or {}).get("rotate")
     if tag is not None:
-        try:
-            return abs(float(tag)) % 360
-        except (TypeError, ValueError):
-            return 0.0
+        return _rotation_degrees(tag) or 0.0
     return 0.0
+
+
+def _rotation_degrees(value) -> Optional[float]:
+    """`value` as degrees in [0, 360), or None if it is not a finite number."""
+    try:
+        degrees = float(value)
+    except (TypeError, ValueError):
+        return None
+    return abs(degrees) % 360 if math.isfinite(degrees) else None
+
+
+def rotation_unreadable(stream: dict) -> bool:
+    """Whether this stream carries a rotation that does not parse as one.
+
+    Not reachable from ffprobe 7.1, which prints rotation as a number. Such a
+    value reads as 0 from display_rotation() but says nothing about whether the
+    picture is turned, so the copy gate refuses it and is_display_transformed()
+    counts it: an unanswered question falls toward encoding (#380).
+    """
+    values = [side_data.get("rotation")
+              for side_data in stream.get("side_data_list") or []]
+    values.append((stream.get("tags") or {}).get("rotate"))
+    return any(value is not None and _rotation_degrees(value) is None
+               for value in values)
 
 
 def is_display_transformed(stream: dict) -> bool:
@@ -1020,7 +1041,7 @@ def is_display_transformed(stream: dict) -> bool:
         if side_data.get("side_data_type") == "Display Matrix" \
                 or "rotation" in side_data or "displaymatrix" in side_data:
             return True
-    return bool(display_rotation(stream))
+    return bool(display_rotation(stream)) or rotation_unreadable(stream)
 
 
 def rung_is_source_size(target: str, width: int, height: int) -> bool:
@@ -2021,7 +2042,8 @@ class FFmpegTranscoder(BaseTranscoder):
             #     codec name alone,
             #   * SDR, since HDR and Dolby Vision are the cases the filter graph
             #     exists for,
-            #   * no display rotation, which a remux cannot carry, and
+            #   * no display rotation, which a remux cannot carry, nor one too
+            #     garbled to read, and
             #   * sync samples a player can start at, which costs a probe and so
             #     is asked last, only once everything free has passed.
             #
@@ -2040,6 +2062,7 @@ class FFmpegTranscoder(BaseTranscoder):
                 and not is_hdr
                 and dovi_profile is None
                 and not display_rotation(_vid_stream)
+                and not rotation_unreadable(_vid_stream)
             )
 
             if copy_source:
