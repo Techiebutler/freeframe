@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { CompareScrubber } from '../compare-scrubber'
 
 const base = {
@@ -166,6 +167,32 @@ describe('CompareScrubber', () => {
     render(<CompareScrubber {...base} />)
     const a = screen.getByTestId('marker-a-c1')
     expect(a.textContent).toContain('MC')
+  })
+
+  it('markers are focusable buttons named for their comment (#170)', () => {
+    render(<CompareScrubber {...base} />)
+    const a = screen.getByTestId('marker-a-c1')
+    expect(a.tagName).toBe('BUTTON')
+    expect(a).toHaveAttribute('type', 'button')
+    expect(a).toHaveAccessibleName('Comment by Maya Chen at 00:00:10:00')
+  })
+
+  it('Enter and Space on a focused marker report it like a click (#170)', async () => {
+    const onMarkerClick = vi.fn()
+    render(<CompareScrubber {...base} onMarkerClick={onMarkerClick} />)
+    const user = userEvent.setup()
+
+    await user.tab() // play button
+    await user.tab()
+    expect(screen.getByTestId('marker-a-c1')).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(onMarkerClick).toHaveBeenLastCalledWith('a', expect.objectContaining({ id: 'c1' }))
+
+    await user.tab()
+    expect(screen.getByTestId('marker-b-c2')).toHaveFocus()
+    await user.keyboard(' ')
+    expect(onMarkerClick).toHaveBeenLastCalledWith('b', expect.objectContaining({ id: 'c2' }))
+    expect(onMarkerClick).toHaveBeenCalledTimes(2)
   })
 
   it('shows a hover tooltip with author name and body, hidden on mouse leave', () => {

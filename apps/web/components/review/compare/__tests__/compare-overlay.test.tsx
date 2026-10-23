@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { stubGeometry, restoreGeometry } from '@/test/geometry'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { useReviewStore } from '@/stores/review-store'
 
 const replace = vi.fn()
@@ -46,11 +47,13 @@ let streamUrl: string | null = null
 // When set, every version gets its own url (`stream:<versionId>`), so a test can
 // tell which version the right pane is showing from the transport's arguments.
 let streamPerVersion = false
+// Versions whose stream request fails: no url, error set (useStreamUrl's catch).
+const streamFailsFor = new Set<string>()
 vi.mock('@/hooks/use-stream-url', () => ({
-  useStreamUrl: (_assetId: string, versionId: string | null) => ({
-    url: streamPerVersion ? `stream:${versionId}` : streamUrl,
-    error: false,
-  }),
+  useStreamUrl: (_assetId: string, versionId: string | null) =>
+    versionId && streamFailsFor.has(versionId)
+      ? { url: null, error: true }
+      : { url: streamPerVersion ? `stream:${versionId}` : streamUrl, error: false },
 }))
 // AnnotationOverlay lazy-imports fabric inside a rAF; stub the exact API
 // surface it touches (new Canvas(el, opts) → setDimensions → loadFromJSON
@@ -148,6 +151,7 @@ beforeEach(() => {
   searchParamsString = 'compare=v-1'
   streamUrl = null
   streamPerVersion = false
+  streamFailsFor.clear()
   // jsdom does not implement scrollIntoView; CommentItem calls it when it
   // becomes focused (marker click → setFocusedCommentId). Unrelated to the
   // marker-click contract under test (see comment-overrides.test.tsx).
@@ -996,5 +1000,71 @@ describe('CompareOverlay annotation authoring', () => {
     )
     fireEvent.click(screen.getByTitle('Draw annotation')) // pane B (right panel open)
     expect(screen.getByTestId('annotation-canvas')).toBeInTheDocument()
+  })
+})
+
+describe('CompareOverlay stream failure (#170)', () => {
+  it('image wipe: a failed side keeps both badges and says which stream is unavailable', () => {
+    streamUrl = '/img.webp'
+    streamFailsFor.add('v-1')
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    // Previously the stage rendered nothing at all: no badges, no reason.
+    const stage = screen.getByTestId('wipe-fallback')
+    expect(within(stage).getByText('v1')).toBeInTheDocument()
+    expect(within(stage).getByText('v3')).toBeInTheDocument()
+    expect(within(stage).getByText('Stream unavailable for v1')).toBeInTheDocument()
+    expect(within(stage).queryByText('Stream unavailable for v3')).not.toBeInTheDocument()
+  })
+
+  it('image wipe: while both streams are still loading, shows the badges and no error', () => {
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    const stage = screen.getByTestId('wipe-fallback')
+    expect(within(stage).getByText('v1')).toBeInTheDocument()
+    expect(within(stage).getByText('v3')).toBeInTheDocument()
+    expect(within(stage).queryByText(/Stream unavailable/)).not.toBeInTheDocument()
+  })
+
+  it('image side-by-side: a failed side says its stream is unavailable', () => {
+    searchParamsString = 'compare=v-1&mode=sbs'
+    streamUrl = '/img.webp'
+    streamFailsFor.add('v-3')
+    render(
+      <CompareOverlay asset={asset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    expect(screen.getByText('Stream unavailable for v3')).toBeInTheDocument()
+    expect(screen.queryByText('Stream unavailable for v1')).not.toBeInTheDocument()
+    expect(screen.getByAltText('v1')).toBeInTheDocument()
+  })
+})
+
+describe('CompareOverlay scrubber marker keyboard (#170)', () => {
+  it('Enter on a focused marker seeks to its comment', async () => {
+    commentsByVersion['v-1'] = [makeComment('c1', 'v-1')]
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    act(() => screen.getByTestId('marker-a-c1').focus())
+    await user.keyboard('{Enter}')
+    expect(transportSeekTo).toHaveBeenCalledWith(5)
+    expect(useReviewStore.getState().focusedCommentId).toBe('c1')
+  })
+
+  it('Space on a focused marker seeks without also toggling playback', async () => {
+    // The overlay's window handler plays/pauses on Space; a Space meant for
+    // the marker must not reach it as well.
+    commentsByVersion['v-1'] = [makeComment('c1', 'v-1')]
+    render(
+      <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    act(() => screen.getByTestId('marker-a-c1').focus())
+    await user.keyboard(' ')
+    expect(transportSeekTo).toHaveBeenCalledWith(5)
+    expect(transportToggle).not.toHaveBeenCalled()
   })
 })

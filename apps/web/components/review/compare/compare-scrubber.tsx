@@ -61,7 +61,7 @@ function ScrubberCommentMarker({
   onLeave: () => void
   onClick: () => void
 }) {
-  const markerRef = React.useRef<HTMLDivElement>(null)
+  const markerRef = React.useRef<HTMLButtonElement>(null)
   const [tooltipPos, setTooltipPos] = React.useState<{ left: number; top: number } | null>(null)
   const color = getAvatarColor(marker.authorName)
 
@@ -83,18 +83,24 @@ function ScrubberCommentMarker({
     setTooltipPos({ left, top })
   }, [isHovered])
 
+  // A native button, so Tab reaches it and Enter/Space fire onClick.
   return (
-    <div
+    <button
       ref={markerRef}
+      type="button"
       data-testid={`marker-${side}-${marker.id}`}
+      aria-label={`Comment by ${marker.authorName} at ${formatTimecode(marker.tc, fps ?? 24)}`}
       className={cn(
-        'absolute -translate-x-1/2 cursor-pointer pointer-events-auto',
+        'absolute -translate-x-1/2 cursor-pointer pointer-events-auto rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
         side === 'a' ? 'top-0' : 'bottom-0',
       )}
       style={{ left: `${leftPercent}%` }}
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
       onClick={onClick}
+      // The overlay plays/pauses on a window-level Space; this one is the
+      // button's own activation key, so keep it from reaching that handler.
+      onKeyDown={(e) => { if (e.key === ' ') e.stopPropagation() }}
     >
       {/* Avatar dot */}
       <Avatar
@@ -139,7 +145,7 @@ function ScrubberCommentMarker({
         </div>,
         document.body,
       )}
-    </div>
+    </button>
   )
 }
 
