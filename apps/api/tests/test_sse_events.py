@@ -284,3 +284,36 @@ def test_process_video_wires_progress_into_the_transcode_job():
 
     src = Path("apps/api/tasks/transcode_tasks.py").read_text()
     assert "progress_cb=_on_progress" in src, "the video task must pass a progress callback"
+
+
+def test_progress_events_name_the_version():
+    """Two uploads of one asset can be in Processing at once, so a progress event
+    naming only the asset moved both rows' bars (#273)."""
+    from apps.api.tasks import transcode_tasks
+
+    asset = SimpleNamespace(id=uuid.uuid4(), project_id=uuid.uuid4())
+    version = SimpleNamespace(id=uuid.uuid4())
+    media_file = SimpleNamespace(s3_key_raw="raw/x")
+    published = []
+
+    class _Stop(Exception):
+        pass
+
+    def _transcode(job):
+        job.progress_cb(42)
+        raise _Stop
+
+    with patch("packages.transcoder.ffmpeg_transcoder.FFmpegTranscoder") as transcoder, \
+         patch.object(transcode_tasks, "_publish_event",
+                      side_effect=lambda p, t, pl: published.append((t, pl))):
+        transcoder.return_value.transcode.side_effect = _transcode
+        with pytest.raises(_Stop):
+            transcode_tasks._process_video(
+                MagicMock(), asset, version, media_file, MagicMock(), "processed/x",
+            )
+
+    assert published == [("transcode_progress", {
+        "asset_id": str(asset.id),
+        "version_id": str(version.id),
+        "percent": 42,
+    })]

@@ -40,6 +40,7 @@ def _drive_process_asset(retries: int, retry_raises: BaseException):
     db.first.side_effect = [version, asset, media_file]
 
     published = []
+    payloads = []
     # process_asset is a PromiseProxy until it is resolved; patch the real Task.
     task = transcode_tasks.process_asset
     task = getattr(task, "_get_current_object", lambda: task)()
@@ -53,7 +54,7 @@ def _drive_process_asset(retries: int, retry_raises: BaseException):
              patch.object(transcode_tasks, "_process_video",
                           side_effect=RuntimeError("ffmpeg blew up")), \
              patch.object(transcode_tasks, "_publish_event",
-                          side_effect=lambda p, t, pl: published.append(t)), \
+                          side_effect=lambda p, t, pl: (published.append(t), payloads.append(pl))), \
              patch.object(task, "retry", side_effect=retry_raises) as retry_mock:
             try:
                 task.run(str(asset.id), str(version.id))
@@ -66,7 +67,7 @@ def _drive_process_asset(retries: int, retry_raises: BaseException):
     finally:
         task.pop_request()
 
-    return SimpleNamespace(version=version, published=published,
+    return SimpleNamespace(version=version, published=published, payloads=payloads,
                            outcome=outcome, retry_calls=retry_calls)
 
 
@@ -104,6 +105,16 @@ def test_a_retry_that_cannot_be_enqueued_records_the_failure():
     assert r.outcome == "raised"
     assert r.version.processing_status == ProcessingStatus.failed
     assert r.published == ["transcode_failed"]
+
+
+def test_the_failure_event_names_the_version():
+    """Two uploads of one asset can be in Processing at once (v1 transcoding, v2
+    uploaded on top). An event naming only the asset is applied to both rows, so
+    v1 failing marked v2 failed too (#273)."""
+    r = _drive_process_asset(retries=3, retry_raises=Retry())
+
+    assert r.published == ["transcode_failed"]
+    assert r.payloads[0]["version_id"] == str(r.version.id)
 
 
 @pytest.mark.parametrize("retries", [0, 1, 2])

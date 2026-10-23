@@ -7,6 +7,8 @@ import { getAccessToken, refreshAccessToken } from '@/lib/auth'
 
 export interface TranscodeProgressEvent {
   asset_id: string
+  /** Absent from a worker that predates it. */
+  version_id?: string
   percent: number
 }
 
@@ -17,6 +19,8 @@ export interface TranscodeCompleteEvent {
 
 export interface TranscodeFailedEvent {
   asset_id: string
+  /** Absent from a worker that predates it. */
+  version_id?: string
   error: string
 }
 

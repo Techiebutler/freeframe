@@ -1695,10 +1695,10 @@ export interface UploadStore {
   clearCompleted: () => void
   fetchHistory: () => Promise<void>
   fetchMoreHistory: () => Promise<void>
-  // SSE-driven processing updates
-  updateProcessingProgress: (assetId: string, percent: number) => void
-  markProcessingComplete: (assetId: string) => void
-  markProcessingFailed: (assetId: string, error: string) => void
+  // SSE-driven processing updates, applied to the row of the version they name
+  updateProcessingProgress: (assetId: string, percent: number, versionId?: string) => void
+  markProcessingComplete: (assetId: string, versionId?: string) => void
+  markProcessingFailed: (assetId: string, error: string, versionId?: string) => void
   // Fallback poll: re-check processing items from backend (catches missed SSE events)
   refreshProcessingItems: () => Promise<void>
 }
@@ -1722,6 +1722,20 @@ function mapProcessingStatus(status: string): UploadStatus {
     case 'failed': return 'failed'
     default: return 'complete'
   }
+}
+
+/**
+ * Whether a transcode event for this asset and version is about this row.
+ *
+ * Keyed on the version, not the asset alone: an asset can have two rows in
+ * `processing` at once (v1 still transcoding, v2 uploaded on top of it), and
+ * v1's `transcode_complete` used to flip both to Ready -- after which v2 was no
+ * longer polled, so nothing corrected it. An event without a version id, from a
+ * worker that predates it, or a row without one still matches by asset.
+ */
+function isProcessingRowOf(f: UploadFile, assetId: string, versionId: string | undefined): boolean {
+  return f.assetId === assetId && f.status === 'processing'
+    && (!versionId || !f.versionId || f.versionId === versionId)
 }
 
 /**
@@ -1779,6 +1793,54 @@ async function finishAssembledUpload(versionId: string, ownerId: string | undefi
     return true
   } catch {
     return false
+  }
+}
+
+/** Waits before each resend of a completion that did not get through, unless the server asked for another. */
+const COMPLETE_RETRY_DELAYS_MS = [2_000, 5_000]
+/** The longest a completion waits on a server's Retry-After before trying again. */
+const COMPLETE_RETRY_AFTER_CAP_MS = 30_000
+
+/**
+ * Whether a completion failed in a way that sending it again may fix: the
+ * request never got an answer (fetch rejects with a TypeError), or the server
+ * or a proxy in front of it could not get through for now (502/503/504; the
+ * API answers 503 with a Retry-After when it cannot reach storage). A 4xx is
+ * the server's answer about this version, and asking again gets the same one.
+ */
+function isTransientCompletionFailure(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status === 502 || err.status === 503 || err.status === 504
+  return err instanceof TypeError
+}
+
+/**
+ * Sends `/upload/complete`, and sends it again, up to three tries in all, while
+ * it fails in a way a retry may fix.
+ *
+ * Sent once, a completion lost to a blip at the end of a long transfer left the
+ * row `interrupted`, and Resume needed the file picked again just to repeat
+ * this one request. Repeating it is safe: the server answers a completion it
+ * already ran with the version's status rather than running it twice (#263).
+ *
+ * Stops early when the upload is cancelled. The last error is rethrown either
+ * way, for the caller's catch to ask the server what happened. A resend under
+ * another account is never made: the request is pinned, and throws instead.
+ */
+async function postCompletion(
+  body: Record<string, unknown>,
+  asOwner: { pinSubject: string | undefined },
+  signal: AbortSignal,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await api.post('/upload/complete', body, asOwner)
+      return
+    } catch (err) {
+      if (attempt >= COMPLETE_RETRY_DELAYS_MS.length || signal.aborted || !isTransientCompletionFailure(err)) throw err
+      const asked = err instanceof ApiError && err.retryAfter !== undefined ? err.retryAfter * 1000 : undefined
+      await delayUnlessAborted(Math.min(asked ?? COMPLETE_RETRY_DELAYS_MS[attempt], COMPLETE_RETRY_AFTER_CAP_MS), signal)
+      if (signal.aborted) throw err
+    }
   }
 }
 
@@ -2671,13 +2733,13 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
 
     completionAttempted = true
     patchRow(id, { finalizing: true })
-    await api.post('/upload/complete', {
+    await postCompletion({
       s3_key,
       upload_id,
       asset_id,
       version_id,
       parts,
-    }, asOwner)
+    }, asOwner, controller.signal)
 
     // Upload done — backend now processes (transcode/convert).
     // For non-processable types (or if SSE isn't wired), mark complete directly.
@@ -2977,7 +3039,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
 
     completionAttempted = true
     updateFile({ finalizing: true })
-    await api.post('/upload/complete', {
+    await postCompletion({
       s3_key: info.s3_key,
       upload_id: info.upload_id,
       asset_id: info.asset_id,
@@ -2989,7 +3051,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       // no error on most backends; handing over none makes that backend
       // refuse instead, which is the failure worth having.
       parts: held.length > 0 ? [] : parts,
-    }, asOwner)
+    }, asOwner, controller.signal)
 
     const isMedia = /^(video|audio|image)\//.test(info.mime_type)
     updateFile({
@@ -3523,30 +3585,30 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     }
   },
 
-  updateProcessingProgress: (assetId, percent) => {
+  updateProcessingProgress: (assetId, percent, versionId) => {
     set((s) => ({
       files: s.files.map((f) =>
-        f.assetId === assetId && f.status === 'processing'
+        isProcessingRowOf(f, assetId, versionId)
           ? { ...f, processingProgress: percent }
           : f,
       ),
     }))
   },
 
-  markProcessingComplete: (assetId) => {
+  markProcessingComplete: (assetId, versionId) => {
     set((s) => ({
       files: s.files.map((f) =>
-        f.assetId === assetId && f.status === 'processing'
+        isProcessingRowOf(f, assetId, versionId)
           ? { ...f, status: 'complete' as const, processingProgress: 100, completedAt: Date.now() }
           : f,
       ),
     }))
   },
 
-  markProcessingFailed: (assetId, error) => {
+  markProcessingFailed: (assetId, error, versionId) => {
     set((s) => ({
       files: s.files.map((f) =>
-        f.assetId === assetId && f.status === 'processing'
+        isProcessingRowOf(f, assetId, versionId)
           ? { ...f, status: 'failed' as const, error }
           : f,
       ),

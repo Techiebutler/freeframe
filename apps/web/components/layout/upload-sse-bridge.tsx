@@ -79,13 +79,13 @@ function SSEListener({ projectId }: { projectId: string }) {
 
   useSSE(projectId, {
     onTranscodeProgress: (data) => {
-      updateProcessingProgress(data.asset_id, data.percent)
+      updateProcessingProgress(data.asset_id, data.percent, data.version_id)
     },
     onTranscodeComplete: (data) => {
-      markProcessingComplete(data.asset_id)
+      markProcessingComplete(data.asset_id, data.version_id)
     },
     onTranscodeFailed: (data) => {
-      markProcessingFailed(data.asset_id, data.error)
+      markProcessingFailed(data.asset_id, data.error, data.version_id)
     },
   })
 

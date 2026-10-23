@@ -772,7 +772,8 @@ describe('a resume', () => {
         return Promise.resolve({ upload_id: 'u1', s3_key: 'k1', asset_id: 'a1', version_id: 'v1', chunk_size_bytes: CHUNK })
       }
       if (path === '/upload/presign-part') return Promise.resolve({ presigned_url: 'https://s3.test/u1/1' })
-      if (path === '/upload/complete') return Promise.reject(new TypeError('Failed to fetch'))
+      // A 500 is not sent again; a dropped connection would be, after a wait.
+      if (path === '/upload/complete') return Promise.reject(new ApiError(500, 'Internal Server Error'))
       return Promise.resolve({})
     }) as never)
     vi.mocked(api.get).mockImplementation(((path: string) => {

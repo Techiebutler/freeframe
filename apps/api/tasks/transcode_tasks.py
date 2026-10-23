@@ -95,6 +95,7 @@ def process_asset(self, asset_id: str, version_id: str):
                 # only the uploader, so never let a presigned URL through.
                 _publish_event(str(asset.project_id), "transcode_failed", {
                     "asset_id": asset_id,
+                    "version_id": version_id,
                     "error": redact_presigned_urls(str(exc)),
                 })
 
@@ -152,8 +153,11 @@ def _process_video(
         if percent <= progress_ok["high_water"]:
             return
         progress_ok["high_water"] = percent
+        # The version as well as the asset: two versions of one asset can be
+        # transcoding at once, and the uploads panel shows a row for each.
         delivered = _publish_event(str(asset.project_id), "transcode_progress", {
             "asset_id": str(asset.id),
+            "version_id": str(version.id),
             "percent": percent,
         })
         if delivered is False:
