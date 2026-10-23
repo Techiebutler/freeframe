@@ -8,7 +8,7 @@ import { useReviewStore } from '@/stores/review-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
 import { useStreamUrl } from '@/hooks/use-stream-url'
-import { localTime, parseOffsetParam, type SideTiming } from '@/lib/compare-time'
+import { localTime, offsetPairKey, resolveOffsets, type SideTiming } from '@/lib/compare-time'
 import { CompareVersionSelect } from './compare-version-select'
 import { CompareScrubber, type ScrubberMarker } from './compare-scrubber'
 import { useSyncedTransport } from './use-synced-transport'
@@ -85,8 +85,18 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
 
   const isVideo = asset.asset_type === 'video'
   const mode = (searchParams.get('mode') === 'sbs' ? 'sbs' : 'wipe') as 'wipe' | 'sbs'
-  const offA = parseOffsetParam(searchParams.get('offA'))
-  const offB = parseOffsetParam(searchParams.get('offB'))
+  // Offsets only apply to the pair they were calibrated for (`offFor`). The right
+  // version lives in the store and changes before the URL write that clears its
+  // offsets lands, so the pair is checked at render time instead of relying on
+  // the two updates arriving together. A legacy URL has no `offFor`; its offsets
+  // belong to the pair shown when the overlay opened, which is pinned in state.
+  const pairKey = offsetPairKey(left?.id, right.id)
+  const [mountPair] = React.useState(pairKey)
+  const { offA, offB } = resolveOffsets(
+    { offA: searchParams.get('offA'), offB: searchParams.get('offB'), offFor: searchParams.get('offFor') },
+    pairKey,
+    mountPair,
+  )
 
   const writeParams = React.useCallback(
     (mutate: (p: URLSearchParams) => void) => {
@@ -299,7 +309,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   // one, which lastAnnotationSide tells us.
   const handleSwitchLeft = React.useCallback(
     (v: AssetVersion) => {
-      writeParams((p) => { p.set('compare', v.id); p.delete('offA'); p.delete('offB') })
+      writeParams((p) => { p.set('compare', v.id); p.delete('offA'); p.delete('offB'); p.delete('offFor') })
       setAnnotationA(null)
       if (lastAnnotationSide === 'a') {
         setLastAnnotationSide(null)
@@ -311,19 +321,18 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const handleSwitchRight = React.useCallback(
     (v: AssetVersion) => {
       // The right pane's version lives in the store, its offsets in the URL.
-      // The store write is synchronous and router.replace is deferred, so
-      // updating them separately renders the NEW version with the OLD offset
-      // still applied for a commit or two. Batching them keeps the pair and
-      // its offsets consistent in every rendered frame.
-      React.startTransition(() => {
-        writeParams((p) => { p.delete('offA'); p.delete('offB') })
-        setCurrentVersion(v)
-        setAnnotationB(null)
-        if (lastAnnotationSide === 'b') {
-          setLastAnnotationSide(null)
-          setFocusedCommentId(null)
-        }
-      })
+      // The store write is synchronous and router.replace commits later, and a
+      // transition cannot batch the two, so for a commit or two the NEW version
+      // renders next to the old URL offsets. Those offsets are tagged with the
+      // pair they were calibrated for (offFor), so they no longer match the new
+      // pair and resolve to 0 in that window; the write below then removes them.
+      writeParams((p) => { p.delete('offA'); p.delete('offB'); p.delete('offFor') })
+      setCurrentVersion(v)
+      setAnnotationB(null)
+      if (lastAnnotationSide === 'b') {
+        setLastAnnotationSide(null)
+        setFocusedCommentId(null)
+      }
     },
     [writeParams, setCurrentVersion, lastAnnotationSide, setFocusedCommentId],
   )
@@ -543,10 +552,17 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 labelA={badgeA}
                 labelB={badgeB}
                 onOffsetChange={(side, value) =>
-                  writeParams((p) => p.set(side === 'a' ? 'offA' : 'offB', String(value)))
+                  // Write both sides with the pair tag: the untouched side may
+                  // still be a stale value from another pair, which the tag
+                  // would otherwise make valid again.
+                  writeParams((p) => {
+                    p.set('offA', String(side === 'a' ? value : offA))
+                    p.set('offB', String(side === 'b' ? value : offB))
+                    p.set('offFor', pairKey)
+                  })
                 }
                 onResetOffsets={() =>
-                  writeParams((p) => { p.delete('offA'); p.delete('offB') })
+                  writeParams((p) => { p.delete('offA'); p.delete('offB'); p.delete('offFor') })
                 }
               />
             </>

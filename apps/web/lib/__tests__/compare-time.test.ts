@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   canCompare, driftedBeyond, frameStep, localTime, markerPosition,
-  parseOffsetParam, sideEnded, sideNotStarted, tMax,
+  offsetPairKey, parseOffsetParam, resolveOffsets, sideEnded, sideNotStarted, tMax,
 } from '../compare-time'
 
 const side = (offset: number, duration: number) => ({ offset, duration })
@@ -70,6 +70,34 @@ describe('parseOffsetParam', () => {
     expect(parseOffsetParam('-3')).toBe(0)
     expect(parseOffsetParam('abc')).toBe(0)
     expect(parseOffsetParam(null)).toBe(0)
+  })
+})
+
+describe('resolveOffsets (offsets are tagged with the pair they were calibrated for)', () => {
+  const key = offsetPairKey('v-1', 'v-3')
+  it('builds the pair key from the displayed left and right versions', () => {
+    expect(key).toBe('v-1:v-3')
+    expect(offsetPairKey(null, 'v-3')).toBe(':v-3')
+  })
+  it('applies the offsets when offFor matches the displayed pair', () => {
+    expect(resolveOffsets({ offA: '1.5', offB: '2', offFor: 'v-1:v-3' }, key, key)).toEqual({ offA: 1.5, offB: 2 })
+  })
+  it('resolves both offsets to 0 when offFor names another pair', () => {
+    expect(resolveOffsets({ offA: '1.5', offB: '2', offFor: 'v-1:v-2' }, key, key)).toEqual({ offA: 0, offB: 0 })
+    expect(resolveOffsets({ offA: '1.5', offB: '2', offFor: 'v-2:v-3' }, key, key)).toEqual({ offA: 0, offB: 0 })
+  })
+  it('applies legacy offsets (no offFor) to the pair shown when the overlay opened', () => {
+    expect(resolveOffsets({ offA: '1.5', offB: '2', offFor: null }, key, key)).toEqual({ offA: 1.5, offB: 2 })
+  })
+  it('resolves legacy offsets to 0 once the shown pair differs from the pair at open', () => {
+    expect(resolveOffsets({ offA: '1.5', offB: '2', offFor: null }, 'v-1:v-2', key)).toEqual({ offA: 0, offB: 0 })
+    expect(resolveOffsets({ offA: '1.5', offB: '2', offFor: null }, 'v-2:v-3', key)).toEqual({ offA: 0, offB: 0 })
+  })
+  it('lets offFor win over the pair at open', () => {
+    expect(resolveOffsets({ offA: '1.5', offB: '2', offFor: 'v-1:v-2' }, 'v-1:v-2', key)).toEqual({ offA: 1.5, offB: 2 })
+  })
+  it('still parses bad values to 0 when the pair matches', () => {
+    expect(resolveOffsets({ offA: '-1', offB: null, offFor: 'v-1:v-3' }, key, key)).toEqual({ offA: 0, offB: 0 })
   })
 })
 

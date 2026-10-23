@@ -1,16 +1,28 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { stubGeometry, restoreGeometry } from '@/test/geometry'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useReviewStore } from '@/stores/review-store'
 
 const replace = vi.fn()
 // Configurable per test (image tests flip mode / provide stream urls).
 let searchParamsString = 'compare=v-1'
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace, push: vi.fn() }),
-  usePathname: () => '/projects/p1/assets/a1',
-  useSearchParams: () => new URLSearchParams(searchParamsString),
-}))
+// Subscribers to searchParamsString, so a deferred router.replace can re-render
+// the overlay the way a real navigation commit does (see the race test below).
+const searchParamsListeners = new Set<() => void>()
+vi.mock('next/navigation', async () => {
+  const React = await import('react')
+  return {
+    useRouter: () => ({ replace, push: vi.fn() }),
+    usePathname: () => '/projects/p1/assets/a1',
+    useSearchParams: () => {
+      const s = React.useSyncExternalStore(
+        (cb) => { searchParamsListeners.add(cb); return () => { searchParamsListeners.delete(cb) } },
+        () => searchParamsString,
+      )
+      return new URLSearchParams(s)
+    },
+  }
+})
 
 // Per-side capture: record which version's hook instance received each create.
 const createComment = vi.fn().mockResolvedValue({})
@@ -31,7 +43,15 @@ vi.mock('@/hooks/use-comments', () => ({
   }),
 }))
 let streamUrl: string | null = null
-vi.mock('@/hooks/use-stream-url', () => ({ useStreamUrl: () => ({ url: streamUrl, error: false }) }))
+// When set, every version gets its own url (`stream:<versionId>`), so a test can
+// tell which version the right pane is showing from the transport's arguments.
+let streamPerVersion = false
+vi.mock('@/hooks/use-stream-url', () => ({
+  useStreamUrl: (_assetId: string, versionId: string | null) => ({
+    url: streamPerVersion ? `stream:${versionId}` : streamUrl,
+    error: false,
+  }),
+}))
 // AnnotationOverlay lazy-imports fabric inside a rAF; stub the exact API
 // surface it touches (new Canvas(el, opts) → setDimensions → loadFromJSON
 // (awaited) → getObjects → renderAll → dispose) so no real canvas is needed.
@@ -69,8 +89,12 @@ const transportToggle = vi.fn()
 const transportSetIsPlaying = vi.fn()
 let transportIsPlaying = false
 // Pin the transport clock so pane-local timecodes are deterministic (t = 12.5s).
+const transportCalls: Array<{
+  urlA: string | null; urlB: string | null
+  timingA: { offset: number }; timingB: { offset: number }
+}> = []
 vi.mock('../use-synced-transport', () => ({
-  useSyncedTransport: () => ({
+  useSyncedTransport: (args: (typeof transportCalls)[number]) => (transportCalls.push(args), {
     playerA: { videoRef: { current: null } },
     playerB: { videoRef: { current: null } },
     t: 12.5, total: 60, isPlaying: transportIsPlaying,
@@ -119,8 +143,11 @@ beforeEach(() => {
   transportToggle.mockClear()
   transportSetIsPlaying.mockClear()
   transportIsPlaying = false
+  replace.mockReset()
+  transportCalls.length = 0
   searchParamsString = 'compare=v-1'
   streamUrl = null
+  streamPerVersion = false
   // jsdom does not implement scrollIntoView; CommentItem calls it when it
   // becomes focused (marker click → setFocusedCommentId). Unrelated to the
   // marker-click contract under test (see comment-overrides.test.tsx).
@@ -419,6 +446,181 @@ describe('CompareOverlay version-switch offset reset (#182)', () => {
     expect(replace).not.toHaveBeenCalled()
     // The right pane already shows v3, so nothing should be written at all.
     expect(useReviewStore.getState().currentVersion).toBe(versionBefore)
+  })
+})
+
+describe('CompareOverlay never renders a version with another pair\'s offset', () => {
+  /** Like page.tsx: the right version comes from the store, offsets from the URL. */
+  function Page() {
+    const current = useReviewStore((s) => s.currentVersion)
+    return (
+      <CompareOverlay
+        asset={videoAsset}
+        versions={[makeVersion(1), makeVersion(2), makeVersion(3)]}
+        rightVersion={current ?? makeVersion(3)}
+        onClose={vi.fn()}
+      />
+    )
+  }
+
+  /** Every render where the right pane already shows `urlB` with an offset on either side. */
+  const offsetRendersOf = (urlB: string) =>
+    transportCalls.filter((c) => c.urlB === urlB && (c.timingA.offset !== 0 || c.timingB.offset !== 0))
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    streamPerVersion = true
+    // router.replace commits on a later tick, as the real App Router does.
+    replace.mockImplementation((href: string) => {
+      setTimeout(() => {
+        searchParamsString = new URL(href, 'http://x').search.slice(1)
+        searchParamsListeners.forEach((cb) => cb())
+      }, 0)
+    })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('switching the right version renders v2 only after its offsets are gone, even while the URL write is pending', () => {
+    searchParamsString = 'compare=v-1&offA=1.5&offB=-0.5&offFor=v-1:v-3'
+    useReviewStore.getState().setCurrentVersion(makeVersion(3))
+    render(<Page />)
+    // Before the switch the calibrated pair keeps its offsets.
+    expect(transportCalls.at(-1)).toMatchObject({ urlB: 'stream:v-3', timingA: { offset: 1.5 } })
+
+    fireEvent.click(within(screen.getByTestId('compare-select-b')).getByRole('button'))
+    fireEvent.click(screen.getByRole('option', { name: /^v2$/ }))
+
+    // The store has switched, the deferred router.replace has not committed yet.
+    expect(useReviewStore.getState().currentVersion?.id).toBe('v-2')
+    expect(searchParamsString).toContain('offA=1.5')
+    expect(transportCalls.at(-1)?.urlB).toBe('stream:v-2')
+    // The guarantee: no render so far shows v2 with an offset on either side.
+    expect(offsetRendersOf('stream:v-2')).toEqual([])
+
+    act(() => { vi.runAllTimers() })
+
+    expect(searchParamsString).not.toMatch(/off(A|B|For)=/)
+    expect(transportCalls.at(-1)).toMatchObject({ urlB: 'stream:v-2', timingA: { offset: 0 }, timingB: { offset: 0 } })
+    expect(offsetRendersOf('stream:v-2')).toEqual([])
+  })
+
+  it('a URL whose offFor names a different pair shows 0 offsets', () => {
+    searchParamsString = 'compare=v-1&offA=1.5&offB=-0.5&offFor=v-1:v-2'
+    useReviewStore.getState().setCurrentVersion(makeVersion(3))
+    render(<Page />)
+    expect(transportCalls.at(-1)).toMatchObject({ urlB: 'stream:v-3', timingA: { offset: 0 }, timingB: { offset: 0 } })
+  })
+
+  it('a URL whose offFor matches the pair restores its offsets; a legacy URL without offFor keeps them', () => {
+    searchParamsString = 'compare=v-1&offA=1.5&offB=2&offFor=v-1:v-3'
+    useReviewStore.getState().setCurrentVersion(makeVersion(3))
+    const first = render(<Page />)
+    expect(transportCalls.at(-1)).toMatchObject({ timingA: { offset: 1.5 }, timingB: { offset: 2 } })
+    first.unmount()
+
+    searchParamsString = 'compare=v-1&offA=1.5&offB=2'
+    render(<Page />)
+    expect(transportCalls.at(-1)).toMatchObject({ timingA: { offset: 1.5 }, timingB: { offset: 2 } })
+  })
+
+  describe('legacy URLs (offA/offB without offFor)', () => {
+    const LEGACY = 'compare=v-1&offA=1.5&offB=2'
+    const goTo = (query: string) =>
+      act(() => {
+        searchParamsString = query
+        searchParamsListeners.forEach((cb) => cb())
+      })
+    const openLegacy = () => {
+      searchParamsString = LEGACY
+      useReviewStore.getState().setCurrentVersion(makeVersion(3))
+      render(<Page />)
+    }
+
+    it('applies the offsets to the pair shown on the first render', () => {
+      openLegacy()
+      expect(transportCalls.at(-1)).toMatchObject({ urlA: 'stream:v-1', urlB: 'stream:v-3', timingA: { offset: 1.5 }, timingB: { offset: 2 } })
+    })
+
+    it('switching the right version never renders v2 with the legacy offsets, even while the URL write is pending', () => {
+      openLegacy()
+      fireEvent.click(within(screen.getByTestId('compare-select-b')).getByRole('button'))
+      fireEvent.click(screen.getByRole('option', { name: /^v2$/ }))
+
+      expect(searchParamsString).toBe(LEGACY) // the clearing write has not committed
+      expect(transportCalls.at(-1)?.urlB).toBe('stream:v-2')
+      expect(offsetRendersOf('stream:v-2')).toEqual([])
+
+      act(() => { vi.runAllTimers() })
+      expect(searchParamsString).not.toMatch(/off(A|B|For)=/)
+      expect(offsetRendersOf('stream:v-2')).toEqual([])
+    })
+
+    it('switching the left version never renders v2 on the left with the legacy offsets', () => {
+      openLegacy()
+      fireEvent.click(within(screen.getByTestId('compare-select-a')).getByRole('button'))
+      fireEvent.click(screen.getByRole('option', { name: /^v2$/ }))
+      act(() => { vi.runAllTimers() })
+
+      expect(transportCalls.at(-1)).toMatchObject({ urlA: 'stream:v-2', timingA: { offset: 0 }, timingB: { offset: 0 } })
+      expect(transportCalls.filter((c) => c.urlA === 'stream:v-2' && (c.timingA.offset !== 0 || c.timingB.offset !== 0))).toEqual([])
+    })
+
+    it('setting an offset writes offFor; a right switch after that is still safe', () => {
+      openLegacy()
+      fireEvent.click(screen.getByTestId('offB-plus-second'))
+      expect(new URL(replace.mock.calls.at(-1)?.[0], 'http://x').searchParams.get('offFor')).toBe('v-1:v-3')
+      act(() => { vi.runAllTimers() })
+      expect(transportCalls.at(-1)).toMatchObject({ timingA: { offset: 1.5 }, timingB: { offset: 3 } })
+
+      fireEvent.click(within(screen.getByTestId('compare-select-b')).getByRole('button'))
+      fireEvent.click(screen.getByRole('option', { name: /^v2$/ }))
+      act(() => { vi.runAllTimers() })
+      expect(offsetRendersOf('stream:v-2')).toEqual([])
+    })
+
+    it('browser back to a legacy URL while mounted on another pair resolves to 0', () => {
+      openLegacy()
+      fireEvent.click(within(screen.getByTestId('compare-select-b')).getByRole('button'))
+      fireEvent.click(screen.getByRole('option', { name: /^v2$/ }))
+      act(() => { vi.runAllTimers() })
+
+      goTo(LEGACY)
+      expect(transportCalls.at(-1)).toMatchObject({ urlB: 'stream:v-2', timingA: { offset: 0 }, timingB: { offset: 0 } })
+    })
+  })
+
+  it('switching the left version removes offFor together with the offsets in one URL write', () => {
+    searchParamsString = 'compare=v-1&offA=1.5&offB=2&offFor=v-1:v-3'
+    useReviewStore.getState().setCurrentVersion(makeVersion(3))
+    render(<Page />)
+
+    fireEvent.click(within(screen.getByTestId('compare-select-a')).getByRole('button'))
+    fireEvent.click(screen.getByRole('option', { name: /^v2$/ }))
+
+    expect(replace).toHaveBeenCalledTimes(1)
+    const url = new URL(replace.mock.calls[0][0], 'http://x')
+    expect(url.searchParams.get('compare')).toBe('v-2')
+    expect(['offA', 'offB', 'offFor'].map((k) => url.searchParams.get(k))).toEqual([null, null, null])
+  })
+
+  it('a newly set offset is written with the pair tag and applies once it commits', () => {
+    searchParamsString = 'compare=v-1&offA=9&offFor=v-1:v-2'
+    useReviewStore.getState().setCurrentVersion(makeVersion(3))
+    render(<Page />)
+
+    // offA=9 is stale (calibrated for v1/v2), so the overlay shows 0. Stepping B
+    // must not resurrect it by tagging the stale value with the current pair.
+    fireEvent.click(screen.getByTestId('offB-plus-second'))
+    const url = new URL(replace.mock.calls.at(-1)?.[0], 'http://x')
+    expect(url.searchParams.get('offFor')).toBe('v-1:v-3')
+    expect(url.searchParams.get('offA')).toBe('0')
+    expect(parseFloat(url.searchParams.get('offB') ?? 'NaN')).toBeGreaterThan(0)
+
+    act(() => { vi.runAllTimers() })
+    expect(transportCalls.at(-1)?.timingA.offset).toBe(0)
+    expect(transportCalls.at(-1)?.timingB.offset).toBeGreaterThan(0)
   })
 })
 

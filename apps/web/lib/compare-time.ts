@@ -45,6 +45,31 @@ export function parseOffsetParam(v: string | null): number {
   return Number.isFinite(n) && n >= 0 ? n : 0
 }
 
+/**
+ * Key of the version pair a set of sync offsets was calibrated for. Written to
+ * the URL as `offFor` next to `offA`/`offB`, so the offsets say which pair they
+ * belong to instead of relying on being cleared in step with a version switch.
+ */
+export function offsetPairKey(leftId: string | null | undefined, rightId: string): string {
+  return `${leftId ?? ''}:${rightId}`
+}
+
+/**
+ * Sync offsets that are valid for the pair currently shown. Offsets tagged for a
+ * different pair are stale and resolve to 0. A URL with no `offFor` (a link shared
+ * before the tag existed) was calibrated for the pair that was on screen when the
+ * overlay opened, so `legacyPair` stands in for the missing tag: its offsets apply
+ * to that pair and to no other.
+ */
+export function resolveOffsets(
+  params: { offA: string | null; offB: string | null; offFor: string | null },
+  pairKey: string,
+  legacyPair: string,
+): { offA: number; offB: number } {
+  if ((params.offFor ?? legacyPair) !== pairKey) return { offA: 0, offB: 0 }
+  return { offA: parseOffsetParam(params.offA), offB: parseOffsetParam(params.offB) }
+}
+
 /** Compare button gating: video/image asset with >= 2 ready versions. */
 export function canCompare(
   assetType: string,

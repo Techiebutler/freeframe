@@ -274,11 +274,11 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   }, [comments, searchParams, seekTo, setFocusedCommentId, setActiveAnnotation])
 
   // Version-compare overlay: driven entirely by the ?compare= URL param so it
-  // survives refresh/deep-link. closeCompare strips all four compare params.
+  // survives refresh/deep-link. closeCompare strips all the compare params.
   const compareOpen = Boolean(searchParams.get('compare'))
   const closeCompare = useCallback(() => {
     const p = new URLSearchParams(searchParams.toString())
-    p.delete('compare'); p.delete('mode'); p.delete('offA'); p.delete('offB')
+    p.delete('compare'); p.delete('mode'); p.delete('offA'); p.delete('offB'); p.delete('offFor')
     router.replace(`${pathname}?${p.toString()}`, { scroll: false })
   }, [router, pathname, searchParams])
 
