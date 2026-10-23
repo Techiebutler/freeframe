@@ -28,7 +28,7 @@ import { fetchDownloadUrl, fetchShareDownloadOptions, handleDownload, triggerDow
 import { DownloadMenu } from '@/components/shared/download-menu'
 import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import { ShareReviewScreen } from './share-review-screen'
-import { useBranding } from '@/components/shared/branding-provider'
+import { usePageTitle } from '@/hooks/use-page-title'
 import { Avatar } from '@/components/shared/avatar'
 import type {
   SharePermission,
@@ -656,12 +656,8 @@ export function FolderShareViewer({
   const [panelOpen, setPanelOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
 
-  // Set page title — subscribe to orgName so the title updates once branding loads
-  const orgName = useBranding().orgName || 'FreeFrame'
-  React.useEffect(() => {
-    document.title = title ? `${title} – ${orgName}` : orgName
-    return () => { document.title = orgName }
-  }, [title, orgName])
+  // Page title; the hook re-applies it once branding loads and when React remounts the metadata title
+  usePageTitle(title)
   const [selectedAsset, setSelectedAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   const [assets, setAssets] = React.useState<FolderShareAssetItem[]>([])
