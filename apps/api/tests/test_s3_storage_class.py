@@ -11,6 +11,7 @@ MinIO and Silo refuse everything but STANDARD and REDUCED_REDUNDANCY.
 """
 import asyncio
 import json
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -20,7 +21,7 @@ from pydantic import ValidationError
 
 from apps.api.config import Settings, settings
 from apps.api.services import s3_service
-from apps.api.tasks import transcode_tasks
+from apps.api.tasks import transcode_tasks, watermark_tasks
 from packages.transcoder import image_processor
 from packages.transcoder.base import TranscodeJob
 from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder
@@ -256,3 +257,43 @@ def test_the_audio_and_image_tasks_pass_the_setting(monkeypatch, task, target):
         task(MagicMock(), SimpleNamespace(), SimpleNamespace(), _media_file(), MagicMock(), "processed/p/a/v")
 
     assert process.call_args.kwargs["storage_class"] == "STANDARD_IA"
+
+
+def test_the_watermark_task_writes_its_render_as_media(monkeypatch):
+    """The watermarked MP4 is media, so put_object has to be told so."""
+    monkeypatch.setattr(settings, "s3_storage_class", "STANDARD_IA")
+
+    asset_id = str(uuid.uuid4())
+    asset = SimpleNamespace(id=asset_id, project_id="proj-1")
+    version = SimpleNamespace(id="ver-1")
+    source = SimpleNamespace(original_filename="clip.mov", s3_key_raw="raw/p/a/v/original.mov")
+    by_model = {"Asset": asset, "AssetVersion": version, "MediaFile": source}
+
+    db = MagicMock()
+
+    def query(model):
+        chain = MagicMock()
+        chain.filter.return_value = chain
+        chain.order_by.return_value = chain
+        chain.first.return_value = by_model[model.__name__]
+        return chain
+
+    db.query.side_effect = query
+
+    s3 = MagicMock()
+    s3.download_file.side_effect = lambda _bucket, _key, path: Path(path).write_bytes(b"src")
+
+    def ffmpeg(cmd, **_kwargs):
+        Path(cmd[-1]).write_bytes(b"rendered")
+        return MagicMock(returncode=0)
+
+    with patch.object(watermark_tasks, "SessionLocal", return_value=db), \
+         patch.object(s3_service, "get_s3_client", return_value=s3), \
+         patch.object(watermark_tasks.subprocess, "run", side_effect=ffmpeg), \
+         patch.object(watermark_tasks, "_publish_event"), \
+         patch.object(s3_service, "put_object") as put:
+        watermark_tasks.apply_watermark.run(asset_id, "CONFIDENTIAL", "center", 0.5, None)
+
+    put.assert_called_once()
+    assert put.call_args.args[:3] == (f"watermarked/{asset_id}/output.mp4", b"rendered", "video/mp4")
+    assert put.call_args.kwargs.get("media") is True
