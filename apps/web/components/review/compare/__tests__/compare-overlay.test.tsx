@@ -213,6 +213,19 @@ describe('CompareOverlay', () => {
     expect(screen.queryByPlaceholderText('Leave your comment...')).not.toBeInTheDocument()
   })
 
+  it('offers the comment menu on another author\'s comment only with canModerate (#492)', () => {
+    commentsByVersion['v-3'] = [makeComment('c1', 'v-3')]
+    const props = { asset: videoAsset, versions: [makeVersion(1), makeVersion(3)], rightVersion: makeVersion(3), onClose: vi.fn() }
+    const { unmount } = render(<CompareOverlay {...props} />)
+    expect(screen.getByText('Fix the color grade')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Comment actions' })).not.toBeInTheDocument()
+    unmount()
+
+    render(<CompareOverlay {...props} canModerate />)
+    fireEvent.click(screen.getByRole('button', { name: 'Comment actions' }))
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+  })
+
   it('keeps the Public / Internal toggle in the team composer', () => {
     render(
       <CompareOverlay asset={videoAsset} versions={[makeVersion(1), makeVersion(3)]} rightVersion={makeVersion(3)} onClose={vi.fn()} />,

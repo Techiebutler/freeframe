@@ -177,6 +177,8 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const currentMember = members?.find((m) => m.user_id === user?.id)
   const currentRole = currentMember?.role ?? 'viewer'
   const canComment = currentRole !== 'viewer'
+  // delete_comment lets a project owner remove anyone's comment.
+  const canModerate = currentRole === 'owner'
 
   // Prev/next walks the asset's own folder in the order the project view shows
   // it, not the whole project. Same key as the project page, so the list is
@@ -491,6 +493,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     <CommentPanel
       comments={comments as any}
       currentUserId={user?.id}
+      canModerate={canModerate}
       onResolve={resolveComment}
       onDelete={deleteComment}
       onAddReaction={addReaction}
@@ -696,7 +699,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 
       {/* ─── Main content: viewer + sidebar ────────────────────────────── */}
       {compareOpen && asset && currentVersion && canCompare(asset.asset_type, versions) ? (
-        <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} />
+        <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} canModerate={canModerate} />
       ) : (
       <>
       {/* pb-14 (3.5rem = PEEK_PX) reserves the sheet's peek band so the

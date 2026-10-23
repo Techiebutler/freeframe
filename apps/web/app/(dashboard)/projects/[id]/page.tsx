@@ -335,6 +335,8 @@ export default function ProjectDetailPage() {
         ? "allow"
         : "wait";
   const mayDropFiles = dropRole !== "refuse";
+  // delete_comment lets a project owner remove anyone's comment.
+  const canModerate = currentRole === "owner";
 
   // One folder's share link, from its menu in the tree, grid or list.
   function openFolderShareDialog(folderId: string, folderName: string) {
@@ -1111,6 +1113,7 @@ export default function ProjectDetailPage() {
                       <CommentPanel
                         comments={comments as any}
                         currentUserId={user?.id}
+                        canModerate={canModerate}
                         // Without these the panel reads the review store, which
                         // still holds whatever asset was opened last -- so the
                         // export ran against the wrong asset instead of the one

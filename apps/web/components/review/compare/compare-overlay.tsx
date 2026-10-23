@@ -29,6 +29,8 @@ interface CompareOverlayProps {
   onClose(): void
   /** Mirror of the page's role gate — comment inputs render only when true. */
   canComment?: boolean
+  /** Mirror of the page's owner gate: offers Delete on other people's comments. */
+  canModerate?: boolean
 }
 
 function mediaOf(v: AssetVersion | null | undefined): { fps?: number | null; duration_seconds?: number | null } {
@@ -38,7 +40,7 @@ function mediaOf(v: AssetVersion | null | undefined): { fps?: number | null; dur
 }
 
 /** Fullscreen two-version compare. Chrome: select A, (image mode toggle), select B, close. */
-export function CompareOverlay({ asset, versions, rightVersion, onClose, canComment = true }: CompareOverlayProps) {
+export function CompareOverlay({ asset, versions, rightVersion, onClose, canComment = true, canModerate = false }: CompareOverlayProps) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -419,6 +421,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
               <CommentPanel
                 comments={sideA.comments}
                 currentUserId={user?.id}
+                canModerate={canModerate}
                 onResolve={async (id) => { await sideA.resolveComment(id) }}
                 onDelete={async (id) => { await sideA.deleteComment(id) }}
                 onAddReaction={async (id, e) => { await sideA.addReaction(id, e) }}
@@ -641,6 +644,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
               <CommentPanel
                 comments={sideB.comments}
                 currentUserId={user?.id}
+                canModerate={canModerate}
                 onResolve={async (id) => { await sideB.resolveComment(id) }}
                 onDelete={async (id) => { await sideB.deleteComment(id) }}
                 onAddReaction={async (id, e) => { await sideB.addReaction(id, e) }}
