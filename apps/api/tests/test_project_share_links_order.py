@@ -23,6 +23,7 @@ def _row(title, created_at, id=None):
         view_count=0,
         last_viewed_at=None,
         created_at=created_at,
+        expires_at=None,
     )
 
 
