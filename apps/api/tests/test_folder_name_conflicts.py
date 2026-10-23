@@ -202,6 +202,29 @@ def test_bulk_moving_two_same_named_folders_into_one_parent_answers_409(db, proj
     assert _live_named(db, project, target, "Dailies") == 0
 
 
+def test_bulk_moving_two_folders_names_the_one_whose_name_is_taken(db, project):
+    """With several folders moving, the index's own refusal cannot say which one
+    collided, so the check before the write is what names it."""
+    owner, project = project
+    a = _create(db, owner, project, "A")
+    target = _create(db, owner, project, "Target")
+    _create(db, owner, project, "Dailies", target)
+    taken = _create(db, owner, project, "Dailies", a)
+    free = _create(db, owner, project, "Selects", a)
+
+    with pytest.raises(HTTPException) as exc_info:
+        folders_module.bulk_move(
+            project.id,
+            BulkMoveRequest(folder_ids=[taken, free], target_folder_id=target),
+            db=db,
+            current_user=owner,
+        )
+
+    _assert_conflict(exc_info, "Dailies")
+    assert db.get(Folder, taken).parent_id == a
+    assert db.get(Folder, free).parent_id == a
+
+
 def test_root_level_duplicates_stay_allowed(db, project):
     owner, project = project
     _create(db, owner, project, "Dailies")

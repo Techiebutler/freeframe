@@ -1,8 +1,9 @@
 /**
  * A folder write the server refuses says why (#527).
  *
- * Restoring a trashed folder whose name was taken meanwhile, or creating a
- * folder next to one of the same name, answers 409 with a message. The page
+ * Restoring a trashed folder whose name was taken meanwhile, or creating,
+ * renaming or moving a folder next to one of the same name, answers 409 with
+ * a message. The page
  * used to await these calls bare, so a refusal disappeared as an unhandled
  * rejection and nothing on screen changed. Now the message is a toast.
  *
@@ -16,6 +17,8 @@ const project = { id: 'p1', name: 'Launch film', is_public: false }
 const { folders, storeHook } = vi.hoisted(() => ({
   folders: {
     createFolder: vi.fn(),
+    renameFolder: vi.fn(),
+    bulkMove: vi.fn(),
     restoreFolder: vi.fn(),
     restoreAsset: vi.fn(),
   },
@@ -59,8 +62,8 @@ vi.mock('@/hooks/use-comments', () => ({
 }))
 vi.mock('@/hooks/use-folders', () => ({
   useFolders: () => ({
-    tree: [], mutateTree: vi.fn(), renameFolder: vi.fn(), moveFolder: vi.fn(),
-    deleteFolder: vi.fn(), moveAsset: vi.fn(), bulkMove: vi.fn(), ...folders,
+    tree: [], mutateTree: vi.fn(), moveFolder: vi.fn(),
+    deleteFolder: vi.fn(), moveAsset: vi.fn(), ...folders,
   }),
   useTrash: () => ({
     trash: {
@@ -83,10 +86,22 @@ vi.mock('@/lib/api', async (orig) => ({
 }))
 vi.mock('@/components/projects/asset-grid', () => ({ AssetGrid: () => null }))
 vi.mock('@/components/review/comment-panel', () => ({ CommentPanel: () => null }))
-// The tree stands in as the one control these tests need from it.
+// The tree stands in as the controls these tests need from it.
 vi.mock('@/components/projects/folder-tree', () => ({
-  FolderTree: ({ onShowTrash }: { onShowTrash: () => void }) => (
-    <button onClick={onShowTrash}>Recently Deleted</button>
+  FolderTree: ({
+    onShowTrash,
+    onRenameFolder,
+    onDropItems,
+  }: {
+    onShowTrash: () => void
+    onRenameFolder: (id: string, name: string) => Promise<void>
+    onDropItems: (targetFolderId: string | null, assetIds: string[], folderIds: string[]) => Promise<void>
+  }) => (
+    <>
+      <button onClick={onShowTrash}>Recently Deleted</button>
+      <button onClick={() => onRenameFolder('f-sel', 'Dailies')}>Rename Selects to Dailies</button>
+      <button onClick={() => onDropItems('f-a', [], ['f-dai', 'f-sel'])}>Drop two folders into A</button>
+    </>
   ),
 }))
 vi.mock('@/components/projects/share-links-table', () => ({ ShareLinksTable: () => null }))
@@ -118,6 +133,8 @@ function restoreButtonFor(name: string) {
 
 beforeEach(() => {
   folders.createFolder.mockReset()
+  folders.renameFolder.mockReset()
+  folders.bulkMove.mockReset()
   folders.restoreFolder.mockReset()
   folders.restoreAsset.mockReset()
 })
@@ -172,5 +189,29 @@ describe('folder writes the server refuses', () => {
 
     expect(await screen.findByText("A folder named 'Dailies' already exists here")).toBeTruthy()
     await waitFor(() => expect(folders.createFolder).toHaveBeenCalledWith('Dailies', null))
+  })
+
+  it('renaming a folder to a taken name shows the server message', async () => {
+    folders.renameFolder.mockRejectedValue(
+      new ApiError(409, "A folder named 'Dailies' already exists here"),
+    )
+    renderPage()
+
+    fireEvent.click(screen.getByText('Rename Selects to Dailies'))
+
+    expect(await screen.findByText("A folder named 'Dailies' already exists here")).toBeTruthy()
+    expect(folders.renameFolder).toHaveBeenCalledWith('f-sel', 'Dailies')
+  })
+
+  it('moving folders next to a same-named one shows the server message', async () => {
+    folders.bulkMove.mockRejectedValue(
+      new ApiError(409, "A folder named 'Dailies' already exists here"),
+    )
+    renderPage()
+
+    fireEvent.click(screen.getByText('Drop two folders into A'))
+
+    expect(await screen.findByText("A folder named 'Dailies' already exists here")).toBeTruthy()
+    expect(folders.bulkMove).toHaveBeenCalledWith([], ['f-dai', 'f-sel'], 'f-a')
   })
 })
