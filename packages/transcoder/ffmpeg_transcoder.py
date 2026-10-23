@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -895,6 +896,45 @@ def get_output_mode() -> str:
 #   preserve -> keep HDR10/HLG passthrough (10-bit, original colour tags)
 def get_hdr_mode() -> str:
     return os.environ.get("TRANSCODER_HDR", "convert").lower()
+
+
+# Audio bitrate for the review stream (TRANSCODER_AUDIO_BITRATE, #328).
+#
+# Unset emits no audio options at all, which is what this has always done: the
+# HLS muxer picks native AAC-LC itself, measured at about 128 kb/s for a stereo
+# source (ffmpeg 7.1). The codec stays AAC-LC whatever is set, because it is the
+# only audio codec every browser plays out of HLS/MPEG-TS.
+#
+# The number is a target for ffmpeg's built-in AAC encoder rather than a
+# promise. Measured on 6s of stereo, 192k lands within a few kb/s of the ask;
+# above that what it spends depends on the material, 223-262 kb/s for 256k
+# and 224-245 kb/s for 320k.
+_AUDIO_BITRATE_ENV = "TRANSCODER_AUDIO_BITRATE"
+_AUDIO_BITRATE_RANGE_K = (64, 512)
+
+
+def parse_audio_bitrate(raw: str | None) -> Optional[str]:
+    """Turn TRANSCODER_AUDIO_BITRATE into an ffmpeg `-b:a` value, or None.
+
+    Only `<n>k` is accepted. A bare number reaches ffmpeg as bits per second,
+    so "320" would be a silent request for 320 b/s; refusing it is kinder than
+    guessing which unit was meant. Like TRANSCODER_CPU_LIMIT, an unusable value
+    falls back to the default with a line in the log rather than failing jobs.
+    """
+    text = (raw or "").strip().lower()
+    if not text:
+        return None
+    low, high = _AUDIO_BITRATE_RANGE_K
+    match = re.fullmatch(r"(\d+)k", text)
+    if not match or not low <= int(match.group(1)) <= high:
+        print(f"[transcoder] {_AUDIO_BITRATE_ENV}={raw!r} is not a bitrate between "
+              f"{low}k and {high}k; leaving the audio at ffmpeg's default", flush=True)
+        return None
+    return text
+
+
+def get_audio_bitrate() -> Optional[str]:
+    return parse_audio_bitrate(os.environ.get(_AUDIO_BITRATE_ENV))
 
 
 # Stream copy (TRANSCODER_SOURCE_COPY), off unless a deployment asks for it.
@@ -2022,6 +2062,8 @@ class FFmpegTranscoder(BaseTranscoder):
             # when the ladder has resolved to a single rung, and a single rung
             # is never short of threads.
             cpu_plan = thread_plan(get_cpu_budget(), len(qualities))
+            # Read once for the same reason: a typo is reported once per job.
+            audio_bitrate = get_audio_bitrate() if has_audio else None
 
             hls_dir = work_dir / "hls"
             hls_dir.mkdir()
@@ -2050,7 +2092,7 @@ class FFmpegTranscoder(BaseTranscoder):
                 if has_audio:
                     cmd += (
                         ["-c:a", "copy"] if audio_codec == "aac"
-                        else ["-c:a", "aac", "-b:a", "192k"]
+                        else ["-c:a", "aac", "-b:a", audio_bitrate or "192k"]
                     )
                 cmd += [
                     "-f", "hls",
@@ -2232,6 +2274,9 @@ class FFmpegTranscoder(BaseTranscoder):
                     ffmpeg_cmd += ["-map", f"[{quality}]"]
                     if has_audio:
                         ffmpeg_cmd += ["-map", "a:0"]
+                        if audio_bitrate:
+                            # Indexed per audio stream for the reason above.
+                            ffmpeg_cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", audio_bitrate]
                     if backend == "cpu" or dv_software:
                         enc = "libx265" if family == "hevc" else "libx264"
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`next.config.js` no longer takes an `eslint` key.** If you run a custom `next.config.js`, remove it; Next 16 ignores the key and warns on every build.
 
 ### Added
+- **The audio bitrate of video review streams can be set with `TRANSCODER_AUDIO_BITRATE`.** The transcoder never chose an audio codec or bitrate, so every rendition got ffmpeg's default, AAC-LC at about 128 kb/s for stereo, with no way for an instance doing music or sound review to raise it. Set it to a value such as `192k`, `256k` or `320k` (from `64k` to `512k`) and every rendition is encoded as AAC-LC at that bitrate; a stream-copied upload uses it for non-AAC audio in place of the fixed `192k`. Left empty, the transcode is exactly what it was. An unusable value is logged and ignored. (#328)
 - **Appearance settings in the Create Share Link dialog.** Set a link's layout, card size, aspect ratio, Fit/Fill, card info, sort, theme, accent colour and Open in viewer before you create it, or click **Use my current view** to copy the card settings from the project view. A single-asset link offers only theme and accent, the two its viewer uses. The link panel's preview now shows the link with these settings, in its own theme and accent colour. (#517 by @jdanna)
 
 ### Changed
