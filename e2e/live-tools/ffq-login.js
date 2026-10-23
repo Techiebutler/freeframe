@@ -1,7 +1,7 @@
 // Sign in through the real login form without the password passing through a tool call (LIVE-CHROME.md section 2.2, the file
 // path). Run on the login page: it adds <input type=file id=pwin>; `upload_file` the mode-0600 password file(s) into it
 // (named <account>.pw, inside the workspace), then `window.__ffqLogin('<email>', '<account>')` reads the file in the page,
-// fills the form and clicks "Sign in". Returns once the URL has left /login, or after 20 s.
+// fills the form and clicks "Sign in". `__ffqLogin(null, '<account>')` reads the email from `<account>.em` as well (phase 6). Returns once the URL has left /login, or after 20 s.
 (() => {
   if (window.__ffqLogin) return 'login already installed'
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -19,6 +19,12 @@
     const file = Array.from(document.getElementById('pwin').files).find((f) => f.name === account + '.pw')
     if (!file) return { ok: false, why: 'no password file for ' + account }
     const password = (await file.text()).trim()
+    // Phase 6: with no email given, it is read from <account>.em in the same input, so the address is not in a tool call either.
+    if (!email) {
+      const em = Array.from(document.getElementById('pwin').files).find((f) => f.name === account + '.em')
+      if (!em) return { ok: false, why: 'no email given and no email file for ' + account }
+      email = (await em.text()).trim()
+    }
     const toPassword = Array.from(document.querySelectorAll('button')).find((b) => b.textContent.trim() === 'Sign in with password instead')
     if (toPassword) { toPassword.click(); await sleep(400) }
     const emailBox = document.querySelector('input[placeholder="you@example.com"]')

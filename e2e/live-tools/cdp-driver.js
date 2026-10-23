@@ -35,9 +35,12 @@ module.exports = { redact, redactValue, allowed }
 if (require.main !== module) return
 const { chromium } = require(process.argv[2])
 
+// The DevTools MCP's own table (PredefinedNetworkConditions, LIVE-CHROME.md section 1). Fast 3G and Slow 4G are the same values.
 const PRESETS = {
   'Fast 4G': { latency: 165, downloadThroughput: 1012500, uploadThroughput: 168750 },
   'Slow 4G': { latency: 562.5, downloadThroughput: 180000, uploadThroughput: 84375 },
+  'Fast 3G': { latency: 562.5, downloadThroughput: 180000, uploadThroughput: 84375 },
+  'Slow 3G': { latency: 2000, downloadThroughput: 50000, uploadThroughput: 50000 },
 }
 
 ;(async () => {
@@ -119,12 +122,24 @@ const PRESETS = {
     },
     evalfile: async ({ page, path }) => redactValue(await get(page).page.evaluate(require('node:fs').readFileSync(path, 'utf8'))),
     files: async ({ page, selector, paths }) => { await get(page).page.setInputFiles(selector, paths); return paths.length },
+    // Phase 6: the protocol's DOM.setFileInputFiles with the paths, as the MCP's upload_file does. Playwright's setInputFiles
+    // treats a connectOverCDP browser as remote: it refuses more than 50 MB in all, and hands the page in-memory copies, so a
+    // later touch or rm of the file on disk (U1, U2) would not be seen. These are real files on disk, read lazily by Chrome.
+    filesraw: async ({ page, selector, paths }) => {
+      const s = await cdpOf(get(page))
+      const { root } = await s.send('DOM.getDocument', { depth: 0 })
+      const { nodeId } = await s.send('DOM.querySelector', { nodeId: root.nodeId, selector })
+      if (!nodeId) throw new Error('no element ' + selector)
+      await s.send('DOM.setFileInputFiles', { nodeId, files: paths })
+      return paths.length
+    },
     click: async ({ page, selector, text }) => {
       const p = get(page).page
       const loc = text ? p.getByText(text, { exact: true }).first() : p.locator(selector).first()
       await loc.click({ timeout: 10000 })
       return 'clicked'
     },
+    press: async ({ page, key }) => { await get(page).page.keyboard.press(key); return key },
     fill: async ({ page, selector, value }) => { await get(page).page.locator(selector).first().fill(value, { timeout: 10000 }); return 'filled' },
     shot: async ({ page, path }) => { await get(page).page.screenshot({ path }); return path },
     front: async ({ page }) => { await get(page).page.bringToFront(); return 'front' },
@@ -153,6 +168,52 @@ const PRESETS = {
     close: async ({ page, runBeforeUnload }) => { await get(page).page.close({ runBeforeUnload: !!runBeforeUnload }); return { closed: !!get(page).closed, at: Date.now() } },
     closed: async ({ page }) => ({ closed: get(page).closed ?? null }),
     now: async () => Date.now(),
+    // Phase 6 (the final pass). A performance trace of the whole browser with this page's renderer marked (Playwright's
+    // Chromium-only `browser.startTracing`, i.e. the protocol's Tracing domain, devtools.timeline categories): the stand-in for
+    // the MCP's performance_start_trace / performance_stop_trace. Written as plain JSON (not gzip) to `path`.
+    trace: async ({ page, action, path }) => {
+      if (action === 'start') { await browser.startTracing(get(page).page, { path, screenshots: false }); return { tracing: true, at: Date.now() } }
+      await browser.stopTracing()
+      return { path, at: Date.now() }
+    },
+    // The protocol's Performance.getMetrics (JSHeapUsedSize, Nodes, JSEventListeners, LayoutCount, TaskDuration, ...), and
+    // Runtime.getHeapUsage, optionally after HeapProfiler.collectGarbage (gc: true). Next to `performance.memory`, which Chrome
+    // rounds unless started with --enable-precise-memory-info.
+    metrics: async ({ page, gc }) => {
+      const s = await cdpOf(get(page))
+      if (gc) await s.send('HeapProfiler.collectGarbage')
+      await s.send('Performance.enable')
+      const { metrics } = await s.send('Performance.getMetrics')
+      const heap = await s.send('Runtime.getHeapUsage')
+      return { at: Date.now(), gc: !!gc, heap, metrics: Object.fromEntries(metrics.map((m) => [m.name, m.value])) }
+    },
+    // Page.startScreencast frames written as JPEGs (`<dir>/<n>.jpg`) with their timestamps in `<dir>/frames.json`, the stand-in for
+    // gif_creator: assemble them with ffmpeg afterwards (concat demuxer with each frame's duration). Frames come only when the page
+    // paints. action: 'start' | 'stop'.
+    screencast: async ({ page, action, dir, maxWidth }) => {
+      const rec = get(page)
+      const s = await cdpOf(rec)
+      const fs = require('node:fs')
+      if (action === 'start') {
+        fs.mkdirSync(dir, { recursive: true })
+        rec.cast = { dir, frames: [] }
+        if (!rec.castHooked) {
+          rec.castHooked = true
+          s.on('Page.screencastFrame', (f) => {
+            const c = rec.cast
+            if (c) { const n = c.frames.length; fs.writeFileSync(`${c.dir}/${String(n).padStart(5, '0')}.jpg`, Buffer.from(f.data, 'base64')); c.frames.push({ n, ts: f.metadata.timestamp }) }
+            s.send('Page.screencastFrameAck', { sessionId: f.sessionId }).catch(() => {})
+          })
+        }
+        await s.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: maxWidth ?? 1100, everyNthFrame: 1 })
+        return { started: Date.now() }
+      }
+      await s.send('Page.stopScreencast')
+      const c = rec.cast
+      rec.cast = null
+      fs.writeFileSync(`${c.dir}/frames.json`, JSON.stringify(c.frames))
+      return { frames: c.frames.length, dir: c.dir }
+    },
   }
 
   http.createServer((req, res) => {

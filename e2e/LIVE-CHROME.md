@@ -25,7 +25,7 @@ layout, and the first person to use it should check it before relying on it.
 | Tool | Use | Status |
 | --- | --- | --- |
 | `chrome-devtools` MCP (`chrome-devtools-mcp` 1.11.0 here) | `new_page` (with `isolatedContext`), `navigate_page` (`initScript`, `handleBeforeUnload`), `take_snapshot`, `upload_file`, `click`, `fill`, `type_text`, `press_key`, `emulate`, `list_network_requests`, `get_network_request`, `list_console_messages`, `evaluate_script`, `take_screenshot`, `performance_start_trace` / `performance_stop_trace`, `handle_dialog`, `close_page` | verified, except `handle_dialog` and `screencast_*` (`get_network_request` returns headers and status but no timing) |
-| `claude-in-chrome` tools with `gif_creator` | A recording of the user-visible flow, in the person's own Chrome. Use it for any failing scenario | not exercised |
+| `claude-in-chrome` tools with `gif_creator` | A recording of the user-visible flow, in the person's own Chrome. Use it for any failing scenario | not exercised (phase 6 made its GIFs with section 10's `screencast` and `live-tools/frames-to-gif.js`) |
 | `docker` | storage stop/start and network black hole (section 4) | `stop`/`start` of `ffe2e-minio-1` verified in phase 2 (S1); black hole not exercised |
 
 Limits of the DevTools MCP that shape the protocol:
@@ -644,12 +644,19 @@ in `SCENARIOS.md`'s "Live Chrome run" column (verdict and a link to the section)
 - **`screencapture` needs Screen Recording permission** for the terminal; without it `screencapture -R` fails ("could not create image
   from rect"), and a page screenshot cannot be taken while a dialog holds the page. The dialog's evidence is then the `dialogs` entry
   and the blocked `eval`.
+- **Two layers intercept a trusted click** (phase 6): the open Uploads panel's backdrop (`div.fixed.inset-0.z-40`) covers the page and the
+  sidebar, so close the panel first (a click on the backdrop); and the floating "Powered by FreeFrame" badge sits over the project page's
+  "Open in viewer to comment" link at a 1400 x 900 window (a real click lands on the badge; follow the link from the page instead).
+  The injected file inputs must have `pointer-events: none` as well as `opacity: 0` once they are filled, or they intercept the
+  account menu.
+- **The shell in this environment is zsh**: `set -- $spec` does not split words, so a `for` loop over "port account" pairs passes the
+  pair as one argument. Run such loops under `bash -c` or a script with a bash shebang.
 - **A screenshot is a power assertion too**: `pmset -g assertions` lists one named "Capturing" for Chrome while it is taken. Only
   "Blink Wake Lock" is the page's wake lock.
 
 ## 9. Phase 2 stand-ins (`live-tools/`)
 
-Eleven files (eight scripts for the page, plus the throwaway server and the two section 10 drivers), loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
+Twelve files (eight scripts for the page, plus the throwaway server, the two section 10 drivers and the GIF assembler), loaded with `evaluate_script` `sourcePath` (a path inside the workspace; `evaluate_script` after load works because
 the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript` is only needed for a page that sends at load):
 
 | File | Gives you |
@@ -661,7 +668,8 @@ the app calls `XMLHttpRequest` and `fetch` afresh on every request; `initScript`
 | `live-tools/ffq-route.js` | per-file faults for part PUTs (phase 3): `route['name.png'] = 'stall'` or `'hang'` sends that file's next part PUT to the throwaway server below (real upload progress, then nothing; or every byte sent and no answer), `holdFile['name.png'] = n` holds its first n part PUTs unsent; `routeLog` has the times |
 | `live-tools/ffq-auth.js` | phase 4: `apiLog` (every request to the API: method, path with ids replaced, the account it was sent as from the bearer token's `sub` (first 8 characters of the user id, never the token), status, time), `storageLog` (token and resume-claim writes, from this tab and the others), `me()` (account and seconds left on the token), `authSummary()`, `uploadCallsAs()`, `savedRows(prefix)` and `savedOwners()` (Local Storage `ff-uploads`, with `ownerId`), `claims()`; stand-ins `holdRefresh` / `releaseRefresh()` and `partsAnswerAt` (the `/parts` answer reaches the app at that wall time: two tabs learn "nobody is sending" in the same millisecond). Needs `ffq-probe.js` first; set `q.apiHost` when the API is not `localhost:18000` |
 | `live-tools/ffq-login.js` | phase 4: on a login page, adds `#pwin`; put the mode-0600 password files (named `<account>.pw`) into it, then `__ffqLogin(email, account)` reads the file in the page, fills the form and clicks "Sign in". Delete the password files when the pass ends, at the latest |
-| `live-tools/cdp-driver.js` | phase 4: the section 10 driver (phase 5 added `init`, `focus`, `bounds`, `reload {nowait}`, `close {runBeforeUnload}`, `dialogs {answer, delayMs}`) |
+| `live-tools/cdp-driver.js` | phase 4: the section 10 driver (phase 5 added `init`, `focus`, `bounds`, `reload {nowait}`, `close {runBeforeUnload}`, `dialogs {answer, delayMs}`; phase 6 added `filesraw`, `press`, `trace`, `metrics`, `screencast` and the `Fast 3G` / `Slow 3G` presets) |
+| `live-tools/frames-to-gif.js` | phase 6: the driver's `screencast` frames to a GIF with ffmpeg (`node live-tools/frames-to-gif.js <dir> <out.gif> [stepSeconds] [fps] [width]`), the stand-in for `gif_creator`; prints the size |
 | `live-tools/cdp-raw.js` | phase 5: plain DevTools-protocol commands with nothing of Playwright attached (`list`, `eval`, `new`, `activate`, `close`), for a real hidden tab (section 10). A unique id prefix, a timeout (`CDP_RAW_TIMEOUT_MS`), the driver's `token=` redaction on its output |
 | `live-tools/ffq-wakelock.js` | phase 5: install before the app (init script): `__wl.log` (request, granted, refused, release-called, released, visibility, pagehide), `__wl.prev` (the previous documents' entries, from sessionStorage), `held()`, `state()`, `watch(prefix, ms)` (a timeline of locks held and that prefix's rows, written on change), `stop()`, `clearPrev()` |
 | `live-tools/stall-server.js` | the throwaway server for `route` (`node e2e/live-tools/stall-server.js [port]`, default 18777, on 127.0.0.1): answers the CORS preflight, then `/stall` stops reading after 256 KB and `/hang` reads everything and never answers. Stop it with `kill <pid>` when done |
@@ -717,11 +725,29 @@ c() { curl -s -X POST "http://127.0.0.1:9334/$1" -d "${2:-}"; echo; }           
 The driver answers JSON on `127.0.0.1:9334`: `pages`, `new {url, window}` (`window: true` opens a new window, otherwise a tab),
 `goto`, `reload {page, nowait}`, `url`, `eval {page, fn, timeout}` (a function's source), `evalfile {page, path}` (the `ffq-*.js` scripts), `init {page,
 path}` (a script on every new document of that page, before the app), `files {page, selector, paths}` (the stand-in for `upload_file`),
-`click {page, selector}` and `fill` (trusted input), `shot {page, path}`, `front`, `focus {page, enabled}`, `bounds {page}`,
+`click {page, selector}` and `fill` (trusted input), `press {page, key}`, `shot {page, path}`, `front`, `focus {page, enabled}`, `bounds {page}`,
 `emulate {page, offline}` or `{page, preset: "Fast 4G"}` or `{page}` to lift it, `net {page, match, since}` (the page's requests
 with status or `net::` error, the "DevTools list"), `console {page, since}` (with `pageerror` for uncaught errors), `dialogs {page,
 answer, delayMs}` (the dialogs seen, and how the next ones are answered: dismiss at once by default), `close {page, runBeforeUnload}`,
 `closed`. All pages are in the profile's one browser context, so every tab and window shares localStorage and cookies.
+
+Added in phase 6 (the final pass): `filesraw {page, selector, paths}` (the protocol's `DOM.setFileInputFiles` with real paths, as the MCP's
+`upload_file` does; **use it instead of `files`**, see below), `trace {page, action: 'start'|'stop', path}` (a performance trace, plain JSON; the
+stand-in for `performance_start_trace` / `performance_stop_trace`; section 5 item 8's script reads it with `JSON.parse` instead of `gunzip`),
+`metrics {page, gc}` (`Performance.getMetrics` and `Runtime.getHeapUsage`, after `HeapProfiler.collectGarbage` with `gc: true`), and
+`screencast {page, action: 'start'|'stop', dir}` (JPEG frames and their timestamps; `live-tools/frames-to-gif.js` makes the GIF). Start the
+Chrome with `--enable-precise-memory-info` when `performance.memory` is to be read (Chrome rounds it otherwise).
+
+- **The driver's `files` (Playwright's `setInputFiles`) treats a `connectOverCDP` browser as remote**: it refuses more than 50 MB in all
+  ("Cannot transfer files larger than 50Mb to a browser not co-located with the server") and hands the page in-memory copies, so a
+  `touch` or `rm` of the file on disk never reaches the page (U1, U2 and X1 to X3 would pass or fail for the wrong reason). Phases 4 and 5
+  used it with small files that nothing changed. Use `filesraw`.
+- **The driver dismisses every dialog by default**, so with files on their way a `location.reload()` from the page meets the leave
+  guard's `beforeunload` and does not happen (phase 6, R1's first take). Set `dialogs {page, answer: 'accept'}` before a reload meant to
+  interrupt uploads.
+- **`lsof ... | grep -c Google` counts every Chrome on the machine.** With two of your own (or the person's) running, filter by the network
+  service of yours: its PID is the child of your Chrome whose command line has `network.mojom.NetworkService`, then
+  `lsof -nP -a -p <that pid> -iTCP:19000 -sTCP:ESTABLISHED`.
 
 How it differs from the MCP:
 
