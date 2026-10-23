@@ -126,11 +126,20 @@ import { MB, fakeServer, fileOf, drop, flush } from '@/test/upload-queue-server'
 
 const QUEUED_LINE = 'New version queued, waiting for other uploads'
 
+// Next 16 hands route params to the page as a promise that it unwraps with
+// `use()`. A promise that already carries `status` and `value` is read
+// synchronously, so the assertions below do not need a Suspense wrapper.
+const routeParams = { id: 'p1', assetId: 'a2' }
+const fulfilledParams = Object.assign(Promise.resolve(routeParams), {
+  status: 'fulfilled' as const,
+  value: routeParams,
+})
+
 function renderPage() {
   // The page tells the user through a toast when a version cannot be added.
   return render(
     <ToastProvider>
-      <ReviewPage params={{ id: 'p1', assetId: 'a2' }} />
+      <ReviewPage params={fulfilledParams} />
     </ToastProvider>,
   )
 }
