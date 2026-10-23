@@ -1056,17 +1056,36 @@ def abort_upload(
             _dispose_version_files, _strip_asset_with_no_versions,
         )
         asset_id = version.asset_id
+        last_version = db.query(AssetVersion).filter(
+            AssetVersion.asset_id == asset_id,
+            AssetVersion.id != version.id,
+            AssetVersion.deleted_at.is_(None),
+        ).first() is None
+        # Removing the asset is authorized the way deleting an asset is
+        # everywhere else, by a live role on a live project. `created_by` only
+        # says who started the upload, and survives that person being taken off
+        # the project; and nothing in a project in the trash is changed, so a
+        # restore brings it back as it was.
+        #
+        # Without that, an upload that is the asset's last version is not
+        # disposed of here: the version alone would go, and the asset would be
+        # left with none, a card in the grid that cannot be opened, which no
+        # sweep ever collects (the reaper strips only the assets of versions it
+        # reaps itself). Its multipart upload is already aborted above, so its
+        # bytes are gone now; the version stays `uploading` for the reaper, which
+        # takes it and the asset together once it has been idle for the window,
+        # as it did for every upload before Discard existed.
+        if last_version and not _may_remove_asset(db, asset_id, current_user):
+            db.commit()
+            logger.info(
+                "upload %s discarded by user %s; its multipart is aborted and the "
+                "version is left to the reaper with asset %s",
+                version.id, current_user.id, asset_id,
+            )
+            return
         _dispose_version_files(db, version)
         db.flush()
-        # Removing the asset is authorized the way deleting an asset is
-        # everywhere else, by a live role on the project. `created_by` only says
-        # who started the upload, and survives that person being taken off the
-        # project. Without the role the version still goes, since it is theirs,
-        # and an asset left with no versions is the reaper's to collect.
-        stripped = (
-            _may_remove_asset(db, asset_id, current_user)
-            and _strip_asset_with_no_versions(db, asset_id)
-        )
+        stripped = last_version and _strip_asset_with_no_versions(db, asset_id)
         db.commit()
         logger.info(
             "upload %s discarded by user %s; asset %s %s",

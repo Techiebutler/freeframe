@@ -15,6 +15,7 @@ own unflushed writes cannot see that, which is how an earlier MagicMock version
 of this file stayed green with the commit replaced by `pass`.
 """
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
@@ -241,19 +242,90 @@ def test_another_users_upload_cannot_be_discarded(db, storage):
     assert _committed(db, Asset, asset.id).deleted_at is None
 
 
-def test_without_a_role_on_the_project_the_version_goes_but_the_asset_stays(db, storage):
+def _versionless_assets(db, project_id):
+    """Live assets of the project with no live version: the card that cannot be opened."""
+    db.expire_all()
+    return [
+        a for a in db.query(Asset).filter(Asset.project_id == project_id, Asset.deleted_at.is_(None))
+        if db.query(AssetVersion).filter(
+            AssetVersion.asset_id == a.id, AssetVersion.deleted_at.is_(None)
+        ).first() is None
+    ]
+
+
+def _reap_after_the_window(db, version):
+    """The reaper's pass once the upload has been idle past its window."""
+    db.query(AssetVersion).filter(AssetVersion.id == version.id).update(
+        {"last_activity_at": datetime.now(timezone.utc) - timedelta(days=30)}
+    )
+    db.commit()
+    cleanup._reap_stale_uploads(db)
+    db.commit()
+
+
+def test_without_a_role_on_the_project_the_upload_is_left_to_the_reaper(db, storage):
     """`created_by` outlives being removed from the project; the role does not.
 
     Deleting an asset needs `editor` everywhere else, so a discard does not get
-    to remove one on the strength of having started the upload. The version is
-    still theirs to throw away, and an asset left with no versions is the
-    reaper's to collect.
+    to remove one on the strength of having started the upload. Disposing of the
+    version alone would leave the asset with none, a card that cannot be opened,
+    and the reaper never collects an asset whose version it did not reap itself.
+    So the multipart is aborted now, and the version is left `uploading` for the
+    reaper, which takes the version and the asset together.
     """
-    owner, _, asset, (version,) = _seed(db, role=ProjectRole.reviewer)
+    owner, project, asset, (version,) = _seed(db, role=ProjectRole.reviewer)
+
+    _abort(db, owner, version)
+
+    kept = _committed(db, AssetVersion, version.id)
+    assert kept.deleted_at is None
+    assert kept.processing_status == ProcessingStatus.uploading
+    assert (_key(version), "u-1") in storage["aborted"]
+    assert _committed(db, Asset, asset.id).deleted_at is None
+    assert _versionless_assets(db, project.id) == []
+
+    _reap_after_the_window(db, version)
+    assert _committed(db, AssetVersion, version.id).deleted_at is not None
+    assert _committed(db, Asset, asset.id).deleted_at is not None
+
+
+def test_a_discard_in_a_trashed_project_leaves_no_versionless_asset_after_restore(db, storage):
+    """#510: Discard of an interrupted upload whose project is in the trash.
+
+    The live-project check refuses the asset strip in a deleted project. With the
+    version disposed of and the asset kept, restoring the project brought back a
+    card with no versions. The upload is left to the reaper instead, its
+    multipart aborted now, and the trash is restored as it was.
+    """
+    owner, project, asset, (version,) = _seed(db)
+    project.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    _abort(db, owner, version)
+
+    assert (_key(version), "u-1") in storage["aborted"]
+    assert _committed(db, AssetVersion, version.id).deleted_at is None
+
+    project = db.get(Project, project.id)
+    project.deleted_at = None
+    db.commit()
+
+    assert _versionless_assets(db, project.id) == []
+
+    _reap_after_the_window(db, version)
+    assert _committed(db, AssetVersion, version.id).deleted_at is not None
+    assert _committed(db, Asset, asset.id).deleted_at is not None
+    assert _versionless_assets(db, project.id) == []
+
+
+def test_without_a_role_an_asset_with_another_live_version_loses_only_this_one(db, storage):
+    owner, _, asset, (landed, version) = _seed(
+        db, statuses=(ProcessingStatus.ready, ProcessingStatus.uploading), role=ProjectRole.reviewer)
 
     _abort(db, owner, version)
 
     assert _committed(db, AssetVersion, version.id).deleted_at is not None
+    assert _committed(db, AssetVersion, landed.id).deleted_at is None
     assert _committed(db, Asset, asset.id).deleted_at is None
 
 
