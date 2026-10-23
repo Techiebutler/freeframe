@@ -54,7 +54,8 @@ def _run_task(run, download=None):
     if download:
         s3.download_file.side_effect = download
 
-    def put_object(key, data, content_type):
+    # **kwargs: put_object grows keyword options (such as media=) that these tests do not care about.
+    def put_object(key, data, content_type, **kwargs):
         uploaded["key"], uploaded["data"] = key, data
 
     with patch("apps.api.tasks.watermark_tasks.SessionLocal", return_value=_mock_db()), \
