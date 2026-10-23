@@ -27,24 +27,29 @@ def generate_magic_code() -> str:
     return str(secrets.randbelow(900000) + 100000)
 
 
-def store_magic_code(email: str, code: str) -> None:
-    """Store magic code in Redis with expiry."""
+def store_magic_code(key: str, code: str) -> None:
+    """Store magic code in Redis with expiry.
+
+    `key` names the account the code is for. The auth routes pass the user id,
+    not the address: two accounts can differ only by case, and an address key
+    would let one verify the other's code.
+    """
     r = get_redis()
-    key = f"{MAGIC_CODE_PREFIX}{email.lower()}"
-    r.setex(key, MAGIC_CODE_EXPIRY_SECONDS, code)
+    code_key = f"{MAGIC_CODE_PREFIX}{key.lower()}"
+    r.setex(code_key, MAGIC_CODE_EXPIRY_SECONDS, code)
     # Reset attempts counter
-    attempts_key = f"{MAGIC_CODE_ATTEMPTS_PREFIX}{email.lower()}"
+    attempts_key = f"{MAGIC_CODE_ATTEMPTS_PREFIX}{key.lower()}"
     r.delete(attempts_key)
 
 
-def verify_magic_code(email: str, code: str) -> tuple[bool, str]:
+def verify_magic_code(key: str, code: str) -> tuple[bool, str]:
     """
     Verify magic code from Redis.
     Returns (success, error_message).
     """
     r = get_redis()
-    key = f"{MAGIC_CODE_PREFIX}{email.lower()}"
-    attempts_key = f"{MAGIC_CODE_ATTEMPTS_PREFIX}{email.lower()}"
+    code_key = f"{MAGIC_CODE_PREFIX}{key.lower()}"
+    attempts_key = f"{MAGIC_CODE_ATTEMPTS_PREFIX}{key.lower()}"
     
     # Check attempts
     attempts = r.get(attempts_key)
@@ -52,7 +57,7 @@ def verify_magic_code(email: str, code: str) -> tuple[bool, str]:
         return False, "Too many attempts. Request a new code."
     
     # Get stored code
-    stored_code = r.get(key)
+    stored_code = r.get(code_key)
     if not stored_code:
         return False, "Code expired or not found"
     
@@ -63,17 +68,17 @@ def verify_magic_code(email: str, code: str) -> tuple[bool, str]:
         return False, "Invalid code"
     
     # Success - delete the code
-    r.delete(key)
+    r.delete(code_key)
     r.delete(attempts_key)
     return True, ""
 
 
-def delete_magic_code(email: str) -> None:
+def delete_magic_code(key: str) -> None:
     """Delete magic code from Redis."""
     r = get_redis()
-    key = f"{MAGIC_CODE_PREFIX}{email.lower()}"
-    attempts_key = f"{MAGIC_CODE_ATTEMPTS_PREFIX}{email.lower()}"
-    r.delete(key)
+    code_key = f"{MAGIC_CODE_PREFIX}{key.lower()}"
+    attempts_key = f"{MAGIC_CODE_ATTEMPTS_PREFIX}{key.lower()}"
+    r.delete(code_key)
     r.delete(attempts_key)
 
 
