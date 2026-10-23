@@ -268,10 +268,19 @@ def _storage_unreachable(what: str = "check") -> HTTPException:
     Never 409. A conflict says the request can never succeed, and this client
     treats it as final -- it marks the upload failed and fires /upload/abort -- so
     answering a storage hiccup that way destroys a version that may be complete.
+
+    Coded the way `storage_initiate_error` codes its 503, so the web queue reads
+    a `/parts` that cannot reach storage as a storage hold ("Waiting for
+    storage") rather than as the user's connection. `message` is the sentence
+    the string detail used to be, which is what a client shows.
     """
     return HTTPException(
         status_code=503,
-        detail=f"Could not reach storage to {what} this upload. Please retry.",
+        detail={
+            "code": "storage_unavailable",
+            "message": f"Could not reach storage to {what} this upload. Please retry.",
+            "retry_after": 5,
+        },
         headers={"Retry-After": "5"},
     )
 

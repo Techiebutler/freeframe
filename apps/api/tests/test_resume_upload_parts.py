@@ -333,6 +333,14 @@ def test_storage_that_cannot_be_reached_is_not_reported_as_gone(
     resp = client.get(_url(version), headers=auth_headers)
 
     assert resp.status_code == 503
+    # Coded like initiate's, so a queued Resume that meets a storage outage
+    # waits saying "Waiting for storage", not "Waiting for connection".
+    assert resp.json()["detail"] == {
+        "code": "storage_unavailable",
+        "message": "Could not reach storage to check this upload. Please retry.",
+        "retry_after": 5,
+    }
+    assert resp.headers["Retry-After"] == "5"
 
 
 def test_an_unreachable_head_during_a_gone_upload_is_not_reported_as_gone(
@@ -352,6 +360,8 @@ def test_an_unreachable_head_during_a_gone_upload_is_not_reported_as_gone(
     resp = client.get(_url(version), headers=auth_headers)
 
     assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "storage_unavailable"
+    assert resp.json()["detail"]["retry_after"] == 5
 
 
 def test_a_version_that_is_no_longer_uploading_has_nothing_to_resume(

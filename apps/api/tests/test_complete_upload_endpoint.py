@@ -391,6 +391,11 @@ def test_retry_survives_a_storage_blip_as_a_conflict_not_a_crash(
 
     assert resp.status_code == 503
     assert resp.headers["Retry-After"] == "5"
+    assert resp.json()["detail"] == {
+        "code": "storage_unavailable",
+        "message": "Could not reach storage to check this upload. Please retry.",
+        "retry_after": 5,
+    }
     assert version.processing_status == ProcessingStatus.processing
     assert dispatched == []
 
