@@ -25,7 +25,7 @@ import { useUploadStore, __uploadQueueTesting as testing } from '../upload-store
 import { signInAs, row } from '@/test/upload-session'
 import { installXhrFake, type FakeXhr } from '@/test/xhr-fake'
 import {
-  MB, fakeServer, fileOf, small, drop, rowOf, files, stored, settle, flush, rehydrate,
+  MB, fakeServer, fileOf, small, drop, rowOf, files, stored, settle, flush, rehydrate, resumable,
 } from '@/test/upload-queue-server'
 
 const listed = (id: string) => files().some((f) => f.id === id)
@@ -312,6 +312,80 @@ describe('cancel while storage cannot answer', () => {
     // And next's part goes out within the budget.
     expect(rowOf(next).status).toBe('uploading')
     expect(xhrs.filter((x) => x.url.includes('/u2/'))).toHaveLength(1)
+  })
+})
+
+describe('cancel, then Remove before the run has settled', () => {
+  // #523. Cancel on an uploading row and Remove on a cancelled one are the same X in the same
+  // place, so a double click does both. The run ends only once the request out at the cancel
+  // has wound down, and by then the row is gone: the abort is still the user's decision.
+
+  /** Every part PUT hangs, and an abort reports only when the test says so. */
+  function slowAborts() {
+    const pending: Array<() => void> = []
+    installXhrFake((_, request) => {
+      const abort = request.abort.bind(request)
+      request.abort = () => { pending.push(abort) }
+      return new Promise(() => {})
+    })
+    return { windDown: () => { while (pending.length) pending.shift()!() } }
+  }
+
+  it('a new upload still sends /upload/abort', async () => {
+    const server = fakeServer(() => 'answer')
+    const parts = slowAborts()
+
+    const [a] = drop([fileOf('a.mov')])
+    await settle()
+    expect(rowOf(a).status).toBe('uploading')
+
+    useUploadStore.getState().cancelUpload(a)
+    useUploadStore.getState().removeFile(a)
+    await settle()
+    expect(listed(a)).toBe(false)
+    expect(aborts(server.calls)).toEqual([])
+
+    parts.windDown()
+    await settle()
+
+    expect(aborts(server.calls)).toEqual(['abort u1'])
+    expect(api.post).toHaveBeenCalledWith('/upload/abort', {
+      s3_key: 'k1', upload_id: 'u1', version_id: 'v1', discard: true,
+    }, { pinSubject: 'user-1' })
+    expect(listed(a)).toBe(false)
+    expect(testing.runningIds()).toEqual([])
+  })
+
+  it('a resumed upload still sends /upload/abort', async () => {
+    testing.setClaimSettleMs(0)
+    const server = fakeServer(() => 'answer')
+    const parts = slowAborts()
+    vi.mocked(api.get).mockResolvedValue(resumable({ file_size_bytes: 50 * MB }) as never)
+    useUploadStore.setState({
+      files: [row({
+        id: 'r', status: 'interrupted', fileSize: 50 * MB,
+        assetId: 'ra', versionId: 'rv', uploadId: 'ru', s3Key: 'rk',
+      })],
+    })
+
+    useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4'))
+    await settle()
+    expect(rowOf('r').status).toBe('uploading')
+
+    useUploadStore.getState().cancelUpload('r')
+    useUploadStore.getState().removeFile('r')
+    await settle()
+    expect(listed('r')).toBe(false)
+    expect(aborts(server.calls)).toEqual([])
+
+    parts.windDown()
+    await settle()
+
+    expect(aborts(server.calls)).toEqual(['abort ru'])
+    expect(api.post).toHaveBeenCalledWith('/upload/abort', {
+      s3_key: 'rk', upload_id: 'ru', version_id: 'rv', discard: true,
+    }, { pinSubject: 'user-1' })
+    expect(testing.runningIds()).toEqual([])
   })
 })
 

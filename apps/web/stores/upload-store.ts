@@ -2739,7 +2739,12 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
     // API takes its client's whole retry budget to give up (minutes), during
     // which the queue stood still behind a row that already read "Cancelled"
     // (e2e S4, APP-BUG-5). `abortCancelled` handles its own answer.
-    if (userCancelled() && upload_id && s3_key && version_id) {
+    //
+    // The cancel is read off the run's own controller as well as the row:
+    // Remove on the cancelled row can take the row away before the request
+    // that was out at the cancel has wound down, and the cancel still stands
+    // (#523). Only `cancelUpload` aborts this controller.
+    if ((controller.signal.aborted || userCancelled()) && upload_id && s3_key && version_id) {
       void abortCancelled(useUploadStore.setState, { s3_key, upload_id, version_id }, owner)
     }
   } finally {
@@ -3033,8 +3038,9 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       }
     }
 
-    // Sent, not awaited, as in `runNew`: the place is given back now.
-    if (userCancelled() && info) {
+    // Sent, not awaited, as in `runNew`: the place is given back now, and a
+    // row removed since the cancel is still aborted.
+    if ((controller.signal.aborted || userCancelled()) && info) {
       void abortCancelled(useUploadStore.setState, {
         s3_key: info.s3_key,
         upload_id: info.upload_id,
