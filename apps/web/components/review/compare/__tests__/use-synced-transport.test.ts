@@ -1,7 +1,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSyncedTransport, type SlavableVideo } from '../use-synced-transport'
+import { useSyncedTransport, type MasterCandidate, type SlavableVideo } from '../use-synced-transport'
 
 const players = vi.hoisted(() => ({
   a: { videoRef: { current: null as unknown } },
@@ -13,7 +13,7 @@ vi.mock('@/hooks/use-video-player', () => ({
 
 // Model a decoder landing on the preceding frame rather than the exact seek
 // time. A repeated assignment is observable even if it lands on the same frame.
-function fakeVideo(fps: number): SlavableVideo & { seeks: number[] } {
+function fakeVideo(fps: number): SlavableVideo & MasterCandidate & { seeks: number[] } {
   let currentTime = 8
   const seeks: number[] = []
   return {
@@ -25,6 +25,8 @@ function fakeVideo(fps: number): SlavableVideo & { seeks: number[] } {
     paused: true,
     play() { this.paused = false; return Promise.resolve() },
     pause() { this.paused = true },
+    ended: false,
+    error: null,
     seeks,
   }
 }
@@ -34,7 +36,7 @@ let root: Root
 let callbacks: Map<number, FrameRequestCallback>
 let now: number
 
-function mountTransport(fpsA: number | null, fpsB: number | null) {
+function mountTransport(fpsA: number | null, fpsB: number | null, overrides: Partial<Args> = {}) {
   let current: ReturnType<typeof useSyncedTransport>
   function Probe(props: Args) {
     current = useSyncedTransport(props)
@@ -45,6 +47,7 @@ function mountTransport(fpsA: number | null, fpsB: number | null) {
     timingA: { offset: 0, duration: 60 },
     timingB: { offset: 0, duration: 60 },
     fpsA, fpsB,
+    ...overrides,
   }
   const render = (props: Args) => act(() => root.render(createElement(Probe, props)))
   render(args)
@@ -129,5 +132,110 @@ describe('useSyncedTransport native frame tolerances', () => {
     frame()
     expect(a.seeks).toHaveLength(0)
     expect(b.seeks).toHaveLength(1)
+  })
+})
+
+describe('useSyncedTransport playback', () => {
+  function mountPair(overrides: Partial<Args> = {}) {
+    const a = fakeVideo(25)
+    const b = fakeVideo(25)
+    players.a.videoRef.current = a
+    players.b.videoRef.current = b
+    return { a, b, transport: mountTransport(25, 25, overrides) }
+  }
+
+  it('toggle plays both sides on the next frame and pauses them again', () => {
+    const { a, b, transport } = mountPair()
+    frame()
+    expect(a.paused && b.paused).toBe(true)
+
+    act(() => transport.current.toggle())
+    expect(transport.current.isPlaying).toBe(true)
+    frame()
+    expect(a.paused).toBe(false)
+    expect(b.paused).toBe(false)
+    // No audible side: the clock advances by wall time.
+    expect(transport.current.t).toBeCloseTo(0.016, 6)
+
+    act(() => transport.current.toggle())
+    expect(transport.current.isPlaying).toBe(false)
+    frame()
+    expect(a.paused).toBe(true)
+    expect(b.paused).toBe(true)
+  })
+
+  it('follows the audible side clock and hands off when the audible side switches', () => {
+    const { a, b, transport } = mountPair({
+      audibleSide: 'b',
+      timingB: { offset: 2, duration: 60 },
+    })
+    act(() => transport.current.toggle())
+    // Before its offset the audible side does not own the clock.
+    b.currentTime = 20
+    frame()
+    expect(transport.current.t).toBeCloseTo(0.016, 6)
+
+    act(() => transport.current.seekTo(2))
+    b.currentTime = 20
+    frame()
+    expect(transport.current.t).toBe(22)
+    expect(a.currentTime).toBe(22)
+
+    transport.rerender({ audibleSide: 'a' })
+    a.currentTime = 10
+    frame()
+    expect(transport.current.t).toBe(10)
+    expect(b.currentTime).toBe(8)
+
+    // An ended audible side releases the clock to wall time.
+    transport.rerender({ audibleSide: 'b' })
+    b.currentTime = 30
+    b.ended = true
+    frame()
+    expect(transport.current.t).toBeCloseTo(10.016, 6)
+  })
+
+  it('stops at the end of the timeline and holds there', () => {
+    const { a, b, transport } = mountPair({
+      timingA: { offset: 0, duration: 0.04 },
+      timingB: { offset: 0, duration: 0.04 },
+    })
+    act(() => transport.current.toggle())
+    frame()
+    frame()
+    expect(transport.current.isPlaying).toBe(true)
+    frame()
+    expect(transport.current.t).toBe(0.04)
+    expect(transport.current.isPlaying).toBe(false)
+    frame()
+    expect(transport.current.t).toBe(0.04)
+    expect(a.paused && b.paused).toBe(true)
+  })
+
+  it('restarts from 0 when toggled at the end', () => {
+    const { transport } = mountPair({
+      timingA: { offset: 0, duration: 0.04 },
+      timingB: { offset: 0, duration: 0.04 },
+    })
+    act(() => transport.current.seekTo(0.04))
+    act(() => transport.current.toggle())
+    expect(transport.current.t).toBe(0)
+    expect(transport.current.isPlaying).toBe(true)
+    frame()
+    expect(transport.current.t).toBeCloseTo(0.016, 6)
+    expect(transport.current.isPlaying).toBe(true)
+  })
+
+  it('seekTo moves T and re-slaves both sides before the next frame', () => {
+    const { a, b, transport } = mountPair({ timingB: { offset: 2, duration: 60 } })
+    act(() => transport.current.seekTo(5))
+    expect(transport.current.t).toBe(5)
+    expect(a.seeks).toEqual([5])
+    expect(b.seeks).toEqual([3])
+
+    act(() => transport.current.seekTo(999))
+    expect(transport.current.t).toBe(62)
+    act(() => transport.current.seekTo(-1))
+    expect(transport.current.t).toBe(0)
   })
 })
