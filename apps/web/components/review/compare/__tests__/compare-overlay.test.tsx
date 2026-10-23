@@ -213,17 +213,31 @@ describe('CompareOverlay', () => {
     expect(screen.queryByPlaceholderText('Leave your comment...')).not.toBeInTheDocument()
   })
 
-  it('offers the comment menu on another author\'s comment only with canModerate (#492)', () => {
-    commentsByVersion['v-3'] = [makeComment('c1', 'v-3')]
+  it('offers the comment menu on another author\'s comment in both panes only with canModerate (#492)', () => {
+    commentsByVersion['v-1'] = [makeComment('c1', 'v-1', { body: 'Left pane note' })]
+    commentsByVersion['v-3'] = [makeComment('c3', 'v-3', { body: 'Right pane note' })]
     const props = { asset: videoAsset, versions: [makeVersion(1), makeVersion(3)], rightVersion: makeVersion(3), onClose: vi.fn() }
+    const openBoth = () => {
+      // The right panel starts open; the left one starts closed.
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle left comments' }))
+      expect(screen.getByText('Left pane note')).toBeInTheDocument()
+      expect(screen.getByText('Right pane note')).toBeInTheDocument()
+    }
+
     const { unmount } = render(<CompareOverlay {...props} />)
-    expect(screen.getByText('Fix the color grade')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Comment actions' })).not.toBeInTheDocument()
+    openBoth()
+    expect(screen.queryAllByRole('button', { name: 'Comment actions' })).toHaveLength(0)
     unmount()
 
     render(<CompareOverlay {...props} canModerate />)
-    fireEvent.click(screen.getByRole('button', { name: 'Comment actions' }))
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    openBoth()
+    const menus = screen.getAllByRole('button', { name: 'Comment actions' })
+    expect(menus).toHaveLength(2)
+    for (const menu of menus) {
+      fireEvent.click(menu)
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+      fireEvent.click(menu)
+    }
   })
 
   it('keeps the Public / Internal toggle in the team composer', () => {
