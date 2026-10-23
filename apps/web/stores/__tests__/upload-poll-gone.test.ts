@@ -1,16 +1,18 @@
 /**
  * The poll behind the uploads panel, asked about an asset that is gone.
  *
- * `refreshProcessingItems` asks `GET /assets/{id}` about every processing or
- * interrupted row, and a failed request used to read as "no answer, ask again".
- * An asset in the trash answers 404, and one in a deleted project answers 403
- * (since v1.19.0), and neither is going to change. The row stayed in the Active
- * group for good and was polled for as long as the tab stayed open (#509).
+ * `refreshProcessingItems` asks the server about the asset of every processing
+ * or interrupted row, and used to read an asset it got no answer for as "ask
+ * again". An asset in the trash, or in a deleted project (since v1.19.0), is
+ * never going to answer: `GET /assets/{id}` refuses them with 404 and 403, and
+ * `GET /assets/batch`, which the poll asks now (#524), leaves them out. The row
+ * stayed in the Active group for good and was polled for as long as the tab
+ * stayed open (#509).
  *
- * A 403 or 404 is the server saying the file is not there for this user. That is
- * final for the row, and a failed row is neither polled nor counted as active.
- * A dropped connection or a 5xx says nothing about the asset, so those still ask
- * again.
+ * Left out of a successful answer is the server saying the file is not there
+ * for this user. That is final for the row, and a failed row is neither polled
+ * nor counted as active. A dropped connection or a 5xx says nothing about the
+ * asset, so those still ask again.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -24,6 +26,7 @@ import { useUploadStore } from '../upload-store'
 import type { UploadFile } from '../upload-store'
 import { pollIntervalFor } from '@/components/layout/upload-sse-bridge'
 import { signInAs } from '@/test/upload-session'
+import { answerBatch, batchIds } from '@/test/assets-batch'
 
 const GONE_MESSAGE = 'This file is no longer available.'
 
@@ -50,9 +53,9 @@ function rowOf(id: string) {
   return useUploadStore.getState().files.find((f) => f.id === id)!
 }
 
-/** GETs for one asset, counting every poll that went out. */
+/** Polls that asked about one asset, counting every one that went out. */
 function pollsFor(assetId: string) {
-  return vi.mocked(api.get).mock.calls.filter(([path]) => path === `/assets/${assetId}`)
+  return vi.mocked(api.get).mock.calls.filter(([path]) => batchIds(path)?.includes(assetId))
 }
 
 /**
@@ -72,9 +75,9 @@ describe('the poll when the asset is gone', () => {
     useUploadStore.setState({ files: [] })
   })
 
-  it('a 404 from the poll fails a processing row with the gone message and it is not polled again', async () => {
+  it('an answer that leaves the asset out fails a processing row with the gone message and it is not polled again', async () => {
     useUploadStore.setState({ files: [seedRow({ status: 'processing' })] })
-    vi.mocked(api.get).mockRejectedValue(new ApiError(404, 'Asset not found'))
+    vi.mocked(api.get).mockImplementation(answerBatch([]) as never)
 
     await tick()
 
@@ -87,9 +90,9 @@ describe('the poll when the asset is gone', () => {
     expect(pollIntervalFor(useUploadStore.getState().files)).toBe(0)
   })
 
-  it('a 403 from the poll does the same for an interrupted row', async () => {
+  it('does the same for an interrupted row', async () => {
     useUploadStore.setState({ files: [seedRow({ status: 'interrupted', uploadId: 'upload-1' })] })
-    vi.mocked(api.get).mockRejectedValue(new ApiError(403, 'Not authorized'))
+    vi.mocked(api.get).mockImplementation(answerBatch([]) as never)
 
     await tick()
 
@@ -130,7 +133,7 @@ describe('the poll when the asset is gone', () => {
         seedRow({ id: 'row-2', versionId: 'v3', status: 'processing' }),
       ],
     })
-    vi.mocked(api.get).mockRejectedValue(new ApiError(404, 'Asset not found'))
+    vi.mocked(api.get).mockImplementation(answerBatch([]) as never)
 
     await tick()
 
@@ -146,10 +149,9 @@ describe('the poll when the asset is gone', () => {
         seedRow({ id: 'row-2', assetId: 'asset-live', versionId: 'v2' }),
       ],
     })
-    vi.mocked(api.get).mockImplementation(async (path: string) => {
-      if (path === '/assets/asset-gone') throw new ApiError(404, 'Asset not found')
-      return { id: 'asset-live', latest_version: { id: 'v2', processing_status: 'processing' } } as never
-    })
+    vi.mocked(api.get).mockImplementation(answerBatch([
+      { id: 'asset-live', latest_version: { id: 'v2', processing_status: 'processing' } },
+    ]) as never)
 
     await tick()
 

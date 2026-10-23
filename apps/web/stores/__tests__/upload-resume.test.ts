@@ -28,6 +28,7 @@ import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, fail, type PartHandler } from '@/test/xhr-fake'
 import { createPartBudget } from '@/lib/upload-budget'
 import { signInAs } from '@/test/upload-session'
+import { answerBatch, batchIds } from '@/test/assets-batch'
 
 // The upload queue is tab-wide module state: start every test from an empty one.
 beforeEach(() => __uploadQueueTesting.reset())
@@ -573,7 +574,7 @@ describe('refreshProcessingItems', () => {
     // disappeared, the user was told the upload landed, and the parts sat in
     // the bucket until the reaper.
     useUploadStore.setState({ files: [seedRow({})] as never })
-    vi.mocked(api.get).mockResolvedValue(assetWith('an-older-version', 'ready') as never)
+    vi.mocked(api.get).mockImplementation(answerBatch([assetWith('an-older-version', 'ready')]) as never)
 
     await useUploadStore.getState().refreshProcessingItems()
 
@@ -584,29 +585,29 @@ describe('refreshProcessingItems', () => {
     // The reason interrupted rows are polled at all: the same upload can be
     // resumed from another tab or another machine.
     useUploadStore.setState({ files: [seedRow({})] as never })
-    vi.mocked(api.get).mockResolvedValue(assetWith(VERSION_ID, 'processing') as never)
+    vi.mocked(api.get).mockImplementation(answerBatch([assetWith(VERSION_ID, 'processing')]) as never)
 
     await useUploadStore.getState().refreshProcessingItems()
 
     expect(rowOf('row-1').status).toBe('processing')
   })
 
-  it('gives two rows on one asset their own answers', async () => {
-    // An interrupted v2 and a processing v3 read the same result when the
-    // lookup is keyed on the asset.
+  it('applies the one answer two rows on one asset share only to the version it is about', async () => {
+    // An interrupted v2 and a processing v3. The asset is asked about once, and
+    // its answer names one version: the other row is left as it was rather
+    // than being rewritten from an answer about someone else's version.
     useUploadStore.setState({
       files: [
         seedRow({ id: 'row-1', versionId: 'v2', status: 'interrupted' }),
         seedRow({ id: 'row-2', versionId: 'v3', status: 'processing' }),
       ] as never,
     })
-    vi.mocked(api.get)
-      .mockResolvedValueOnce(assetWith('v2', 'ready') as never)
-      .mockResolvedValueOnce(assetWith('v3', 'ready') as never)
+    vi.mocked(api.get).mockImplementation(answerBatch([assetWith('v3', 'ready')]) as never)
 
     await useUploadStore.getState().refreshProcessingItems()
 
-    expect(rowOf('row-1').status).toBe('complete')
+    expect(vi.mocked(api.get).mock.calls.map(([path]) => batchIds(path))).toEqual([[ASSET_ID]])
+    expect(rowOf('row-1').status).toBe('interrupted')
     expect(rowOf('row-2').status).toBe('complete')
   })
 })

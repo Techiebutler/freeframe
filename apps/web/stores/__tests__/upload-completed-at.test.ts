@@ -21,6 +21,7 @@ vi.mock('swr', () => ({ mutate: vi.fn() }))
 import { api } from '@/lib/api'
 import { useUploadStore, __uploadQueueTesting as testing } from '../upload-store'
 import { signInAs, row } from '@/test/upload-session'
+import { answerBatch } from '@/test/assets-batch'
 import { MB, fakeServer, fileOf, drop, rowOf, settle } from '@/test/upload-queue-server'
 import type { AssetResponse } from '@/types'
 
@@ -78,9 +79,9 @@ describe('completedAt', () => {
     useUploadStore.setState({
       files: [row({ id: 'r', status: 'processing', assetId: 'ra', versionId: 'rv', createdAt: now - 3 * DAY })],
     })
-    vi.mocked(api.get).mockImplementation(((path: string) => (path === '/assets/ra'
-      ? Promise.resolve({ id: 'ra', latest_version: { id: 'rv', processing_status: 'ready' } })
-      : Promise.resolve([]))) as never)
+    vi.mocked(api.get).mockImplementation(
+      answerBatch([{ id: 'ra', latest_version: { id: 'rv', processing_status: 'ready' } }]) as never,
+    )
 
     await useUploadStore.getState().refreshProcessingItems()
 

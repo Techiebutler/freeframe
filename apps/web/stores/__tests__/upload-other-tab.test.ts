@@ -34,6 +34,7 @@ import { useUploadStore, currentTabId, LIVE_WINDOW_MS, RESUME_CLAIM_PREFIX, resu
 import type { UploadFile } from '../upload-store'
 import { installXhrFake, ok, type PartHandler } from '@/test/xhr-fake'
 import { signInAs } from '@/test/upload-session'
+import { answerBatch } from '@/test/assets-batch'
 
 // The upload queue is tab-wide module state: start every test from an empty one.
 beforeEach(() => __uploadQueueTesting.reset())
@@ -742,7 +743,7 @@ describe('polling a row whose upload is running on another device', () => {
     // row already said -- so the early return fired and the row kept offering
     // Resume and Discard for an upload that was still running.
     useUploadStore.setState({ files: [row({ status: 'interrupted', ownerTab: undefined })] })
-    vi.mocked(api.get).mockResolvedValue(assetStillUploading(secondsAgo(5)) as never)
+    vi.mocked(api.get).mockImplementation(answerBatch([assetStillUploading(secondsAgo(5))]) as never)
 
     await useUploadStore.getState().refreshProcessingItems()
 
@@ -752,8 +753,8 @@ describe('polling a row whose upload is running on another device', () => {
 
   it('leaves it interrupted once the other device has stopped', async () => {
     useUploadStore.setState({ files: [row({ status: 'interrupted', ownerTab: undefined })] })
-    vi.mocked(api.get).mockResolvedValue(
-      assetStillUploading(new Date(Date.now() - LIVE_WINDOW_MS - 1000)) as never,
+    vi.mocked(api.get).mockImplementation(
+      answerBatch([assetStillUploading(new Date(Date.now() - LIVE_WINDOW_MS - 1000))]) as never,
     )
 
     await useUploadStore.getState().refreshProcessingItems()
@@ -775,7 +776,7 @@ describe('polling a row whose upload is running on another device', () => {
         row({ status: 'interrupted', ownerTab: currentTabId(), heartbeatAt: Date.now() - 5000 }),
       ],
     })
-    vi.mocked(api.get).mockResolvedValue(assetStillUploading(secondsAgo(5)) as never)
+    vi.mocked(api.get).mockImplementation(answerBatch([assetStillUploading(secondsAgo(5))]) as never)
 
     await useUploadStore.getState().refreshProcessingItems()
 
@@ -788,7 +789,7 @@ describe('polling a row whose upload is running on another device', () => {
     // into switching the poll off. A row this tab never owned, with the server
     // reporting movement, is exactly what `elsewhere` exists to say.
     useUploadStore.setState({ files: [row({ status: 'interrupted', ownerTab: OTHER_TAB })] })
-    vi.mocked(api.get).mockResolvedValue(assetStillUploading(secondsAgo(5)) as never)
+    vi.mocked(api.get).mockImplementation(answerBatch([assetStillUploading(secondsAgo(5))]) as never)
 
     await useUploadStore.getState().refreshProcessingItems()
 
@@ -799,7 +800,7 @@ describe('polling a row whose upload is running on another device', () => {
     useUploadStore.setState({
       files: [row({ status: 'interrupted', ownerTab: undefined, progress: 41 })],
     })
-    vi.mocked(api.get).mockResolvedValue(assetStillUploading(secondsAgo(5)) as never)
+    vi.mocked(api.get).mockImplementation(answerBatch([assetStillUploading(secondsAgo(5))]) as never)
 
     await useUploadStore.getState().refreshProcessingItems()
 

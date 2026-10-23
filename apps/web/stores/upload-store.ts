@@ -1541,16 +1541,60 @@ function isFinalRefusal(err: unknown): boolean {
 
 const ASSET_GONE_MESSAGE = 'This file is no longer available.'
 
+/** The most assets `GET /assets/batch` answers for in one request. */
+const ASSET_BATCH_SIZE = 100
+
 /**
- * An answer to `GET /assets/{id}` that will not change.
+ * What the server says about each asset the poll watches, by owner and then by
+ * asset id: the asset, `'gone'` (final), or `null` (no answer, ask again).
  *
- * An asset in the trash answers 404, and one in a deleted project answers 403
- * (since v1.19.0). Both say the file is not there for this user, which no amount
- * of asking again alters, so the row is finished. Anything else -- a dropped
- * connection, a 5xx -- says nothing about the asset and is simply asked again.
+ * One `GET /assets/batch` per hundred assets, each asked about once however
+ * many rows watch it. It used to be one `GET /assets/{id}` per row, which at
+ * the 5s cadence is 12 reads a minute per row, and about fifty rows left
+ * processing spent the whole per-user read limit on the poll alone (#524).
+ *
+ * The batch leaves out what `GET /assets/{id}` would answer 403 or 404 for: an
+ * asset in the trash, or in a deleted project (since v1.19.0). Both say the file
+ * is not there for this user, which no amount of asking again alters, so an id
+ * missing from a successful answer is gone and its row is finished. A request
+ * that fails -- a dropped connection, a 5xx, or any other status -- says nothing
+ * about any asset in it, so they are all asked about again. Asked as the rows'
+ * owner: sent as an account that signed in since, the answer would leave the
+ * owner's assets out and fail the owner's rows for good.
  */
-function isAssetGone(err: unknown): boolean {
-  return err instanceof ApiError && (err.status === 403 || err.status === 404)
+async function askAboutAssets(
+  watched: UploadFile[],
+): Promise<Map<string | undefined, Map<string, AssetResponse | 'gone' | null>>> {
+  const idsByOwner = new Map<string | undefined, Set<string>>()
+  for (const f of watched) {
+    if (!f.assetId) continue
+    const ids = idsByOwner.get(f.ownerId) ?? new Set<string>()
+    ids.add(f.assetId)
+    idsByOwner.set(f.ownerId, ids)
+  }
+  const answers = new Map<string | undefined, Map<string, AssetResponse | 'gone' | null>>()
+  const requests: Promise<void>[] = []
+  for (const [ownerId, idSet] of idsByOwner) {
+    const byId = new Map<string, AssetResponse | 'gone' | null>()
+    answers.set(ownerId, byId)
+    const ids = Array.from(idSet)
+    for (let i = 0; i < ids.length; i += ASSET_BATCH_SIZE) {
+      const chunk = ids.slice(i, i + ASSET_BATCH_SIZE)
+      const query = new URLSearchParams(chunk.map((id) => ['ids', id]))
+      requests.push(
+        api.get<AssetResponse[]>(`/assets/batch?${query}`, { pinSubject: ownerId })
+          .then((assets) => {
+            const found = new Map(assets.map((a) => [a.id, a]))
+            for (const id of chunk) byId.set(id, found.get(id) ?? 'gone')
+          })
+          .catch(() => {
+            for (const id of chunk) byId.set(id, null)
+          }),
+      )
+    }
+  }
+  await Promise.all(requests)
+  return answers
 }
 
 // AbortControllers for cancellation
@@ -3589,23 +3633,15 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     if (!watched.length) return
     try {
       // `null` is "no answer, ask again"; `'gone'` is an answer that is final.
-      // Asked as the row's owner: sent as an account that signed in since, a
-      // 403 would read as the asset gone and fail the owner's row for good.
-      const results = await Promise.all(
-        watched.map((f) =>
-          api.get<AssetResponse>(`/assets/${f.assetId}`, { pinSubject: f.ownerId }).catch((err): 'gone' | null =>
-            isAssetGone(err) ? 'gone' : null,
-          ),
-        ),
-      )
+      const answers = await askAboutAssets(watched)
+      const watchedIds = new Set(watched.map((f) => f.id))
       set((s) => ({
         files: s.files.map((f) => {
           if ((f.status !== 'processing' && f.status !== 'interrupted') || !f.assetId || f.queuedResume) return f
-          // Matched on the version and not the asset: two rows can watch one
-          // asset -- an interrupted v2 and a processing v3 -- and on the asset
-          // they both read the first one's answer.
-          const idx = watched.findIndex((pf) => pf.id === f.id)
-          const answer = idx >= 0 ? results[idx] : null
+          // Two rows can watch one asset -- an interrupted v2 and a processing
+          // v3 -- and both read its one answer. The version guard below is
+          // what keeps the answer about v3 from being applied to v2.
+          const answer = watchedIds.has(f.id) ? answers.get(f.ownerId)?.get(f.assetId) ?? null : null
           // Failed is neither polled nor counted as active, so this is what
           // takes the row off the timer; the panel still offers Dismiss on it.
           if (answer === 'gone') {

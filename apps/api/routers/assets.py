@@ -15,7 +15,7 @@ from ..models.activity import Mention, Notification, NotificationType
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
-from ..services.permissions import require_project_role, require_project_visible, require_asset_access
+from ..services.permissions import require_project_role, require_project_visible, require_asset_access, can_access_asset
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.downloads import (
     describe_choices, download_choices, download_filename, may_download_original,
@@ -251,6 +251,25 @@ def list_assets(
             assets = [a for a in assets if a.id in usable or a.id not in has_any_version]
 
     return _build_asset_responses_bulk(assets, db)
+
+
+# Declared before `/assets/{asset_id}`: routes match in order, and after it
+# "batch" is read as an asset id and refused with a 422.
+@router.get("/assets/batch", response_model=list[AssetResponse])
+def get_assets_batch(
+    ids: list[uuid.UUID] = Query(..., min_length=1, max_length=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """`GET /assets/{id}` for many assets in one request (#524).
+
+    What the uploads panel polls with, so the poll costs one read per tick rather
+    than one per row. An asset `GET /assets/{id}` would refuse with a 403 or 404
+    is left out of the answer instead of failing the request.
+    """
+    assets = db.query(Asset).filter(Asset.id.in_(ids), Asset.deleted_at.is_(None)).all()
+    visible = [a for a in assets if can_access_asset(db, a, current_user)]
+    return _build_asset_responses_bulk(visible, db)
 
 
 @router.get("/assets/{asset_id}", response_model=AssetResponse)
