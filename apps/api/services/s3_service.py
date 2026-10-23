@@ -34,6 +34,15 @@ _PROBE_S3_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attem
 # turns the failure into a coded 503 and the browser decides whether to retry.
 _INITIATE_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 1})
 
+# AbortMultipartUpload runs on every cancel and discard. On the shared client a
+# store that hangs rather than refuses held the request for ~310 s (measured with
+# the storage container paused), and a burst of cancels held that many threads
+# (#523). The route turns a store it cannot reach into a 503 with Retry-After, so
+# this only has to get there in seconds. The first request and one retry: a
+# repeat of an abort whose answer was lost finds NoSuchUpload, which the route
+# reads as gone.
+_ABORT_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 2})
+
 # S3 Content-Type and Cache-Control mappings
 CONTENT_TYPE_MAP = {
     ".m3u8": ("application/vnd.apple.mpegurl", "no-cache"),
@@ -112,6 +121,15 @@ def _get_initiate_client():
     minutes, such as completing a large multipart upload.
     """
     return _build_s3_client(_INITIATE_S3_CONFIG)
+
+@lru_cache(maxsize=1)
+def _get_abort_client():
+    """Client for aborting a multipart upload (see _ABORT_S3_CONFIG).
+
+    Separate from `get_s3_client` for the same reason as the probe client:
+    CompleteMultipartUpload stays on the long timeouts it legitimately needs.
+    """
+    return _build_s3_client(_ABORT_S3_CONFIG)
 
 @lru_cache(maxsize=1)
 def _get_presign_client():
@@ -320,7 +338,7 @@ def complete_multipart_upload(s3_key: str, upload_id: str, parts: list[dict]) ->
 
 def abort_multipart_upload(s3_key: str, upload_id: str) -> None:
     """Abort a multipart upload and clean up uploaded parts."""
-    s3 = get_s3_client()
+    s3 = _get_abort_client()
     s3.abort_multipart_upload(
         Bucket=settings.s3_bucket,
         Key=s3_key,
