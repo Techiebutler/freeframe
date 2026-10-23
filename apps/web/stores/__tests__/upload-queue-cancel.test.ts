@@ -387,6 +387,30 @@ describe('cancel, then Remove before the run has settled', () => {
     }, { pinSubject: 'user-1' })
     expect(testing.runningIds()).toEqual([])
   })
+
+  it('an upload whose initiate was out still sends /upload/abort for what it created', async () => {
+    const server = fakeServer(() => 'wait', 'hang')
+
+    const [a] = drop([small('a.jpg')])
+    await settle()
+    expect(rowOf(a).status).toBe('starting')
+
+    useUploadStore.getState().cancelUpload(a)
+    useUploadStore.getState().removeFile(a)
+    await settle()
+    expect(listed(a)).toBe(false)
+    expect(server.others()).toEqual([])
+
+    server.initiates[0].resolve()
+    await settle()
+
+    expect(server.others()).toEqual(['abort u1'])
+    expect(api.post).toHaveBeenCalledWith('/upload/abort', {
+      s3_key: 'k1', upload_id: 'u1', version_id: 'v1', discard: true,
+    }, { pinSubject: 'user-1' })
+    expect(listed(a)).toBe(false)
+    expect(testing.runningIds()).toEqual([])
+  })
 })
 
 // ---------------------------------------------------------------- cancel all queued
