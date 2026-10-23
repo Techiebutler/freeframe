@@ -57,14 +57,15 @@ def get_user_by_email(db: Session, email: str) -> Optional[User]:
     can already hold accounts that differ only by case. An exact match wins;
     otherwise a case-insensitive match is used only when it names exactly one
     account. With two such accounts, a guess could open the wrong one, so each
-    still answers only to its exact address, as before.
+    still answers only to its exact address, as before. Both sides are folded by
+    Postgres: Python's str.lower() disagrees with it on some non-ASCII letters.
     """
     email = email.strip()
     live = db.query(User).filter(User.deleted_at.is_(None))
     user = live.filter(User.email == email).first()
     if user:
         return user
-    matches = live.filter(func.lower(User.email) == email.lower()).limit(2).all()
+    matches = live.filter(func.lower(User.email) == func.lower(email)).limit(2).all()
     return matches[0] if len(matches) == 1 else None
 
 def get_email_owner(db: Session, email: str) -> Optional[User]:
@@ -75,7 +76,7 @@ def get_email_owner(db: Session, email: str) -> Optional[User]:
     """
     return (
         db.query(User)
-        .filter(func.lower(User.email) == email.strip().lower())
+        .filter(func.lower(User.email) == func.lower(email.strip()))
         .order_by(User.deleted_at.isnot(None))
         .first()
     )

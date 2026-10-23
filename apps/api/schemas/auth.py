@@ -1,5 +1,6 @@
 from pydantic import AfterValidator, BaseModel, EmailStr, model_validator, Field
 from typing import Annotated, Literal
+import string
 import uuid
 from ..models.user import UserStatus
 from ..services.auth_service import BCRYPT_MAX_PASSWORD_BYTES
@@ -55,7 +56,10 @@ HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$"), AfterValidator(st
 # The address a new user is stored under: lowercase, so new accounts never
 # differ only by case. Sign-in schemas keep plain EmailStr on purpose, since
 # get_user_by_email needs the address as typed to reach a legacy mixed-case row.
-NewUserEmail = Annotated[EmailStr, AfterValidator(lambda v: v.strip().lower())]
+# ASCII only: the checks fold with Postgres lower(), which str.lower() disagrees
+# with on some non-ASCII letters (İ), so non-ASCII is left as typed.
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+NewUserEmail = Annotated[EmailStr, AfterValidator(lambda v: v.strip().translate(_ASCII_LOWER))]
 
 class LoginRequest(BaseModel):
     email: EmailStr

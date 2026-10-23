@@ -265,3 +265,42 @@ def test_magic_code_of_one_case_twin_does_not_verify_the_other(client, db, domai
     assert own.status_code == 200, own.text
     from apps.api.services.auth_service import decode_token
     assert decode_token(own.json()["access_token"])["sub"] == str(upper.id)
+
+
+# ── Non-ASCII case folding ───────────────────────────────────────────────────
+# Postgres lower() and Python str.lower() disagree on some letters: lower('İ')
+# is 'i' in Postgres but 'i' plus a combining dot in Python. Each comparison
+# must fold both sides with the same function, or an address can miss itself.
+
+def test_invite_refuses_a_legacy_non_ascii_address_typed_the_same(client, db, domain):
+    admin = _admin(db, domain)
+    _user(db, f"İvan@{domain}")
+    with patch("apps.api.routers.users.send_task_safe") as send:
+        resp = client.post("/users/invite", json={"email": f"İvan@{domain}", "name": "i"},
+                           headers=_auth(admin))
+
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == "Email already registered"
+    send.assert_not_called()
+    assert _rows(db, domain) == [f"İvan@{domain}"]
+
+
+def test_invite_refuses_a_non_ascii_address_it_already_invited(client, db, domain):
+    admin = _admin(db, domain)
+    with patch("apps.api.routers.users.send_task_safe"):
+        first = client.post("/users/invite", json={"email": f"İvan@{domain}", "name": "i"},
+                            headers=_auth(admin))
+        again = client.post("/users/invite", json={"email": f"İVAN@{domain}", "name": "i"},
+                            headers=_auth(admin))
+
+    assert first.status_code == 201, first.text
+    assert again.status_code == 400, again.text
+    assert again.json()["detail"] == "Email already registered"
+    assert len(_rows(db, domain)) == 1
+
+
+def test_lookup_finds_a_legacy_non_ascii_account_in_another_case(db, domain):
+    from apps.api.services.auth_service import get_user_by_email
+
+    legacy = _user(db, f"İvan@{domain}")
+    assert get_user_by_email(db, f"İVAN@{domain}").id == legacy.id
