@@ -1,5 +1,8 @@
 """Admin endpoints for user management."""
 
+from datetime import datetime, timedelta, timezone
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import uuid
@@ -83,7 +86,14 @@ def reactivate_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    user.status = UserStatus.active
+    if user.password_hash is None and not user.email_verified:
+        # An invitee who never accepted has no way in once deactivation cleared
+        # their link, so they go back to pending with a fresh one to copy.
+        user.status = UserStatus.pending_invite
+        user.invite_token = secrets.token_urlsafe(48)
+        user.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    else:
+        user.status = UserStatus.active
     db.commit()
     db.refresh(user)
     return user

@@ -468,7 +468,12 @@ export default function AdminPage() {
                             {u.is_superadmin ? "Remove Admin" : "Make Admin"}
                           </Button>
                         )}
-                        {u.id !== user?.id && u.status === "active" ? (
+                        {/* A pending row with a verified email is an invitee who
+                            signed in with a code before that activated them: a
+                            working account, so it is deactivated, not revoked. */}
+                        {u.id !== user?.id &&
+                        (u.status === "active" ||
+                          (u.status === "pending_invite" && u.email_verified)) ? (
                           <Button
                             variant="ghost"
                             size="sm"

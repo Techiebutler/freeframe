@@ -114,6 +114,13 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
     # If user was pending verification, activate them
     if user.status == UserStatus.pending_verification:
         user.status = UserStatus.active
+    # An invitee who signs in with a code instead of the invite link has
+    # accepted it just the same: without this they used the app while still
+    # listed as pending, and Revoke Invite deleted a working account.
+    if user.status == UserStatus.pending_invite:
+        user.status = UserStatus.active
+        user.invite_token = None
+        user.invite_token_expires_at = None
     
     db.commit()
     

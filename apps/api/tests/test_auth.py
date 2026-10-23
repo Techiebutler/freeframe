@@ -574,7 +574,9 @@ def test_deactivate_clears_a_pending_invite_token(client, auth_headers, mock_db,
 def test_delete_user_revokes_a_pending_invite(client, auth_headers, mock_db, test_user):
     """DELETE /users/{id} — a pending invitee can be deleted without deactivating
     first, which is how the admin page revokes an invite (#472). Still a soft
-    delete, and the link stops working."""
+    delete, and the token is cleared too. (What actually refuses the link once
+    the row is deleted is accept-invite's deleted_at filter, which a mocked
+    query can't exercise.)"""
     test_user.is_superadmin = True
     target = _pending_invitee()
     target.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
@@ -587,6 +589,86 @@ def test_delete_user_revokes_a_pending_invite(client, auth_headers, mock_db, tes
     assert target.invite_token is None
     assert target.invite_token_expires_at is None
     mock_db.delete.assert_not_called()
+
+
+def test_verify_magic_code_activates_a_pending_invitee(client, mock_db):
+    """POST /auth/verify-magic-code — signing in with a code accepts the invite.
+
+    An invitee who used the login page instead of the invite link got tokens
+    and used the app while the row stayed pending_invite for good, so Revoke
+    Invite would soft-delete a working account (#472).
+    """
+    user = _pending_invitee()
+    user.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    mock_db.first.return_value = user
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)), \
+         patch("apps.api.routers.auth.redis_verify_magic_code", return_value=(True, "")):
+        resp = client.post("/auth/verify-magic-code", json={"email": user.email, "code": "123456"})
+
+    assert resp.status_code == 200
+    assert resp.json()["needs_password"] is True
+    assert user.status == UserStatus.active
+    assert user.invite_token is None
+    assert user.invite_token_expires_at is None
+
+
+def test_delete_user_refuses_an_invitee_who_signed_in(client, auth_headers, mock_db, test_user):
+    """DELETE /users/{id} — a row still marked pending_invite whose owner signed
+    in with a code (email_verified, from before that sign-in activated them) is
+    a working account, so it needs deactivating first like any other (#472)."""
+    test_user.is_superadmin = True
+    target = _pending_invitee()
+    target.email_verified = True
+    mock_db.first.return_value = target
+
+    resp = client.delete(f"/users/{target.id}", headers=auth_headers)
+
+    assert resp.status_code == 409
+    assert target.deleted_at is None
+    mock_db.commit.assert_not_called()
+
+
+def test_reactivate_restores_a_never_accepted_invite(client, auth_headers, mock_db, test_user):
+    """PATCH /admin/users/{id}/reactivate — an invitee who never accepted goes
+    back to pending with a fresh 7-day link. Deactivating cleared the old one,
+    so coming back as active would leave an account with no password and no
+    link to set one (#472)."""
+    test_user.is_superadmin = True
+    target = _pending_invitee()
+    target.status = UserStatus.deactivated
+    target.invite_token = None
+    target.is_superadmin = False
+    target.preferences = {}
+    mock_db.first.return_value = target
+
+    resp = client.patch(f"/admin/users/{target.id}/reactivate", headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert target.status == UserStatus.pending_invite
+    assert target.invite_token
+    assert resp.json()["invite_token"] == target.invite_token
+    remaining = target.invite_token_expires_at - datetime.now(timezone.utc)
+    assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
+
+
+def test_reactivate_activates_a_user_who_has_signed_in(client, auth_headers, mock_db, test_user):
+    """PATCH /admin/users/{id}/reactivate — anyone with a password comes back
+    active, with no invite link."""
+    test_user.is_superadmin = True
+    target = _mock_user("back@example.com")
+    target.status = UserStatus.deactivated
+    target.email_verified = True
+    target.invite_token = None
+    target.is_superadmin = False
+    target.preferences = {}
+    mock_db.first.return_value = target
+
+    resp = client.patch(f"/admin/users/{target.id}/reactivate", headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert target.status == UserStatus.active
+    assert target.invite_token is None
 
 
 def test_invite_rejects_a_name_longer_than_the_column(client, auth_headers, mock_db, test_user):

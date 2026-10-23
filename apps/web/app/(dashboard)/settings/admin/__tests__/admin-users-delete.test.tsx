@@ -48,7 +48,17 @@ const invited = makeUser({
   name: 'wrong.address',
   email: 'wrong.address@example.com',
   status: 'pending_invite',
+  email_verified: false,
   invite_token: 'tok',
+})
+// Signed in with an email code before that sign-in activated an invitee.
+const signedIn = makeUser({
+  id: 'signed-in',
+  name: 'Code Signer',
+  email: 'code.signer@example.com',
+  status: 'pending_invite',
+  email_verified: true,
+  invite_token: 'tok2',
 })
 
 function rowFor(name: string) {
@@ -120,6 +130,15 @@ describe('Admin users: Revoke invite', () => {
     expect(screen.getAllByRole('button', { name: 'Revoke Invite' })).toHaveLength(1)
     expect(within(rowFor('wrong.address')).getByRole('button', { name: 'Revoke Invite' })).toBeInTheDocument()
     expect(within(rowFor('wrong.address')).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+  })
+
+  it('offers Deactivate, not Revoke Invite, on a pending row whose owner already signed in', () => {
+    h.users = [me, invited, signedIn]
+    render(<AdminPage />)
+
+    expect(within(rowFor('Code Signer')).queryByRole('button', { name: 'Revoke Invite' })).not.toBeInTheDocument()
+    expect(within(rowFor('Code Signer')).getByRole('button', { name: 'Deactivate' })).toBeInTheDocument()
+    expect(within(rowFor('wrong.address')).queryByRole('button', { name: 'Deactivate' })).not.toBeInTheDocument()
   })
 
   it('revokes the invite by deleting the pending user', async () => {
