@@ -61,6 +61,33 @@ describe('useRefetchOnUploadStatus', () => {
     expect(renders).toBe(before)
   })
 
+  it('does not re-render the caller when uploads change status either', () => {
+    // APP-BUG-4 (e2e Q2): the caller is the project page, so a re-render of it re-renders the
+    // whole asset grid. With every status move of every upload re-rendering it, a 300-file drop
+    // kept the main thread busy for most of the run (React work in about 10 s of a 15 s profile,
+    // and tasks of up to 270 ms).
+    useUploadStore.setState({ files: [row('done', 'complete'), ...Array.from({ length: 20 }, (_, i) => row(`f${i}`, 'queued'))] })
+    let renders = 0
+    const refetch = vi.fn()
+    renderHook(() => {
+      renders += 1
+      useRefetchOnUploadStatus('p', refetch)
+    })
+    const before = renders
+
+    for (let i = 0; i < 20; i++) {
+      patch(`f${i}`, { status: 'starting' })
+      patch(`f${i}`, { status: 'uploading', assetId: `a${i}` })
+      patch(`f${i}`, { status: 'processing', progress: 100 })
+      patch(`f${i}`, { status: 'complete' })
+      act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
+    }
+
+    expect(renders).toBe(before)
+    // And it still refetched for them.
+    expect(refetch.mock.calls.length).toBeGreaterThanOrEqual(20)
+  })
+
   it('refetches when an upload in this project finishes', () => {
     useUploadStore.setState({ files: [row('up', 'uploading')] })
     const refetch = vi.fn()

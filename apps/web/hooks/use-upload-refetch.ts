@@ -42,49 +42,63 @@ export const GRID_REFETCH_GAP_MS = 2_000
  * refetches at once, and changes inside the gap are folded into one refetch at
  * its end, so the last change is always fetched.
  *
- * It subscribes to strings derived from the rows, not to the rows. Progress writes
- * (up to ~100 an upload, and every transcode progress event) leave both unchanged,
- * so they neither re-render the caller nor refetch. Watching `files` itself fired
- * the refetch on every one of those writes, two GETs each on the project page,
- * which was enough to reach the API's per-user GET limit while uploading.
+ * It watches the store from outside React and never re-renders its caller. The
+ * caller is the project page, so a re-render of it is a re-render of the whole
+ * asset grid; with selectors here, every status move of every upload did that,
+ * and a 300-file drop kept the main thread busy for most of the run (e2e Q2,
+ * APP-BUG-4). The grid re-renders when its refetched data changes, at most once
+ * a gap.
+ *
+ * It compares strings derived from the rows, not the rows. Progress writes (up
+ * to ~100 an upload, and every transcode progress event) leave them unchanged,
+ * so they do not refetch. Watching `files` itself fired the refetch on every one
+ * of those writes, two GETs each on the project page, which was enough to reach
+ * the API's per-user GET limit while uploading.
  */
 export function useRefetchOnUploadStatus(projectId: string, refetch: () => void): void {
-  const statusKey = useUploadStore((s) =>
-    s.files
-      .filter((f) => f.projectId === projectId)
-      .flatMap((f) => {
-        const state = gridState(f)
-        return state ? [`${f.id}:${state}`] : []
-      })
-      .join('\n'),
-  )
-  const anyComplete = useUploadStore((s) =>
-    s.files.some((f) => f.projectId === projectId && f.status === 'complete'),
-  )
-
   const refetchRef = React.useRef(refetch)
   React.useEffect(() => {
     refetchRef.current = refetch
   }, [refetch])
-  const lastAt = React.useRef(Number.NEGATIVE_INFINITY)
-  const due = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   React.useEffect(() => {
-    if (!anyComplete) return
-    // A refetch is already due at the end of the gap; it will read the state as it is then.
-    if (due.current) return
+    let lastAt = Number.NEGATIVE_INFINITY
+    let due: ReturnType<typeof setTimeout> | null = null
+    let seenFiles: UploadFile[] | null = null
+    let seenKey: string | null = null
+
     const fire = () => {
-      due.current = null
-      lastAt.current = Date.now()
+      due = null
+      lastAt = Date.now()
       refetchRef.current()
     }
-    const wait = lastAt.current + GRID_REFETCH_GAP_MS - Date.now()
-    if (wait <= 0) fire()
-    else due.current = setTimeout(fire, wait)
-  }, [statusKey, anyComplete])
+    const look = (files: UploadFile[]) => {
+      if (files === seenFiles) return
+      seenFiles = files
+      let anyComplete = false
+      const parts: string[] = []
+      for (const f of files) {
+        if (f.projectId !== projectId) continue
+        if (f.status === 'complete') anyComplete = true
+        const state = gridState(f)
+        if (state) parts.push(`${f.id}:${state}`)
+      }
+      const key = `${anyComplete}\n${parts.join('\n')}`
+      if (key === seenKey) return
+      seenKey = key
+      if (!anyComplete) return
+      // A refetch is already due at the end of the gap; it will read the state as it is then.
+      if (due) return
+      const wait = lastAt + GRID_REFETCH_GAP_MS - Date.now()
+      if (wait <= 0) fire()
+      else due = setTimeout(fire, wait)
+    }
 
-  React.useEffect(() => () => {
-    if (due.current) clearTimeout(due.current)
-    due.current = null
-  }, [])
+    look(useUploadStore.getState().files)
+    const unsubscribe = useUploadStore.subscribe((state) => look(state.files))
+    return () => {
+      unsubscribe()
+      if (due) clearTimeout(due)
+    }
+  }, [projectId])
 }
