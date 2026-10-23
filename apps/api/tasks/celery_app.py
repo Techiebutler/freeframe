@@ -96,10 +96,18 @@ celery_app.conf.beat_schedule = {
 }
 
 
-import threading
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 _task_logger = logging.getLogger("celery.dispatch")
+
+# Bounded so a burst of dispatches doesn't open one thread (and, with
+# broker_pool_limit=0, one broker connection) per call. concurrent.futures joins
+# its workers at interpreter exit (even ones that inherited the daemon flag from
+# a daemon caller thread), so a queued or in-flight dispatch finishes instead of
+# being killed mid-send. The queue is unbounded on purpose; a caller on the
+# request path must never block waiting for a slot.
+_dispatch_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="celery-dispatch")
 
 
 def _dispatch_task(task, args, kwargs):
@@ -117,14 +125,10 @@ def _dispatch_task(task, args, kwargs):
 
 
 def send_task_safe(task, *args, **kwargs):
-    """Send a Celery task in a background thread so it never blocks the API response.
+    """Send a Celery task from a background thread so it never blocks the API response.
 
     Broker connections can take seconds (especially with pool_limit=0).
-    This ensures the API returns immediately while the task is dispatched async.
+    This ensures the API returns immediately while the task is dispatched async
+    on the shared, bounded dispatch pool.
     """
-    thread = threading.Thread(
-        target=_dispatch_task,
-        args=(task, args, kwargs),
-        daemon=True,
-    )
-    thread.start()
+    _dispatch_executor.submit(_dispatch_task, task, args, kwargs)
