@@ -62,6 +62,13 @@ if settings.cors_allows_any_origin:
 else:
     _cors_origin_kwargs = {"allow_origins": settings.cors_origins}
 
+app.add_middleware(GlobalRateLimitMiddleware)
+app.add_middleware(SetupGuardMiddleware)
+# add_middleware prepends, so the one added last runs first. CORS has to be
+# outermost: the limiter's 429 and the setup guard's 503 are returned without
+# reaching anything inside them, and without CORS headers the browser hides
+# the status (and Retry-After) behind a network error (#525). It also answers
+# preflights before they count against the read limit.
 app.add_middleware(
     CORSMiddleware,
     **_cors_origin_kwargs,
@@ -70,8 +77,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition", "Retry-After"],
 )
-app.add_middleware(GlobalRateLimitMiddleware)
-app.add_middleware(SetupGuardMiddleware)
 
 app.include_router(auth.router)
 app.include_router(users.router)

@@ -185,3 +185,63 @@ class TestGlobalRateLimitMiddleware:
 
         assert allowed is False
         assert retry_after == 25
+
+
+class TestShortCircuitResponsesCarryCors:
+    """A response a middleware returns on its own still reaches the browser readable (#525).
+
+    Without Access-Control-Allow-Origin the browser hides the status, so a 429
+    from the limiter (or the setup guard's 503) surfaced as a network error and
+    the client could not read Retry-After to back off. `http://localhost:3000`
+    is always in `settings.cors_origins`, and the any-origin regex echoes it too.
+    """
+
+    ORIGIN = "http://localhost:3000"
+
+    @pytest.fixture
+    def limited(self, monkeypatch):
+        from apps.api.middleware.global_rate_limit import GlobalRateLimitMiddleware
+
+        monkeypatch.setattr(GlobalRateLimitMiddleware, "_check", lambda self, *a: (False, 7))
+
+    def test_rate_limit_429_has_cors_headers(self, client, limited):
+        resp = client.get("/projects", headers={"Origin": self.ORIGIN})
+
+        assert resp.status_code == 429
+        assert resp.headers.get("retry-after") == "7"
+        assert resp.headers.get("access-control-allow-origin") == self.ORIGIN
+        exposed = resp.headers.get("access-control-expose-headers", "").lower()
+        assert "retry-after" in exposed
+
+    def test_preflight_is_answered_while_rate_limited(self, client, limited):
+        # An authenticated GET is preflighted. If the preflight itself got the
+        # bare 429, the browser would never send the request that carries one.
+        resp = client.options(
+            "/projects",
+            headers={
+                "Origin": self.ORIGIN,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == self.ORIGIN
+
+    def test_setup_guard_503_has_cors_headers(self, client, monkeypatch):
+        monkeypatch.setattr("apps.api.middleware.setup_guard._setup_complete", False)
+        session = MagicMock()
+        session.query.return_value.filter.return_value.first.return_value = None
+        monkeypatch.setattr("apps.api.database.SessionLocal", lambda: session)
+
+        resp = client.get("/projects", headers={"Origin": self.ORIGIN})
+
+        assert resp.status_code == 503
+        assert resp.json()["needs_setup"] is True
+        assert resp.headers.get("access-control-allow-origin") == self.ORIGIN
+
+    def test_normal_response_still_has_cors_headers(self, client):
+        resp = client.get("/health", headers={"Origin": self.ORIGIN})
+
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == self.ORIGIN
