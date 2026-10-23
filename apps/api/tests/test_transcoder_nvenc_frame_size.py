@@ -28,6 +28,7 @@ from packages.transcoder.ffmpeg_transcoder import (
     _is_hw_runtime_failure,
     fitted_size,
     nvenc_rung_target,
+    rung_box,
 )
 
 PRESIGNED = "https://s3.example.com/uploads/video.mp4?X-Amz-Signature=secret"
@@ -236,22 +237,28 @@ def test_an_encoder_with_no_known_limits_is_left_alone():
 @pytest.mark.parametrize("encoder", sorted(_NVENC_FRAME_LIMITS))
 def test_every_enlarged_rung_fits_the_encoder_and_the_source(encoder):
     (min_w, min_h), (max_w, max_h) = _NVENC_FRAME_LIMITS[encoder]
-    checked = 0
+    checked = portrait = 0
     for width in range(32, 9000, 37):
         for height in range(32, 9000, 41):
-            for name, (target, _crf) in QUALITY_MAP.items():
-                new = nvenc_rung_target(target, width, height, encoder)
-                before = fitted_size(target, width, height)
-                if new == target:
-                    continue
-                checked += 1
-                assert before[0] < min_w or before[1] < min_h, (width, height, name)
-                w, h = fitted_size(new, width, height)
-                assert min_w <= w <= min(max_w, width), (width, height, name, new)
-                assert min_h <= h <= min(max_h, height), (width, height, name, new)
-                # Never smaller than the rung it replaces, in either direction.
-                assert w >= before[0] and h >= before[1], (width, height, name, new)
+            for name, (landscape, _crf) in QUALITY_MAP.items():
+                # The transcoder hands nvenc_rung_target the box rung_box()
+                # turned to the frame (#452), portrait for a portrait source.
+                for target in {landscape, rung_box(landscape, width, height)}:
+                    new = nvenc_rung_target(target, width, height, encoder)
+                    before = fitted_size(target, width, height)
+                    if new == target:
+                        continue
+                    checked += 1
+                    if target != landscape:
+                        portrait += 1
+                    assert before[0] < min_w or before[1] < min_h, (width, height, name, target)
+                    w, h = fitted_size(new, width, height)
+                    assert min_w <= w <= min(max_w, width), (width, height, name, target, new)
+                    assert min_h <= h <= min(max_h, height), (width, height, name, target, new)
+                    # Never smaller than the rung it replaces, in either direction.
+                    assert w >= before[0] and h >= before[1], (width, height, name, target, new)
     assert checked > 1000
+    assert portrait > 100
 
 
 # ── the ladder each attempt builds ────────────────────────────────────────────
@@ -314,6 +321,19 @@ def test_dolby_vision_5_on_nvenc_keeps_the_ladder_it_had():
 
     assert len(calls) == 1 and "h264_nvenc" not in calls[0]
     assert _boxes(calls[0])["360p"] == "360:640"
+
+
+def test_a_rotated_dolby_vision_5_source_gets_upright_rungs_on_nvenc():
+    # Profile 5 is decoded and scaled in software whatever the backend, so
+    # ffmpeg autorotates its frames before the graph and the scaler is handed
+    # 1080x1920: the boxes are turned, as for any frame in system memory.
+    stream = {**DOLBY_VISION_5, "side_data_list": [
+        *DOLBY_VISION_5["side_data_list"], *ROTATED_90["side_data_list"],
+    ]}
+    _, calls = _transcode(1920, 1080, stream=stream)
+
+    assert len(calls) == 1 and "h264_nvenc" not in calls[0]
+    assert _boxes(calls[0]) == {"1080p": "1080:1920", "720p": "720:1280", "360p": "360:640"}
 
 
 def test_the_software_fallback_keeps_the_ladder_it_had():
