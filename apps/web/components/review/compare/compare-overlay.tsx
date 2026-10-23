@@ -77,7 +77,8 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     [versions],
   )
 
-  // Left = ?compare= param (fallback: nearest other ready version). Right = route's current version.
+  // Left = ?compare= param (fallback: nearest other ready version). Right = the
+  // store's current version; ?right= names it so a reload restores it (#299).
   const compareParam = searchParams.get('compare')
   const fallbackLeft =
     [...ready].reverse().find((v) => v.version_number < rightVersion.version_number) ??
@@ -100,13 +101,16 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     mountPair,
   )
 
+  // Every write names the right pane, so even a link opened without ?right=
+  // describes its pair once anything in compare is changed.
   const writeParams = React.useCallback(
     (mutate: (p: URLSearchParams) => void) => {
       const p = new URLSearchParams(searchParams.toString())
+      p.set('right', right.id)
       mutate(p)
       router.replace(`${pathname}?${p.toString()}`, { scroll: false })
     },
-    [router, pathname, searchParams],
+    [router, pathname, searchParams, right.id],
   )
 
   // Streams
@@ -323,13 +327,14 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   )
   const handleSwitchRight = React.useCallback(
     (v: AssetVersion) => {
-      // The right pane's version lives in the store, its offsets in the URL.
+      // The right pane's version renders from the store (the URL only names it
+      // for a reload), its offsets from the URL.
       // The store write is synchronous and router.replace commits later, and a
       // transition cannot batch the two, so for a commit or two the NEW version
       // renders next to the old URL offsets. Those offsets are tagged with the
       // pair they were calibrated for (offFor), so they no longer match the new
       // pair and resolve to 0 in that window; the write below then removes them.
-      writeParams((p) => { p.delete('offA'); p.delete('offB'); p.delete('offFor') })
+      writeParams((p) => { p.set('right', v.id); p.delete('offA'); p.delete('offB'); p.delete('offFor') })
       setCurrentVersion(v)
       setAnnotationB(null)
       if (lastAnnotationSide === 'b') {

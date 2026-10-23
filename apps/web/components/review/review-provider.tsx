@@ -52,6 +52,8 @@ interface ReviewProviderProps {
   assetId: string;
   shareToken?: string; // If set, uses share token API instead of authenticated API
   shareSession?: string | null;
+  /** Version to open on instead of the newest, if it is ready. Read on mount only. */
+  initialVersionId?: string | null;
   children: React.ReactNode;
 }
 
@@ -59,6 +61,7 @@ export function ReviewProvider({
   assetId,
   shareToken,
   shareSession,
+  initialVersionId,
   children,
 }: ReviewProviderProps) {
   const [asset, setAsset] = useState<AssetResponse | null>(null);
@@ -79,6 +82,9 @@ export function ReviewProvider({
   // Guards against a stale comments fetch (e.g. an in-flight all-versions request)
   // overwriting a newer version-scoped one — only the latest request applies its result.
   const commentsReqRef = useRef(0);
+  // A compare link names its right pane, which is the current version (#299).
+  // Held from mount so a later URL change does not refetch the asset.
+  const initialVersionRef = useRef(initialVersionId ?? null);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -155,9 +161,11 @@ export function ReviewProvider({
         if (!mountedRef.current) return;
         setVersions(allVersions ?? []);
 
-        const readyVersion = (allVersions ?? [])
+        const ready = (allVersions ?? [])
           .sort((a, b) => b.version_number - a.version_number)
-          .find((v) => v.processing_status === "ready");
+          .filter((v) => v.processing_status === "ready");
+        const readyVersion =
+          ready.find((v) => v.id === initialVersionRef.current) ?? ready[0];
         if (readyVersion) {
           setCurrentVersion(readyVersion);
         } else if (data.latest_version) {

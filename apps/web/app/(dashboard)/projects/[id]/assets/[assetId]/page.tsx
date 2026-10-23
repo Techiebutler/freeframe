@@ -276,11 +276,12 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   }, [comments, searchParams, seekTo, setFocusedCommentId, setActiveAnnotation])
 
   // Version-compare overlay: driven entirely by the ?compare= URL param so it
-  // survives refresh/deep-link. closeCompare strips all the compare params.
+  // survives refresh/deep-link (?right= names the right pane, see ReviewPage).
+  // closeCompare strips all the compare params.
   const compareOpen = Boolean(searchParams.get('compare'))
   const closeCompare = useCallback(() => {
     const p = new URLSearchParams(searchParams.toString())
-    p.delete('compare'); p.delete('mode'); p.delete('offA'); p.delete('offB'); p.delete('offFor')
+    p.delete('compare'); p.delete('right'); p.delete('mode'); p.delete('offA'); p.delete('offB'); p.delete('offFor')
     router.replace(`${pathname}?${p.toString()}`, { scroll: false })
   }, [router, pathname, searchParams])
 
@@ -670,6 +671,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                 if (!prev) return
                 const p = new URLSearchParams(searchParams.toString())
                 p.set('compare', prev.id)
+                p.set('right', cur.id)
                 router.replace(`${pathname}?${p.toString()}`, { scroll: false })
               }}
               className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
@@ -805,9 +807,13 @@ export default function ReviewPage({
   params: Promise<{ id: string; assetId: string }>
 }) {
   const { id: projectId, assetId } = use(params)
+  // The right compare pane is the store's current version, which a reload does
+  // not keep, so a compare URL names it and the provider opens on it (#299).
+  const searchParams = useSearchParams()
+  const initialVersionId = searchParams.get('compare') ? searchParams.get('right') : null
 
   return (
-    <ReviewProvider assetId={assetId}>
+    <ReviewProvider assetId={assetId} initialVersionId={initialVersionId}>
       <ReviewScreenInner projectId={projectId} />
     </ReviewProvider>
   )
