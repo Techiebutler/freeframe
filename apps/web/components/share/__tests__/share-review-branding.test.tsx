@@ -28,7 +28,6 @@ function seedBranding(values: Partial<BrandingValues>) {
     ...values,
     loaded: true,
     loading: false,
-    brandingFetchedAt: Date.now(),
   })
 }
 
@@ -59,7 +58,7 @@ describe('share review header shows the instance brand (#308)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     document.documentElement.removeAttribute('data-theme')
-    useBrandingStore.setState({ ...HARDCODED_DEFAULTS, loaded: false, loading: false, brandingFetchedAt: null })
+    useBrandingStore.setState({ ...HARDCODED_DEFAULTS, loaded: false, loading: false })
   })
 
   function renderSingleAsset() {

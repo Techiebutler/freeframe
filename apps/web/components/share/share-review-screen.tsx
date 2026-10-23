@@ -33,11 +33,11 @@ function hasIdentity(): boolean {
 }
 
 export function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, theme, onBack,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, theme = 'dark', onBack,
 }: {
   token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean
-  /** The link's theme, which the page renders in; picks the logo variant. */
-  theme: 'dark' | 'light'
+  /** The link's theme, which the page renders in; picks the logo variant. Dark, the share pages' default, when not given. */
+  theme?: 'dark' | 'light'
   onBack?: () => void
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
