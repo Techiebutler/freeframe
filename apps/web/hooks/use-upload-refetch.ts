@@ -33,6 +33,23 @@ function gridState(f: UploadFile): string | null {
 export const GRID_REFETCH_GAP_MS = 2_000
 
 /**
+ * How soon after a refetch a change that leaves nothing on its way may refetch
+ * again, in ms, without waiting out `GRID_REFETCH_GAP_MS`.
+ */
+export const GRID_SETTLE_GAP_MS = 500
+
+/**
+ * Whether the row is still on its way to the grid's final state: waiting,
+ * starting, sending or transcoding, or a Resume waiting for its turn.
+ */
+function onItsWay(f: UploadFile): boolean {
+  return (
+    f.status === 'queued' || f.status === 'starting' || f.status === 'uploading' ||
+    f.status === 'processing' || (f.status === 'interrupted' && f.queuedResume === true)
+  )
+}
+
+/**
  * Calls `refetch` when one of this project's uploads changes what the asset
  * grid shows while one of them is complete, which is when the grid can be out
  * of date. A row leaving one of those states (a cancel, an interruption)
@@ -41,6 +58,14 @@ export const GRID_REFETCH_GAP_MS = 2_000
  * At most once per `GRID_REFETCH_GAP_MS`: the first change after a quiet spell
  * refetches at once, and changes inside the gap are folded into one refetch at
  * its end, so the last change is always fetched.
+ *
+ * The gap is for bursts. A change that leaves none of the project's uploads on
+ * its way (`onItsWay`) is the end of one, or a single upload's last move, and
+ * refetches at once if the last refetch was at least `GRID_SETTLE_GAP_MS` ago:
+ * a single small image that goes Ready 700 ms after its first refetch was
+ * otherwise shown Ready 2 s after it, later than before the gap existed. A
+ * refetch already due still runs at the end of the gap. A drop's files stay on
+ * their way until its last one finishes, so this adds one refetch to a drop.
  *
  * It watches the store from outside React and never re-renders its caller. The
  * caller is the project page, so a re-render of it is a re-render of the whole
@@ -67,19 +92,24 @@ export function useRefetchOnUploadStatus(projectId: string, refetch: () => void)
     let seenFiles: UploadFile[] | null = null
     let seenKey: string | null = null
 
-    const fire = () => {
-      due = null
+    const refetchNow = () => {
       lastAt = Date.now()
       refetchRef.current()
+    }
+    const fire = () => {
+      due = null
+      refetchNow()
     }
     const look = (files: UploadFile[]) => {
       if (files === seenFiles) return
       seenFiles = files
       let anyComplete = false
+      let anyOnItsWay = false
       const parts: string[] = []
       for (const f of files) {
         if (f.projectId !== projectId) continue
         if (f.status === 'complete') anyComplete = true
+        if (onItsWay(f)) anyOnItsWay = true
         const state = gridState(f)
         if (state) parts.push(`${f.id}:${state}`)
       }
@@ -87,6 +117,11 @@ export function useRefetchOnUploadStatus(projectId: string, refetch: () => void)
       if (key === seenKey) return
       seenKey = key
       if (!anyComplete) return
+      // Settled: nothing is left to fold in, so the grid need not wait for the gap.
+      if (!anyOnItsWay && Date.now() - lastAt >= GRID_SETTLE_GAP_MS) {
+        refetchNow()
+        return
+      }
       // A refetch is already due at the end of the gap; it will read the state as it is then.
       if (due) return
       const wait = lastAt + GRID_REFETCH_GAP_MS - Date.now()

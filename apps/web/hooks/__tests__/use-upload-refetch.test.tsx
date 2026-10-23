@@ -150,6 +150,59 @@ describe('useRefetchOnUploadStatus', () => {
     expect(refetch.mock.calls.length).toBe(during + 1)
   })
 
+  it("a single small upload's Ready card is not held back by the gap", () => {
+    // The project already has a finished upload, so every move refetches. One small image goes
+    // processing at 300 ms and Ready at 700 ms: the Ready state is fetched at 700 ms, not 2 s.
+    useUploadStore.setState({ files: [row('done', 'complete'), row('up', 'queued')] })
+    const refetch = vi.fn()
+    renderHook(() => useRefetchOnUploadStatus('p', refetch))
+    act(() => { vi.advanceTimersByTime(60_000) })
+    refetch.mockClear()
+
+    patch('up', { status: 'uploading', assetId: 'a-up' })
+    expect(refetch).toHaveBeenCalledTimes(1)
+    act(() => { vi.advanceTimersByTime(300) })
+    patch('up', { status: 'processing', progress: 100 })
+    expect(refetch).toHaveBeenCalledTimes(1)
+    act(() => { vi.advanceTimersByTime(400) })
+    patch('up', { status: 'complete' })
+
+    expect(refetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('a finish while another upload of the project is still on its way waits for the gap', () => {
+    useUploadStore.setState({ files: [row('done', 'complete'), row('a', 'queued'), row('b', 'queued')] })
+    const refetch = vi.fn()
+    renderHook(() => useRefetchOnUploadStatus('p', refetch))
+    act(() => { vi.advanceTimersByTime(60_000) })
+    refetch.mockClear()
+
+    patch('a', { status: 'uploading', assetId: 'a-a' })
+    expect(refetch).toHaveBeenCalledTimes(1)
+    act(() => { vi.advanceTimersByTime(700) })
+    patch('a', { status: 'complete' })
+    // b has not started: still a burst.
+    expect(refetch).toHaveBeenCalledTimes(1)
+    act(() => { vi.advanceTimersByTime(1_300) })
+    expect(refetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('the last finish of a burst within 500 ms of a refetch waits for the gap', () => {
+    useUploadStore.setState({ files: [row('done', 'complete'), row('up', 'queued')] })
+    const refetch = vi.fn()
+    renderHook(() => useRefetchOnUploadStatus('p', refetch))
+    act(() => { vi.advanceTimersByTime(60_000) })
+    refetch.mockClear()
+
+    patch('up', { status: 'uploading', assetId: 'a-up' })
+    act(() => { vi.advanceTimersByTime(200) })
+    patch('up', { status: 'complete' })
+    expect(refetch).toHaveBeenCalledTimes(1)
+
+    act(() => { vi.advanceTimersByTime(GRID_REFETCH_GAP_MS) })
+    expect(refetch).toHaveBeenCalledTimes(2)
+  })
+
   it('the first change after a quiet spell refetches at once', () => {
     useUploadStore.setState({ files: [row('up', 'uploading')] })
     const refetch = vi.fn()
