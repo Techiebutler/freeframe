@@ -38,7 +38,7 @@ import { UploadsPanel } from '../uploads-panel'
 import { useUploadStore, __uploadQueueTesting as testing } from '@/stores/upload-store'
 import { signInAs, row } from '@/test/upload-session'
 import {
-  MB, fakeServer, fileOf, drop, rowOf, stored, settle, rehydrate, resumable,
+  MB, fakeServer, fileOf, small, drop, rowOf, stored, settle, rehydrate, resumable,
 } from '@/test/upload-queue-server'
 
 /** Every row of the open panel, top to bottom. */
@@ -200,6 +200,33 @@ describe('what a queued row says', () => {
 })
 
 // ---------------------------------------------------------------- order
+
+describe('the panel header', () => {
+  const header = () => screen.getByRole('heading', { name: /^Uploads/ })
+
+  it('counts the files running apart from the ones waiting: "3 active · 2 queued"', async () => {
+    fakeServer(() => 'wait')
+    drop([small('a.jpg'), small('b.jpg'), small('c.jpg'), small('d.jpg'), small('e.jpg')])
+    await settle()
+    openPanel()
+
+    expect(header()).toHaveTextContent(/^Uploads3 active · 2 queued$/)
+  })
+
+  it('says only "N active" with nothing queued, and only "N queued" with nothing running', async () => {
+    const server = fakeServer(() => 'wait')
+    drop([small('a.jpg'), small('b.jpg')])
+    await settle()
+    const { unmount } = openPanel()
+    expect(header()).toHaveTextContent(/^Uploads2 active$/)
+    unmount()
+
+    useUploadStore.setState({ files: [row({ id: 'r', status: 'interrupted', queuedResume: true, versionId: 'rv' })] })
+    openPanel()
+    expect(header()).toHaveTextContent(/^Uploads1 queued$/)
+    expect(server.names()).toEqual(['a.jpg', 'b.jpg'])
+  })
+})
 
 describe('the order of the rows', () => {
   it('rows of one drop list in start order', async () => {

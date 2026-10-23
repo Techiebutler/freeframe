@@ -155,6 +155,19 @@ function countsOf(files: UploadFile[]): PanelCounts {
   return counts
 }
 
+/**
+ * The header's count: the files running ("3 active") apart from the ones
+ * waiting for their turn ("2 queued"), as the rows' own badges show them. The
+ * Active tab counts both, since both are on their way.
+ */
+function headerCount(counts: PanelCounts): string {
+  const running = counts.active - counts.queued
+  const parts: string[] = []
+  if (running > 0) parts.push(`${running} active`)
+  if (counts.queued > 0) parts.push(`${counts.queued} queued`)
+  return parts.join(' · ')
+}
+
 /** A listing back in its date groups, in order. */
 function groupsOf(listing: string[]): { label: string; ids: string[] }[] {
   const groups: { label: string; ids: string[] }[] = []
@@ -804,7 +817,7 @@ export function UploadsPanel({
             Uploads
             {counts.active > 0 && (
               <span className="ml-1.5 text-xs font-normal text-accent">
-                {counts.active} active
+                {headerCount(counts)}
               </span>
             )}
           </h2>
