@@ -1403,6 +1403,14 @@ export interface UploadFile {
   s3Key?: string
   createdAt: number // timestamp for grouping
   /**
+   * When the row became `complete`: what its "N minutes ago" counts from.
+   * `createdAt` is when it was added, kept through a wait in the queue, a retry
+   * and a resume. Set on every move into `complete` (`withCompletion`), and for
+   * a history row from the version's last activity, the last time a part was
+   * sent, since the version records no finish time.
+   */
+  completedAt?: number
+  /**
    * The account that added the row: the access token's `sub` when it was
    * added, never the profile in `useAuthStore`, which is fetched once and goes
    * stale when another tab signs in. Every request the row's run makes is
@@ -1819,6 +1827,7 @@ function mergeHistoryAssets(existing: UploadFile[], assets: AssetResponse[]): Up
         assetId: a.id,
         versionId: v.id,
         createdAt: new Date(v.created_at).getTime(),
+        ...(status === 'complete' ? { completedAt: new Date(v.last_activity_at ?? v.created_at).getTime() } : {}),
         elsewhereUntil: status === 'elsewhere' ? until : undefined,
         fromHistory: true,
         // `/me/assets?filter=owned` lists the assets this account created, so
@@ -2134,8 +2143,13 @@ function rowById(id: string): UploadFile | undefined {
 
 function patchRow(id: string, patch: Partial<UploadFile>): void {
   useUploadStore.setState((s) => ({
-    files: s.files.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+    files: s.files.map((f) => (f.id === id ? withCompletion(f, { ...f, ...patch }) : f)),
   }))
+}
+
+/** `next`, with `completedAt` set to now when it is `prev` moving into `complete`. */
+function withCompletion(prev: UploadFile, next: UploadFile): UploadFile {
+  return next.status === 'complete' && prev.status !== 'complete' ? { ...next, completedAt: Date.now() } : next
 }
 
 function activeInfos(): ActiveInfo[] {
@@ -3514,7 +3528,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     set((s) => ({
       files: s.files.map((f) =>
         f.assetId === assetId && f.status === 'processing'
-          ? { ...f, status: 'complete' as const, processingProgress: 100 }
+          ? { ...f, status: 'complete' as const, processingProgress: 100, completedAt: Date.now() }
           : f,
       ),
     }))
@@ -3631,13 +3645,13 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           // always changing status and can never reach this comparison equal.
           if (status === f.status) return f
           const keepsProgress = status === 'interrupted' || status === 'elsewhere'
-          return {
+          return withCompletion(f, {
             ...f,
             status,
             elsewhereUntil: stillMoving ? movingUntil : f.elsewhereUntil,
             progress: keepsProgress ? f.progress : 100,
             processingProgress: status === 'complete' ? 100 : 0,
-          }
+          })
         }),
       }))
     } catch {

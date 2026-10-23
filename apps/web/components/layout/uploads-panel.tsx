@@ -555,7 +555,7 @@ function UploadRow({ upload }: { upload: UploadFile }) {
           )}
           {upload.status === 'complete' && (
             <span className="text-[11px] text-text-tertiary">
-              <RelativeTime at={upload.createdAt} />
+              <RelativeTime at={upload.completedAt ?? upload.createdAt} />
             </span>
           )}
           {upload.status === 'failed' && upload.error && (

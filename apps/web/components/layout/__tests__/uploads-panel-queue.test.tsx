@@ -228,6 +228,39 @@ describe('the panel header', () => {
   })
 })
 
+describe('when a finished row says it finished', () => {
+  it('counts from when it finished: a file that waited 25 minutes says "just now"', () => {
+    useUploadStore.setState({
+      files: [row({ id: 'c', assetName: 'c', status: 'complete', createdAt: Date.now() - 25 * 60_000, completedAt: Date.now() })],
+    })
+    openPanel('All')
+
+    expect(within(rowNamed('c')).getByText('just now')).toBeInTheDocument()
+  })
+
+  it('a three-day-old row resumed and finished in this page load is under Today and says "just now"', () => {
+    useUploadStore.setState({
+      files: [row({
+        id: 'r', assetName: 'r', status: 'complete', dropSeq: 1,
+        createdAt: Date.now() - 3 * 24 * 60 * 60_000, completedAt: Date.now(),
+      })],
+    })
+    openPanel('All')
+
+    expect(headings()).toEqual(['Today'])
+    expect(within(rowNamed('r')).getByText('just now')).toBeInTheDocument()
+  })
+
+  it('a row with no completion time on record still counts from when it was added', () => {
+    useUploadStore.setState({
+      files: [row({ id: 'o', assetName: 'o', status: 'complete', createdAt: Date.now() - 25 * 60_000 })],
+    })
+    openPanel('All')
+
+    expect(within(rowNamed('o')).getByText('25 minutes ago')).toBeInTheDocument()
+  })
+})
+
 describe('the order of the rows', () => {
   it('rows of one drop list in start order', async () => {
     fakeServer(() => 'wait')
