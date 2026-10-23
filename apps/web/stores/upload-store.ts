@@ -1545,8 +1545,8 @@ const ASSET_GONE_MESSAGE = 'This file is no longer available.'
 const ASSET_BATCH_SIZE = 100
 
 /**
- * What the server says about each asset the poll watches, by owner and then by
- * asset id: the asset, `'gone'` (final), or `null` (no answer, ask again).
+ * What the server says about each asset the poll watches, by asset id: the
+ * asset, `'gone'` (final), or `null` (no answer, ask again).
  *
  * One `GET /assets/batch` per hundred assets, each asked about once however
  * many rows watch it. It used to be one `GET /assets/{id}` per row, which at
@@ -1558,40 +1558,30 @@ const ASSET_BATCH_SIZE = 100
  * is not there for this user, which no amount of asking again alters, so an id
  * missing from a successful answer is gone and its row is finished. A request
  * that fails -- a dropped connection, a 5xx, or any other status -- says nothing
- * about any asset in it, so they are all asked about again. Asked as the rows'
- * owner: sent as an account that signed in since, the answer would leave the
- * owner's assets out and fail the owner's rows for good.
+ * about any asset in it, so they are all asked about again. Asked as `ownerId`,
+ * the owner of every watched row: sent as an account that signed in since, the
+ * answer would leave the owner's assets out and fail the owner's rows for good.
  */
 async function askAboutAssets(
+  ownerId: string | undefined,
   watched: UploadFile[],
-): Promise<Map<string | undefined, Map<string, AssetResponse | 'gone' | null>>> {
-  const idsByOwner = new Map<string | undefined, Set<string>>()
-  for (const f of watched) {
-    if (!f.assetId) continue
-    const ids = idsByOwner.get(f.ownerId) ?? new Set<string>()
-    ids.add(f.assetId)
-    idsByOwner.set(f.ownerId, ids)
-  }
-  const answers = new Map<string | undefined, Map<string, AssetResponse | 'gone' | null>>()
+): Promise<Map<string, AssetResponse | 'gone' | null>> {
+  const ids = Array.from(new Set(watched.flatMap((f) => (f.assetId ? [f.assetId] : []))))
+  const answers = new Map<string, AssetResponse | 'gone' | null>()
   const requests: Promise<void>[] = []
-  for (const [ownerId, idSet] of idsByOwner) {
-    const byId = new Map<string, AssetResponse | 'gone' | null>()
-    answers.set(ownerId, byId)
-    const ids = Array.from(idSet)
-    for (let i = 0; i < ids.length; i += ASSET_BATCH_SIZE) {
-      const chunk = ids.slice(i, i + ASSET_BATCH_SIZE)
-      const query = new URLSearchParams(chunk.map((id) => ['ids', id]))
-      requests.push(
-        api.get<AssetResponse[]>(`/assets/batch?${query}`, { pinSubject: ownerId })
-          .then((assets) => {
-            const found = new Map(assets.map((a) => [a.id, a]))
-            for (const id of chunk) byId.set(id, found.get(id) ?? 'gone')
-          })
-          .catch(() => {
-            for (const id of chunk) byId.set(id, null)
-          }),
-      )
-    }
+  for (let i = 0; i < ids.length; i += ASSET_BATCH_SIZE) {
+    const chunk = ids.slice(i, i + ASSET_BATCH_SIZE)
+    const query = new URLSearchParams(chunk.map((id) => ['ids', id]))
+    requests.push(
+      api.get<AssetResponse[]>(`/assets/batch?${query}`, { pinSubject: ownerId })
+        .then((assets) => {
+          const found = new Map(assets.map((a) => [a.id, a]))
+          for (const id of chunk) answers.set(id, found.get(id) ?? 'gone')
+        })
+        .catch(() => {
+          for (const id of chunk) answers.set(id, null)
+        }),
+    )
   }
   await Promise.all(requests)
   return answers
@@ -3633,7 +3623,9 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     if (!watched.length) return
     try {
       // `null` is "no answer, ask again"; `'gone'` is an answer that is final.
-      const answers = await askAboutAssets(watched)
+      // Every watched row is visible, so they all belong to the signed-in
+      // account and share one owner.
+      const answers = await askAboutAssets(watched[0].ownerId, watched)
       const watchedIds = new Set(watched.map((f) => f.id))
       set((s) => ({
         files: s.files.map((f) => {
@@ -3641,7 +3633,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           // Two rows can watch one asset -- an interrupted v2 and a processing
           // v3 -- and both read its one answer. The version guard below is
           // what keeps the answer about v3 from being applied to v2.
-          const answer = watchedIds.has(f.id) ? answers.get(f.ownerId)?.get(f.assetId) ?? null : null
+          const answer = watchedIds.has(f.id) ? answers.get(f.assetId) ?? null : null
           // Failed is neither polled nor counted as active, so this is what
           // takes the row off the timer; the panel still offers Dismiss on it.
           if (answer === 'gone') {
