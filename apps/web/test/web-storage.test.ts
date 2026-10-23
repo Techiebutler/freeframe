@@ -5,6 +5,10 @@ import { describe, it, expect } from 'vitest';
 // --localstorage-file it is `undefined`, so every store that touches
 // localStorage fails to load with "Cannot read properties of undefined
 // (reading 'getItem')" (#352). vitest.config.ts turns Node's off in workers.
+//
+// This test can only go red on Node 25 or newer. CI runs the Node that .nvmrc
+// names (20), which has no Web Storage global to shadow jsdom's, so there it
+// passes whether or not the vitest.config.ts guard is in place.
 describe('jsdom Web Storage (#352)', () => {
   it.each(['localStorage', 'sessionStorage'] as const)(
     "%s is jsdom's Storage, not Node's built-in",

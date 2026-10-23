@@ -175,9 +175,12 @@ jobs:
       # (EOVERRIDE, #366) would otherwise go green. Resolution only, so
       # --ignore-scripts. A clean dir, because npm 10.x also crashes
       # ('edgesOut') next to a pnpm node_modules and a stray lockfile would hide
-      # a real failure. npm 11 is pinned so the check does not depend on the npm
-      # .nvmrc's Node bundles: 10.9.8 (Node 22's) crashes from scratch on any
-      # manifest (#417). The pin can go once Node 22 ships an npm past 10.9.8.
+      # a real failure. npm 11 is pinned so the resolve does not run on the npm
+      # bundled with whatever Node .nvmrc names: npm 10.9.8 crashes from scratch
+      # on any manifest (#417). Drop the pin once the .nvmrc Node bundles an npm
+      # other than 10.9.8. The outer `npx` is still that bundled npm, and it also
+      # parses the package.json in this dir, so the pin narrows the dependency on
+      # the bundled npm rather than removing it.
       - name: npm can still resolve apps/web
         run: |
           dir="$RUNNER_TEMP/npm-resolve"
