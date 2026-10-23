@@ -243,8 +243,9 @@ tell how big a part is. The list reporter draws such a pass as a red cross, but 
   `stallParts` needs a part of 10 MB (a file of 20 MB), which both engines report as partly sent.
 - **The API allows each account 600 reads a minute.** A short test that loads a page or two reads about 30 times (the dev
   server's strict mode asks twice for most things), so a fast spec run back to back (`--repeat-each`) can spend the
-  minute. The 429 carries no CORS header, so the page sees a failed request, and a project page that never learns the
-  account's role ignores a drop. Wait a minute between such runs, or spread the tests over both accounts.
+  minute. When this was written the 429 carried no CORS header, so the page saw a failed request, and a project page that
+  never learned the account's role ignored a drop. Since #525 the 429 carries the CORS headers and the page can read it
+  and its `Retry-After`. Wait a minute between such runs, or spread the tests over both accounts.
 - **Faults act on one page.** `throttleParts` and the others apply to the `page` they are given
   from the moment they are called until it closes; call them before `page.goto` when the page
   should be under them from the first request.

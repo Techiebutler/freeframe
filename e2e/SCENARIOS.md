@@ -489,9 +489,10 @@ Observations (not failures of these scenarios):
   429"). After the split below, a Chromium run started straight after a WebKit run still met one 429, on its 2nd test. The L2 tests now sign
   in as `secondary`, which halves each account's share, and the spec counts 429s and names them when a test fails. Wait a
   minute between back-to-back runs of this file.
-- **A 429 from the API has no CORS header** (the browser reports "not allowed by Access-Control-Allow-Origin. Status code:
-  429"), so the page sees a network failure, cannot read `Retry-After`, and SWR retries into the same window. Pre-existing,
-  not part of the upload queue; not fixed here.
+- **A 429 from the API had no CORS header** (the browser reported "not allowed by Access-Control-Allow-Origin. Status code:
+  429"), so the page saw a network failure, could not read `Retry-After`, and SWR retried into the same window. Pre-existing,
+  not part of the upload queue; fixed by #525, after which the 429 carries the CORS headers and the browser can read it and
+  its `Retry-After`.
 - **A drop on a project page before it knows the account's role goes nowhere, silently.** The role comes from the
   project's members matched against `/auth/me`, and until both answer it is "viewer". The drop region's handlers are
   attached all along but return early while it is not enabled (`useFileDropRegion`), so the drop is ignored (no row, no
