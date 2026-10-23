@@ -390,7 +390,8 @@ def _lock_if_still_purgeable(db, model, obj_id, cutoff):
     is no longer aged, or is already gone — in which case the caller must skip it. This closes the
     purge-vs-restore TOCTOU: a restore that commits before this runs is filtered out; a restore
     in-flight blocks on the lock and is then seen as deleted_at IS NULL; a restore after this locks
-    the row blocks until the purge deletes+commits (the restore then no-ops)."""
+    the row blocks until the purge deletes+commits, and its guarded UPDATE then matches no row, so
+    it answers 404."""
     return db.query(model).filter(
         model.id == obj_id,
         model.deleted_at.isnot(None),

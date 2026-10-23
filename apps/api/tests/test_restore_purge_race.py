@@ -2,10 +2,9 @@
 
 The purge locks a soft-deleted root, hard-deletes it and commits. A restore
 that read the row just before then has nothing left to update. It used to
-report success anyway, or fail on the UPDATE that matched no row; now it says
-the item is gone. The purge runs here in its own session on the same
-connection, between the restore's read and its write, which is the order the
-race produces.
+fail on the UPDATE that matched no row; now it says the item is gone. The
+purge runs here in its own session on the same connection, between the
+restore's read and its write, which is the order the race produces.
 """
 
 import uuid
