@@ -138,9 +138,9 @@ def test_the_sweep_re_dispatches_rather_than_condemning():
     """Marking a stuck version `failed` would be worse than leaving it.
 
     CompleteMultipartUpload has already run by then, so the raw object is fully
-    assembled, and the reaper deletes s3_key_raw for `failed` and `uploading`
-    alike. A short broker outage after a large upload would schedule that master
-    for deletion. That is why the previous attempt at this was reverted.
+    assembled, and nothing ever re-queues a `failed` version. A short broker
+    outage after a large upload would leave that master untranscoded for good.
+    That is why the previous attempt at this was reverted.
     """
     from apps.api.tasks import cleanup_tasks
 

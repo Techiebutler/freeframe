@@ -3,8 +3,8 @@
 `CompleteMultipartUpload` can succeed with the process dying before the status is
 committed. That leaves a fully assembled object and a version still reading
 `uploading`. The client fires abort from the catch of every completion failure, so
-without a check the version is marked failed and the stale-upload reaper deletes
-the finished file a day later.
+without a check the version is marked failed, and the finished file is never
+transcoded, since nothing re-queues a failed version.
 """
 import uuid
 from unittest.mock import MagicMock

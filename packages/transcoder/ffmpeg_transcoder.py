@@ -1392,10 +1392,10 @@ def refuse_a_truncated_result(
     between two numbers, and a mismatch is not proof of a short read: it can also
     be a duration this code trusted and should not have. The two outcomes are
     not symmetric. Raising once costs a re-read, and a re-read is the cure for
-    the transient case. Raising every time costs the master: the version reaches
-    `failed`, and `_reap_stale_uploads` deletes the original of a `failed`
-    version a day later. The ladder can always be built again; the master
-    cannot. So this refuses while a retry remains and gives way when none does.
+    the transient case. Raising every time strands the master: the version
+    reaches `failed`, and nothing ever transcodes a `failed` version again. The
+    ladder can always be built again; the master cannot. So this refuses while a
+    retry remains and gives way when none does.
     """
     if not source_video_seconds or source_video_seconds <= 0:
         # Nothing trustworthy to compare against, which is the normal case for

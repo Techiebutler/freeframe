@@ -19,8 +19,9 @@ short ladder is stored anyway.
 The two ways to get this wrong are not symmetric, and the asymmetry decides the
 design. A ladder that is wrongly accepted can be rebuilt from a master that is
 still there. A ladder that is wrongly refused on every read lands the version on
-`failed`, and the stale-upload reaper then deletes the master -- the one copy
-that cannot be rebuilt. So refusing is only ever worth a re-read: the check
+`failed`, and nothing ever transcodes a `failed` version again: the master,
+the one copy that cannot be rebuilt, is kept but never becomes a ladder. So
+refusing is only ever worth a re-read: the check
 refuses while an attempt remains and gives way, loudly, on the last one. What it
 buys is the transient case, where reading again is the whole cure.
 
@@ -733,8 +734,8 @@ def test_no_playlist_at_all_is_deliberately_not_judged(tmp_path):
 
 
 def test_an_unknown_source_duration_cannot_be_judged(tmp_path):
-    # Refusing here would turn a missing number into a failed asset -- and,
-    # through the reaper, into a deleted master.
+    # Refusing here would turn a missing number into a failed asset, whose
+    # master nothing ever transcodes again.
     #
     # Honest about what this holds: `None` is pinned, because dropping the
     # guard makes the comparison raise TypeError. `0.0` takes the same branch
@@ -1110,14 +1111,14 @@ def test_a_truncated_avi_is_stored_as_it_always_was(tmp_path):
 # ------------------------------------------- the last attempt gives way
 #
 # The half of this feature that decides what a wrong answer costs. Refusing
-# forever spends the master; refusing once spends a minute.
+# forever strands the master; refusing once spends a minute.
 
 def test_the_last_attempt_stores_a_short_ladder_rather_than_failing(tmp_path,
                                                                     capsys):
     # The same file that is refused above, on the attempt after which there is
-    # no retry left. It has to come out stored: `failed` is what brings the
-    # reaper, and the reaper deletes the original -- which for every shape in
-    # the metadata section above is an intact upload.
+    # no retry left. It has to come out stored: nothing ever transcodes a
+    # `failed` version again, so failing here strands the original -- which
+    # for every shape in the metadata section above is an intact upload.
     result, _, _ = _drive_a_transcode(
         tmp_path, written_seconds=98.0, source_seconds=600.0,
         final_attempt=True,

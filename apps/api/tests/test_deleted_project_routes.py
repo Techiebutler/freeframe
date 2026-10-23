@@ -381,7 +381,7 @@ def test_aborting_an_assembled_upload_promotes_it_in_a_live_project(client, db, 
 def test_aborting_an_assembled_upload_never_promotes_it_into_a_deleted_project(client, db, monkeypatch):
     """/upload/complete refuses a deleted project's upload, so abort must not
     publish the same object by the back door: it is recorded failed, for the
-    reaper or the purge, and nothing is transcoded."""
+    project's purge, and nothing is transcoded."""
     from apps.api.models.asset import ProcessingStatus
     w, triggered = _abort_assembled(client, db, monkeypatch, trash=True)
     assert w.upload.processing_status == ProcessingStatus.failed

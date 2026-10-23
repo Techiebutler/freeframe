@@ -567,7 +567,7 @@ def test_abort_does_not_fail_a_version_that_already_finished(
     """The client aborts from the catch of every completion failure.
 
     A lost response to a *successful* complete would otherwise mark a finished,
-    transcoded version failed, and the reaper deletes those a day later.
+    transcoded version failed, and nothing ever moves a failed version back.
     """
     version = MagicMock()
     version.id = uuid.uuid4()
