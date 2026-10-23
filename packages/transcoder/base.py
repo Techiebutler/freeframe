@@ -22,9 +22,9 @@ class TranscodeJob:
     # a version ends up `failed`. A ladder that comes out short is worth reading
     # again -- a dropped read, an object the store had not finished assembling --
     # but a source that reads short every single time must still be stored, and
-    # stored as whatever it produced: the master is the irreplaceable half, the
-    # reaper deletes the master of a `failed` version, and no measurement is
-    # worth that trade. So the check refuses while a retry is left and accepts
+    # stored as whatever it produced: the master is the irreplaceable half, a
+    # `failed` version is never transcoded again, and no measurement is worth
+    # that trade. So the check refuses while a retry is left and accepts
     # with a loud log line when none is.
     #
     # Not quite absolute, and the gap is worth knowing: if the broker will not

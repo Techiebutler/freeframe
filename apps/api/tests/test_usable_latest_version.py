@@ -132,6 +132,8 @@ def test_the_reaper_removes_an_asset_it_has_stripped_of_every_version(real_db, m
     monkeypatch.setattr(ct, "list_stale_multipart_uploads", lambda cutoff: [])
     monkeypatch.setattr(ct, "delete_object", lambda k: None)
     monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+    # Failed uploads that never assembled a master, which the reaper does take.
+    monkeypatch.setattr(ct, "head_object_size", lambda k: None)
 
     _, _, doomed, dv = _seed(real_db, [ProcessingStatus.failed])
     _, _, survivor, sv = _seed(real_db, [ProcessingStatus.ready, ProcessingStatus.failed])

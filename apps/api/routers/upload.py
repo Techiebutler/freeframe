@@ -358,8 +358,8 @@ def _already_assembled(s3_key: str, expected_bytes: int, version_id) -> bool | N
     user-visible with a False -- marks a version failed and hands it to the reaper,
     or tells a client its upload is not there -- and a failed lookup is not
     evidence of absence. Collapsing the two loses finished uploads: a HeadObject
-    that times out during an abort would write off a fully transferred master,
-    which the reaper then deletes a day later.
+    that times out during an abort would write off a fully transferred master as
+    `failed`, and nothing ever transcodes a failed version.
     """
     try:
         return head_object_size(s3_key) == expected_bytes
@@ -1103,17 +1103,19 @@ def abort_upload(
         # Still `uploading` does not prove the upload failed. CompleteMultipartUpload
         # can have succeeded with the process dying before the status was committed,
         # which leaves a finished object and a version that still looks in-flight.
-        # Marking that failed hands it to the reaper, which deletes the finished file
-        # a day later -- so ask storage what actually happened before deciding.
+        # Marking that failed leaves a finished file that is never transcoded, since
+        # nothing re-queues a failed version -- so ask storage what actually
+        # happened before deciding.
         assembled = _already_assembled(s3_key, media_file.file_size_bytes, version.id)
         # Only a confirmed object promotes the version. "Could not find out" is
-        # recorded as failed exactly like "not there", because the two have the
-        # same consequence: `_reap_stale_uploads` sweeps `uploading` and `failed`
-        # on identical criteria, so leaving it `uploading` saves no bytes and only
-        # parks the row in the panel's Active tab instead of Failed.
+        # recorded as failed exactly like "not there". `_reap_stale_uploads` asks
+        # storage again before it reclaims a `failed` version and keeps one whose
+        # object is there, whereas it takes an `uploading` one without asking, so
+        # leaving it `uploading` would put the bytes at more risk, not less, and
+        # park the row in the panel's Active tab instead of Failed.
         # An assembled object in a deleted project is recorded failed too, as
         # /upload/complete refuses it: nothing in a deleted project is transcoded,
-        # and the reaper or the purge removes it.
+        # and the project's purge removes it.
         if assembled and not asset_project_is_live(db, version.asset_id):
             logger.info(
                 "abort called for assembled upload %s in a deleted project; "

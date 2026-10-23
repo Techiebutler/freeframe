@@ -24,6 +24,7 @@ from ..models.activity import Mention, ActivityLog, Notification
 from ..services.owned_keys import is_project_logo_key
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
+    head_object_size,
 )
 
 log = logging.getLogger("celery.cleanup")
@@ -295,6 +296,31 @@ def _dispose_version_files(db: Session, v: AssetVersion) -> None:
     v.deleted_at = datetime.now(timezone.utc)
 
 
+def _holds_a_master(db: Session, v: AssetVersion) -> bool:
+    """Whether storage may still hold a `failed` version's uploaded master.
+
+    `failed` means two things. /upload/abort writes it for an upload that never
+    assembled an object, which is the reaper's to reclaim. The transcoder writes it
+    for a master that uploaded completely and then failed to transcode on every
+    attempt, and that master is the user's only copy of the original: nothing
+    re-queues a failed version, so deleting it leaves nothing for a later fix to run
+    against. The status cannot tell the two apart; storage can.
+
+    Only a confirmed absence lets the reaper go ahead. Any object at the key is one
+    CompleteMultipartUpload assembled, whatever size was declared for it, and a
+    lookup that fails is not evidence that nothing is there.
+    """
+    for mf in db.query(MediaFile).filter(MediaFile.version_id == v.id).all():
+        try:
+            if head_object_size(mf.s3_key_raw) is not None:
+                return True
+        except Exception:  # noqa: BLE001 - an unanswered lookup must keep the master
+            log.warning("reaper: could not check the master of failed version %s; keeping it",
+                        v.id, exc_info=True)
+            return True
+    return False
+
+
 def _reap_stale_uploads(db) -> int:
     """Reclaim upload orphans. Mutates `db` (soft-deletes versions) but does NOT commit —
     the caller owns the transaction. Returns the number of versions soft-deleted."""
@@ -312,11 +338,18 @@ def _reap_stale_uploads(db) -> int:
     # recorded. A large upload on a slow line can legitimately outlive the window
     # -- 90 GB at 8 Mbit/s takes longer than a day -- and reclaiming it by start
     # time destroys an upload that is still making progress.
-    versions = db.query(AssetVersion).filter(
+    candidates = db.query(AssetVersion).filter(
         AssetVersion.processing_status.in_([ProcessingStatus.uploading, ProcessingStatus.failed]),
         AssetVersion.deleted_at.is_(None),
         func.coalesce(AssetVersion.last_activity_at, AssetVersion.created_at) < cutoff,
     ).all()
+    # A `failed` version whose master is still in storage is kept: it stays until
+    # someone deletes it, and then goes through the soft-delete retention like
+    # anything else.
+    versions = [
+        v for v in candidates
+        if v.processing_status != ProcessingStatus.failed or not _holds_a_master(db, v)
+    ]
     for v in versions:
         _dispose_version_files(db, v)
     db.flush()
@@ -360,8 +393,8 @@ def _reap_stale_uploads(db) -> int:
     log.log(
         logging.WARNING if (versions or orphans) else logging.INFO,
         "reaper: soft-deleted %d stale version(s), %d asset(s) left with none, "
-        "%d unreferenced upload(s) aborted",
-        len(versions), stripped, orphans,
+        "%d unreferenced upload(s) aborted, %d failed version(s) kept for their master",
+        len(versions), stripped, orphans, len(candidates) - len(versions),
     )
     return len(versions)
 
@@ -483,9 +516,9 @@ def requeue_stuck_processing():
 
     This re-dispatches rather than condemning. Marking such a version `failed`
     would be worse than leaving it: CompleteMultipartUpload has already run by
-    then, so the raw object is fully assembled, and the reaper deletes
-    `s3_key_raw` for `failed` and `uploading` alike -- a twenty-second broker
-    restart after a large upload would schedule that master for deletion.
+    then, so the raw object is fully assembled, and nothing ever re-queues a
+    `failed` version -- a twenty-second broker restart after a large upload would
+    leave that master untranscoded for good.
     """
     hours = settings.stuck_processing_timeout_hours
     if hours <= 0:

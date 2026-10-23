@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 0
 
     # Reaper: uploads stuck in `uploading`/`failed` longer than this are reclaimed. Hours.
+    # A `failed` version whose master is still in storage (a transcode that failed)
+    # is kept.
     # A version claimed as `processing` whose transcode never ran is re-dispatched
     # after this long. It must stay comfortably above the transcoder's own 4-hour
     # ceiling, or a legitimately slow encode gets a second worker on top of it.
