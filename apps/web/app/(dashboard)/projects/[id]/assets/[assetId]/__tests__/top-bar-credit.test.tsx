@@ -15,11 +15,11 @@
  * counter -- not merely that the two "share a parent", since the counter's
  * parent is the inner navigator div rather than the group.
  *
- * The credit is hidden below `lg`. In flow it is 147px that neither the middle
- * group nor the block on the right can give back, so the surplus leaves the bar
- * past its right edge, where the page root's `overflow-hidden` clips it and
- * nothing scrolls to it -- taking the sidebar toggle with it from about 744px
- * down, which is an iPad in portrait.
+ * The credit is hidden below `lg`. In flow it is 147px the controls need there,
+ * and before the centre group could shrink the surplus left the bar past its
+ * right edge, where the page root's `overflow-hidden` clips it and nothing
+ * scrolls to it -- taking the sidebar toggle with it from about 744px down,
+ * which is an iPad in portrait. From `lg` up the credit is what gives way.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -158,6 +158,9 @@ function renderPage() {
   )
 }
 
+/** Whole classes, so `min-w-0` is not satisfied by `min-w-0.5` or the like. */
+const classes = (el: Element) => el.className.split(/\s+/)
+
 const defaultRootAssets = [{ id: 'a1' }, asset, { id: 'a3' }]
 
 beforeEach(() => {
@@ -187,21 +190,48 @@ describe('the credit and the asset navigator in the top bar', () => {
     expect(credit.parentElement!.contains(counter)).toBe(true)
   })
 
-  it('puts the navigator first and keeps the group from shrinking', () => {
+  it('puts the navigator first and keeps it from shrinking', () => {
     renderPage()
 
     const credit = screen.getByTitle('FreeFrame on GitHub')
     const counter = screen.getByText('2 of 3')
-    const group = credit.parentElement!
 
     // Order decides which of the two sits on the bar's centre line. The
     // navigator is the control; the credit is what stands beside it.
     expect(
       counter.compareDocumentPosition(credit) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
-    // Without shrink-0 the group is what yields when the bar runs out of room,
-    // and the navigator's chevrons are 28px targets that have nothing to give.
-    expect(group.className).toContain('shrink-0')
+    // The navigator's chevrons are 28px targets that have nothing to give.
+    expect(counter.parentElement!.className.split(/\s+/)).toContain('shrink-0')
+  })
+
+  // #384. Neither the centre group nor the block on the right could shrink, so
+  // once the asset name was down to nothing every further pixel left the bar
+  // past its clipped right edge, sidebar toggle first. Measured at 1024px with
+  // the rail expanded, Compare and the navigator showing: 57px of name left at
+  // the default text size, and the toggle off-screen at a 20px one -- the
+  // `lg` gate is a px media query and does not move when rems grow.
+  it('lets the credit, and only the credit, give way when the bar runs out', () => {
+    renderPage()
+
+    const credit = screen.getByTitle('FreeFrame on GitHub')
+    const group = credit.parentElement!
+
+    // The group yields rather than holding its width against the controls.
+    expect(classes(group)).not.toContain('shrink-0')
+    expect(classes(group)).toContain('min-w-0')
+    // And within it, the credit is what yields, truncating its text.
+    expect(classes(credit)).toContain('min-w-0')
+    expect(classes(credit)).toContain('[&>span]:truncate')
+  })
+
+  it('keeps the back arrow inside the block it belongs to', () => {
+    renderPage()
+
+    // The left block is squeezed first; at zero width the back arrow spilled
+    // into the centre group and the navigator was drawn over it.
+    const back = screen.getByRole('link', { name: 'Back to project' })
+    expect(classes(back.parentElement!)).toContain('min-w-7')
   })
 
   it('positions neither of them absolutely', () => {

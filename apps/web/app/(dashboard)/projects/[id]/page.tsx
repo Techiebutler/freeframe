@@ -41,6 +41,7 @@ import { UploadZone } from "@/components/upload/upload-zone";
 import { useFileDropRegion } from "@/components/projects/use-file-drop-region";
 import { useUploadStore } from "@/stores/upload-store";
 import { useToast } from "@/components/shared/toast";
+import { useBranding } from "@/components/shared/branding-provider";
 import { useAuthStore } from "@/stores/auth-store";
 import { useViewStore } from "@/stores/view-store";
 import { useBreadcrumbStore } from "@/stores/breadcrumb-store";
@@ -129,6 +130,7 @@ export default function ProjectDetailPage() {
   const startUploads = useUploadStore((s) => s.startUploads);
   const toast = useToast();
   const { user, userFetched } = useAuthStore();
+  const { poweredByFreeframe } = useBranding();
 
   // A folder write the server refused says why: a name already taken where the
   // folder would land, or a trashed item the retention purge has since removed.
@@ -1063,7 +1065,19 @@ export default function ProjectDetailPage() {
 
       {/* ─── Right Panel (Comments + Fields tabs, or Share Link Settings) ─ */}
       {rightPanelOpen && (
-        <div className="hidden xl:flex w-[360px] flex-col border-l border-border bg-bg-secondary shrink-0">
+        <div
+          className={cn(
+            "hidden xl:flex w-[360px] flex-col border-l border-border bg-bg-secondary shrink-0",
+            // The shell's floating "Powered by FreeFrame" badge sits 1rem from
+            // the window's bottom-right corner, and this panel runs into that
+            // corner: the badge (30px tall) was drawn over the right half of
+            // "Open in viewer to comment" and took the click, opening the
+            // repository instead of the viewer. The reserve is the badge's
+            // offset and height plus a gap, so whatever the tab, the panel's
+            // last control ends above it. See the badge in (dashboard)/layout.tsx.
+            poweredByFreeframe && "pb-[calc(3.5rem+env(safe-area-inset-bottom))]",
+          )}
+        >
           {showShareLinks && selectedShareLink ? (
             <ShareLinkSettingsPanel token={selectedShareLink} />
           ) : (

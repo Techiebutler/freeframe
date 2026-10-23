@@ -780,13 +780,20 @@ export function UploadsPanel({
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop. It starts where the rail ends, as the panel does: over the
+          whole viewport it sat above the sidebar's z-30, so the rail the panel
+          opens beside was visible and dead until the panel closed. Both widths
+          are spelled out for Tailwind, and the expanded one is gated at `md`
+          for the same reason as the panel's offset below. */}
       <div
-        className="fixed inset-0 z-40"
+        className={cn(
+          'fixed top-0 right-0 bottom-0 left-[52px] z-40',
+          !railCollapsed && 'md:left-[220px]',
+        )}
         onClick={() => setPanelOpen(false)}
         // A file dragged onto the page is aimed at what is behind this, not at
         // it. The backdrop exists to catch a click outside the panel, but it
-        // covers the viewport, so leaving it in the way makes every drop target
+        // covers the page, so leaving it in the way makes every drop target
         // on the page dead for as long as the panel is open. Stepping aside is
         // the honest reading of the gesture -- the drag then continues onto the
         // asset area underneath.

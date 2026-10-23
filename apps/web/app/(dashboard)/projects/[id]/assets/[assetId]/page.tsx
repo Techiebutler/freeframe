@@ -550,8 +550,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     <div className="absolute inset-0 flex flex-col overflow-hidden">
       {/* ─── Top bar (Frame.io style) ──────────────────────────────────── */}
       <div className="flex items-center justify-between border-b border-border px-3 h-12 bg-bg-secondary shrink-0">
-        {/* Left: back + breadcrumb */}
-        <div className="flex items-center gap-1 min-w-0 flex-1">
+        {/* Left: back + breadcrumb. The name is the first thing the bar gives
+            up; `min-w-7` keeps the back arrow, which at zero width spilled out
+            into the centre group and had the navigator drawn over it. */}
+        <div className="flex items-center gap-1 min-w-7 flex-1">
           {/* Back to the folder the asset is in, as a share link's back arrow
               does; it used to go to the project root from anywhere. */}
           <Link
@@ -587,15 +589,24 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             navigator is not rendered and the credit is centred alone, exactly
             as before.
 
-            The credit is `hidden` below `lg` because in flow it is 147px that
-            nothing can reclaim: the middle group does not shrink, and neither
-            does the block on the right, so the surplus leaves the bar past its
-            right edge, where the page root's `overflow-hidden` clips it and no
-            scroll reaches it. That costs the sidebar toggle from about 744px
-            down -- an iPad in portrait, or two windows side by side. Out of
-            flow below `lg`, the thresholds are the ones this page had before
-            the credit joined the bar at all. */}
-        <div className="flex items-center gap-3 shrink-0">
+            The block on the right does not shrink, and anything that leaves
+            the bar past its right edge is clipped by the page root's
+            `overflow-hidden`, where no scroll reaches it -- the sidebar toggle
+            first. So once the asset name is down to nothing, the credit is
+            what gives way: this group can shrink (`min-w-0`, no `shrink-0`),
+            the navigator inside it cannot, and the credit truncates its text.
+            Gating the credit on viewport width alone did not cover it: the bar
+            is also 168px narrower with the rail expanded, and a raised browser
+            text size grows every rem while the `lg` media query stays put. At
+            1024px, rail expanded, Compare and the navigator showing, 57px of
+            name was all that was left, and at a 20px text size the toggle was
+            off-screen.
+
+            The credit is still `hidden` below `lg`, where the room it would
+            take is room the controls need at every width. Out of flow there,
+            the thresholds are the ones this page had before the credit joined
+            the bar at all. */}
+        <div className="flex items-center gap-3 min-w-0">
           {totalAssets > 1 && (
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -619,7 +630,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               </button>
             </div>
           )}
-          <PoweredByBadge showIcon className="hidden lg:inline-flex" />
+          <PoweredByBadge showIcon className="hidden lg:inline-flex min-w-0 [&>span]:truncate" />
         </div>
 
         {/* Right: version, share, sidebar toggle */}
