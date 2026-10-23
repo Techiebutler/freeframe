@@ -371,6 +371,7 @@ def test_invite_rejects_deleted_users_email(client, auth_headers, mock_db, test_
     test_user.is_superadmin = True
     deleted = _mock_user("former@example.com")
     deleted.deleted_at = datetime.now(timezone.utc)
+    mock_db.order_by.return_value = mock_db
     mock_db.first.return_value = deleted
 
     resp = client.post(
@@ -391,6 +392,7 @@ def test_invite_rejects_existing_active_email(client, auth_headers, mock_db, tes
     """POST /users/invite — a live account keeps the "already registered" message,
     which the Bulk Invite dialog relies on to count the address as skipped."""
     test_user.is_superadmin = True
+    mock_db.order_by.return_value = mock_db
     mock_db.first.return_value = _mock_user("taken@example.com")
 
     resp = client.post(

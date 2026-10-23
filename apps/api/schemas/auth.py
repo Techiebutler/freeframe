@@ -52,6 +52,11 @@ DisplayName = Annotated[str, Field(min_length=1, max_length=255), AfterValidator
 # colour input emits nothing else.
 HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$"), AfterValidator(str.lower)]
 
+# The address a new user is stored under: lowercase, so new accounts never
+# differ only by case. Sign-in schemas keep plain EmailStr on purpose, since
+# get_user_by_email needs the address as typed to reach a legacy mixed-case row.
+NewUserEmail = Annotated[EmailStr, AfterValidator(lambda v: v.strip().lower())]
+
 class LoginRequest(BaseModel):
     email: EmailStr
     # No length bounds on login. A creation-side floor prevents new weak
@@ -102,7 +107,7 @@ class AdminUserResponse(UserResponse):
     invite_token: str | None = None
 
 class InviteRequest(BaseModel):
-    email: EmailStr
+    email: NewUserEmail
     name: str
 
 # Magic code flow

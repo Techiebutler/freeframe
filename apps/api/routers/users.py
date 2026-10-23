@@ -10,7 +10,7 @@ from ..schemas.auth import (
 )
 from ..models.user import User, UserStatus
 from ..middleware.auth import get_current_user
-from ..services.auth_service import hash_password
+from ..services.auth_service import hash_password, get_email_owner
 from ..tasks.email_tasks import send_invite_email
 from ..tasks.celery_app import send_task_safe
 from ..models.instance_branding import InstanceBranding
@@ -61,9 +61,10 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 @router.post("/invite", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
 def invite_user(body: InviteRequest, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    # No deleted_at filter: the unique constraint on users.email still covers
-    # soft-deleted rows, so skipping them here turns the INSERT into a 500.
-    existing = db.query(User).filter(User.email == body.email).first()
+    # Soft-deleted rows count: the unique constraint on users.email still covers
+    # them, so skipping them here turns the INSERT into a 500. Any case counts
+    # too, or Bob@ could be invited next to bob@ as a second account.
+    existing = get_email_owner(db, body.email)
     if existing and existing.deleted_at is not None:
         raise HTTPException(
             status_code=400,

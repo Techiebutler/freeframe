@@ -66,15 +66,21 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
             email=body.email,
         )
 
-    # Generate and store magic code in Redis
+    # Generate and store magic code in Redis, keyed by the account rather than
+    # the typed address. An instance can hold two accounts differing only by
+    # case, and an address key (lowercased) would let one of them verify the
+    # other's code.
     code = generate_magic_code()
-    store_magic_code(body.email, code)
+    store_magic_code(str(user.id), code)
 
     # Queue email via Celery (async)
     try:
         branding = db.query(InstanceBranding).first()
         org_name = branding.org_name if branding else None
-        send_task_safe(send_magic_code_email, body.email, code, MAGIC_CODE_EXPIRY_MINUTES, org_name)
+        # To the stored address, not the typed one: the lookup ignores case. The
+        # response below still echoes what was typed, as it does for an unknown
+        # address, so the stored spelling never leaks.
+        send_task_safe(send_magic_code_email, user.email, code, MAGIC_CODE_EXPIRY_MINUTES, org_name)
     except Exception:
         pass  # Email delivery is best-effort; code is already in Redis
 
@@ -98,7 +104,7 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
         raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
 
     # Verify magic code from Redis
-    success, error = redis_verify_magic_code(body.email, body.code)
+    success, error = redis_verify_magic_code(str(user.id), body.code)
     if not success:
         raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
     

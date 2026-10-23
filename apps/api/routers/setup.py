@@ -4,12 +4,12 @@ These are only available when no superadmin exists in the system.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 from ..database import get_db
 from ..models.user import User, UserStatus
-from ..services.auth_service import hash_password, create_access_token, create_refresh_token
-from ..schemas.auth import NewPassword, TokenResponse
+from ..services.auth_service import hash_password, create_access_token, create_refresh_token, get_email_owner
+from ..schemas.auth import NewPassword, NewUserEmail, TokenResponse
 from ..middleware.rate_limit import rate_limit
 
 router = APIRouter(prefix="/setup", tags=["setup"])
@@ -21,7 +21,7 @@ class SetupStatusResponse(BaseModel):
 
 
 class CreateSuperAdminRequest(BaseModel):
-    email: EmailStr
+    email: NewUserEmail
     name: str
     password: NewPassword
 
@@ -71,8 +71,9 @@ def create_superadmin(body: CreateSuperAdminRequest, db: Session = Depends(get_d
             detail="Setup already completed. Superadmin already exists.",
         )
     
-    # Check if email is already taken
-    existing = db.query(User).filter(User.email == body.email, User.deleted_at.is_(None)).first()
+    # Check if email is already taken, in any case and including soft-deleted
+    # rows, which the unique constraint on users.email still covers.
+    existing = get_email_owner(db, body.email)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

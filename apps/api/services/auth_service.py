@@ -3,6 +3,7 @@ from typing import Optional
 import uuid
 import jwt
 import bcrypt
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..models.user import User, UserStatus
@@ -50,7 +51,34 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 def get_user_by_email(db: Session, email: str) -> Optional[User]:
-    return db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+    """The live user signing in, or being looked up, by this address.
+
+    Addresses used to be stored as typed and compared exactly, so an instance
+    can already hold accounts that differ only by case. An exact match wins;
+    otherwise a case-insensitive match is used only when it names exactly one
+    account. With two such accounts, a guess could open the wrong one, so each
+    still answers only to its exact address, as before.
+    """
+    email = email.strip()
+    live = db.query(User).filter(User.deleted_at.is_(None))
+    user = live.filter(User.email == email).first()
+    if user:
+        return user
+    matches = live.filter(func.lower(User.email) == email.lower()).limit(2).all()
+    return matches[0] if len(matches) == 1 else None
+
+def get_email_owner(db: Session, email: str) -> Optional[User]:
+    """Any row, live or soft-deleted, that already holds this address in any case.
+
+    For the checks that guard creating a user. A live row is preferred so the
+    caller can tell "already registered" apart from "belonged to a deleted user".
+    """
+    return (
+        db.query(User)
+        .filter(func.lower(User.email) == email.strip().lower())
+        .order_by(User.deleted_at.isnot(None))
+        .first()
+    )
 
 def get_user_by_id(db: Session, user_id: uuid.UUID) -> Optional[User]:
     return db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
