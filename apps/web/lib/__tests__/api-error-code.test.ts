@@ -6,6 +6,7 @@ vi.mock('@/lib/auth', () => ({
 }))
 
 import { api, ApiError } from '@/lib/api'
+import { classifyInitiateError } from '@/lib/upload-initiate-outcome'
 
 /** A real `Response`, so `headers.get` is case-insensitive the way the browser's is. */
 function errorResponse(
@@ -37,6 +38,28 @@ describe('ApiError code and retryAfter', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it("a /parts that cannot reach storage, as the API answers it, is a storage hold: a queued Resume says Waiting for storage", async () => {
+    // `_storage_unreachable` in apps/api/routers/upload.py.
+    stubFetch(
+      errorResponse(
+        503,
+        {
+          detail: {
+            code: 'storage_unavailable',
+            message: 'Could not reach storage to check this upload. Please retry.',
+            retry_after: 5,
+          },
+        },
+        { 'Retry-After': '5' },
+      ),
+    )
+
+    const err = await catchApiError(() => api.get('/upload/v1/parts'))
+
+    expect(err.detail).toBe('Could not reach storage to check this upload. Please retry.')
+    expect(classifyInitiateError(err)).toEqual({ kind: 'hold', reason: 'storage', retryAfterMs: 5_000 })
   })
 
   it('reads code and message from a coded detail', async () => {
