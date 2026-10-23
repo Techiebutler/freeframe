@@ -34,7 +34,8 @@ vi.mock('@/lib/api', async (orig) => {
 vi.mock('swr', () => ({ mutate: vi.fn() }))
 
 import { api, ApiError } from '@/lib/api'
-import { useUploadStore, visibleFiles, __uploadQueueTesting as testing } from '../upload-store'
+import { clearTokens } from '@/lib/auth'
+import { useUploadStore, visibleFiles, __uploadQueueTesting as testing, type UploadFile } from '../upload-store'
 import { signInAs, signOutElsewhere, writeTokenUnannounced, tokenFor, row } from '@/test/upload-session'
 import {
   MB, fakeServer, fileOf, small, drop, rowOf, stored, settle, flush, resumable,
@@ -44,6 +45,7 @@ const X = 'user-x'
 const Y = 'user-y'
 const SWITCHED = 'Another account signed in. Add these files again after signing back in.'
 const SIGNED_OUT = 'Signed out in another tab. Add these files again after signing in.'
+const SESSION_ENDED = 'Your session ended. Add these files again after signing in.'
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -320,6 +322,105 @@ describe('an initiate that meets another account', () => {
     expect(storedRow('r')).toMatchObject({ status: 'interrupted', versionId: 'rv', ownerId: X })
     expect(server.others()).toEqual([])
     expect(testing.runningIds()).toEqual([])
+  })
+})
+
+describe("when this tab's own session ends", () => {
+  /**
+   * `clearTokens` is followed by the page leaving for /login, and a tab never
+   * hears its own `storage` event. Whatever the store does about the rows it
+   * holds in memory only, it has to do before `location.href` is set.
+   */
+  function watchLeave(): { at: () => UploadFile[] | undefined; href: () => string } {
+    let atLeave: UploadFile[] | undefined
+    let href = ''
+    vi.stubGlobal('location', {
+      get href() { return href },
+      set href(v: string) {
+        atLeave = stored()
+        href = v
+      },
+    })
+    return { at: () => atLeave, href: () => href }
+  }
+
+  it('clearTokens with no request in flight fails the held probe and the queued rows, saved with their owner, before the page leaves', async () => {
+    // Storage is down: the first file probes the hold, the rest wait behind it.
+    fakeServer(() => new TypeError('Failed to fetch'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const ids = drop([small('a.jpg'), small('b.jpg'), small('c.jpg'), small('d.jpg')])
+    await settle()
+    expect(testing.runningIds()).toEqual([])
+    expect(ids.map((id) => rowOf(id).status)).toEqual(['queued', 'queued', 'queued', 'queued'])
+    const leave = watchLeave()
+
+    clearTokens()
+
+    expect(leave.href()).toBe('/login')
+    expect(leave.at()?.filter((f) => ids.includes(f.id))).toHaveLength(4)
+    for (const id of ids) {
+      expect(rowOf(id)).toMatchObject({ status: 'failed', failedBeforeStart: true, error: SESSION_ENDED, ownerId: X })
+      expect(leave.at()?.find((f) => f.id === id)).toMatchObject({ status: 'failed', error: SESSION_ENDED, ownerId: X })
+    }
+  })
+
+  it('an unpinned request whose refresh is refused, through the real lib/api and lib/auth, fails the rows that never started', async () => {
+    vi.mocked(api.get).mockReset()
+    vi.mocked(api.post).mockReset()
+    window.localStorage.setItem('ff_refresh_token', 'refresh-x')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const leave = watchLeave()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      // Storage is down: every initiate gets no answer.
+      if (url.endsWith('/upload/initiate')) throw new TypeError('Failed to fetch')
+      if (url.endsWith('/notifications')) return json(401, { detail: 'Not authenticated' })
+      if (url.endsWith('/auth/refresh')) return json(401, { detail: 'Refresh token revoked' })
+      throw new Error(`unexpected fetch ${url}`)
+    }))
+    const ids = drop([small('a.jpg'), small('b.jpg')])
+    await settle()
+    expect(ids.map((id) => rowOf(id).status)).toEqual(['queued', 'queued'])
+
+    await expect(api.get('/notifications')).rejects.toBeInstanceOf(ApiError)
+
+    expect(leave.href()).toBe('/login')
+    for (const id of ids) {
+      expect(rowOf(id)).toMatchObject({ status: 'failed', error: SESSION_ENDED, ownerId: X })
+      expect(leave.at()?.find((f) => f.id === id)).toMatchObject({ status: 'failed', error: SESSION_ENDED, ownerId: X })
+    }
+  })
+
+  it("the queue's own pinned initiate whose refresh is refused says the session ended, not another tab", async () => {
+    vi.mocked(api.get).mockReset()
+    vi.mocked(api.post).mockReset()
+    window.localStorage.setItem('ff_refresh_token', 'refresh-x')
+    watchLeave()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/upload/initiate')) return json(401, { detail: 'Not authenticated' })
+      if (url.endsWith('/auth/refresh')) return json(401, { detail: 'Refresh token revoked' })
+      throw new Error(`unexpected fetch ${url}`)
+    }))
+
+    const [id] = drop([small('a.jpg')])
+    await vi.waitFor(() => expect(rowOf(id).status).toBe('failed'))
+
+    expect(rowOf(id)).toMatchObject({ failedBeforeStart: true, error: SESSION_ENDED, ownerId: X })
+    expect(storedRow(id)).toMatchObject({ status: 'failed', error: SESSION_ENDED, ownerId: X })
+  })
+
+  it('a sign-out seen through the storage event after this tab signed back in still says another tab', async () => {
+    watchLeave()
+    clearTokens()
+    signInAs(X)
+    fakeServer(() => 'wait')
+    const ids = drop([fileOf('a.mov'), fileOf('b.mov'), fileOf('c.mov'), fileOf('d.mov')])
+    await settle()
+
+    signOutElsewhere()
+
+    expect(rowOf(ids[3])).toMatchObject({ status: 'failed', error: SIGNED_OUT, ownerId: X })
   })
 })
 

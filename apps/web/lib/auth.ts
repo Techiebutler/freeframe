@@ -49,6 +49,21 @@ export function resetLeaveGuardSuppression(): void {
   leaveGuardSuppressed = false
 }
 
+const sessionEndListeners = new Set<() => void>()
+
+/**
+ * Calls `cb` when this tab ends the session (`clearTokens`), after the tokens
+ * are gone and before the page starts to leave. A tab is never sent the
+ * `storage` event for its own writes, so this is the only way code in this tab
+ * hears of it in time. Returns the unsubscribe function.
+ */
+export function onSessionEnded(cb: () => void): () => void {
+  sessionEndListeners.add(cb)
+  return () => {
+    sessionEndListeners.delete(cb)
+  }
+}
+
 /**
  * Ends the session in this tab: the tokens go and the page loads /login.
  *
@@ -59,6 +74,10 @@ export function resetLeaveGuardSuppression(): void {
  * prompt has nothing to offer: "Stay" would leave a tab with no session that
  * signs itself out again on the next request. The flag is set before the
  * navigation, every time.
+ *
+ * `onSessionEnded` listeners run once the tokens are gone and before the
+ * navigation: the upload store saves the files it holds only in memory. A
+ * listener that throws does not keep the page from leaving.
  */
 export function clearTokens(): void {
   if (typeof window === 'undefined') return
@@ -68,6 +87,13 @@ export function clearTokens(): void {
   // Clear auth cookies
   document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0`
   document.cookie = `${REFRESH_TOKEN_KEY}=; path=/; max-age=0`
+  sessionEndListeners.forEach((cb) => {
+    try {
+      cb()
+    } catch (err) {
+      console.warn('A listener failed as the session ended', err)
+    }
+  })
   window.location.href = withBasePath('/login')
 }
 

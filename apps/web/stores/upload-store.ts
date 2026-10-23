@@ -8,6 +8,7 @@ import { createPartBudget, type PartBudget } from '@/lib/upload-budget'
 import { createUploadQueue, usableRetryAfter, type ActiveInfo, type QueueEntry } from '@/lib/upload-queue'
 import { classifyInitiateError, type InitiateOutcome } from '@/lib/upload-initiate-outcome'
 import { currentSubject, watchSubject } from '@/lib/upload-owner'
+import { onSessionEnded } from '@/lib/auth'
 import {
   assertReadable, FileUnreadableError, FILE_READ_FAILED_MESSAGE,
 } from '@/lib/upload-readable'
@@ -1901,10 +1902,20 @@ const newRowId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 const REFUSED_MESSAGE = 'The server refused this upload.'
 const ACCOUNT_SWITCHED_MESSAGE = 'Another account signed in. Add these files again after signing back in.'
 const SIGNED_OUT_MESSAGE = 'Signed out in another tab. Add these files again after signing in.'
+const SESSION_ENDED_MESSAGE = 'Your session ended. Add these files again after signing in.'
+
+/**
+ * Whether the session was last ended by this tab (`clearTokens`, heard through
+ * `onSessionEnded`) rather than by another tab (heard through the `storage`
+ * event). Only the wording of a signed-out row depends on it. Cleared as soon
+ * as anyone signs in again.
+ */
+let sessionEndedHere = false
 
 /** Why a row could not start as its owner: someone else is signed in, or nobody is. */
 function accountMessage(now: string | null): string {
-  return now === null ? SIGNED_OUT_MESSAGE : ACCOUNT_SWITCHED_MESSAGE
+  if (now !== null) return ACCOUNT_SWITCHED_MESSAGE
+  return sessionEndedHere ? SESSION_ENDED_MESSAGE : SIGNED_OUT_MESSAGE
 }
 
 /** A new row that cannot start because its owner is no longer signed in. */
@@ -1929,6 +1940,7 @@ function accountFailure(now: string | null): Partial<UploadFile> {
  * same account twice changes nothing.
  */
 function applySubject(next: string | null): void {
+  if (next !== null) sessionEndedHere = false
   const others = (f: UploadFile) => f.ownerId !== next && !runners.has(f.id)
   const files = useUploadStore.getState().files
   const newRows = new Set(files.filter((f) => f.status === 'queued' && others(f)).map((f) => f.id))
@@ -3973,6 +3985,19 @@ if (typeof window !== 'undefined') {
   watchSubject((next) => applySubject(next))
 }
 
+// This tab ended the session: a refresh the server refused, or Log out. The
+// tab never hears its own `storage` event, and the page leaves for /login
+// straight after, so the same rule is applied here, before it goes: rows that
+// had not started fail and are saved with their owner, instead of vanishing
+// with the page's memory (spec goals 6 and 9). Rows being sent are left to
+// their run, as on any change; what was saved of them comes back Interrupted.
+if (typeof window !== 'undefined') {
+  onSessionEnded(() => {
+    sessionEndedHere = true
+    applySubject(null)
+  })
+}
+
 // Rows saved before this release are checked once the saved rows are loaded.
 // localStorage is synchronous, so that is normally done by now.
 if (typeof window !== 'undefined') {
@@ -4051,6 +4076,7 @@ export const __uploadQueueTesting = {
     adopting.clear()
     historyGeneration++
     claimSettleMs = CLAIM_SETTLE_MS
+    sessionEndedHere = false
   },
   /**
    * How long a resume's claim waits for another tab's (see `RESUME_CLAIM_PREFIX`).

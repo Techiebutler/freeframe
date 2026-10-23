@@ -297,9 +297,10 @@ test('L2 (negative): Log out with nothing queued or sending asks nothing', async
 
 // ─── L3 ────────────────────────────────────────────────────────────────────────
 
-test('L3: a session that ends on its own goes to /login with no prompt, even with files queued', async ({ page }) => {
+test('L3: a session that ends on its own goes to /login with no prompt, even with files queued, and no file is lost', async ({ page }) => {
   test.setTimeout(3 * 60_000)
-  await openCleanProject(page, 'L3', await primary())
+  const account = await primary()
+  const { project } = await openCleanProject(page, 'L3', account)
   const dialogs = answerDialogs(page)
   const { files } = await freezeQueue(page, 'l3', 5)
   await closeUploads(page)
@@ -323,4 +324,26 @@ test('L3: a session that ends on its own goes to /login with no prompt, even wit
   await page.locator('button[title="Notifications"], button:has(span:text-is("Notifications"))').first().click()
   await expect(page).toHaveURL(/\/login/, { timeout: 30_000 })
   expect(dialogs.seen, 'no browser prompt').toEqual([])
+
+  // `clearTokens` tells the upload store before the page leaves (a tab never hears its own `storage`
+  // event), so the two queued files were failed and saved with their owner on the way out.
+  const kept = await page.evaluate(() => window.localStorage.getItem('ff-uploads'))
+  const savedAtLogin = (JSON.parse(kept ?? '{}').state?.files ?? []) as Array<{ assetName: string; status: string; error?: string; ownerId?: string }>
+  const names = files.map((f) => f.name)
+  expect(savedAtLogin.filter((f) => names.includes(f.assetName)).map((f) => f.status).sort(), 'saved on the way out')
+    .toEqual(['failed', 'failed', 'uploading', 'uploading', 'uploading'])
+
+  // Signed back in, in the same tab, all five are there: the two that never started Failed, saying why,
+  // and the three that were sending Interrupted, to be resumed. `signIn` writes the saved session's whole
+  // localStorage, its uploads list included, so this tab's list is put back after it.
+  await signIn(page, account)
+  await page.evaluate((list) => { if (list !== null) window.localStorage.setItem('ff-uploads', list) }, kept)
+  await page.goto(`/projects/${project.id}`)
+  await openUploads(page)
+  const after = await until(page, files, 'all five back after signing in', (m) => m.length === files.length)
+  expect(count(after, 'failed'), summary(after)).toBe(2)
+  expect(count(after, 'interrupted'), summary(after)).toBe(3)
+  for (const r of after.filter((m) => m.status === 'failed')) {
+    expect(r.detail).toContain('Your session ended. Add these files again after signing in.')
+  }
 })
