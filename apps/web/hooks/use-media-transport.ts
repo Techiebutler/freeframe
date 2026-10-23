@@ -140,6 +140,10 @@ export function useMediaTransport({ toggleVideo }: MediaTransportOptions = {}): 
   const togglePlay = useCallback(() => {
     const el = elRef.current
     if (!el) return
+    // Assumes any <video> in the media column is VideoPlayer's, since
+    // VideoPlayer is what registers the handler behind `toggleVideo`
+    // (registerTogglePlayHandler). Any other <video> rendered there would be
+    // routed to a toggle nobody registered, making the sheet button a no-op.
     if (toggleVideo && el.tagName === 'VIDEO') {
       toggleVideo()
       return
