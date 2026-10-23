@@ -210,28 +210,37 @@ def test_an_unrotated_source_on_nvenc_keeps_its_cuda_frames():
 
 
 def test_a_portrait_rotated_clip_gets_portrait_rungs_on_nvenc():
-    # 1920x1080 stored, displayed 1080x1920. The boxes stay as they are: what
-    # changes is that the scaler is handed the upright frame.
+    # 1920x1080 stored, displayed 1080x1920. The scaler is handed the upright
+    # frame, and the boxes are turned to match it (#452).
     _, calls = _transcode({**H264, **ROTATED_90})
 
-    assert _boxes(calls[0]) == {"1080p": "1920:1080", "720p": "1280:720", "360p": "640:360"}
+    assert _boxes(calls[0]) == {"1080p": "1080:1920", "720p": "720:1280", "360p": "360:640"}
     assert _decodes_into_memory_on_nvdec(calls[0])
 
 
 def test_a_narrow_rotated_clip_is_sized_upright_on_the_first_attempt():
-    # 1920x720 with a 90-degree matrix is 720x1920 upright, whose 360p fit
-    # (136x360) is under h264_nvenc's minimum, so the box is enlarged on the
+    # 1920x400 with a 90-degree matrix is 400x1920 upright, whose 360p fit
+    # (134x640) is under h264_nvenc's minimum, so the box is enlarged on the
     # NVDEC attempt as it already was on the CPU-decode one.
-    result, calls = _transcode({**H264, **ROTATED_90}, width=1920, height=720,
+    result, calls = _transcode({**H264, **ROTATED_90}, width=1920, height=400,
                                failures=[NVDEC_REFUSAL])
 
     assert result.success is True
     nvdec, cpu_decode = calls
     assert _decodes_into_memory_on_nvdec(nvdec)
-    assert _boxes(nvdec) == {"720p": "1280:720", "360p": "146:390"}
+    assert _boxes(nvdec) == {"360p": "146:702"}
     assert "-hwaccel" not in cpu_decode
     assert _graph(cpu_decode).startswith("[0:V:0]format=nv12,hwupload_cuda[up];")
-    assert _boxes(cpu_decode) == {"720p": "1280:720", "360p": "146:390"}
+    assert _boxes(cpu_decode) == {"360p": "146:702"}
+
+
+def test_a_hardware_frame_is_sized_as_it_is_stored():
+    # QSV decodes a rotated source into hardware frames, which ffmpeg does not
+    # turn, so its scaler is handed 1920x1080 and the boxes stay landscape.
+    _, calls = _transcode({**H264, **ROTATED_90}, backend="qsv")
+
+    assert "-hwaccel_output_format" in calls[0]
+    assert _boxes(calls[0]) == {"1080p": "1920:1080", "720p": "1280:720", "360p": "640:360"}
 
 
 def test_a_flip_does_not_swap_the_sizing():

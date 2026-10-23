@@ -103,4 +103,24 @@ describe('useVideoPlayer quality selection', () => {
     expect(rendered.player.currentQuality).toBe(0)
     expect(rendered.player.selectedQuality).toBe(-1)
   })
+
+  it('names a portrait level by its short side, as the ladder sizes it', () => {
+    const rendered = renderPlayer()
+
+    act(() => {
+      rendered.instance.emit(hls.Events.MANIFEST_PARSED, {
+        levels: [
+          { width: 1080, height: 1920, bitrate: 5_000_000 },
+          { width: 1920, height: 1080, bitrate: 5_000_000 },
+          { height: 720, bitrate: 2_500_000 },
+        ],
+      })
+    })
+
+    expect(rendered.player.qualityLevels.map((level) => level.label)).toEqual([
+      '1080p',
+      '1080p',
+      '720p',
+    ])
+  })
 })

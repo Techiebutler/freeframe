@@ -34,7 +34,7 @@ from .storage import get_allow_original_downloads
 ORIGINAL = "original"
 TRANSCODE = "transcode"
 
-_RESOLUTION = re.compile(r"RESOLUTION=\d+x(\d+)")
+_RESOLUTION = re.compile(r"RESOLUTION=(\d+)x(\d+)")
 
 
 @dataclass
@@ -124,10 +124,12 @@ def download_choices(
 
 
 def _top_rung_height(hls_prefix: str) -> Optional[int]:
-    """The tallest variant in a ladder's master playlist, which is the rung
-    the download MP4 was remuxed from."""
+    """The top variant in a ladder's master playlist, which is the rung the
+    download MP4 was remuxed from, as the ladder names it: by its short side,
+    so a portrait 1080x1920 is 1080p (#452)."""
     obj = get_s3_client().get_object(Bucket=settings.s3_bucket, Key=f"{hls_prefix}/master.m3u8")
-    heights = [int(h) for h in _RESOLUTION.findall(obj["Body"].read().decode("utf-8"))]
+    heights = [min(int(w), int(h))
+               for w, h in _RESOLUTION.findall(obj["Body"].read().decode("utf-8"))]
     return max(heights) if heights else None
 
 

@@ -1044,6 +1044,23 @@ def is_display_transformed(stream: dict) -> bool:
     return bool(display_rotation(stream)) or rotation_unreadable(stream)
 
 
+def rung_box(target: str, width: int, height: int) -> str:
+    """A rung's `w:h` box, turned to lie the way a `width` x `height` frame does.
+
+    QUALITY_MAP's boxes are landscape, and fitted as they are a portrait frame
+    is sized by its long side: the 1080p rung made 608x1080 of a 1080x1920 phone
+    clip. Turned, the box puts the rung's height on the frame's short side, so
+    1080x1920 keeps its size under 1080p and comes out 720x1280 under 720p, as a
+    landscape source would (#452). A square frame or box is left as it is.
+    """
+    if not width or not height:
+        return target
+    box_w, box_h = (int(v) for v in target.split(":"))
+    if (box_w - box_h) * (width - height) < 0:
+        return f"{box_h}:{box_w}"
+    return target
+
+
 def rung_is_source_size(target: str, width: int, height: int) -> bool:
     """Whether a rung's scale target resolves to the source's own dimensions.
 
@@ -1106,20 +1123,19 @@ _NVENC_FRAME_LIMITS = {
 def nvenc_rung_target(target: str, width: int, height: int, encoder: str) -> str:
     """A rung's box, enlarged where its fit would be too small for `encoder`.
 
-    The ladder's boxes are landscape, so a tall portrait source comes out of the
-    360p one narrower than NVENC encodes (720x1920 gives 136x360, under
-    h264_nvenc's 146), and a very wide one shorter (8000x480 gives 640x38). Such
-    a rung gets the smallest box of the source's own shape that the encoder
-    takes instead -- 146:390 and 834:50 for those two -- so the job stays on the
-    GPU rather than failing over to software. The rung is a little larger than
-    the software pipeline makes it, and keeps its shape.
+    A very tall source comes out of the 360p box narrower than NVENC encodes
+    (400x1920 in `360:640` gives 134x640, under h264_nvenc's 146), and a very
+    wide one shorter (8000x480 in `640:360` gives 640x38). Such a rung gets the
+    smallest box of the source's own shape that the encoder takes instead --
+    146:702 and 834:50 for those two -- so the job stays on the GPU rather than
+    failing over to software. The rung is a little larger than the software
+    pipeline makes it, and keeps its shape.
 
     `width` x `height` must be the frame the scaler is handed, which is not
     always the stored one: see the call in transcode(). Returned unchanged when
     the fit already suits the encoder, or when no box would without scaling the
     source up or passing the encoder's maximum; the software fallback takes
-    those. Portrait rungs are still sized by their long side here (#452), so a
-    portrait 360p rung is 360 tall, not 360 wide; this only keeps it encodable.
+    those.
     """
     limits = _NVENC_FRAME_LIMITS.get(encoder)
     if not limits or not width or not height:
@@ -2001,9 +2017,12 @@ class FFmpegTranscoder(BaseTranscoder):
             source_height = (meta.height if meta else 0) or 0
             source_width = (meta.width if meta else 0) or 0
 
-            qualities = [q for q in requested if rung_height(q) <= source_height]
+            # A rung is named for the short side, whichever way up the source
+            # is, and rotation does not change which side that is (#452).
+            qualities = [q for q in requested
+                         if rung_height(q) <= min(source_width, source_height)]
             # What each rung scales to. Its own nominal size, except for the one
-            # kept below.
+            # kept below; either is turned to the frame's shape by rung_box().
             scale_targets = {q: QUALITY_MAP[q][0] for q in requested}
             if not qualities and requested:
                 # Never emit an empty ladder: keep the smallest requested rung,
@@ -2056,7 +2075,8 @@ class FFmpegTranscoder(BaseTranscoder):
                 source_copy_enabled()
                 and len(qualities) == 1
                 and rung_is_source_size(
-                    scale_targets[qualities[0]], source_width, source_height
+                    rung_box(scale_targets[qualities[0]], source_width, source_height),
+                    source_width, source_height,
                 )
                 and is_browser_safe(_vid_stream)
                 and not is_hdr
@@ -2253,19 +2273,24 @@ class FFmpegTranscoder(BaseTranscoder):
                     # or format option; the libplacebo prefix already set the target
                     # bit depth and the software encoder sets -pix_fmt itself.
                     scale_extra = ""
-                targets = scale_targets
+                # Each box is turned to the frame the scaler is handed. ffmpeg
+                # autorotates a frame in system memory ahead of the graph, so a
+                # software decode, and whatever is uploaded -- a CPU decode, or
+                # a rotated source's GPU decode -- is scaled upright. Only
+                # hardware frames keep the stored size: NVENC and VAAPI decode
+                # no rotated source into those, and QSV, which does, is sized
+                # as stored.
+                hardware_frames = (
+                    not (cpu_upload or dv_software) and bool(_BACKEND_HWACCEL.get(backend))
+                )
+                seen = (source_width, source_height)
+                if not hardware_frames and round(display_rotation(_vid_stream)) % 180 == 90:
+                    seen = (source_height, source_width)
+                targets = {q: rung_box(scale_targets[q], *seen) for q in qualities}
                 if backend == "nvenc" and not dv_software:
                     # NVENC has a minimum frame size; see nvenc_rung_target.
-                    # It needs the frame the scaler is handed. ffmpeg autorotates
-                    # a frame in system memory ahead of the graph, so whatever
-                    # is uploaded -- a CPU decode, or a rotated source's GPU
-                    # decode -- is scaled upright. Only CUDA frames keep the
-                    # stored size, and no rotated source is decoded into those.
-                    seen = (source_width, source_height)
-                    if cpu_upload and round(display_rotation(_vid_stream)) % 180 == 90:
-                        seen = (source_height, source_width)
                     encoder = "hevc_nvenc" if out_mode["family"] == "hevc" else "h264_nvenc"
-                    targets = {q: nvenc_rung_target(scale_targets[q], *seen, encoder)
+                    targets = {q: nvenc_rung_target(targets[q], *seen, encoder)
                                for q in qualities}
                 filter_complex = f"{hdr_prefix}{src}split={len(qualities)}{split_outputs};"
                 filter_complex += ";".join(

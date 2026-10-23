@@ -216,6 +216,28 @@ def test_a_source_that_is_not_16_9_copies_at_its_own_size():
     assert not _copies(cmd)
 
 
+def test_an_upright_portrait_source_copies_at_its_own_size():
+    # The 1080p box was landscape, so 1080x1920 under it was a 608x1080 rung to
+    # encode and never a copy. A portrait source is sized by its short side now,
+    # and 1080x1920 is exactly what the rung asks for (#452).
+    for width, height, rung in ((1080, 1920, "1080p"), (720, 1280, "720p")):
+        cmd, result, _ = _transcode([rung], source=(width, height))
+        assert _copies(cmd), f"{width}x{height}"
+        assert (result.width, result.height) == (width, height)
+
+
+def test_a_rotated_portrait_source_is_still_encoded():
+    # The same picture stored landscape with a matrix is sized the same way,
+    # and a remux still cannot carry the matrix.
+    cmd, _, _ = _transcode(["1080p"], source=(1920, 1080), video_stream={
+        **_H264_8BIT,
+        "side_data_list": [{"side_data_type": "Display Matrix", "rotation": -90}],
+    })
+
+    assert not _copies(cmd)
+    assert "scale=1080:1920:" in cmd[cmd.index("-filter_complex") + 1]
+
+
 def test_the_copy_writes_the_master_playlist_both_routers_hand_out():
     # assets.py and share.py both point the player at master.m3u8, and ffmpeg
     # only writes one when it is asked to.

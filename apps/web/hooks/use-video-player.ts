@@ -248,7 +248,11 @@ export function useVideoPlayer(
           index,
           height: level.height,
           bitrate: level.bitrate,
-          label: level.height ? `${level.height}p` : `${Math.round(level.bitrate / 1000)}kbps`,
+          // Named by the short side, as the ladder sizes a rung: a portrait
+          // 1080x1920 level is 1080p (#452).
+          label: level.height
+            ? `${Math.min(level.width || level.height, level.height)}p`
+            : `${Math.round(level.bitrate / 1000)}kbps`,
         }))
         setQualityLevels(levels)
         setCurrentQuality(-1) // wait for the first active rung

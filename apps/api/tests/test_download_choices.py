@@ -110,6 +110,24 @@ def test_the_video_transcode_is_labelled_with_its_rung():
     assert choices[0].size_bytes == 5_000_000_000
 
 
+def test_a_portrait_transcode_is_labelled_by_its_short_side():
+    # A portrait ladder is sized by its short side, so its top rung is the
+    # 1080p one at 1080x1920, and calling it 1920p names a rung that does not
+    # exist (#452).
+    master = (
+        "#EXTM3U\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=360x640\n0/playlist.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1080x1920\n1/playlist.m3u8\n"
+    )
+    mf = _media_file()
+    choices = downloads.download_choices(AssetType.video, mf, allow_original=True)
+    with patch.object(downloads, "get_s3_client", return_value=_s3_with_master(master)), \
+         patch.object(downloads, "head_object_size", return_value=900_000_000):
+        downloads.describe_choices(AssetType.video, mf, choices)
+
+    assert choices[1].label == "1080p"
+
+
 def test_storage_that_will_not_answer_leaves_a_working_menu():
     mf = _media_file()
     choices = downloads.download_choices(AssetType.video, mf, allow_original=True)
@@ -384,7 +402,7 @@ def test_an_mp4_upload_and_its_mp4_transcode_download_under_different_names():
 
     with patch.object(downloads, "get_s3_client", return_value=_s3_with_master(master)):
         assert downloads.download_filename(asset, mf, original) == "Portrait.mp4"
-        assert downloads.download_filename(asset, mf, transcode) == "Portrait (1280p).mp4"
+        assert downloads.download_filename(asset, mf, transcode) == "Portrait (720p).mp4"
 
 
 def test_a_transcode_in_another_format_keeps_the_plain_name():

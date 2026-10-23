@@ -8,6 +8,7 @@ built, and the `-filter_complex` that comes out.
 """
 import asyncio
 import json
+import re
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -70,7 +71,8 @@ def test_an_unset_or_broken_setting_still_yields_the_full_ladder():
 
 # ─────────────────────────────────── the job reaching the filter graph
 
-def _ffmpeg_cmd_for(qualities: list[str], source: tuple[int, int]) -> list[str]:
+def _ffmpeg_cmd_for(qualities: list[str], source: tuple[int, int],
+                    stream: dict | None = None) -> list[str]:
     """Run a transcode with everything mocked and return the ffmpeg command."""
     width, height = source
 
@@ -80,7 +82,8 @@ def _ffmpeg_cmd_for(qualities: list[str], source: tuple[int, int]) -> list[str]:
         mock.stderr = ""
         if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock.stdout = json.dumps({"streams": [
-                {"r_frame_rate": "25/1", "duration": 6.0, "width": width, "height": height},
+                {"r_frame_rate": "25/1", "duration": 6.0, "width": width, "height": height,
+                 **(stream or {})},
             ]})
         elif "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "a":
             mock.stdout = json.dumps({"streams": []})
@@ -108,6 +111,12 @@ def _ffmpeg_cmd_for(qualities: list[str], source: tuple[int, int]) -> list[str]:
 
 def _filter_complex(cmd: list[str]) -> str:
     return cmd[cmd.index("-filter_complex") + 1]
+
+
+def _boxes(cmd: list[str]) -> dict[str, str]:
+    """Each rung's scale box, by rung name."""
+    return dict((q, box) for box, q in
+                re.findall(r"scale(?:_\w+)?=(\d+:\d+):[^\[]*\[(\w+)\]", _filter_complex(cmd)))
 
 
 def test_one_configured_rung_builds_exactly_one_rendition():
@@ -184,3 +193,51 @@ def test_2160p_on_top_of_the_default_ladder_builds_four():
     for spec in ("scale=3840:2160", "scale=1920:1080", "scale=1280:720", "scale=640:360"):
         assert spec in graph
     assert cmd[cmd.index("-var_stream_map") + 1].split() == ["v:0", "v:1", "v:2", "v:3"]
+
+
+# ─────────────────────────────────── portrait sources, by their short side
+
+ROTATED_90 = {"side_data_list": [{"side_data_type": "Display Matrix", "rotation": -90}]}
+
+
+def test_a_portrait_source_gets_portrait_rungs_at_its_own_width():
+    # Every box used to be landscape, so the "1080p" rendition of a 1080x1920
+    # phone clip was 608x1080 and nothing played at the source's size (#452).
+    cmd = _ffmpeg_cmd_for(["1080p", "720p", "360p"], source=(1080, 1920))
+
+    assert _boxes(cmd) == {"1080p": "1080:1920", "720p": "720:1280", "360p": "360:640"}
+
+
+def test_a_portrait_rung_is_kept_by_the_short_side():
+    # 1080 <= 1280 kept the 1080p rung for a 720x1280 clip, which then came out
+    # 608x1080: smaller than the source and named for a size it never had.
+    cmd = _ffmpeg_cmd_for(["1080p", "720p", "360p"], source=(720, 1280))
+
+    assert _boxes(cmd) == {"720p": "720:1280", "360p": "360:640"}
+
+
+def test_a_rotated_landscape_file_gets_the_same_rungs_as_a_portrait_one():
+    # Stored 1920x1080 with a 90-degree matrix: ffmpeg turns the frame upright
+    # before the graph, so the scaler is handed 1080x1920.
+    rotated = _ffmpeg_cmd_for(["1080p", "720p", "360p"], source=(1920, 1080), stream=ROTATED_90)
+
+    assert _boxes(rotated) == {"1080p": "1080:1920", "720p": "720:1280", "360p": "360:640"}
+
+
+def test_2160p_on_a_portrait_4k_source_keeps_its_size():
+    cmd = _ffmpeg_cmd_for(["2160p"], source=(2160, 3840))
+
+    assert _boxes(cmd) == {"2160p": "2160:3840"}
+
+
+def test_a_small_rotated_source_is_clamped_to_its_upright_size():
+    # The clamp names the source's size, and the scaler is handed it upright.
+    cmd = _ffmpeg_cmd_for(["1080p"], source=(480, 270), stream=ROTATED_90)
+
+    assert _boxes(cmd) == {"1080p": "270:480"}
+
+
+def test_landscape_and_square_sources_keep_the_boxes_they_had():
+    for source in ((1920, 1080), (1440, 1080), (1080, 1080)):
+        cmd = _ffmpeg_cmd_for(["1080p", "720p", "360p"], source=source)
+        assert _boxes(cmd) == {"1080p": "1920:1080", "720p": "1280:720", "360p": "640:360"}, source

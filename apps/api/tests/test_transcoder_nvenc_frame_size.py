@@ -256,13 +256,24 @@ def test_every_enlarged_rung_fits_the_encoder_and_the_source(encoder):
 
 # ── the ladder each attempt builds ────────────────────────────────────────────
 
-def test_a_tall_portrait_keeps_the_gpu_with_a_larger_360p_rung():
+def test_a_portrait_source_fits_nvenc_with_its_own_rungs():
+    # A portrait rung is sized by its short side (#452), so 720x1920's 360p is
+    # 240x640 now rather than 136x360, and needs no larger box.
     result, calls = _transcode(720, 1920)
 
     assert result.success is True
     assert len(calls) == 1
+    assert _boxes(calls[0]) == {"720p": "720:1280", "360p": "360:640"}
+
+
+def test_a_very_tall_portrait_keeps_the_gpu_with_a_larger_360p_rung():
+    # 400x1920 in 360:640 is 134x640, still under h264_nvenc's 146.
+    result, calls = _transcode(400, 1920)
+
+    assert result.success is True
+    assert len(calls) == 1
     assert "-hwaccel" in calls[0] and "h264_nvenc" in calls[0]
-    assert _boxes(calls[0]) == {"1080p": "1920:1080", "720p": "1280:720", "360p": "146:390"}
+    assert _boxes(calls[0]) == {"360p": "146:702"}
 
 
 def test_a_very_wide_source_keeps_the_gpu_with_a_taller_360p_rung():
@@ -272,64 +283,67 @@ def test_a_very_wide_source_keeps_the_gpu_with_a_taller_360p_rung():
 
 
 def test_a_source_nvenc_takes_as_it_is_keeps_every_box():
-    for size in [(1920, 1080), (1080, 1920)]:
-        _, calls = _transcode(*size)
-        assert _boxes(calls[0]) == {q: QUALITY_MAP[q][0] for q in ("1080p", "720p", "360p")}
+    _, calls = _transcode(1920, 1080)
+    assert _boxes(calls[0]) == {q: QUALITY_MAP[q][0] for q in ("1080p", "720p", "360p")}
+    _, calls = _transcode(1080, 1920)
+    assert _boxes(calls[0]) == {"1080p": "1080:1920", "720p": "720:1280", "360p": "360:640"}
 
 
 def test_hevc_output_uses_hevc_nvencs_own_minimum(monkeypatch):
     monkeypatch.setenv("TRANSCODER_OUTPUT", "h265_10")
-    _, narrow = _transcode(480, 1440)
-    _, portrait = _transcode(720, 1920)
+    _, narrow = _transcode(360, 1920)
+    _, portrait = _transcode(400, 1920)
 
     assert "hevc_nvenc" in narrow[0]
-    assert _boxes(narrow[0])["360p"] == "130:390"
-    assert _boxes(portrait[0])["360p"] == "640:360"
+    assert _boxes(narrow[0])["360p"] == "130:694"
+    # 134x640, which h264_nvenc refuses and hevc_nvenc takes.
+    assert _boxes(portrait[0])["360p"] == "360:640"
 
 
 @pytest.mark.parametrize("backend", ["cpu", "vaapi", "qsv"])
 def test_other_backends_keep_the_ladder_they_had(backend):
-    _, calls = _transcode(720, 1920, backend=backend)
+    _, calls = _transcode(400, 1920, backend=backend)
 
-    assert _boxes(calls[0])["360p"] == "640:360"
+    assert _boxes(calls[0])["360p"] == "360:640"
 
 
 def test_dolby_vision_5_on_nvenc_keeps_the_ladder_it_had():
     # Profile 5 is encoded in software whatever the backend, so NVENC's limits
     # do not apply to it.
-    _, calls = _transcode(720, 1920, stream=DOLBY_VISION_5)
+    _, calls = _transcode(400, 1920, stream=DOLBY_VISION_5)
 
     assert len(calls) == 1 and "h264_nvenc" not in calls[0]
-    assert _boxes(calls[0])["360p"] == "640:360"
+    assert _boxes(calls[0])["360p"] == "360:640"
 
 
 def test_the_software_fallback_keeps_the_ladder_it_had():
     # Whatever made NVENC fail, libx264 gets the ordinary boxes.
-    result, calls = _transcode(720, 1920, failures=[NVENC_BELOW_MINIMUM])
+    result, calls = _transcode(400, 1920, failures=[NVENC_BELOW_MINIMUM])
 
     assert result.success is True
     assert _is_software(calls[1])
-    assert _boxes(calls[1])["360p"] == "640:360"
+    assert _boxes(calls[1])["360p"] == "360:640"
 
 
 def test_a_rotated_source_is_sized_as_the_scaler_sees_it():
-    # Stored 1920x720 with a 90-degree display matrix. ffmpeg autorotates a
+    # Stored 1920x400 with a 90-degree display matrix. ffmpeg autorotates a
     # frame in system memory before the graph and leaves a CUDA one alone, so a
     # rotated source is never decoded into CUDA frames: both attempts scale
-    # 720x1920, whose 360p fit (136x360) is under h264_nvenc's minimum.
-    result, calls = _transcode(1920, 720, stream=ROTATED_90, failures=[NVDEC_REFUSAL])
+    # 400x1920, whose 360p fit (134x640) is under h264_nvenc's minimum. Sized
+    # as stored, it would be 640x134 and keep its box.
+    result, calls = _transcode(1920, 400, stream=ROTATED_90, failures=[NVDEC_REFUSAL])
 
     assert result.success is True
     gpu_decode, cpu_decode = calls
     assert "-hwaccel" in gpu_decode and "-hwaccel_output_format" not in gpu_decode
-    assert _boxes(gpu_decode) == {"720p": "1280:720", "360p": "146:390"}
+    assert _boxes(gpu_decode) == {"360p": "146:702"}
     assert "hwupload_cuda" in cpu_decode[cpu_decode.index("-filter_complex") + 1]
-    assert _boxes(cpu_decode) == {"720p": "1280:720", "360p": "146:390"}
+    assert _boxes(cpu_decode) == {"360p": "146:702"}
 
 
 def test_a_rotated_source_the_gpu_cannot_decode_is_sized_upright():
     # ProRes starts on the CPU decode, so it is autorotated from the outset.
-    _, calls = _transcode(1920, 720, stream={**PRORES, **ROTATED_90})
+    _, calls = _transcode(1920, 400, stream={**PRORES, **ROTATED_90})
 
     assert "-hwaccel" not in calls[0]
-    assert _boxes(calls[0])["360p"] == "146:390"
+    assert _boxes(calls[0])["360p"] == "146:702"
