@@ -1,8 +1,8 @@
 import { expect, type Page, type Request } from '@playwright/test'
 import fs from 'node:fs'
-import { accessToken, json, primary } from './accounts'
+import { type Account, accessToken, json, primary } from './accounts'
 import { liveFilesDir, makeFiles } from './files'
-import { createProject, rows, signIn, type UploadRow } from './stack'
+import { createProject, resetUploads, rows, signIn, type UploadRow } from './stack'
 
 /**
  * Helpers the Phase 3 scenarios (unreadable.spec.ts, network.spec.ts) share:
@@ -72,9 +72,31 @@ export async function openProject(page: Page, label: string) {
   return { account, project }
 }
 
-/** Names of the assets in a project's root, through the API. */
-export async function assetNames(projectId: string): Promise<string[]> {
-  const token = await accessToken(await primary())
+/**
+ * A fresh project of `account`'s, open in `page`, with no upload of this
+ * browser's left over, and ready to take a drop.
+ *
+ * The page takes a drop only once it knows the account may upload here: the
+ * role comes from the project's members matched against `/auth/me`, and until
+ * both have answered it is "viewer", so a drop goes nowhere (no row, no
+ * message). The header's Upload button is drawn on the same condition, and the
+ * empty project's own regardless, so two of them means the role is known. The
+ * same wait as `tests/leave.spec.ts`.
+ */
+export async function openCleanProject(page: Page, label: string, account: Account) {
+  await signIn(page, account)
+  // The saved session carries the uploads list of the browser that made it.
+  await resetUploads(page)
+  const project = await createProject(account, `E2E ${label} ${Date.now()}`)
+  await page.goto(`/projects/${project.id}`)
+  await expect(page.getByText('No assets')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Upload', exact: true })).toHaveCount(2, { timeout: 60_000 })
+  return { account, project }
+}
+
+/** Names of the assets in a project's root, through the API, as `account` (primary unless given). */
+export async function assetNames(projectId: string, account?: Account): Promise<string[]> {
+  const token = await accessToken(account ?? (await primary()))
   const assets = await json<Array<{ name: string }>>('GET', `/projects/${projectId}/assets?folder_id=root`, { token })
   return assets.map((a) => a.name)
 }

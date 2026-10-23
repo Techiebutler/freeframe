@@ -113,6 +113,8 @@ passes would hide the races they exist to catch. A failure keeps a trace:
 | `E2E_PRIMARY_EMAIL`     | unset                   | Only for a stack that already has a superadmin and no `.accounts.json`: an existing superadmin to use as `primary`. |
 | `E2E_PRIMARY_PASSWORD`  | unset                   | Its password. |
 | `E2E_FORCE_LOGIN`       | unset                   | Set to `1` to sign both accounts in through the form even if their saved sessions still work. |
+| `E2E_INFRA`             | unset                   | Set to `1` to run `tests/infra.spec.ts`, which stops, unplugs and pauses the stack's MinIO container. Skipped otherwise. |
+| `E2E_MINIO_CONTAINER`   | `ffe2e-minio-1`         | The MinIO container the infra helpers act on. Any name not starting `ffe2e-` is refused. |
 | `E2E_UPLOAD_CONCURRENCY` | `5`                    | The part budget of the stack under test (its `NEXT_PUBLIC_UPLOAD_CONCURRENCY`). `queue.spec.ts` uses it for the start-rule check (Q1) and the presign bound (S2); set it when the stack's value is not 5. |
 
 ## How it works
@@ -143,10 +145,10 @@ key in the stack's Redis: `docker exec <redis container> redis-cli del rl:login:
 
 | File          | Gives you |
 | ------------- | --------- |
-| `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm` (and `submitLoginForm`, for a login page already on screen), `createProject`, `resetUploads`, `openUploads`, `closeUploads`, `dropFiles`, `rows`, `uploadRow` |
+| `stack.ts`    | `apiUrl()`, `signIn`, `signInThroughForm` (and `submitLoginForm`, for a login page already on screen), `createProject`, `resetUploads`, `openUploads`, `closeUploads`, `dropFiles`, `rows`, `uploadRow`; for the infra scenarios `stopStorage`, `startStorage`, `blackholeStorage` (`'disconnect'` or `'pause'`), `restoreStorage` and `waitForStorage`, which act on the ffe2e MinIO container only |
 | `files.ts`    | `makeFiles` (real random-content files on disk), `touch`, `remove`, `rewrite`, `liveFilesDir` |
 | `faults.ts`   | `throttleParts`, `failParts`, `hangParts`, `holdParts`, `stallParts`, `failInitiate`, `countRequests`, all on `page.route` (`throttleParts` also reads part sizes the page records); `trackUploads` (which S3 key is which file's, to aim `hangParts`, `holdParts` and `stallParts` at one file with `only`); `networkSwitch` (the browser's network down and up) |
-| `scenario.ts` | What the Phase 3 specs share: `openProject`, `pngs` (PNGs in a folder the test may change, backdated), `removeScenarioFiles`, `recordUploadCalls` (initiates, part PUTs, presigns, aborts, with times), `until` and the panel helpers |
+| `scenario.ts` | What the Phase 3 and later specs share: `openProject`, `openCleanProject` (any account, no leftover uploads, waits until the page takes a drop), `pngs` (PNGs in a folder the test may change, backdated), `removeScenarioFiles`, `recordUploadCalls` (initiates, part PUTs, presigns, aborts, with times), `until` and the panel helpers |
 | `accounts.ts` | `primary()`, `secondary()` and the `Account` type |
 
 `dropFiles` cannot drag from the desktop, so it builds the `DataTransfer` a browser would: real
@@ -185,6 +187,18 @@ way, a session that ends on its own). Each clicks the page before it leaves, sin
 has used, and answers every dialog from the start of the test, since one left unanswered blocks the page. How Playwright
 reports a dismissed `beforeunload` differs by engine and by how the navigation began (a table in the spec's header and in
 `SCENARIOS.md`). The L2 tests sign in as `secondary` to share the API's per-account read limit (see Traps).
+
+`tests/scale.spec.ts` holds Q2 (300 files of 200 KB with the panel open): it observes main-thread long tasks from the first
+page load (`PerformanceObserver`, Chromium only; WebKit asserts completion only), records every API request the page makes,
+and fails on any refused one, so a request storm that reaches the per-account read limit shows up as itself. It signs in as
+`secondary` and takes about 30 s.
+
+`tests/infra.spec.ts` holds S3 and S4 (storage stopped, cut off or paused under a running queue). It is skipped unless
+`E2E_INFRA=1`, and touches only the ffe2e stack's MinIO (`E2E_MINIO_CONTAINER`). Every test puts storage back in `afterEach`
+and in `beforeEach` (for a run that was killed mid-outage), and waits for `/minio/health/live` on the host port. If a run is
+killed hard anyway: `docker start ffe2e-minio-1`, `docker unpause ffe2e-minio-1`, or
+`docker network connect --alias minio --alias ffe2e-minio-1 ffe2e_default ffe2e-minio-1` (a plain `network connect` loses the
+`minio` alias, and the API cannot find storage without it).
 
 `tests/fixtures.spec.ts` checks each fixture's observable effect (a throttled part really is
 slow, an injected 500 reaches the page, a folder drop lands in the folder, ...) on every engine.
