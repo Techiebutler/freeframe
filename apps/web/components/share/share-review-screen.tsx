@@ -33,9 +33,12 @@ function hasIdentity(): boolean {
 }
 
 export function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, theme, onBack,
 }: {
-  token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; onBack?: () => void
+  token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean
+  /** The link's theme, which the page renders in; picks the logo variant. */
+  theme: 'dark' | 'light'
+  onBack?: () => void
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
   const [VideoPlayer, setVideoPlayer] = React.useState<any>(null)
@@ -81,6 +84,7 @@ export function ShareReviewScreen({
         permission={permission}
         allowDownload={allowDownload}
         showVersions={showVersions}
+        theme={theme}
         onBack={onBack}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
@@ -94,7 +98,7 @@ export function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, showVersions, onBack,
+  token, shareSession, assetName, permission, allowDownload, showVersions, theme, onBack,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
@@ -295,7 +299,7 @@ function ShareReviewInner({
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
-          <ShareBrandMark />
+          <ShareBrandMark theme={theme} />
           <span className="text-[13px] font-medium text-text-primary truncate">{assetName}</span>
         </div>
         <div className="flex items-center gap-2">

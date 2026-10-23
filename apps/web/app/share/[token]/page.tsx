@@ -488,7 +488,8 @@ function SingleAssetShareViewer({
   // project's, which wins over the built-in. No fallback, so a link with no
   // accent keeps the stylesheet's rather than being repainted.
   const accentColor = appearance?.accent_color ?? branding?.primary_color
-  useShareAppearance(accentColor, appearance?.theme !== 'light')
+  const isDark = appearance?.theme !== 'light'
+  useShareAppearance(accentColor, isDark)
 
   return (
     <div className="fixed inset-0 z-50">
@@ -500,6 +501,7 @@ function SingleAssetShareViewer({
         permission={permission}
         allowDownload={allowDownload}
         showVersions={showVersions}
+        theme={isDark ? 'dark' : 'light'}
       />
     </div>
   )

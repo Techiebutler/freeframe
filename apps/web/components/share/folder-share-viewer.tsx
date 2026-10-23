@@ -574,6 +574,7 @@ interface AssetViewerProps {
   permission: SharePermission
   allowDownload: boolean
   showVersions: boolean
+  theme: 'dark' | 'light'
   onBack: () => void
 }
 
@@ -607,7 +608,7 @@ function HlsVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={videoRef} controls className={className} />
 }
 
-function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, onBack }: AssetViewerProps) {
+function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, theme, onBack }: AssetViewerProps) {
   // Use the same ReviewProvider as the project review page, but with shareToken
   // This gives us the same video player, image viewer, comment panel, etc.
   return (
@@ -620,6 +621,7 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, sh
         permission={permission}
         allowDownload={allowDownload}
         showVersions={showVersions}
+        theme={theme}
         onBack={onBack}
       />
     </div>
@@ -837,6 +839,7 @@ export function FolderShareViewer({
         permission={permission}
         allowDownload={allowDownload}
         showVersions={showVersions}
+        theme={isDark ? 'dark' : 'light'}
         onBack={() => setViewingAsset(null)}
       />
     )
@@ -904,7 +907,7 @@ export function FolderShareViewer({
             </DropdownMenu.Root>
           ) : (
             // The same mark the asset view shows once one is opened (#308).
-            <ShareBrandMark />
+            <ShareBrandMark theme={isDark ? 'dark' : 'light'} />
           )}
 
           {/* Breadcrumb */}
