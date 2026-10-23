@@ -169,6 +169,13 @@ def test_connection_failures_answer_coded_503(
     ("SlowDown", 400),
     ("ServiceUnavailable", 400),
     ("InternalError", 400),
+    # Throttling, however the store spells it: a 429, or a 400 with a throttling code.
+    ("TooManyRequests", 429),
+    ("SomethingElse", 429),
+    ("Throttling", 400),
+    ("ThrottlingException", 400),
+    ("TooManyRequests", 400),
+    ("RequestThrottled", 400),
 ])
 def test_storage_5xx_and_throttling_answer_coded_503(
     client, auth_headers, mock_db, monkeypatch, path, code, status
@@ -189,6 +196,8 @@ def test_storage_5xx_and_throttling_answer_coded_503(
 @pytest.mark.parametrize("exc", [
     _client_error("AccessDenied", 403),
     _client_error("NoSuchBucket", 404),
+    # The store does not implement the call: a 5xx, but no wait will change it.
+    _client_error("NotImplemented", 501),
     # A certificate problem is a configuration fault that waiting will not fix, even
     # though botocore files SSLError under ConnectionError. So is a protocol-version
     # mismatch, or TLS spoken to a plain-HTTP port.
@@ -197,7 +206,7 @@ def test_storage_5xx_and_throttling_answer_coded_503(
         1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1006)")),
     _tls(ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1006)")),
     _tls(ssl.SSLError(1, "[SSL: TLSV1_ALERT_PROTOCOL_VERSION] tlsv1 alert protocol version (_ssl.c:1006)")),
-], ids=["AccessDenied", "NoSuchBucket", "SSLError", "SSLError-cert", "SSLError-wrong-version",
+], ids=["AccessDenied", "NoSuchBucket", "NotImplemented-501", "SSLError", "SSLError-cert", "SSLError-wrong-version",
         "SSLError-protocol-version"])
 def test_storage_refusals_answer_coded_500(
     client, auth_headers, mock_db, monkeypatch, path, exc

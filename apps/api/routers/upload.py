@@ -210,9 +210,12 @@ def presign_part(
     return PresignPartResponse(presigned_url=url, part_number=body.part_number)
 
 
-# Codes S3 and its clones use for "try again shortly". Some stores answer them with
-# a 4xx, so the code is checked as well as the status.
-_TRANSIENT_STORAGE_CODES = frozenset({"SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout"})
+# Codes S3 and its clones use for "try again shortly", throttling included. Some
+# stores answer them with a 4xx, so the code is checked as well as the status.
+_TRANSIENT_STORAGE_CODES = frozenset({
+    "SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout",
+    "Throttling", "ThrottlingException", "TooManyRequests", "RequestThrottled",
+})
 
 
 # What a TLS failure says when the TLS setup itself is wrong: a certificate that
@@ -271,12 +274,13 @@ def storage_initiate_error(exc: Exception) -> HTTPException | None:
     """The coded answer for a storage failure while an upload is being started.
 
     503 `storage_unavailable` (with `Retry-After`) when waiting could help: storage
-    could not be reached, timed out, or is shedding load, including a TLS
-    handshake the peer cut short. 500 `storage_error` when it answered and refused,
-    or its TLS setup is wrong (a certificate that does not validate, a protocol
-    version mismatch): waiting will not fix either, and the admin has to. None for
-    everything else, which the caller re-raises: a bad argument or a bug is not a
-    storage outage and must stay loud.
+    could not be reached, timed out, cut a TLS handshake short, or is shedding load
+    or throttling (a 429, or a throttling code on any status). 500 `storage_error`
+    when it answered and refused (a 4xx, or a 501 for a call it does not
+    implement), or its TLS setup is wrong (a certificate that does not validate, a
+    protocol version mismatch): waiting will not fix either, and the admin has to.
+    None for everything else, which the caller re-raises: a bad argument or a bug
+    is not a storage outage and must stay loud.
 
     The web queue keys off `code` to decide between backing off and giving up.
     """
@@ -289,8 +293,10 @@ def storage_initiate_error(exc: Exception) -> HTTPException | None:
     elif isinstance(exc, ClientError):
         status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
         code = exc.response.get("Error", {}).get("Code")
+        # 429 is throttling whatever the code says. 501 is the store saying it
+        # does not implement the call: a 5xx, but no wait will change it.
         transient = (
-            (isinstance(status_code, int) and status_code >= 500)
+            (isinstance(status_code, int) and (status_code == 429 or (status_code >= 500 and status_code != 501)))
             or code in _TRANSIENT_STORAGE_CODES
         )
     else:
