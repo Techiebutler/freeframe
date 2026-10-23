@@ -3,7 +3,9 @@ import * as React from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 
 vi.mock('@/lib/api', () => ({ api: { get: vi.fn(async () => ({ data: {} })) } }))
-vi.mock('../review-provider', () => ({ useReview: () => ({ registerPauseHandler: () => {} }) }))
+vi.mock('../review-provider', () => ({
+  useReview: () => ({ registerPauseHandler: () => {}, registerTogglePlayHandler: () => () => {} }),
+}))
 const quality = vi.hoisted(() => ({
   levels: [] as { index: number; label: string; height: number; bitrate: number }[],
   current: -1,

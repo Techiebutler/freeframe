@@ -137,7 +137,7 @@ export function VideoPlayer({
 
   const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime, currentVersion } =
     useReviewStore();
-  const { registerPauseHandler } = useReview();
+  const { registerPauseHandler, registerTogglePlayHandler } = useReview();
   const [timeFormatOpen, setTimeFormatOpen] = useState(false);
   // The media's own width/height ratio, used to size the stage on a portrait
   // phone. 16/9 until `loadedmetadata` lands, so nothing jumps in the common
@@ -307,6 +307,10 @@ export function VideoPlayer({
   useEffect(() => {
     registerPauseHandler(pause);
   }, [registerPauseHandler, pause]);
+
+  // And the toggle, for the mobile comment sheet's play/pause button, so it
+  // gets the same first-tap retry and pause disarm as this player's own.
+  useEffect(() => registerTogglePlayHandler(togglePlay), [registerTogglePlayHandler, togglePlay]);
 
   // Sync video currentTime to review store so comment input shows same timecode
   const lastSyncRef = useRef(0);

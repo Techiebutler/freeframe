@@ -96,7 +96,7 @@ function ShareReviewInner({
   token, shareSession, assetName, permission, allowDownload, showVersions, onBack,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
-  const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
+  const { asset, versions, isLoading, comments, refetchComments, addComment, togglePlayback } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime } = useReviewStore()
   // An asset opens on its comments: that pane is the reason an asset link
   // exists. The folder grid is the surface that starts closed. Below `md` the
@@ -115,7 +115,7 @@ function ShareReviewInner({
   // One expression for the top-bar toggle's icon and its label, so the two
   // cannot disagree about whether the panel is up.
   const panelShown = useSheet ? sheetState !== 'peek' : sidebarOpen
-  const { isPlaying, togglePlay } = useMediaTransport()
+  const { isPlaying, togglePlay, mediaRootRef } = useMediaTransport({ toggleVideo: togglePlayback })
   const reviewRootRef = React.useRef<HTMLDivElement>(null)
   const handleSheetHeight = React.useCallback((px: number) => setSheetHeight(px), [])
 
@@ -326,6 +326,7 @@ function ShareReviewInner({
       >
         {/* Media viewer — reuses project components */}
         <div
+          ref={mediaRootRef}
           className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0"
         >
           {asset.asset_type === 'video' && versionReady && VideoPlayer ? (

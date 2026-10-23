@@ -57,7 +57,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
+  const { asset, versions, isLoading, refetchComments, refetchVersions, togglePlayback } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
   const { user } = useAuthStore()
   const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
@@ -84,7 +84,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const useSheet = !isWide && !isLandscape
   const [sheetState, setSheetState] = useState<SheetState>('peek')
   const [sheetHeight, setSheetHeight] = useState(PEEK_PX)
-  const { isPlaying, togglePlay } = useMediaTransport()
+  const { isPlaying, togglePlay, mediaRootRef } = useMediaTransport({ toggleVideo: togglePlayback })
   const reviewRootRef = useRef<HTMLDivElement>(null)
 
   // MUST be stable: MobileCommentSheet lists it as an effect dependency, so an
@@ -723,6 +723,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       >
         {/* Left: viewer column */}
         <div
+          ref={mediaRootRef}
           className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0"
         >
           {/* What a New Version is waiting for, over the media and not over the

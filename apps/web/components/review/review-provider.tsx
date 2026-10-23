@@ -40,6 +40,10 @@ interface ReviewContextValue {
   refetchVersions: () => Promise<void>;
   pauseVideo: () => void;
   registerPauseHandler: (handler: () => void) => void;
+  /** The video player's own play/pause toggle, retry and all. No-op without a video player. */
+  togglePlayback: () => void;
+  /** Returns the unregister, which clears the handler only if it is still this one. */
+  registerTogglePlayHandler: (handler: () => void) => () => void;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -67,6 +71,7 @@ export function ReviewProvider({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const pauseHandlerRef = useRef<(() => void) | null>(null);
+  const togglePlayHandlerRef = useRef<(() => void) | null>(null);
 
   const { setCurrentAsset, setCurrentVersion, setPlayheadTime, currentVersion } =
     useReviewStore();
@@ -386,6 +391,21 @@ export function ReviewProvider({
     pauseHandlerRef.current = handler;
   }, []);
 
+  const togglePlayback = useCallback(() => {
+    togglePlayHandlerRef.current?.();
+  }, []);
+
+  // Cleared on unregister, unlike the pause handler: the mobile sheet's
+  // transport calls this for whatever player is mounted, and a video player
+  // replaced by an audio one must not leave its toggle behind. Only its own,
+  // though, so a late unregister never clears a newer player's toggle.
+  const registerTogglePlayHandler = useCallback((handler: () => void) => {
+    togglePlayHandlerRef.current = handler;
+    return () => {
+      if (togglePlayHandlerRef.current === handler) togglePlayHandlerRef.current = null;
+    };
+  }, []);
+
   const value = useMemo<ReviewContextValue>(
     () => ({
       assetId,
@@ -403,6 +423,8 @@ export function ReviewProvider({
       refetchVersions,
       pauseVideo,
       registerPauseHandler,
+      togglePlayback,
+      registerTogglePlayHandler,
     }),
     [
       assetId,
@@ -418,6 +440,8 @@ export function ReviewProvider({
       refetchVersions,
       pauseVideo,
       registerPauseHandler,
+      togglePlayback,
+      registerTogglePlayHandler,
     ],
   );
 

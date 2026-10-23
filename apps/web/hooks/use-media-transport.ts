@@ -42,20 +42,35 @@ export interface MediaTransport {
   mediaRootRef: (node: HTMLElement | null) => void
 }
 
+export interface MediaTransportOptions {
+  /**
+   * The video player's own toggle (ReviewProvider's `togglePlayback`). A
+   * `<video>` goes through it rather than the element, because the player is
+   * where the iOS first-tap retry lives (#404): a play() rejected with nothing
+   * buffered is retried on `canplay`, and a pause disarms that retry and ends
+   * the intent to play. Driven directly, the first tap did nothing on iOS, and
+   * a pause while the player's own play() was pending let its retry resume the
+   * video anyway.
+   */
+  toggleVideo?: () => void
+}
+
 /**
  * Playback state for a surface that does not own the player — the mobile
  * comment sheet's handle row, which must keep playback reachable while it
  * covers the transport bar.
  *
- * Driving the element directly keeps WaveSurfer in sync too: its Player
- * subscribes to the element's own `play`/`pause` events, so `ws.on('pause')`
- * fires and AudioPlayer's button updates with us.
+ * An `<audio>` is driven directly, which keeps WaveSurfer in sync too: its
+ * Player subscribes to the element's own `play`/`pause` events, so
+ * `ws.on('pause')` fires and AudioPlayer's button updates with us. A `<video>`
+ * goes through `toggleVideo` when given (see MediaTransportOptions).
+ * `isPlaying` follows the element's events either way.
  *
  * Image assets have no media element: `isPlaying` stays false and `togglePlay`
  * is a no-op. Callers signal that to MobileCommentSheet by passing
  * `currentTime=""`, which suppresses the mini transport entirely.
  */
-export function useMediaTransport(): MediaTransport {
+export function useMediaTransport({ toggleVideo }: MediaTransportOptions = {}): MediaTransport {
   const [isPlaying, setIsPlaying] = useState(false)
   const elRef = useRef<HTMLMediaElement | null>(null)
   const rootRef = useRef<HTMLElement | null>(null)
@@ -125,9 +140,14 @@ export function useMediaTransport(): MediaTransport {
   const togglePlay = useCallback(() => {
     const el = elRef.current
     if (!el) return
-    if (el.paused) void el.play()
+    if (toggleVideo && el.tagName === 'VIDEO') {
+      toggleVideo()
+      return
+    }
+    // Autoplay policy can reject this; the button just stays on Play.
+    if (el.paused) el.play().catch(() => {})
     else el.pause()
-  }, [])
+  }, [toggleVideo])
 
   return { isPlaying, togglePlay, mediaRootRef }
 }
