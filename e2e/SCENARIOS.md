@@ -327,7 +327,7 @@ What each one observed:
 completed; in one run one tab was then left Failed, "Upload is incomplete: 1 part(s) missing, starting at part 1.". Each tab
 looks in shared storage for the other's heartbeat once `/parts` answers (spec goal 11, step 2), and a write to localStorage
 reaches another tab's process a moment later, so each looked before the other's first stamp arrived. Now a resume that
-has been told nobody is sending writes a claim (one key per row, `ff-upload-claim:<row id>`), waits 500 ms for a competing
+has been told nobody is sending writes a claim (one key per upload, `ff-upload-claim:<version id>`), waits 500 ms for a competing
 claim still on its way, and goes on only if its claim stands; the other shows Elsewhere. The unit test in
 `upload-other-tab.test.ts` ("two tabs resuming the same upload at the same moment") reproduces it: the other tab's moves
 land just after this tab has looked, and before the fix this tab sent and completed. The same describe and "two tabs of

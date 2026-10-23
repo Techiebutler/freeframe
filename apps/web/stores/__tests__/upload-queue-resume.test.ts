@@ -751,7 +751,7 @@ describe('two tabs of one browser', () => {
     // must not turn the claim off for that row: the tab writes its own over
     // it, and the other tab, looking at the same moment, finds it.
     window.localStorage.setItem('ff-uploads', JSON.stringify({ state: { files: [interrupted()] }, version: 0 }))
-    window.localStorage.setItem(resumeClaimKey('r'), '{"tab":"some-tab","nonce":')
+    window.localStorage.setItem(resumeClaimKey('rv'), '{"tab":"some-tab","nonce":')
     const one = await openTab()
     const two = await openTab()
     one.testing.setClaimSettleMs(200)
@@ -771,9 +771,46 @@ describe('two tabs of one browser', () => {
     expect(one.status()).toBe('uploading')
     expect(two.status()).toBe('elsewhere')
     expect(presigns).toBe(1)
-    expect(JSON.parse(window.localStorage.getItem(resumeClaimKey('r'))!)).toMatchObject({ tab: one.tabId })
+    expect(JSON.parse(window.localStorage.getItem(resumeClaimKey('rv'))!)).toMatchObject({ tab: one.tabId })
 
     one.store.getState().cancelUpload('r')
+    await settle()
+  })
+
+  it("a live row in one tab and the history row for the same upload in another, resumed at once: only one sends", async () => {
+    // The two rows have different ids (history rows are keyed on the asset)
+    // but name one version, one multipart upload. The claim is on the upload.
+    window.localStorage.setItem('ff-uploads', JSON.stringify({
+      state: {
+        files: [
+          interrupted(),
+          interrupted({ id: 'history-ra', fromHistory: true, uploadId: undefined, s3Key: undefined }),
+        ],
+      },
+      version: 0,
+    }))
+    const one = await openTab()
+    const two = await openTab()
+    one.testing.setClaimSettleMs(200)
+    two.testing.setClaimSettleMs(200)
+    const parts = heldPartsByVersion(one, two)
+
+    one.store.getState().resumeUpload('r', small('clip.mp4'))
+    two.store.getState().resumeUpload('history-ra', small('clip.mp4'))
+    await settle()
+    // Both answers land together: each tab looks before either has stamped its row.
+    parts.answer('rv')
+
+    await vi.waitFor(() => {
+      expect(one.status('r')).not.toBe('starting')
+      expect(two.status('history-ra')).not.toBe('starting')
+    }, { timeout: 3_000 })
+    expect(presigns).toBe(1)
+    expect([one.status('r'), two.status('history-ra')].sort()).toEqual(['elsewhere', 'uploading'])
+    expect(JSON.parse(window.localStorage.getItem(resumeClaimKey('rv'))!)).toHaveProperty('tab')
+
+    one.store.getState().cancelUpload('r')
+    two.store.getState().cancelUpload('history-ra')
     await settle()
   })
 

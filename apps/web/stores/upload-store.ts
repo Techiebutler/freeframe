@@ -182,7 +182,10 @@ function beatingInAnotherTab(fileId: string, now: number): boolean {
 /**
  * Where a tab says it is taking an upload up, for the moment between deciding
  * to and its heartbeat reaching the other tabs (spec goal 11). One key per
- * row: `RESUME_CLAIM_PREFIX` followed by the row id.
+ * upload: `RESUME_CLAIM_PREFIX` followed by the version id. Not the row id: a
+ * row this tab is sending and the history row another tab shows for the same
+ * upload (`history-<asset id>`) are two ids for one multipart upload, and
+ * claims on two keys both stood, so both tabs sent into it.
  *
  * The check above reads the other tabs' heartbeats, and two tabs that Resume
  * the same row at once are both told nobody is sending it: each looks before
@@ -198,16 +201,16 @@ function beatingInAnotherTab(fileId: string, now: number): boolean {
  * resuming row is `starting`, and the start rule counts it as an active file
  * whose unfinished parts are still `'unknown'` (`Runner.unfinished`).
  *
- * A key per row, not one shared map: a tab writes a map from what it last
- * read, and a tab that had not yet seen another tab's claim on one row
- * removed it by claiming a different row, leaving that tab showing Elsewhere
+ * A key per upload, not one shared map: a tab writes a map from what it last
+ * read, and a tab that had not yet seen another tab's claim on one upload
+ * removed it by claiming a different one, leaving that tab showing Elsewhere
  * with nobody sending.
  */
 export const RESUME_CLAIM_PREFIX = 'ff-upload-claim:'
 
-/** Where the resume claim on `rowId` is kept (`RESUME_CLAIM_PREFIX`). */
-export function resumeClaimKey(rowId: string): string {
-  return `${RESUME_CLAIM_PREFIX}${rowId}`
+/** Where the resume claim on the upload of `versionId` is kept (`RESUME_CLAIM_PREFIX`). */
+export function resumeClaimKey(versionId: string): string {
+  return `${RESUME_CLAIM_PREFIX}${versionId}`
 }
 
 /**
@@ -251,13 +254,13 @@ function parseClaim(raw: string | null): ResumeClaim | null {
   }
 }
 
-/** The claim on `rowId`. Throws only when storage itself cannot be used. */
-function readClaim(rowId: string): ResumeClaim | null {
-  return parseClaim(window.localStorage.getItem(resumeClaimKey(rowId)))
+/** The claim on the upload of `versionId`. Throws only when storage itself cannot be used. */
+function readClaim(versionId: string): ResumeClaim | null {
+  return parseClaim(window.localStorage.getItem(resumeClaimKey(versionId)))
 }
 
 /**
- * Removes the claims on other rows that hold nobody off any more, so the keys
+ * Removes the claims on other uploads that hold nobody off any more, so the keys
  * of tabs that claimed and went away do not pile up. Only what this tab reads
  * as stale goes: a key it reads no value for is left alone.
  */
@@ -276,19 +279,19 @@ function pruneClaims(now: number, except: string): void {
 }
 
 /**
- * Claims the row for this tab, once the server and the stored heartbeats have
- * both said nobody is sending it. `won` is false when another tab's claim is
+ * Claims the upload of `versionId` for this tab, once the server and the
+ * stored heartbeats have both said nobody is sending it. `won` is false when another tab's claim is
  * still fresh, or when another tab's claim replaced this one while it settled.
  * `nonce` names this tab's claim, for `releaseClaim`. Storage that cannot be
  * used coordinates nothing, and the tab goes ahead, as it did before claims.
  */
-async function claimRow(rowId: string, signal: AbortSignal): Promise<{ won: boolean; nonce?: string }> {
+async function claimUpload(versionId: string, signal: AbortSignal): Promise<{ won: boolean; nonce?: string }> {
   const tab = currentTabId()
   const nonce = newTabId()
-  const key = resumeClaimKey(rowId)
+  const key = resumeClaimKey(versionId)
   const now = Date.now()
   try {
-    const theirs = readClaim(rowId)
+    const theirs = readClaim(versionId)
     if (theirs && theirs.tab !== tab && now - theirs.at < CLAIM_TTL_MS) return { won: false }
     window.localStorage.setItem(key, JSON.stringify({ tab, nonce, at: now }))
   } catch {
@@ -301,18 +304,18 @@ async function claimRow(rowId: string, signal: AbortSignal): Promise<{ won: bool
   }
   if (claimSettleMs > 0) await delayUnlessAborted(claimSettleMs, signal)
   try {
-    return readClaim(rowId)?.nonce === nonce ? { won: true, nonce } : { won: false }
+    return readClaim(versionId)?.nonce === nonce ? { won: true, nonce } : { won: false }
   } catch {
     return { won: true, nonce }
   }
 }
 
-/** Takes this tab's claim off the row, if it is still the one there. */
-function releaseClaim(rowId: string, nonce: string | undefined): void {
+/** Takes this tab's claim off the upload, if it is still the one there. */
+function releaseClaim(versionId: string, nonce: string | undefined): void {
   if (nonce === undefined) return
   try {
-    if (readClaim(rowId)?.nonce !== nonce) return
-    window.localStorage.removeItem(resumeClaimKey(rowId))
+    if (readClaim(versionId)?.nonce !== nonce) return
+    window.localStorage.removeItem(resumeClaimKey(versionId))
   } catch {
     /* storage unusable: nothing was claimed there */
   }
@@ -2837,7 +2840,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     }
     // Another tab of this browser may have been told the same at the same
     // moment: only the tab whose claim stands goes on (see `RESUME_CLAIM_PREFIX`).
-    const claim = await claimRow(id, controller.signal)
+    const claim = await claimUpload(versionId, controller.signal)
     claimNonce = claim.nonce
     // Cancelled while the claim settled: back to plain `interrupted` already.
     if (runner.stoodDown) return
@@ -3027,7 +3030,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
   } finally {
     watch?.stop()
     stopBeat()
-    releaseClaim(id, claimNonce)
+    releaseClaim(versionId, claimNonce)
     if (abortControllers[id] === controller) delete abortControllers[id]
     endRun(id, runner, runKey)
   }
