@@ -51,7 +51,8 @@ export function BrandingPreview() {
   })
   const logoUrl = (screen === 'login' ? authLogo : appLogo) ?? null
 
-  // A presigned logo URL that has expired would otherwise leave a broken-image
+  // A logo URL that no longer loads, such as one for a slot that has since been
+  // cleared (the logo route answers 404), would otherwise leave a broken-image
   // glyph exactly where the brand mark belongs. Fall back to the default icon,
   // which is what the real sidebar ends up showing too.
   const [logoErrored, setLogoErrored] = React.useState(false)
