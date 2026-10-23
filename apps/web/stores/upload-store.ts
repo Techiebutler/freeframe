@@ -375,6 +375,9 @@ function activeElsewhere(
   // been taken up by another tab since.
   if (beatingInAnotherTab(row.id, now)) return true
   if (ownAndRecentAt(row, now)) return false
+  // The activity the server reports is a stamp this tab's own `/parts` made:
+  // nobody has moved the upload since.
+  if (touchedOnlyHere(info)) return false
   // A Resume this tab queued waits for its turn, and nothing stamps the row
   // while it waits, so judged at the turn a click made inside the grace was
   // refused as soon as the wait outlasted it: the tab's own last parts read as
@@ -444,6 +447,53 @@ function movedSinceClick(info: ResumeInfo, click: ResumeClick): boolean {
   const sinceMoved = serverNow - moved
   const sinceClick = click.askedAt - click.requestedAt + click.rtt
   return sinceMoved < sinceClick
+}
+
+/**
+ * The server's `RESUME_TOUCH_INTERVAL` (apps/api/routers/upload.py): `/parts`
+ * records itself as activity only when nothing has moved for this long.
+ */
+const PARTS_TOUCH_INTERVAL_MS = 5 * 60_000
+
+/**
+ * For each version, the latest `server_time` of a `/parts` answer of this
+ * tab's that recorded itself as activity, on the server's clock. Tab memory
+ * only: it says what this tab did, which no other tab can know.
+ */
+const ownTouches = new Map<string, number>()
+
+/**
+ * `GET /upload/{v}/parts`, remembering when its answer says the request itself
+ * stamped `last_activity_at`: nothing had moved for `PARTS_TOUCH_INTERVAL_MS`,
+ * or nothing had ever. The server stamps before it reads `server_time`, so
+ * the stamp is at or before that time. Recorded however the caller goes on to
+ * use the answer, including a Resume cancelled while it asked.
+ *
+ * An answer that did not stamp records nothing: the activity it reports is
+ * somebody else's, and it must still count as theirs.
+ */
+async function getParts(versionId: string, opts: { pinSubject?: string }): Promise<ResumeInfo> {
+  const info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`, opts)
+  const answered = info?.server_time ? Date.parse(info.server_time) : NaN
+  if (!Number.isNaN(answered)) {
+    const before = info.last_activity_at ? Date.parse(info.last_activity_at) : null
+    const stamped = before === null || (!Number.isNaN(before) && answered - before >= PARTS_TOUCH_INTERVAL_MS)
+    if (stamped) ownTouches.set(versionId, Math.max(answered, ownTouches.get(versionId) ?? -Infinity))
+  }
+  return info
+}
+
+/**
+ * Whether the last activity the server reports for this upload is no later
+ * than a stamp this tab's own `/parts` made: the server's value only moves
+ * forward, so after that stamp anything at or before it is that stamp. Both
+ * times are on the server's clock.
+ */
+function touchedOnlyHere(info: ResumeInfo): boolean {
+  const own = ownTouches.get(info.version_id)
+  if (own === undefined || !info.last_activity_at) return false
+  const reported = Date.parse(info.last_activity_at)
+  return !Number.isNaN(reported) && reported <= own
 }
 
 /** Until when an upload that last moved at `lastActivity` counts as running. */
@@ -1703,7 +1753,7 @@ async function completedVersionStatus(
  */
 async function finishAssembledUpload(versionId: string, ownerId: string | undefined): Promise<boolean> {
   try {
-    const info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`, { pinSubject: ownerId })
+    const info = await getParts(versionId, { pinSubject: ownerId })
     if (info.state !== 'assembled') return false
     await api.post('/upload/complete', {
       s3_key: info.s3_key,
@@ -2721,7 +2771,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
     // browser that never saw them.
     const askedAt = Date.now()
     try {
-      info = await api.get<ResumeInfo>(`/upload/${versionId}/parts`, asOwner)
+      info = await getParts(versionId, asOwner)
     } catch (err) {
       const outcome = isAbortError(err) || isFinalRefusal(err) ? null : classifyInitiateError(err)
       // Cancelled while it asked: the row is already plain `interrupted` again,
@@ -3135,7 +3185,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         // As the row's owner, like everything below: the panel follows the
         // account only once this tab hears of a change, and a Discard clicked
         // before then must not be sent as whoever signed in since.
-        info = await api.get<ResumeInfo>(`/upload/${row.versionId}/parts`, asOwner)
+        info = await getParts(row.versionId, asOwner)
       } catch (err) {
         // 404 or 409: the version is gone or no longer uploading, so the row has
         // nothing to offer. The multipart upload behind it may still be open --
@@ -3697,7 +3747,7 @@ async function adoptOwnerlessRows(): Promise<void> {
 async function checkOwner(f: UploadFile, versionId: string, owner: string): Promise<void> {
   adopting.add(f.id)
   try {
-    await api.get<ResumeInfo>(`/upload/${versionId}/parts`, { pinSubject: owner })
+    await getParts(versionId, { pinSubject: owner })
     useUploadStore.setState((s) => ({
       files: s.files.map((r) => (r.id === f.id && r.ownerId === undefined ? { ...r, ownerId: owner } : r)),
     }))
@@ -4077,6 +4127,7 @@ export const __uploadQueueTesting = {
     historyGeneration++
     claimSettleMs = CLAIM_SETTLE_MS
     sessionEndedHere = false
+    ownTouches.clear()
   },
   /**
    * How long a resume's claim waits for another tab's (see `RESUME_CLAIM_PREFIX`).

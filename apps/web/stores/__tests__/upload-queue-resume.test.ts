@@ -470,6 +470,114 @@ describe('a resume and a discard', () => {
   })
 })
 
+/**
+ * `GET /upload/{v}/parts` as the server answers it (`list_held_parts`): it
+ * records the request as activity when nothing has moved for 5 minutes, and
+ * reports the activity it held before, with its clock as it answers. The
+ * first `held` answers wait for `release`; the rest answer at once.
+ */
+function stampingParts(lastActivity: number | null, held = 0) {
+  let last = lastActivity
+  const waiting: Array<() => void> = []
+  let calls = 0
+  vi.mocked(api.get).mockImplementation(((path: string) => {
+    if (!path.endsWith('/parts')) return Promise.resolve([])
+    calls += 1
+    const now = Date.now()
+    const previous = last
+    if (previous === null || now - previous >= 5 * 60_000) last = now
+    const answer = resumable({
+      file_size_bytes: 50 * MB,
+      last_activity_at: previous === null ? null : new Date(previous).toISOString(),
+      server_time: new Date(now).toISOString(),
+    })
+    if (calls > held) return Promise.resolve(answer)
+    return new Promise((resolve) => waiting.push(() => resolve(answer)))
+  }) as never)
+  return {
+    release: () => waiting.shift()!(),
+    calls: () => calls,
+    /** Another device presigns a part: activity the server records. */
+    movedElsewhere: () => { last = Date.now() },
+  }
+}
+
+describe("this tab's own /parts stamp", () => {
+  it('Resume, Cancel while it asks /parts, Resume again: the stamp its own /parts made is not read as another sender', async () => {
+    fakeServer(() => 'answer', 'hang')
+    const parts = stampingParts(Date.now() - 10 * 60_000, 1)
+    useUploadStore.setState({ files: [interrupted({ fileSize: 50 * MB })] })
+
+    useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4'))
+    await settle()
+    expect(rowOf('r')).toMatchObject({ status: 'starting', resuming: true })
+    useUploadStore.getState().cancelUpload('r')
+    parts.release()
+    await settle()
+    expect(rowOf('r').status).toBe('interrupted')
+
+    useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4'))
+    await settle()
+
+    expect(parts.calls()).toBe(2)
+    expect(rowOf('r').status).toBe('uploading')
+  })
+
+  it('Resume, Cancel while it asks /parts, then Discard: not refused', async () => {
+    const parts = stampingParts(Date.now() - 10 * 60_000, 1)
+    useUploadStore.setState({ files: [interrupted({ fileSize: 50 * MB })] })
+    useUploadStore.getState().resumeUpload('r', fileOf('clip.mp4'))
+    await settle()
+    useUploadStore.getState().cancelUpload('r')
+    parts.release()
+    await settle()
+
+    const said = await useUploadStore.getState().discardUpload('r')
+
+    expect(said).toBeNull()
+    expect(api.post).toHaveBeenCalledWith('/upload/abort', expect.objectContaining({ version_id: 'rv', discard: true }), { pinSubject: 'user-1' })
+    expect(files().find((f) => f.id === 'r')).toBeUndefined()
+  })
+
+  it("the adoption check's /parts stamp does not refuse a Discard right after it", async () => {
+    stampingParts(Date.now() - 10 * 60_000)
+    useUploadStore.setState({ files: [interrupted({ ownerId: undefined, ownerTab: undefined })] })
+    await testing.adoptOwnerlessRows()
+    expect(rowOf('r').ownerId).toBe('user-1')
+
+    const said = await useUploadStore.getState().discardUpload('r')
+
+    expect(said).toBeNull()
+    expect(api.post).toHaveBeenCalledWith('/upload/abort', expect.objectContaining({ version_id: 'rv', discard: true }), { pinSubject: 'user-1' })
+  })
+
+  it('a stamp made after this tab\'s own is another sender\'s', async () => {
+    const parts = stampingParts(Date.now() - 10 * 60_000)
+    useUploadStore.setState({ files: [interrupted({ ownerId: undefined, ownerTab: undefined })] })
+    await testing.adoptOwnerlessRows()
+    await new Promise((r) => setTimeout(r, 5))
+    parts.movedElsewhere()
+
+    const said = await useUploadStore.getState().discardUpload('r')
+
+    expect(said).toBe('Still uploading in another tab or on another device')
+    expect(rowOf('r').status).toBe('elsewhere')
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
+  it('an answer that recorded nothing does not excuse the activity it reported', async () => {
+    // Another device moved it a minute ago, so no /parts here records anything.
+    stampingParts(Date.now() - 60_000)
+    useUploadStore.setState({ files: [interrupted({ ownerId: undefined, ownerTab: undefined })] })
+    await testing.adoptOwnerlessRows()
+
+    const said = await useUploadStore.getState().discardUpload('r')
+
+    expect(said).toBe('Still uploading in another tab or on another device')
+    expect(api.post).not.toHaveBeenCalled()
+  })
+})
+
 describe('two tabs of one browser', () => {
   /**
    * A second copy of the store, as another tab of this browser runs it: its
