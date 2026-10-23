@@ -80,11 +80,16 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   // Left = ?compare= param (fallback: nearest other ready version). Right = the
   // store's current version; ?right= names it so a reload restores it (#299).
   const compareParam = searchParams.get('compare')
-  const fallbackLeft =
-    [...ready].reverse().find((v) => v.version_number < rightVersion.version_number) ??
-    ready.find((v) => v.id !== rightVersion.id) ?? null
-  const left = ready.find((v) => v.id === compareParam) ?? fallbackLeft
+  const leftFor = (r: AssetVersion) =>
+    ready.find((v) => v.id === compareParam) ??
+    [...ready].reverse().find((v) => v.version_number < r.version_number) ??
+    ready.find((v) => v.id !== r.id) ?? null
+  const left = leftFor(rightVersion)
   const right = rightVersion
+  // The ready version ?right= names, if any. ReviewProvider opens on it, but only
+  // when it mounts; see the restore effect below for an already-mounted page.
+  const rightParam = searchParams.get('right')
+  const urlRight = ready.find((v) => v.id === rightParam) ?? null
 
   const isVideo = asset.asset_type === 'video'
   const mode = (searchParams.get('mode') === 'sbs' ? 'sbs' : 'wipe') as 'wipe' | 'sbs'
@@ -94,7 +99,12 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   // the two updates arriving together. A legacy URL has no `offFor`; its offsets
   // belong to the pair shown when the overlay opened, which is pinned in state.
   const pairKey = offsetPairKey(left?.id, right.id)
-  const [mountPair] = React.useState(pairKey)
+  // The pair the overlay opens on is the one the URL names, even while the store
+  // still shows another right version for the commit before the restore lands.
+  const [mountPair] = React.useState(() => {
+    const openRight = urlRight ?? right
+    return offsetPairKey(leftFor(openRight)?.id, openRight.id)
+  })
   const { offA, offB } = resolveOffsets(
     { offA: searchParams.get('offA'), offB: searchParams.get('offB'), offFor: searchParams.get('offFor') },
     pairKey,
@@ -112,6 +122,22 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     },
     [router, pathname, searchParams, right.id],
   )
+
+  // ReviewProvider reads ?right= only when it mounts, so a soft navigation to a
+  // compare URL on an already-open review page lands here with the store still
+  // on another version. Restore the named version once, on mount. If the URL
+  // names a version that is unknown or not ready, the store's version stays and
+  // one write names it instead, so the URL matches the pair on screen (#299).
+  // writeParams builds on this render's params, so the write keeps the rest of
+  // the URL as it is now and cannot bring back a param removed earlier.
+  const restoredRightRef = React.useRef(false)
+  React.useEffect(() => {
+    if (restoredRightRef.current) return
+    restoredRightRef.current = true
+    if (!rightParam) return
+    if (!urlRight) writeParams(() => {})
+    else if (urlRight.id !== right.id) setCurrentVersion(urlRight)
+  }, [rightParam, urlRight, right.id, writeParams, setCurrentVersion])
 
   // Streams
   const { url: urlA, error: errA } = useStreamUrl(asset.id, left?.id ?? null)
