@@ -58,6 +58,15 @@ describe('the rail with the uploads panel open', () => {
     expect(useUploadStore.getState().panelOpen).toBe(false)
   })
 
+  it('Profile in the account menu closes the panel as it navigates', () => {
+    render(<Sidebar collapsed onToggle={() => {}} />)
+
+    fireEvent.pointerDown(screen.getByTitle('Ada'), { button: 0, ctrlKey: false })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }))
+
+    expect(useUploadStore.getState().panelOpen).toBe(false)
+  })
+
   it('Uploads still toggles the panel shut', () => {
     render(<Sidebar collapsed onToggle={() => {}} />)
 
