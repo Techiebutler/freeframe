@@ -220,6 +220,45 @@ describe('cancel', () => {
   })
 })
 
+describe('cancel while storage cannot answer', () => {
+  it('a cancelled upload gives its place to the next file at once, not when /upload/abort answers', async () => {
+    // APP-BUG-5 (e2e S4). The abort is a request to the API, which asks storage to throw the
+    // parts away; with storage hanging the API takes its client's full retry budget to give up
+    // (310 s with the e2e MinIO paused, 10.5 s with it unplugged, measured). The run used to
+    // await that answer before giving back its place, so the queue stood still behind a row that
+    // already read "Cancelled".
+    const server = fakeServer(() => 'answer', 'hang')
+    const post = vi.mocked(api.post).getMockImplementation()!
+    let answerAbort!: () => void
+    vi.mocked(api.post).mockImplementation(((path: string, body?: unknown) => {
+      if (path !== '/upload/abort') return post(path, body)
+      post(path, body)
+      return new Promise((resolve) => { answerAbort = () => resolve({}) })
+    }) as never)
+
+    const [a, , , d] = drop([small('a.jpg'), small('b.jpg'), small('c.jpg'), small('d.jpg')])
+    await settle()
+    expect(server.names()).toEqual(['a.jpg', 'b.jpg', 'c.jpg'])
+    expect(rowOf(d).status).toBe('queued')
+    const revision = useUploadStore.getState().versionsRevision
+
+    useUploadStore.getState().cancelUpload(a)
+    await settle()
+
+    expect(rowOf(a).status).toBe('cancelled')
+    expect(aborts(server.calls)).toEqual(['abort u1'])
+    // The abort is still out, and the next file has started.
+    expect(server.names()).toEqual(['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'])
+    expect(testing.runningIds()).not.toContain(a)
+    // The version list hears of it only once the server has answered.
+    expect(useUploadStore.getState().versionsRevision).toBe(revision)
+    answerAbort()
+    await settle()
+    expect(useUploadStore.getState().versionsRevision).toBe(revision + 1)
+    expect(aborts(server.calls)).toEqual(['abort u1'])
+  })
+})
+
 // ---------------------------------------------------------------- cancel all queued
 
 describe('cancelAllQueued', () => {

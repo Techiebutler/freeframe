@@ -2165,8 +2165,8 @@ function endRun(id: string, runner: Runner, runKey: string): void {
   partBudget.forget(runKey)
   if (runners.get(id) === runner) runners.delete(id)
   noteRunsChanged()
-  // Cancelled while starting: whatever the initiate created has been thrown
-  // away by now, so there is nothing left for the row to say.
+  // Cancelled while starting: whatever the initiate created is being thrown
+  // away (the abort is on its way), so there is nothing left for the row to say.
   if (runner.removeWhenSettled) {
     useUploadStore.setState((s) => ({ files: s.files.filter((f) => f.id !== id) }))
   }
@@ -2653,8 +2653,14 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
     // *any* error -- destroying the bytes that make a resume possible at
     // exactly the moment they became worth keeping. Everything else is left
     // for the user to resume or for the reaper to reclaim.
+    //
+    // Sent, not awaited: the run gives its place back now. The abort asks the
+    // API to have storage throw the parts away, and with storage hanging the
+    // API takes its client's whole retry budget to give up (minutes), during
+    // which the queue stood still behind a row that already read "Cancelled"
+    // (e2e S4, APP-BUG-5). `abortCancelled` handles its own answer.
     if (userCancelled() && upload_id && s3_key && version_id) {
-      await abortCancelled(useUploadStore.setState, { s3_key, upload_id, version_id }, owner)
+      void abortCancelled(useUploadStore.setState, { s3_key, upload_id, version_id }, owner)
     }
   } finally {
     watch?.stop()
@@ -2947,8 +2953,9 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
       }
     }
 
+    // Sent, not awaited, as in `runNew`: the place is given back now.
     if (userCancelled() && info) {
-      await abortCancelled(useUploadStore.setState, {
+      void abortCancelled(useUploadStore.setState, {
         s3_key: info.s3_key,
         upload_id: info.upload_id,
         version_id: info.version_id,
