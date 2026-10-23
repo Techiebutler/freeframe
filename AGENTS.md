@@ -104,6 +104,10 @@ pnpm --filter web exec tsc --noEmit   # type check
 pnpm --filter web lint
 ```
 
+> **Use the Node version in [`.nvmrc`](.nvmrc).** CI reads it, and so do `nvm use` and `fnm`.
+> A different system Node can fail tests that pass in CI. CI also checks that npm, which
+> `docker-compose.dev.yml` installs `apps/web` with, can still resolve `apps/web/package.json`.
+
 > CI ignores changes limited to `*.md`, `docs/**`, `LICENSE`, and the issue/PR templates,
 > so a docs-only PR (like editing this file) will not trigger the test/build jobs.
 
