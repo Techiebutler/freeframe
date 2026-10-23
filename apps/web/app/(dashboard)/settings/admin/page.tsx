@@ -400,7 +400,9 @@ export default function AdminPage() {
             />
           </div>
         ) : (
-          <div className="rounded-lg border border-border bg-bg-secondary overflow-hidden">
+          <div className="rounded-lg border border-border bg-bg-secondary overflow-x-auto">
+            {/* Scrolls rather than clips: a row with every action can be wider
+                than the page, and a clipped button cannot be reached at all. */}
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-bg-tertiary">
@@ -457,7 +459,7 @@ export default function AdminPage() {
                         : "—"}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                         {u.status === "pending_invite" && u.invite_token && (
                           <Button
                             variant="ghost"
