@@ -41,6 +41,12 @@ _INITIATE_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total
 # this only has to get there in seconds. The first request and one retry: a
 # repeat of an abort whose answer was lost finds NoSuchUpload, which the route
 # reads as gone.
+#
+# The stale-upload reaper (tasks/cleanup_tasks.py) aborts through this client
+# too, and wraps each call in `_safe`, so a timeout there is logged and swallowed
+# rather than ending the sweep. An upload no row owns is listed again and retried
+# on the next sweep. A version's own upload is not: its version is soft-deleted
+# either way, so the next sweep no longer selects it.
 _ABORT_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 2})
 
 # S3 Content-Type and Cache-Control mappings
