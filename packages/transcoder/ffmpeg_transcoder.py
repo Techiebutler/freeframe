@@ -2451,9 +2451,11 @@ class FFmpegTranscoder(BaseTranscoder):
             elif encode_backend in _CPU_DECODE_UPLOAD and not dv_software and turned:
                 how = ("decoding into system memory" if encode_backend in _MEMORY_DECODE_HWACCEL
                        else "decoding on the CPU")
+                rotation = ("unreadable rotation" if rotation_unreadable(_vid_stream)
+                            else f"rotation {display_rotation(_vid_stream):g}")
                 print(
                     f"[transcoder] {job.input_s3_key} has a display matrix "
-                    f"(rotation {display_rotation(_vid_stream):g}); {how} so ffmpeg "
+                    f"({rotation}); {how} so ffmpeg "
                     f"turns it upright, encoding on {encode_backend}",
                     flush=True,
                 )
