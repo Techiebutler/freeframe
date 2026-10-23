@@ -28,7 +28,7 @@ import {
   assetNameFromFile,
   uploadNameForFile,
 } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -129,6 +129,15 @@ export default function ProjectDetailPage() {
   const startUploads = useUploadStore((s) => s.startUploads);
   const toast = useToast();
   const { user } = useAuthStore();
+
+  // A folder write the server refused says why: a name already taken where the
+  // folder would land, or a trashed item the retention purge has since removed.
+  const reportRefusal = React.useCallback(
+    (err: unknown, fallback: string) => {
+      toast.error(err instanceof ApiError ? err.detail : fallback);
+    },
+    [toast],
+  );
 
   const {
     tree,
@@ -498,7 +507,11 @@ export default function ProjectDetailPage() {
                 : undefined
             }
             onRenameFolder={async (id, name) => {
-              await renameFolder(id, name);
+              try {
+                await renameFolder(id, name);
+              } catch (err) {
+                reportRefusal(err, "Could not rename the folder");
+              }
               mutateSubfolders();
             }}
             onDeleteFolder={async (id) => {
@@ -516,7 +529,11 @@ export default function ProjectDetailPage() {
             onFileDragOverFolder={canUpload ? setFolderTarget : undefined}
             fileDragTarget={fileDragFolderId}
             onDropItems={async (targetFolderId, assetIds, folderIds) => {
-              await bulkMove(assetIds, folderIds, targetFolderId);
+              try {
+                await bulkMove(assetIds, folderIds, targetFolderId);
+              } catch (err) {
+                reportRefusal(err, "Could not move the items");
+              }
               mutateAssets();
               mutateSubfolders();
             }}
@@ -700,7 +717,11 @@ export default function ProjectDetailPage() {
                       <button
                         className="text-xs text-accent hover:underline shrink-0"
                         onClick={async () => {
-                          await restoreFolder(item.id);
+                          try {
+                            await restoreFolder(item.id);
+                          } catch (err) {
+                            reportRefusal(err, "Could not restore the folder");
+                          }
                           mutateTrash();
                           mutateAssets();
                           mutateSubfolders();
@@ -726,7 +747,11 @@ export default function ProjectDetailPage() {
                       <button
                         className="text-xs text-accent hover:underline shrink-0"
                         onClick={async () => {
-                          await restoreAsset(item.id);
+                          try {
+                            await restoreAsset(item.id);
+                          } catch (err) {
+                            reportRefusal(err, "Could not restore the asset");
+                          }
                           mutateTrash();
                           mutateAssets();
                           mutateSubfolders();
@@ -766,7 +791,11 @@ export default function ProjectDetailPage() {
               }
               onFolderOpen={(folder) => handleSelectFolder(folder.id)}
               onFolderRename={async (id, name) => {
-                await renameFolder(id, name);
+                try {
+                  await renameFolder(id, name);
+                } catch (err) {
+                  reportRefusal(err, "Could not rename the folder");
+                }
                 mutateSubfolders();
               }}
               onFolderDelete={async (id) => {
@@ -789,7 +818,11 @@ export default function ProjectDetailPage() {
               onFileDragOverFolder={canDropFiles ? setFolderTarget : undefined}
               fileDragTarget={fileDragFolderId}
               onDropToFolder={async (targetFolderId, assetIds, folderIds) => {
-                await bulkMove(assetIds, folderIds, targetFolderId);
+                try {
+                  await bulkMove(assetIds, folderIds, targetFolderId);
+                } catch (err) {
+                  reportRefusal(err, "Could not move the items");
+                }
                 mutateAssets();
                 mutateSubfolders();
               }}
@@ -815,7 +848,11 @@ export default function ProjectDetailPage() {
               onAssetRename={(asset) => setAssetToRename(asset as AssetResponse)}
               onAssetDelete={(asset) => setAssetToDelete(asset as AssetResponse)}
               onBulkMove={async (assetIds, folderIds, targetFolderId) => {
-                await bulkMove(assetIds, folderIds, targetFolderId);
+                try {
+                  await bulkMove(assetIds, folderIds, targetFolderId);
+                } catch (err) {
+                  reportRefusal(err, "Could not move the items");
+                }
                 mutateAssets();
                 mutateSubfolders();
                 mutateTree();
@@ -1228,7 +1265,11 @@ export default function ProjectDetailPage() {
         placeholder="Folder name"
         submitLabel="Create"
         onSubmit={async (name) => {
-          await createFolder(name, folderDialogParentId);
+          try {
+            await createFolder(name, folderDialogParentId);
+          } catch (err) {
+            reportRefusal(err, "Could not create the folder");
+          }
           mutateAssets();
           mutateSubfolders();
         }}
