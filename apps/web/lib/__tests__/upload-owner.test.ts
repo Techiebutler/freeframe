@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { subjectOf, currentSubject, watchSubject } from '../upload-owner'
+import { clearTokens } from '../auth'
 
 /**
  * An upload belongs to the account that started it, and the only client-side
@@ -108,5 +109,35 @@ describe('watchSubject', () => {
     expect(cb).toHaveBeenCalledTimes(3)
     expect(cb).toHaveBeenLastCalledWith(null, USER_X)
     stop()
+  })
+
+  it('after this tab ends the session, another tab signing the same account back in is reported', () => {
+    // A tab never hears its own storage writes, so `clearTokens` in this tab
+    // is heard through `onSessionEnded` instead. Without it the watcher still
+    // took X for signed in, and X signing back in elsewhere read as no change.
+    vi.stubGlobal('location', { href: '' })
+    localStorage.setItem('ff_access_token', tokenFor(USER_X))
+    const cb = vi.fn()
+    const stop = watchSubject(cb)
+
+    clearTokens()
+    storageEvent('ff_access_token', tokenFor(USER_X), null)
+
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(cb).toHaveBeenCalledWith(USER_X, null)
+    stop()
+    vi.unstubAllGlobals()
+  })
+
+  it('stops hearing this tab end the session once unsubscribed', () => {
+    vi.stubGlobal('location', { href: '' })
+    localStorage.setItem('ff_access_token', tokenFor(USER_X))
+    const cb = vi.fn()
+    watchSubject(cb)()
+
+    clearTokens()
+
+    expect(cb).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
   })
 })

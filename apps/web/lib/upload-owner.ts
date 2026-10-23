@@ -1,4 +1,4 @@
-import { getAccessToken } from './auth'
+import { getAccessToken, onSessionEnded } from './auth'
 
 /**
  * Who an upload belongs to.
@@ -42,6 +42,11 @@ export function currentSubject(): string | null {
  * `storage` events reach only the other tabs, never the one that wrote, so a
  * refresh or sign-in in this tab is not reported here. A `null` key is another
  * tab calling `localStorage.clear()`. Returns the unsubscribe function.
+ *
+ * This tab ending the session (`clearTokens`) is not reported either; callers
+ * that need it listen to `onSessionEnded`. It is heard here all the same, so
+ * the account this compares against is nobody from then on, and another tab
+ * signing the same account back in is a change.
  */
 export function watchSubject(
   cb: (next: string | null, prev: string | null) => void,
@@ -57,5 +62,11 @@ export function watchSubject(
     cb(next, was)
   }
   window.addEventListener('storage', onStorage)
-  return () => window.removeEventListener('storage', onStorage)
+  const stopHearingSessionEnd = onSessionEnded(() => {
+    prev = null
+  })
+  return () => {
+    window.removeEventListener('storage', onStorage)
+    stopHearingSessionEnd()
+  }
 }

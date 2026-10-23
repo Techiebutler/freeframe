@@ -208,7 +208,9 @@ describe('the leave guard', () => {
       prompted = null
       href = ''
       window.localStorage.clear()
-      signInAs('u1')
+      // In `act`: the session the last pass ended hid this account's rows, and
+      // signing back in shows them again, which re-arms the guard on a render.
+      act(() => signInAs('u1'))
       if (refresh) window.localStorage.setItem('ff_refresh_token', refresh)
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401 }))
       expect(leaves(), `before the session ends (${refresh})`).toBe(true)
