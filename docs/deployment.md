@@ -259,7 +259,9 @@ FreeFrame applies this automatically to **non-AWS** buckets at startup when it h
 
 #### Abort incomplete multipart uploads — recommended
 
-Add a bucket lifecycle rule that **aborts incomplete multipart uploads after a few days**. It is a backstop: it cleans up the rare empty multipart upload left behind when a request to start an upload times out after storage had already created it. It also frees the parts of any upload that is never completed, which S3 bills for until the upload is aborted. Keep the number of days above `STALE_UPLOAD_TIMEOUT_HOURS` (24 hours by default), so the rule never aborts an upload someone could still resume.
+Add a bucket lifecycle rule that **aborts incomplete multipart uploads after a few days**. It is a backstop: it cleans up the rare empty multipart upload left behind when a request to start an upload times out after storage had already created it. It also frees the parts of any upload that is never completed, which S3 bills for until the upload is aborted. On AWS the API's reaper also finds those empty uploads itself, since nothing in the database refers to them; the rule covers the stores where it cannot.
+
+The rule counts days from when the upload **started**, not from when it last moved. FreeFrame keeps offering Resume on an upload for as long as it keeps moving: its own reaper (`STALE_UPLOAD_TIMEOUT_HOURS`, 24 hours by default) ages an upload by its last activity. So the rule can abort an upload that someone is still resuming, and that upload is lost: its next part or its completion fails, and the file has to be sent again from the start. Pick a number of days above the longest upload you expect people to keep resuming, and above `STALE_UPLOAD_TIMEOUT_HOURS`. For scale, 600 GB at 8 Mbit/s takes about a week, and an upload resumed a little each day can run longer. The 7 days below suits most instances; raise it if yours takes very large files over slow links.
 
 On **AWS S3** (and any store that implements the S3 lifecycle API), save this as `lifecycle.json`:
 
