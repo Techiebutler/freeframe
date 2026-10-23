@@ -73,28 +73,53 @@ def invite_user(body: InviteRequest, db: Session = Depends(get_db), current_user
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Generate invite token
-    invite_token = secrets.token_urlsafe(48)
-    invite_expires = datetime.now(timezone.utc) + timedelta(days=7)
-    
     user = User(
         email=body.email,
         name=body.name,
         status=UserStatus.pending_invite,
-        invite_token=invite_token,
-        invite_token_expires_at=invite_expires,
     )
+    _new_invite_link(user)
     db.add(user)
     db.commit()
     db.refresh(user)
     
-    # Send invite email
-    invite_url = f"{settings.frontend_url}/invite/{invite_token}"
-    branding = db.query(InstanceBranding).first()
-    org_name = branding.org_name if branding else "FreeFrame"
-    send_task_safe(send_invite_email, user.email, current_user.name or "Admin", org_name, invite_url)
+    _email_invite(db, user, current_user)
     
     return user
+
+
+@router.post("/{user_id}/resend-invite", response_model=AdminUserResponse)
+def resend_invite(user_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """Email a pending invitee a fresh 7-day invite link. The new link replaces
+    the old one, so a link that went to the wrong place, or has expired, stops
+    mattering."""
+    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    # email_verified on a pending row is an invitee who signed in with a code
+    # while a code still let them in: a working account, not an open invite.
+    if user.status != UserStatus.pending_invite or user.email_verified:
+        raise HTTPException(status_code=409, detail="Only a pending invite can be resent")
+
+    _new_invite_link(user)
+    db.commit()
+    db.refresh(user)
+
+    _email_invite(db, user, current_user)
+
+    return user
+
+
+def _new_invite_link(user: User) -> None:
+    user.invite_token = secrets.token_urlsafe(48)
+    user.invite_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+
+def _email_invite(db: Session, user: User, inviter: User) -> None:
+    invite_url = f"{settings.frontend_url}/invite/{user.invite_token}"
+    branding = db.query(InstanceBranding).first()
+    org_name = branding.org_name if branding else "FreeFrame"
+    send_task_safe(send_invite_email, user.email, inviter.name or "Admin", org_name, invite_url)
 
 @router.patch("/{user_id}", response_model=UserResponse)
 def update_user(user_id: uuid.UUID, body: UpdateProfileRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

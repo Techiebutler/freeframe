@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from apps.api.models.user import UserStatus
 
 
@@ -589,6 +591,75 @@ def test_delete_user_revokes_a_pending_invite(client, auth_headers, mock_db, tes
     assert target.invite_token is None
     assert target.invite_token_expires_at is None
     mock_db.delete.assert_not_called()
+
+
+def test_resend_invite_issues_a_fresh_link_and_emails_it(client, auth_headers, mock_db, test_user):
+    """POST /users/{id}/resend-invite — a new 7-day link replaces the old one,
+    so the old link stops working, and the invite email goes out with it."""
+    test_user.is_superadmin = True
+    target = _pending_invitee(token="old-token")
+    target.invite_token_expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    target.is_superadmin = False
+    target.preferences = {}
+    mock_db.first.return_value = target
+
+    with patch("apps.api.routers.users.send_task_safe") as mock_send:
+        resp = client.post(f"/users/{target.id}/resend-invite", headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert target.invite_token not in (None, "old-token")
+    remaining = target.invite_token_expires_at - datetime.now(timezone.utc)
+    assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
+    assert target.status == UserStatus.pending_invite
+    mock_send.assert_called_once()
+    args = mock_send.call_args.args
+    assert args[1] == target.email
+    assert args[-1].endswith(f"/invite/{target.invite_token}")
+
+
+@pytest.mark.parametrize("state", ["active", "signed_in_pending", "deactivated"])
+def test_resend_invite_refuses_anyone_but_a_pending_invitee(client, auth_headers, mock_db, test_user, state):
+    """Only an invite nobody has accepted can be resent. An active or
+    deactivated account, or a pending row whose owner already signed in with a
+    code on an earlier release, gets 409 and no email."""
+    test_user.is_superadmin = True
+    target = _pending_invitee(token="tok")
+    if state == "active":
+        target.status = UserStatus.active
+    elif state == "deactivated":
+        target.status = UserStatus.deactivated
+    else:
+        target.email_verified = True
+    mock_db.first.return_value = target
+
+    with patch("apps.api.routers.users.send_task_safe") as mock_send:
+        resp = client.post(f"/users/{target.id}/resend-invite", headers=auth_headers)
+
+    assert resp.status_code == 409
+    assert target.invite_token == "tok"
+    mock_send.assert_not_called()
+
+
+def test_resend_invite_unknown_user_404(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = True
+    mock_db.first.return_value = None
+
+    with patch("apps.api.routers.users.send_task_safe") as mock_send:
+        resp = client.post(f"/users/{uuid.uuid4()}/resend-invite", headers=auth_headers)
+
+    assert resp.status_code == 404
+    mock_send.assert_not_called()
+
+
+def test_resend_invite_needs_an_admin(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = False
+    mock_db.first.return_value = _pending_invitee()
+
+    with patch("apps.api.routers.users.send_task_safe") as mock_send:
+        resp = client.post(f"/users/{uuid.uuid4()}/resend-invite", headers=auth_headers)
+
+    assert resp.status_code == 403
+    mock_send.assert_not_called()
 
 
 def test_verify_magic_code_sends_a_pending_invitee_to_their_invite(client, mock_db):

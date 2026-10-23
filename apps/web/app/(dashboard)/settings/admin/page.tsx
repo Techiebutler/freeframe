@@ -3,7 +3,7 @@
 import * as React from "react";
 import useSWR, { mutate } from "swr";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Users, Plus, X, Shield, Link2, Check } from "lucide-react";
+import { Users, Plus, X, Shield, Link2, Check, Send } from "lucide-react";
 import { cn, copyToClipboard } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
@@ -289,6 +289,27 @@ export default function AdminPage() {
     }
   };
 
+  const [resendingId, setResendingId] = React.useState<string | null>(null);
+  const [resentId, setResentId] = React.useState<string | null>(null);
+
+  // Emails a fresh 7-day link; the old link stops working. Disabled while the
+  // request is out, so a double click doesn't send the invitee two emails.
+  const handleResendInvite = async (u: User) => {
+    setResendingId(u.id);
+    try {
+      await api.post(`/users/${u.id}/resend-invite`);
+      mutate("/admin/users");
+      setResentId(u.id);
+      setTimeout(() => setResentId(null), 2000);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Failed to resend invite";
+      alert(message);
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   const handleToggleAdmin = async (
     userId: string,
     isCurrentlyAdmin: boolean,
@@ -457,6 +478,28 @@ export default function AdminPage() {
                             )}
                           </Button>
                         )}
+                        {u.id !== user?.id &&
+                          u.status === "pending_invite" &&
+                          !u.email_verified && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleResendInvite(u)}
+                              disabled={resendingId === u.id}
+                              className="gap-1"
+                            >
+                              {resentId === u.id ? (
+                                <>
+                                  <Check className="h-3.5 w-3.5 text-status-success" />{" "}
+                                  Sent
+                                </>
+                              ) : (
+                                <>
+                                  <Send className="h-3.5 w-3.5" /> Resend Invite
+                                </>
+                              )}
+                            </Button>
+                          )}
                         {u.id !== user?.id && (
                           <Button
                             variant="ghost"

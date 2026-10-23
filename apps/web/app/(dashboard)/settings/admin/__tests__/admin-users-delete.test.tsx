@@ -25,11 +25,12 @@ vi.mock('swr', () => ({
   mutate: (...a: unknown[]) => h.mutate(...a),
 }))
 const apiDelete = vi.fn()
+const apiPost = vi.fn()
 vi.mock('@/lib/api', () => ({
   api: {
     get: vi.fn(),
     patch: vi.fn(),
-    post: vi.fn(),
+    post: (...a: unknown[]) => apiPost(...a),
     delete: (...a: unknown[]) => apiDelete(...a),
   },
 }))
@@ -153,5 +154,44 @@ describe('Admin users: Revoke invite', () => {
     await waitFor(() => expect(apiDelete).toHaveBeenCalledWith('/users/invited'))
     await waitFor(() => expect(h.mutate).toHaveBeenCalledWith('/admin/users'))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+})
+
+describe('Admin users: Resend invite', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    h.users = [me, active, gone, invited, signedIn]
+    useAuthStore.setState({ user: me, isSuperAdmin: true })
+  })
+
+  it('offers Resend Invite only on an invite nobody has accepted', () => {
+    render(<AdminPage />)
+
+    expect(screen.getAllByRole('button', { name: 'Resend Invite' })).toHaveLength(1)
+    expect(within(rowFor('wrong.address')).getByRole('button', { name: 'Resend Invite' })).toBeInTheDocument()
+    expect(within(rowFor('Code Signer')).queryByRole('button', { name: 'Resend Invite' })).not.toBeInTheDocument()
+  })
+
+  it('emails a fresh link, refreshes the list and says it was sent', async () => {
+    apiPost.mockResolvedValue({ ...invited, invite_token: 'fresh' })
+    render(<AdminPage />)
+
+    fireEvent.click(within(rowFor('wrong.address')).getByRole('button', { name: 'Resend Invite' }))
+
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/users/invited/resend-invite'))
+    await waitFor(() => expect(h.mutate).toHaveBeenCalledWith('/admin/users'))
+    expect(await within(rowFor('wrong.address')).findByText('Sent')).toBeInTheDocument()
+  })
+
+  it('shows the server message when the resend is refused', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    apiPost.mockRejectedValue(new Error('Only a pending invite can be resent'))
+    render(<AdminPage />)
+
+    fireEvent.click(within(rowFor('wrong.address')).getByRole('button', { name: 'Resend Invite' }))
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Only a pending invite can be resent'))
+    expect(within(rowFor('wrong.address')).queryByText('Sent')).not.toBeInTheDocument()
+    alertSpy.mockRestore()
   })
 })
