@@ -45,8 +45,12 @@ test.beforeEach(async () => {
   await restoreStorage()
 })
 test.afterEach(async () => {
-  removeScenarioFiles()
-  await restoreStorage()
+  // Storage first, and whatever else throws: a run must never leave MinIO down.
+  try {
+    await restoreStorage()
+  } finally {
+    removeScenarioFiles()
+  }
 })
 
 /** Rows that are no longer going to upload without somebody doing something. */
@@ -70,13 +74,15 @@ async function freezeQueue(page: Page, tag: string, n: number) {
 
 // ─── S3 ────────────────────────────────────────────────────────────────────────
 
-test('S3: storage stopped for 60 s mid-queue: queued files hold, the sending ones recover or end Interrupted', async ({ page }, testInfo) => {
+test('S3: storage stopped for 60 s mid-queue: queued files hold (one through its turn), the sending ones recover or end Interrupted', async ({ page }, testInfo) => {
   test.setTimeout(10 * 60_000)
   const account = await primary()
   const { project } = await openCleanProject(page, 'S3', account)
   const calls = recordUploadCalls(page)
   const { hold, files } = await freezeQueue(page, 's3', 5)
-  const sending = files.slice(0, 3)
+  // The first is cancelled 15 s into the outage, so the fourth's turn comes while storage is down.
+  const [cancelled, ...rest] = files
+  const sending = files.slice(1, 3)
   const queued = files.slice(3)
 
   // Storage goes, and the three parts on their way are let go into the outage.
@@ -86,41 +92,55 @@ test('S3: storage stopped for 60 s mid-queue: queued files hold, the sending one
 
   const wrong: string[] = []
   const seen = new Set<string>()
+  let cancelledAt = 0
   while (Date.now() - downAt < 60_000) {
-    const mine = mineOf(await rows(page), files)
-    expect(mine, 'every row stays').toHaveLength(5)
+    if (!cancelledAt && Date.now() - downAt >= 15_000) {
+      const row = uploadRow(page, cancelled.name)
+      await row.hover()
+      await row.locator('button[title="Cancel upload"]').click()
+      cancelledAt = Date.now()
+    }
+    const all = mineOf(await rows(page), files)
+    expect(all, 'every row stays').toHaveLength(5)
+    const mine = mineOf(all, rest)
     wrong.push(...mine.filter((r) => GONE_WRONG.includes(r.status)).map((r) => summary([r])))
     wrong.push(...wrongCopy(mine))
     // A sending file is sending (its part retry ladder) or Interrupted; a queued one waits, or tries (Starting).
     wrong.push(...mineOf(mine, sending).filter((r) => !['uploading', 'interrupted'].includes(r.status)).map((r) => `sending ${summary([r])}`))
     wrong.push(...mineOf(mine, queued).filter((r) => !['queued', 'starting'].includes(r.status)).map((r) => `queued ${summary([r])}`))
-    for (const r of mine) seen.add(`${r.status}/${r.kind}`)
+    for (const r of mine) seen.add(`${r.name === queued[0].name ? 'fourth ' : ''}${r.status}/${r.kind}`)
     await page.waitForTimeout(500)
   }
   expect(wrong, 'during the 60 s outage').toEqual([])
-  // Nothing reached storage: no part answered, no queued file created.
+  expect(mineOf(await rows(page), [cancelled])[0]?.status).toBe('cancelled')
+  // The fourth file's turn came with storage down: it asked, was told storage is unavailable, and held.
+  expect(seen, 'the fourth file held for storage at its turn').toContain('fourth queued/waiting-for-storage')
+  expect(initiatesOf(calls, [queued[0]]).map((c) => c.status)).toContain(503)
+  // Nothing reached storage: no part answered, no queued file created, and the fifth waited its turn.
   expect(calls.puts.filter((p) => p.status === 200), 'parts answered during the outage').toEqual([])
   expect(initiatesOf(calls, queued).filter((c) => c.status === 200), 'queued files created during the outage').toEqual([])
+  expect(initiatesOf(calls, [queued[1]]), 'the fifth file asked during the outage').toEqual([])
 
   await startStorage()
   const backAt = Date.now()
 
-  // The queued two upload; each of the sending three either recovers or ends Interrupted, as long as that takes
-  // (the part ladder's rungs are 2, 4, 8 ... 128 s, about 254 s in all).
-  const end = await until(page, files, 'the queued two uploaded and the sending three settled', (m) =>
-    m.length === 5 &&
+  // The queued two upload; each of the two still sending either recovers or ends Interrupted, as long as that
+  // takes (the part ladder's rungs are 2, 4, 8 ... 128 s, about 254 s in all).
+  const end = await until(page, rest, 'the queued two uploaded and the sending two settled', (m) =>
+    m.length === 4 &&
     mineOf(m, queued).every((r) => FINISHED_UPLOADING.includes(r.status)) &&
     mineOf(m, sending).every((r) => FINISHED_UPLOADING.includes(r.status) || r.status === 'interrupted'),
     5 * 60_000)
   const recovered = mineOf(end, sending).filter((r) => FINISHED_UPLOADING.includes(r.status)).length
   testInfo.annotations.push({
     type: 'outcome',
-    description: `row states seen during the outage: ${[...seen].sort().join(', ')}; of the three sending, ${recovered} recovered and ${3 - recovered} ended Interrupted; settled ${((Date.now() - backAt) / 1000).toFixed(1)} s after storage was back; ${summary(end)}`,
+    description: `row states seen during the outage: ${[...seen].sort().join(', ')}; of the two still sending, ${recovered} recovered and ${2 - recovered} ended Interrupted; settled ${((Date.now() - backAt) / 1000).toFixed(1)} s after storage was back; the fourth asked ${initiatesOf(calls, [queued[0]]).map((c) => c.status ?? c.failed).join(', ')}; ${summary(end)}`,
   })
   console.log(`S3: ${testInfo.annotations.at(-1)!.description}`)
   expect(end.filter((r) => GONE_WRONG.includes(r.status))).toEqual([])
-  // An outage is not a reason to throw an upload away.
-  expect(calls.aborts).toEqual([])
+  // The cancel is the only abort: an outage is not a reason to throw an upload away.
+  expect(calls.aborts.map((a) => a.uploadId)).toEqual([initiatesOf(calls, [cancelled])[0].uploadId])
+  expect(initiatesOf(calls, queued).filter((c) => c.status === 200), 'each queued file created once').toHaveLength(2)
   await expect.poll(async () => (await assetNames(project.id, account)).length, { timeout: 60_000 })
     .toBe(end.filter((r) => FINISHED_UPLOADING.includes(r.status)).length)
 })

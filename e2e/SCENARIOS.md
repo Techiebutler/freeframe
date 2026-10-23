@@ -596,9 +596,13 @@ What each one observed (after the fixes below):
   in 25.9 to 35.8 s, 185 to 272 reads, nothing refused.
 - **S3** five 1 MB PNGs, parts on hold: three Uploading, two Queued. `docker stop` of the MinIO, the held parts released into
   the outage, 60 s, `docker start`. Through the 60 s: the three sending rows stayed Uploading (their part retry ladder), the
-  two queued stayed "Waiting to start" (no place came free, so they never asked), no row failed, no part was answered, no
-  queued file was created. After the start, in all three runs, **all three sending files recovered** (none ended Interrupted) and
-  the two queued uploaded, everything settled 1.2 to 2.4 s after storage was back; no `/upload/abort` was sent.
+  two queued stayed "Waiting to start", no row failed, no part was answered, no queued file was created. After the start, in
+  all three runs, **all three sending files recovered** (none ended Interrupted) and the two queued uploaded, everything
+  settled 1.2 to 2.4 s after storage was back; no `/upload/abort` was sent. **Fix round 1** added a Cancel of the first
+  sending file 15 s into the outage, so that a queued file's turn comes under `docker stop` too: the fourth file asked at
+  once, was answered 503 `storage_unavailable` (ten times, about 5 s apart, through the rest of the outage), read "Waiting
+  for storage" and held; the fifth never asked; after the start the fourth was created once and everything but the cancelled
+  file uploaded (the two still sending recovered), with the cancel's abort the only one sent.
 - **S4** (`docker network disconnect`, the row's mechanism) and **S4b** (`docker pause`): the same frozen queue, storage cut,
   then the first sending file is cancelled, so the fourth file's turn comes. Its initiate is sent at once, answered with the
   coded 503 `storage_unavailable`, and the row reads **"Waiting for storage" 10.1 to 10.2 s after its turn** in all six runs
@@ -657,12 +661,34 @@ Observations, not fixed here (outside the upload queue; each pre-dates it on `ma
 - Right after storage came back once (S4b's setup, straight after S4 restored the network), the API answered two initiates
   503 `storage_unavailable`; the queue held them and they went through 5 s later, as designed.
 
+### Phase 6 gate, fix round 1 (2026-10-23)
+
+The brief's step 2 in full, after fix round 1 (storage restored first in `afterEach`, the infra helpers refuse anything but
+the `minio` service of an `ffe2e` compose project, the cancel order pinned by a unit test, S3 cancelling a sending file
+mid-outage). Each run had its own `--output` directory under `/tmp`, deleted afterwards.
+
+| Run | Result | Duration |
+|---|---|---|
+| `pnpm test:chromium` (whole suite, `E2E_INFRA` unset) | 57 passed, 5 skipped (the two setup sign-ins, saved sessions reused, and the three infra tests); the `test.fail()` fixtures test is drawn as a cross and counts as passed | 13.1 min |
+| `pnpm test:webkit` (whole suite, started 70 s after) | 57 passed, 5 skipped, the same | 14.9 min |
+| `E2E_INFRA=1 pnpm test:chromium -- tests/infra.spec.ts` | 3 passed (S3, S4, S4b), 2 skipped (setup); and once more just before the whole suites, 3 passed | 2.0 min each |
+| Firefox | does not launch on this Mac, as before; not run | n/a |
+
+Nothing failed and nothing was re-run. Q2 inside the whole suites: Chromium uploaded 300 in 15.2 s, Ready in 22.0 s, 8 long
+tasks over 50 ms, the longest 79 ms, 321 reads, none refused; WebKit uploaded 300 in 19.4 s, Ready in 21.6 s, 138 reads, none
+refused. S3 in both infra runs: the fourth file held "Waiting for storage" (503 about every 5 s), the two still sending
+recovered, settled 2.4 to 4.8 s after the start. S4 and S4b: "Waiting for storage" 10.1 to 10.2 s after the next file's turn.
+The suite now has 57 tests per engine where Phase 5 had 55: Q2, and the `storageContainer()` refusal check in
+`fixtures.spec.ts`; the three infra tests are skipped without `E2E_INFRA=1`. Web unit suite 149 files, 1 503 tests; `tsc
+--noEmit` clean; lint 18 warnings, 0 errors.
+
 ### Mutation and failure checks
 
 - Q2 fails on the app before APP-BUG-3's fix (the 429s above) and, marginally, before APP-BUG-4's (1 run of 2).
 - S4 and S4b fail on the app before APP-BUG-5's fix (the timings above).
-- S3 has no mutation of its own: in it the queued files never get a place during the outage, so "queued files hold" is
-  checked by their staying queued with no initiate answered. A queued file's turn during an outage is S4's job.
+- S3 has no mutation of its own. Since fix round 1 it also cancels a sending file mid-outage, so the fourth file's turn
+  comes under `docker stop` and its hold ("Waiting for storage", no row failed, created once afterwards) is checked there
+  as well as in S4.
 
 ## Manual pass owed (real Safari, real Firefox)
 

@@ -23,6 +23,7 @@ vi.mock('swr', () => ({ mutate: vi.fn() }))
 import { api, ApiError } from '@/lib/api'
 import { useUploadStore, __uploadQueueTesting as testing } from '../upload-store'
 import { signInAs, row } from '@/test/upload-session'
+import { installXhrFake, type FakeXhr } from '@/test/xhr-fake'
 import {
   MB, fakeServer, fileOf, small, drop, rowOf, files, stored, settle, flush, rehydrate,
 } from '@/test/upload-queue-server'
@@ -256,6 +257,61 @@ describe('cancel while storage cannot answer', () => {
     await settle()
     expect(useUploadStore.getState().versionsRevision).toBe(revision + 1)
     expect(aborts(server.calls)).toEqual(['abort u1'])
+  })
+
+  it("the next file starts only once every part of the cancelled one has settled, though the abort is still out", async () => {
+    // The order APP-BUG-5's fix relies on: with the abort no longer awaited, the run gives its place
+    // back right after its parts have settled (`uploadParts` awaits every part before it throws), so
+    // the next file can never send while the cancelled one still holds slots of the part budget.
+    vi.useFakeTimers()
+    const server = fakeServer(() => 'answer')
+    const post = vi.mocked(api.post).getMockImplementation()!
+    vi.mocked(api.post).mockImplementation(((path: string, body?: unknown) => {
+      if (path !== '/upload/abort') return post(path, body)
+      post(path, body)
+      return new Promise(() => {}) // storage never answers
+    }) as never)
+    // Every PUT hangs until aborted, and `big`'s report their abort a second late, as a request
+    // that takes a moment to wind down does: until then each still holds its slot.
+    const ended = new Set<FakeXhr>()
+    const xhrs = installXhrFake((url, request) => {
+      if (url.includes('/u1/')) {
+        const abort = request.abort.bind(request)
+        request.abort = () => { setTimeout(() => { abort(); ended.add(request) }, 1_000) }
+      }
+      return new Promise(() => {})
+    })
+    const openAt = new Map<string, number>()
+    let checking = true
+    const stillOpen = (uploadId: string) => xhrs.filter((x) => x.url.includes(`/${uploadId}/`) && !ended.has(x)).length
+
+    // `big` takes every slot of the budget (5 parts in flight); `next` waits for a place.
+    const [big, next] = drop([fileOf('big.mov', 80 * MB), small('next.jpg')])
+    await flush()
+    expect(xhrs.filter((x) => x.url.includes('/u1/'))).toHaveLength(5)
+    expect(server.names()).toEqual(['big.mov'])
+
+    const initiate = vi.mocked(api.post).getMockImplementation()!
+    vi.mocked(api.post).mockImplementation(((path: string, body?: unknown) => {
+      if (checking && path === '/upload/initiate') openAt.set(String((body as { original_filename?: string }).original_filename), stillOpen('u1'))
+      return initiate(path, body)
+    }) as never)
+
+    useUploadStore.getState().cancelUpload(big)
+    await flush()
+    // Nothing starts while big's parts wind down.
+    expect(server.names()).toEqual(['big.mov'])
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flush()
+    checking = false
+
+    expect(rowOf(big).status).toBe('cancelled')
+    expect(server.names()).toEqual(['big.mov', 'next.jpg'])
+    expect(openAt.get('next.jpg'), "big's PUTs still open when next asked to start").toBe(0)
+    expect(aborts(server.calls)).toEqual(['abort u1'])
+    // And next's part goes out within the budget.
+    expect(rowOf(next).status).toBe('uploading')
+    expect(xhrs.filter((x) => x.url.includes('/u2/'))).toHaveLength(1)
   })
 })
 

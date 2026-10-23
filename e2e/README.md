@@ -200,6 +200,12 @@ killed hard anyway: `docker start ffe2e-minio-1`, `docker unpause ffe2e-minio-1`
 `docker network connect --alias minio --alias ffe2e-minio-1 ffe2e_default ffe2e-minio-1` (a plain `network connect` loses the
 `minio` alias, and the API cannot find storage without it).
 
+S4's `docker network disconnect` is a black hole (the browser's connection is accepted and then nothing answers) on Docker
+Desktop for Mac, where it was measured. On Linux the host port is served by `docker-proxy` or iptables, which likely reset or
+refuse the connection instead, so there the browser sees a refusal and S4 no longer tests a hang; S4b (`docker pause`) hangs
+on any host. The helpers refuse any container that is not the `minio` service of an `ffe2e` compose project, whatever
+`E2E_MINIO_CONTAINER` says.
+
 `tests/fixtures.spec.ts` checks each fixture's observable effect (a throttled part really is
 slow, an injected 500 reaches the page, a folder drop lands in the folder, ...) on every engine.
 Run it after touching anything in `fixtures/`. One of its tests is marked `test.fail()`: it

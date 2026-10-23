@@ -354,17 +354,34 @@ export async function dropFiles(
  * `ffe2e-minio-1` (the `-p ffe2e` stack in section 1 of the README).
  *
  * These helpers stop, start, pause and unplug a real container, so they act on
- * that one container only, and refuse any name outside the `ffe2e-` stack: a
- * typo must not reach another stack's storage. Nothing here removes a
- * container, a volume or a network.
+ * that one container only. A name outside the `ffe2e-` stack is refused before
+ * anything else, and so is a container of that stack that is not its `minio`
+ * service (by its compose labels, read with a plain `docker inspect`): a typo
+ * such as `ffe2e-postgres-1` must not stop the database. Nothing here removes
+ * a container, a volume or a network.
  */
 export function storageContainer(): string {
   const name = process.env.E2E_MINIO_CONTAINER ?? 'ffe2e-minio-1'
   if (!/^ffe2e-[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) {
     throw new Error(`Refusing to touch container "${name}": the infra helpers act only on the ffe2e stack's MinIO (a name starting "ffe2e-").`)
   }
+  if (!verifiedStorage.has(name)) {
+    let labels: Record<string, string> | null
+    try {
+      labels = JSON.parse(docker('inspect', '--format', '{{json .Config.Labels}}', name)) as Record<string, string> | null
+    } catch (error) {
+      throw new Error(`Refusing to touch container "${name}": cannot inspect it (${String(error).split('\n')[0]})`)
+    }
+    const service = labels?.['com.docker.compose.service']
+    const project = labels?.['com.docker.compose.project'] ?? ''
+    if (service !== 'minio' || !project.startsWith('ffe2e')) {
+      throw new Error(`Refusing to touch container "${name}": it is compose service "${service ?? 'none'}" of project "${project || 'none'}", not the ffe2e stack's minio.`)
+    }
+    verifiedStorage.add(name)
+  }
   return name
 }
+const verifiedStorage = new Set<string>()
 
 function docker(...args: string[]): string {
   return execFileSync('docker', args, { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim()
@@ -459,6 +476,14 @@ export async function startStorage(): Promise<void> {
  *
  * (`stopStorage` is the third: refused at once on both sides.) Always undo it
  * with `restoreStorage`, from an `afterEach` or a `finally`.
+ *
+ * The black hole of `'disconnect'` is Docker Desktop's: its port forwarder
+ * accepts the browser's connection and has nowhere to send it. That was
+ * measured on Docker Desktop for Mac only. On Linux the host port is served by
+ * `docker-proxy` (or iptables DNAT), which likely resets or refuses the
+ * connection once the container is off the network: the browser then sees a
+ * refusal, as with `stopStorage`, and S4 no longer tests a hang there. Use
+ * `'pause'` (S4b) for a hang on any host.
  */
 export function blackholeStorage(how: 'disconnect' | 'pause' = 'disconnect'): void {
   if (how === 'pause') {

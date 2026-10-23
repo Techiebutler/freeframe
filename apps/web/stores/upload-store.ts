@@ -2166,7 +2166,8 @@ function endRun(id: string, runner: Runner, runKey: string): void {
   if (runners.get(id) === runner) runners.delete(id)
   noteRunsChanged()
   // Cancelled while starting: whatever the initiate created is being thrown
-  // away (the abort is on its way), so there is nothing left for the row to say.
+  // away (the abort is on its way, not yet answered; see `cancelUpload`), so
+  // there is nothing left for the row to say.
   if (runner.removeWhenSettled) {
     useUploadStore.setState((s) => ({ files: s.files.filter((f) => f.id !== id) }))
   }
@@ -3248,7 +3249,12 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
     }
 
     // Initiating: what the initiate creates is thrown away when it answers
-    // (see `runNew`), and only then does the row leave.
+    // (see `runNew`), and only then does the row leave. "Thrown away" means
+    // the abort has been sent, not answered: the row leaves before
+    // `/upload/abort` answers (APP-BUG-5). A history fetch that lands in that
+    // window can still see the version `uploading` and adopt it back as a row,
+    // as it could before whenever the abort failed; the reaper and a Discard
+    // cover both.
     if (row.status === 'starting' && runner) runner.removeWhenSettled = true
     if (!runner) {
       fileRefs.delete(fileId)

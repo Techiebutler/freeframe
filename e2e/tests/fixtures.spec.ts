@@ -6,7 +6,7 @@ import { crc32 } from 'node:zlib'
 import { accessToken, json, primary, savedRefreshToken, secondary } from '../fixtures/accounts'
 import { countRequests, failInitiate, failParts, hangParts, holdParts, networkSwitch, partBodyBytes, stallParts, throttleParts, trackUploads } from '../fixtures/faults'
 import { makeFiles, remove, rewrite, touch } from '../fixtures/files'
-import { apiUrl, createProject, dropFiles, openUploads, resetUploads, rows, signIn } from '../fixtures/stack'
+import { apiUrl, createProject, dropFiles, openUploads, resetUploads, rows, signIn, storageContainer } from '../fixtures/stack'
 
 /**
  * What the fixtures promise, one observable effect per test. Later scenarios
@@ -91,6 +91,28 @@ test('resetUploads() clears the upload list and the tab id', async ({ page }) =>
 })
 
 // ─── Files ─────────────────────────────────────────────────────────────────────
+
+test('storageContainer() names the ffe2e MinIO and refuses any other container', async () => {
+  // Only reads: a name check, and `docker inspect` of the container's labels. Nothing is stopped.
+  const before = process.env.E2E_MINIO_CONTAINER
+  const named = (name: string | undefined) => {
+    if (name === undefined) delete process.env.E2E_MINIO_CONTAINER
+    else process.env.E2E_MINIO_CONTAINER = name
+    return () => storageContainer()
+  }
+  try {
+    expect(named(undefined)()).toBe('ffe2e-minio-1')
+    // Another stack's: refused by name, before docker is asked anything.
+    expect(named('otherstack-minio-1')).toThrow(/only on the ffe2e stack's MinIO/)
+    // The ffe2e stack's database: refused by its compose service.
+    expect(named('ffe2e-postgres-1')).toThrow(/compose service "postgres".*not the ffe2e stack's minio/)
+    // A name that is no container at all.
+    expect(named('ffe2e-nosuch-1')).toThrow(/cannot inspect it/)
+  } finally {
+    if (before === undefined) delete process.env.E2E_MINIO_CONTAINER
+    else process.env.E2E_MINIO_CONTAINER = before
+  }
+})
 
 const sha = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 
