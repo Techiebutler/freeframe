@@ -1807,6 +1807,9 @@ const COMPLETE_RETRY_AFTER_CAP_MS = 30_000
  * or a proxy in front of it could not get through for now (502/503/504; the
  * API answers 503 with a Retry-After when it cannot reach storage). A 4xx is
  * the server's answer about this version, and asking again gets the same one.
+ * Cross-origin, an unhandled 500 with no CORS headers reaches the client as a
+ * fetch TypeError and is retried, which is safe because the completion is
+ * idempotent (#263).
  */
 function isTransientCompletionFailure(err: unknown): boolean {
   if (err instanceof ApiError) return err.status === 502 || err.status === 503 || err.status === 504

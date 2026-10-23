@@ -51,7 +51,8 @@ function mockUploadWithFailingCompletion(): { aborts: unknown[] } {
       case '/upload/presign-part':
         return Promise.resolve({ presigned_url: 'https://s3.example/part-1' }) as never
       case '/upload/complete':
-        // The shape of a lost response: the request never came back.
+        // A plain Error on purpose, not the TypeError a lost response throws: postCompletion
+        // treats it as non-retryable, so the upload reaches its catch on the first try.
         return Promise.reject(new Error('Failed to fetch')) as never
       case '/upload/abort':
         aborts.push(body)
