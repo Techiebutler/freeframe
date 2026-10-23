@@ -56,23 +56,31 @@ export function BrandingHead() {
   const { orgName, faviconUrl, appleIconUrl, primaryColor } = useBranding()
   useEnsureBranding()
 
+  // The org name the tab title was last made for. The title only needs touching
+  // when this changes: on mount it already carries the right name, because
+  // `generateMetadata` and the first client render both read the server's copy
+  // (or both fall back to "FreeFrame" when the server had none).
+  const titledFor = React.useRef(orgName || 'FreeFrame')
+
   React.useEffect(() => {
     const org = orgName || 'FreeFrame'
+    // Mount, a StrictMode re-run, or nothing renamed. Writing here used to
+    // replace the sign-in tab's "FreeFrame — Auth" with a bare "FreeFrame", and
+    // it was only put back because React happened to re-insert its own metadata
+    // title a millisecond later. Nothing guarantees that order, so do not write.
+    if (titledFor.current === org) return
+    const from = titledFor.current
+    titledFor.current = org
+
     const current = document.title
-    // Page titles are composed as "Page – Org" (usePageTitle, folder-share-viewer).
-    // Preserve the page part and only swap the org suffix; set a bare org title
-    // only when nothing page-specific is being shown (e.g. the initial
-    // "FreeFrame" metadata title). Child effects run first, so a page title set
-    // on mount is already present here.
+    // Page titles are composed as "Page – Org" (usePageTitle); swap only the org
+    // suffix and keep the page part. Auth pages are "Org — Auth", with the org
+    // first; swap that prefix. Anything else is the bare org name.
     const idx = current ? current.lastIndexOf(' – ') : -1
-    if (idx !== -1) {
-      const next = `${current.slice(0, idx)} – ${org}`
-      if (document.title !== next) {
-        document.title = next
-      }
-    } else if (document.title !== org) {
-      document.title = org
-    }
+    let next = org
+    if (idx !== -1) next = `${current.slice(0, idx)} – ${org}`
+    else if (current.startsWith(`${from} — `)) next = `${org}${current.slice(from.length)}`
+    if (document.title !== next) document.title = next
   }, [orgName])
 
   React.useEffect(() => {
