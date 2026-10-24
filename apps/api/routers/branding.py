@@ -127,15 +127,10 @@ def get_logo_upload_url(
 ):
     require_project_role(db, project_id, current_user, ProjectRole.editor)
     key = f"{project_logo_prefix(project_id)}{uuid.uuid4()}.webp"
-    upload_url = s3_service.get_s3_client().generate_presigned_url(
-        "put_object",
-        Params={
-            "Bucket": settings.s3_bucket,
-            "Key": key,
-            "ContentType": "image/webp",
-        },
-        ExpiresIn=3600,
-    )
+    # The browser PUTs to this URL, so it is signed for the public endpoint, as
+    # every other upload URL is; the server-side client's internal one does not
+    # resolve outside the stack.
+    upload_url = s3_service.generate_presigned_put_url(key, content_type="image/webp", expires_in=3600)
     return BrandingLogoUploadResponse(upload_url=upload_url, key=key)
 
 
