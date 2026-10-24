@@ -126,6 +126,10 @@ function useRowFileDrag({
         return
       }
       e.preventDefault()
+      // Taken here, as a file drop is: a card dragged by its thumbnail also lists
+      // `Files` in Chrome and Safari, and the shell's refusal behind this would
+      // set `none` over the move.
+      e.stopPropagation()
       e.dataTransfer.dropEffect = 'move'
       setIsDragOver(true)
     },
@@ -162,6 +166,7 @@ function useRowFileDrag({
         return
       }
       e.preventDefault()
+      e.stopPropagation()
       setIsDragOver(false)
       try {
         const data = JSON.parse(e.dataTransfer.getData('application/json'))
