@@ -21,7 +21,8 @@ const LOGO_SOURCES: Record<LogoVariant, string> = {
 }
 
 /**
- * The built-in FreeFrame mark, recolored by the root data-theme in globals.css.
+ * The built-in FreeFrame mark, recolored by the root data-theme in globals.css,
+ * or by a nearer one on a frame that sets its own (the share page preview).
  * A single dark-ink asset keeps the markup hydration-safe and avoids fetching a
  * second image that would only be hidden by CSS. `className` is for sizing
  * and layout only; theme/filter styling is owned by this component.

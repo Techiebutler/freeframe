@@ -128,6 +128,13 @@
  */
 [data-theme="light"] .themed-default-logo { filter: none; }
 :root:not([data-theme="light"]) .themed-default-logo { filter: brightness(0) invert(1); }
+/*
+ * A frame that sets its own data-theme inside the app (the share page preview)
+ * recolors the mark for itself. These match the root rule's specificity and come
+ * after it, so the frame's theme wins over the app's in either direction.
+ */
+:root [data-theme="light"] .themed-default-logo { filter: none; }
+:root [data-theme="dark"] .themed-default-logo { filter: brightness(0) invert(1); }
 
 @layer components {
 

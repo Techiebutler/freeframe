@@ -38,7 +38,8 @@ describe('ThemedDefaultLogo', () => {
       'utf8',
     )
     const logoRules = globalsCss.match(/^.*\.themed-default-logo\s*\{[^}]*\}$/gm) ?? []
-    expect(logoRules).toHaveLength(2)
+    // Two for the document's theme, two for a frame that sets its own.
+    expect(logoRules).toHaveLength(4)
     expect(logoRules.every((rule) => rule.includes('data-theme'))).toBe(true)
 
     const style = document.createElement('style')
@@ -56,6 +57,35 @@ describe('ThemedDefaultLogo', () => {
 
       document.documentElement.setAttribute('data-theme', 'dark')
       expect(getComputedStyle(logo).filter).toBe('brightness(0) invert(1)')
+    } finally {
+      style.remove()
+    }
+  })
+
+  // A preview of a share page (project settings, the link panel) sets its own
+  // data-theme on a frame inside the app. The mark has to follow the frame,
+  // not the app around it: measured in Chromium, a light frame inside the dark
+  // app drew a white mark on a light header, and a dark frame inside the light
+  // app a dark mark on a dark one, because the root rule outranked the scoped
+  // one.
+  it.each([
+    ['dark', 'light', 'none'],
+    ['light', 'dark', 'brightness(0) invert(1)'],
+    ['unthemed', 'light', 'none'],
+  ] as const)('in a %s app, a %s frame draws the mark with filter: %s', (root, frame, filter) => {
+    const globalsCss = readFileSync(join(import.meta.dirname, '../../../app/globals.css'), 'utf8')
+    const style = document.createElement('style')
+    style.textContent = (globalsCss.match(/^.*\.themed-default-logo\s*\{[^}]*\}$/gm) ?? []).join('\n')
+    document.head.appendChild(style)
+
+    try {
+      if (root !== 'unthemed') document.documentElement.setAttribute('data-theme', root)
+      const { container } = render(
+        <div data-theme={frame}>
+          <ThemedDefaultLogo variant="icon" alt="FreeFrame" />
+        </div>,
+      )
+      expect(getComputedStyle(container.querySelector('img')!).filter).toBe(filter)
     } finally {
       style.remove()
     }
