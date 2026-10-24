@@ -20,7 +20,9 @@ import {
 } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime, formatTimeLeft } from '@/lib/utils'
 import { useShallow } from 'zustand/react/shallow'
-import { useUploadStore, visibleFiles, findRow, isOnItsWay, type UploadFile } from '@/stores/upload-store'
+import {
+  useUploadStore, visibleFiles, visibleDropNotes, findRow, isOnItsWay, type UploadFile,
+} from '@/stores/upload-store'
 import { useUploadSpeedStore } from '@/stores/upload-speed-store'
 import { carriesFiles } from '@/lib/drag'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -712,6 +714,38 @@ function UploadRow({ upload }: { upload: UploadFile }) {
 
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
+/**
+ * What the panel says about drops and picks beyond their rows (files left out,
+ * files that could not be read, folders that could not be made), each line
+ * until it is dismissed. Above the tabs, so it shows whichever is chosen.
+ */
+function DropNotes() {
+  const notes = useUploadStore(useShallow(visibleDropNotes))
+  const dismiss = useUploadStore((s) => s.dismissDropNote)
+  if (notes.length === 0) return null
+  return (
+    <ul className="px-3 pt-2.5 space-y-1.5 shrink-0" aria-live="polite">
+      {notes.map((note) => (
+        <li
+          key={note.id}
+          className="flex items-start gap-2 rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-xs text-text-secondary"
+        >
+          <AlertCircle className="h-3.5 w-3.5 mt-px shrink-0 text-status-warning" />
+          <span className="flex-1 min-w-0 break-words">{note.text}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => dismiss(note.id)}
+            className="h-4 w-4 shrink-0 flex items-center justify-center rounded text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export function UploadsPanel({
   railCollapsed = true,
 }: {
@@ -821,6 +855,12 @@ export function UploadsPanel({
           !railCollapsed && 'md:[--ff-left:220px]',
           'border-r border-border bg-bg-secondary shadow-2xl flex flex-col pb-safe animate-in slide-in-from-left-4 duration-150',
         )}
+        // The panel covers 380px of the page as well, the asset area included,
+        // and nothing in it takes a file. A file dragged over it is on its way
+        // to the page, as over the backdrop: the panel steps aside for it.
+        onDragEnter={(e) => {
+          if (carriesFiles(e)) setPanelOpen(false)
+        }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
@@ -862,6 +902,8 @@ export function UploadsPanel({
             </button>
           </div>
         </div>
+
+        <DropNotes />
 
         {/* Filter tabs */}
         <div className="px-3 pt-2.5 pb-1 shrink-0">

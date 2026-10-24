@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom'
 import { render, screen, fireEvent, createEvent, act } from '@testing-library/react'
 
 import { useFileDropRegion } from '../use-file-drop-region'
+import type { Collected } from '@/lib/upload-folder-walk'
+import { folderDrop, droppedPaths } from '@/test/folder-drop'
 
 const file = new File(['x'], 'cut-v3.mov', { type: 'video/quicktime' })
 
@@ -28,7 +30,7 @@ function Region({
 }: {
   enabled?: boolean
   currentFolderId?: string | null
-  onUploadFiles?: (folderId: string | null, files: File[]) => void
+  onUploadFiles?: (folderId: string | null, dropped: Promise<Collected>) => void
   onShell?: (e: React.DragEvent) => void
   dialogOpen?: boolean
 }) {
@@ -145,14 +147,37 @@ describe('a file dragged over the region itself', () => {
     expect(onShell).not.toHaveBeenCalled()
   })
 
-  it('uploads into the folder the region is showing', () => {
+  it('uploads into the folder the region is showing', async () => {
     const onUploadFiles = vi.fn()
     render(<Region currentFolderId="episodes" onUploadFiles={onUploadFiles} />)
     sizeRegion()
 
     dropAt(screen.getByTestId('grid'), 400, 300)
 
-    expect(onUploadFiles).toHaveBeenCalledWith('episodes', [file])
+    expect(onUploadFiles).toHaveBeenCalledWith('episodes', expect.any(Promise))
+    await expect(onUploadFiles.mock.calls[0][1]).resolves.toEqual({
+      files: [{ file, dirs: [] }],
+      unreadable: 0,
+      unreadableFolders: 0,
+    })
+  })
+
+  it('reads a dropped folder during the drop event, not after it', async () => {
+    // The items of a drop answer only in the event's own turn. Reading them
+    // later, as `e.dataTransfer.files` was, gets the folder's unreadable
+    // placeholder: queued as a file, it failed with "The file changed or was
+    // moved after it was added".
+    const onUploadFiles = vi.fn()
+    render(<Region onUploadFiles={onUploadFiles} />)
+    sizeRegion()
+    const drop = folderDrop('Shoot', ['a.mov', 'b.mov'])
+
+    dropAt(screen.getByTestId('grid'), 400, 300, drop.dataTransfer)
+    drop.expire()
+
+    expect(drop.webkitGetAsEntry).toHaveBeenCalled()
+    const collected = await onUploadFiles.mock.calls[0][1]
+    expect(droppedPaths(collected)).toEqual(['Shoot/a.mov', 'Shoot/b.mov'])
   })
 
   it('uploads nothing when the button comes up outside it', () => {

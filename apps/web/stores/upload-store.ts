@@ -1657,6 +1657,27 @@ function transferWatch(
   }
 }
 
+/** One file of a drop or pick handed to `startUploads`. */
+export interface StartItem {
+  file: File
+  assetName: string
+  /** The folder this file goes to, when it is not the drop's. */
+  folderId?: string | null
+  /** The type to send, when not `file.type`. */
+  mimeType?: string
+}
+
+/** A line the Uploads panel shows about a drop or a pick. */
+export interface DropNote {
+  id: string
+  text: string
+  /** The account that made the drop; only it sees the note. */
+  ownerId: string | null
+}
+
+/** How many notes the panel keeps; the oldest go first. */
+const MAX_DROP_NOTES = 5
+
 export interface UploadStore {
   files: UploadFile[]
   /**
@@ -1683,6 +1704,13 @@ export interface UploadStore {
    */
   runsRevision: number
   panelOpen: boolean
+  /**
+   * What the Uploads panel says about drops and picks beyond their rows: files
+   * left out, files that could not be read, folders that could not be made.
+   * Each line is shown until dismissed, and only to the account that made the
+   * drop. Never saved: a note is about something that just happened here.
+   */
+  dropNotes: DropNote[]
   historyLoaded: boolean
   historyHasMore: boolean
   historyLoading: boolean
@@ -1701,8 +1729,15 @@ export interface UploadStore {
   /**
    * Adds a whole drop or pick, in order, as one drop. Returns the row ids in
    * the order given, or none at all when nobody is signed in.
+   *
+   * `folderId` is where the files go; a file of a dropped folder names its own
+   * folder instead (`null` for the project root). `mimeType` is the type the
+   * file is sent as when the browser's own will not do (see `planDrop`).
    */
-  startUploads: (items: Array<{ file: File; assetName: string }>, projectId: string, projectName?: string, folderId?: string | null) => string[]
+  startUploads: (items: StartItem[], projectId: string, projectName?: string, folderId?: string | null) => string[]
+  /** Adds a line to the top of the Uploads panel, and opens the panel to show it. */
+  addDropNote: (text: string) => void
+  dismissDropNote: (id: string) => void
   /** Queues an interrupted row to carry on with `file`, ahead of every file not yet started. */
   resumeUpload: (fileId: string, file: File) => void
   /** Resolves to a message saying why nothing was discarded, or null. */
@@ -2677,7 +2712,9 @@ async function runNew(id: string, runner: Runner, runKey: string): Promise<void>
           asset_name: sentName,
           original_filename: file.name,
           file_size_bytes: file.size,
-          mime_type: file.type,
+          // The type the drop planned: a file read out of a dropped folder
+          // has no browser type at all.
+          mime_type: startRow?.fileType || file.type,
           folder_id: target.folderId,
         }, asOwner)
         : await api.post<VersionInitiateResponse>(`/assets/${target.assetId}/versions`, {
@@ -3172,7 +3209,7 @@ async function runResume(id: string, runner: Runner, runKey: string): Promise<vo
  */
 function enqueueNew(
   set: (fn: (s: UploadStore) => Partial<UploadStore>) => void,
-  items: Array<{ file: File; assetName: string; target: StartTarget }>,
+  items: Array<{ file: File; assetName: string; target: StartTarget; mimeType?: string }>,
   projectId: string,
   projectName: string | undefined,
 ): string[] {
@@ -3183,7 +3220,7 @@ function enqueueNew(
   noticeSubject()
   const dropSeq = ++dropSeqs
   const createdAt = Date.now()
-  const rows: UploadFile[] = items.map(({ file, assetName, target }) => {
+  const rows: UploadFile[] = items.map(({ file, assetName, target, mimeType }) => {
     const id = newRowId()
     fileRefs.set(id, file)
     startTargets.set(id, target)
@@ -3191,7 +3228,7 @@ function enqueueNew(
       id,
       fileName: file.name,
       fileSize: file.size,
-      fileType: file.type,
+      fileType: mimeType ?? file.type,
       projectId,
       projectName,
       assetName,
@@ -3222,6 +3259,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   versionsRevision: 0,
   runsRevision: 0,
   panelOpen: false,
+  dropNotes: [],
   historyLoaded: false,
   historyHasMore: true,
   historyLoading: false,
@@ -3236,10 +3274,25 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   startUploads: (items, projectId, projectName, folderId) =>
     enqueueNew(
       set,
-      items.map(({ file, assetName }) => ({ file, assetName, target: { kind: 'asset' as const, folderId: folderId ?? null } })),
+      items.map((item) => ({
+        file: item.file,
+        assetName: item.assetName,
+        mimeType: item.mimeType,
+        target: {
+          kind: 'asset' as const,
+          folderId: item.folderId !== undefined ? item.folderId : (folderId ?? null),
+        },
+      })),
       projectId,
       projectName,
     ),
+
+  addDropNote: (text) => {
+    const note: DropNote = { id: newRowId(), text, ownerId: currentSubject() }
+    set((s) => ({ dropNotes: [...s.dropNotes, note].slice(-MAX_DROP_NOTES), panelOpen: true }))
+  },
+
+  dismissDropNote: (id) => set((s) => ({ dropNotes: s.dropNotes.filter((n) => n.id !== id) })),
 
   startVersionUpload: (file, assetId, assetName, projectId, projectName) =>
     enqueueNew(set, [{ file, assetName, target: { kind: 'version', assetId } }], projectId, projectName)[0] ?? null,
@@ -3456,12 +3509,39 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
   },
 
   cancelAllQueued: () => {
-    // Each row by its own rule. A held probe hands the hold down the line as
-    // it goes, and the last one out finds nobody waiting and ends it.
+    // Each row by `cancelUpload`'s rule for a row whose turn has not begun: a
+    // new file only leaves, a queued resume goes back to plain `interrupted`.
+    // Applied to all of them in one write rather than one `cancelUpload` each,
+    // which wrote and saved the whole list once per row: seconds of a frozen
+    // tab for a dropped folder of a few hundred files.
     const waiting = visibleFiles(get()).filter(
       (f) => (f.status === 'queued' || (f.status === 'interrupted' && f.queuedResume)) && !runners.has(f.id),
     )
-    for (const f of waiting) get().cancelUpload(f.id)
+    if (waiting.length === 0) return
+    const leaving = new Set<string>()
+    const unqueued = new Set<string>()
+    for (const f of waiting) {
+      fileRefs.delete(f.id)
+      if (f.status === 'queued') {
+        startTargets.delete(f.id)
+        leaving.add(f.id)
+      } else {
+        resumeRequestedAt.delete(f.id)
+        unqueued.add(f.id)
+      }
+    }
+    set((s) => ({
+      files: s.files.flatMap((f) => {
+        if (leaving.has(f.id)) return []
+        if (unqueued.has(f.id)) return [{ ...f, queuedResume: undefined, holdReason: undefined }]
+        return [f]
+      }),
+    }))
+    // Out of the queue together, and only then the hold: a probe among them
+    // passes the hold on once, finds nobody left waiting, and ends it.
+    const probe = queue.hold.probeId
+    for (const f of waiting) queue.remove(f.id)
+    if (probe !== null && (leaving.has(probe) || unqueued.has(probe)) && !runners.has(probe)) passOnProbe()
   },
 
   retryUpload: (fileId) => {
@@ -4100,6 +4180,11 @@ export const useUploadStore = create<UploadStore>()(
  * signing back in; views, counts and polls see only these. A row with no owner
  * is nobody's and shows to nobody, and with nobody signed in nothing shows.
  */
+/** The drop notes of the account signed in now, oldest first. */
+export function visibleDropNotes(state: Pick<UploadStore, 'dropNotes' | 'subject'>): DropNote[] {
+  return state.dropNotes.filter((n) => n.ownerId !== null && n.ownerId === state.subject)
+}
+
 export function visibleFiles(state: UploadStore): UploadFile[] {
   return state.files.filter((f) => f.ownerId !== undefined && f.ownerId === state.subject)
 }
@@ -4283,6 +4368,11 @@ export const __uploadQueueTesting = {
   hasAbortController: (id: string): boolean => abortControllers[id] !== undefined,
   /** Rows whose run has begun and not yet ended. */
   runningIds: (): string[] => Array.from(runners.keys()),
+  /** The folder a queued new upload will be created in, as its initiate will name it. */
+  folderOf: (id: string): string | null | undefined => {
+    const target = startTargets.get(id)
+    return target?.kind === 'asset' ? target.folderId : undefined
+  },
   /** Whether a row of the signed-in account is moving, so that the lock is wanted. */
   wakeLockWanted: (): boolean => wakeLockWanted,
 }

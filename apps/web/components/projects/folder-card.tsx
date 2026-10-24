@@ -9,6 +9,7 @@ import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
 import { useFolderMenu } from './menus/folder-menu'
 import type { Folder as FolderType, AssetResponse } from '@/types'
 import { carriesFiles } from '@/lib/drag'
+import { collectDataTransfer, type Collected } from '@/lib/upload-folder-walk'
 
 const assetTypeIcons = {
   video: Film,
@@ -92,8 +93,9 @@ interface FolderCardProps {
    *  selection's menu when this folder is one of several selected. */
   contextMenu?: React.ReactNode
   onDropItems?: (targetFolderId: string, assetIds: string[], folderIds: string[]) => void
-  /** Files dropped on this folder upload into it. Absent = uploads not allowed here. */
-  onDropFiles?: (targetFolderId: string, files: File[]) => void
+  /** Files dropped on this folder upload into it, as `collectDataTransfer`
+   *  reads them. Absent = uploads not allowed here. */
+  onDropFiles?: (targetFolderId: string, dropped: Promise<Collected>) => void
   /** Tells the region above that a file drag is over this folder, so it can
    *  shrink its own marking to this one -- two frames lit at once do not say
    *  where the file will land. On release the folder names itself, so a leave
@@ -209,11 +211,14 @@ export function FolderCard({
         // Stops the region above uploading the same files into the open folder.
         e.stopPropagation()
         clearDrag()
-        // Handed over even when the list is empty, which is what several
-        // promised-file sources on macOS produce. The region behind this card
-        // never sees the drop, so its marking comes down through this call and
-        // nothing else: skipping it leaves "Drop to upload" on screen for good.
-        onDropFiles(folder.id, Array.from(e.dataTransfer.files))
+        // Read here, in the drop event's own turn: afterwards the drop's items
+        // answer nothing, and a dropped folder is only an unreadable
+        // placeholder in `files`. Handed over even when the drop is empty,
+        // which is what several promised-file sources on macOS produce. The
+        // region behind this card never sees the drop, so its marking comes
+        // down through this call and nothing else: skipping it leaves "Drop to
+        // upload" on screen for good.
+        onDropFiles(folder.id, collectDataTransfer(e.dataTransfer))
         return
       }
       e.preventDefault()

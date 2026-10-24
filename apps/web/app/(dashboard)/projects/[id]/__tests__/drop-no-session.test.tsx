@@ -119,7 +119,7 @@ afterEach(() => {
 })
 
 describe('a drop with no session', () => {
-  it('dropping 5 files with no token shows exactly one "Sign in to upload" toast and creates no rows', () => {
+  it('dropping 5 files with no token shows exactly one "Sign in to upload" toast and creates no rows', async () => {
     render(
       <ToastProvider>
         <ProjectDetailPage />
@@ -129,7 +129,7 @@ describe('a drop with no session', () => {
 
     dropFiles(screen.getByTestId('grid'), files)
 
-    expect(screen.getAllByText('Sign in to upload')).toHaveLength(1)
+    expect(await screen.findAllByText('Sign in to upload')).toHaveLength(1)
     expect(useUploadStore.getState().files).toEqual([])
     expect(useUploadStore.getState().panelOpen).toBe(false)
     expect(api.post).not.toHaveBeenCalled()

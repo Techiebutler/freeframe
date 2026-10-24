@@ -3,6 +3,8 @@ import { render, screen, fireEvent } from '@testing-library/react'
 
 import { FolderTree, PROJECT_ROOT_ROW } from '../folder-tree'
 import type { FolderTreeNode } from '@/types'
+import type { Collected } from '@/lib/upload-folder-walk'
+import { folderDrop, droppedPaths } from '@/test/folder-drop'
 
 const tree: FolderTreeNode[] = [
   {
@@ -42,8 +44,13 @@ function renderTree(props: Record<string, unknown> = {}) {
   )
 }
 
+/** The files a drop handed on, once read. */
+async function filesOf(dropped: unknown): Promise<File[]> {
+  return (await (dropped as Promise<Collected>)).files.map((f) => f.file)
+}
+
 describe('dropping a file on the sidebar tree', () => {
-  it('uploads into the row it was dropped on', () => {
+  it('uploads into the row it was dropped on', async () => {
     // The regression this pins: FolderTree took the handler and never passed it
     // to the rows, so the feature was dead in the sidebar while the CHANGELOG
     // said otherwise.
@@ -52,30 +59,33 @@ describe('dropping a file on the sidebar tree', () => {
 
     fireEvent.drop(screen.getByText('Episodes'), { dataTransfer: fileDrag() })
 
-    expect(onDropFiles).toHaveBeenCalledWith('episodes', [file])
+    expect(onDropFiles).toHaveBeenCalledWith('episodes', expect.any(Promise))
+    expect(await filesOf(onDropFiles.mock.calls[0][1])).toEqual([file])
   })
 
-  it('uploads into a nested row too', () => {
+  it('uploads into a nested row too', async () => {
     const onDropFiles = vi.fn()
     renderTree({ onDropFiles })
     fireEvent.click(screen.getByText('Episodes')) // expands the children
 
     fireEvent.drop(screen.getByText('Episode 04'), { dataTransfer: fileDrag() })
 
-    expect(onDropFiles).toHaveBeenCalledWith('ep-04', [file])
+    expect(onDropFiles).toHaveBeenCalledWith('ep-04', expect.any(Promise))
+    expect(await filesOf(onDropFiles.mock.calls[0][1])).toEqual([file])
   })
 
-  it('uploads into the project root when dropped on the project row', () => {
+  it('uploads into the project root when dropped on the project row', async () => {
     // The row lit up for a file drag before and then did nothing with it.
     const onDropFiles = vi.fn()
     renderTree({ onDropFiles })
 
     fireEvent.drop(screen.getByText('Season 2'), { dataTransfer: fileDrag() })
 
-    expect(onDropFiles).toHaveBeenCalledWith(null, [file])
+    expect(onDropFiles).toHaveBeenCalledWith(null, expect.any(Promise))
+    expect(await filesOf(onDropFiles.mock.calls[0][1])).toEqual([file])
   })
 
-  it('reports an empty file list rather than staying silent', () => {
+  it('reports an empty file list rather than staying silent', async () => {
     // Several promised-file sources on macOS drop with nothing readable. The
     // caller owns the drag marking, so it has to hear about the drop either
     // way or "Drop to upload" stays on screen for good.
@@ -84,7 +94,20 @@ describe('dropping a file on the sidebar tree', () => {
 
     fireEvent.drop(screen.getByText('Episodes'), { dataTransfer: fileDrag([]) })
 
-    expect(onDropFiles).toHaveBeenCalledWith('episodes', [])
+    expect(onDropFiles).toHaveBeenCalledWith('episodes', expect.any(Promise))
+    expect(await filesOf(onDropFiles.mock.calls[0][1])).toEqual([])
+  })
+
+  it('reads a dropped folder during the drop event, not after it', async () => {
+    const onDropFiles = vi.fn()
+    renderTree({ onDropFiles })
+    const drop = folderDrop('Shoot', ['a.mov'])
+
+    fireEvent.drop(screen.getByText('Episodes'), { dataTransfer: drop.dataTransfer })
+    drop.expire()
+
+    expect(drop.webkitGetAsEntry).toHaveBeenCalled()
+    expect(droppedPaths(await onDropFiles.mock.calls[0][1])).toEqual(['Shoot/a.mov'])
   })
 
   it('cancels the browser default even where uploads are refused', () => {

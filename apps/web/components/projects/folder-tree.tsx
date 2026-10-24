@@ -14,6 +14,7 @@ import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
 import { FolderMenuItems } from './menus/folder-menu'
 import type { FolderTreeNode } from '@/types'
 import { carriesFiles } from '@/lib/drag'
+import { collectDataTransfer, type Collected } from '@/lib/upload-folder-walk'
 
 interface FolderTreeProps {
   tree: FolderTreeNode[]
@@ -32,7 +33,7 @@ interface FolderTreeProps {
   onDropItems?: (targetFolderId: string | null, assetIds: string[], folderIds: string[]) => void
   /** Files dropped on a folder row upload into it, `null` being the project
    *  root. Absent = uploads not allowed. */
-  onDropFiles?: (targetFolderId: string | null, files: File[]) => void
+  onDropFiles?: (targetFolderId: string | null, dropped: Promise<Collected>) => void
   /** See FolderCard: lets the region above shrink its marking to this row. */
   onFileDragOverFolder?: (folderId: string | null, from?: string) => void
   /** Which folder currently holds the file-drag marking, so exactly one row can
@@ -73,7 +74,7 @@ function useRowFileDrag({
   /** Identifies this row in the page's marking. */
   rowId: string
   /** Absent = this row does not take files, and says so with a `none` cursor. */
-  onDropFiles?: (files: File[]) => void
+  onDropFiles?: (dropped: Promise<Collected>) => void
   onDropItems?: (assetIds: string[], folderIds: string[]) => void
   onFileDragOverFolder?: (folderId: string | null, from?: string) => void
 }) {
@@ -152,11 +153,12 @@ function useRowFileDrag({
         if (!onDropFiles) return
         e.stopPropagation()
         clearDrag()
-        // Handed over even when the list is empty, which is what several
-        // promised-file sources on macOS produce: the caller owns the region
-        // marking, and it has to come down either way. Uploading nothing is a
-        // no-op there.
-        onDropFiles(Array.from(e.dataTransfer.files))
+        // Read here, in the drop event's own turn: afterwards the drop's
+        // items answer nothing, and a dropped folder is only an unreadable
+        // placeholder in `files`. Handed over even when the drop is empty,
+        // which is what several promised-file sources on macOS produce: the
+        // caller owns the region marking, and it has to come down either way.
+        onDropFiles(collectDataTransfer(e.dataTransfer))
         return
       }
       e.preventDefault()
@@ -188,7 +190,7 @@ interface FolderNodeProps {
   onShareFolder?: (folderId: string, folderName: string) => void
   onDropItems?: (targetFolderId: string | null, assetIds: string[], folderIds: string[]) => void
   /** Files dropped on a folder row upload into it. Absent = uploads not allowed. */
-  onDropFiles?: (targetFolderId: string, files: File[]) => void
+  onDropFiles?: (targetFolderId: string, dropped: Promise<Collected>) => void
   /** See FolderCard: lets the region above shrink its marking to this row. */
   onFileDragOverFolder?: (folderId: string | null, from?: string) => void
   /** See FolderTreeProps. */
@@ -231,7 +233,7 @@ function FolderNode({
   const { isDragOver, dragHandlers } = useRowFileDrag({
     rowId: node.id,
     onDropFiles: useMemo(
-      () => (onDropFiles ? (files: File[]) => onDropFiles(node.id, files) : undefined),
+      () => (onDropFiles ? (dropped: Promise<Collected>) => onDropFiles(node.id, dropped) : undefined),
       [onDropFiles, node.id],
     ),
     onDropItems: useMemo(
@@ -381,7 +383,7 @@ export function FolderTree({
     useRowFileDrag({
       rowId: PROJECT_ROOT_ROW,
       onDropFiles: useMemo(
-        () => (onDropFiles ? (files: File[]) => onDropFiles(null, files) : undefined),
+        () => (onDropFiles ? (dropped: Promise<Collected>) => onDropFiles(null, dropped) : undefined),
         [onDropFiles],
       ),
       onDropItems: useMemo(

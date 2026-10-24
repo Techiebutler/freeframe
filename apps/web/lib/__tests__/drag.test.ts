@@ -5,9 +5,9 @@
  * someone drags a card across the grid, and what keeps folder targets from
  * lighting up for a file that is not meant for them.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { carriesFiles } from '../drag'
+import { carriesFiles, refuseFileDrag } from '../drag'
 
 function drag(types: string[]): React.DragEvent {
   return { dataTransfer: { types } } as unknown as React.DragEvent
@@ -46,5 +46,59 @@ describe('carriesFiles', () => {
       [Symbol.iterator]: function* () { yield 'Files' },
     }
     expect(carriesFiles({ dataTransfer: { types: listLike } } as never)).toBe(true)
+  })
+})
+
+describe('a drag that started on this page', () => {
+  // Chrome and Safari list `Files` for an <img> dragged out of the page itself
+  // (a thumbnail, the logo), so `types` alone would start an upload of the
+  // page's own image when it is let go over the asset area.
+  afterEach(() => {
+    window.dispatchEvent(new Event('dragend'))
+  })
+
+  function pageImage() {
+    const img = document.createElement('img')
+    document.body.appendChild(img)
+    img.dispatchEvent(new Event('dragstart', { bubbles: true }))
+    return img
+  }
+
+  it('is not a file drag, even when it lists Files', () => {
+    const img = pageImage()
+
+    expect(carriesFiles(drag(['Files', 'text/uri-list', 'text/html']))).toBe(false)
+    img.remove()
+  })
+
+  it('stops counting once the drag ends', () => {
+    const img = pageImage()
+    img.dispatchEvent(new Event('dragend', { bubbles: true }))
+
+    expect(carriesFiles(drag(['Files']))).toBe(true)
+    img.remove()
+  })
+
+  it('stops counting at the next press when the source left the page before its dragend', () => {
+    // A dragend fired at a node no longer in the document reaches nothing
+    // else, and a flag left standing would refuse every later file drop.
+    const img = pageImage()
+    img.remove()
+
+    window.dispatchEvent(new Event('pointerdown'))
+
+    expect(carriesFiles(drag(['Files']))).toBe(true)
+  })
+
+  it('is still refused by the shell, so the browser does not open the image', () => {
+    const img = pageImage()
+    const dataTransfer = { types: ['Files'], dropEffect: 'copy' }
+    const e = { dataTransfer, preventDefault: vi.fn() } as unknown as React.DragEvent
+
+    refuseFileDrag(e)
+
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(dataTransfer.dropEffect).toBe('none')
+    img.remove()
   })
 })

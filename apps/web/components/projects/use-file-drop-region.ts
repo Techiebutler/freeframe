@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { carriesFiles, pointerIsOver } from "@/lib/drag";
+import { collectDataTransfer, type Collected } from "@/lib/upload-folder-walk";
 
 /**
  * The asset area as a drop target for files from outside the browser.
@@ -26,8 +27,9 @@ export function useFileDropRegion({
   /** The folder the region is showing, which is where a drop on the region
    *  itself lands. `null` is the project root. */
   currentFolderId: string | null;
-  /** `null` as the folder means the project root. */
-  onUploadFiles: (folderId: string | null, files: File[]) => void;
+  /** `null` as the folder means the project root. `dropped` is what the drop
+   *  held, still being read (a dropped folder is walked after the event). */
+  onUploadFiles: (folderId: string | null, dropped: Promise<Collected>) => void;
 }) {
   const regionRef = React.useRef<HTMLDivElement>(null);
   const dropDepth = React.useRef(0);
@@ -155,23 +157,27 @@ export function useFileDropRegion({
       // See onDragOver: taken, so the shell's refusal is not also run for a
       // file this region is about to upload.
       e.stopPropagation();
-      const files = Array.from(e.dataTransfer.files);
-      if (files.length === 0) return;
+      // Read here, in the drop event's own turn: the drop's items answer only
+      // now, and a dropped folder is nothing but an unreadable placeholder in
+      // `files`. The walk itself goes on after the event. Handed on even when
+      // the drop held nothing, so the Uploads panel can say so.
+      //
       // The region means the folder it is showing. A drop on a folder card or
       // a sidebar row never reaches here -- those stop the event and call
       // `onDropToFolder` with their own id.
-      onUploadFiles(currentFolderId, files);
+      onUploadFiles(currentFolderId, collectDataTransfer(e.dataTransfer));
     },
     [mine, setFolderTarget, onUploadFiles, currentFolderId],
   );
 
-  /** A folder target -- a card or a sidebar row -- took the drop itself. */
+  /** A folder target -- a card or a sidebar row -- took the drop itself, and
+   *  read it in its own drop handler. */
   const onDropToFolder = React.useCallback(
-    (folderId: string | null, files: File[]) => {
+    (folderId: string | null, dropped: Promise<Collected>) => {
       setFolderTarget(null);
       setIsFileDragOver(false);
       dropDepth.current = 0;
-      onUploadFiles(folderId, files);
+      onUploadFiles(folderId, dropped);
     },
     [setFolderTarget, onUploadFiles],
   );

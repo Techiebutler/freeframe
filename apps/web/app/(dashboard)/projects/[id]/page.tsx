@@ -4,7 +4,6 @@ import * as React from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import Link from "next/link";
-import * as Dialog from "@radix-ui/react-dialog";
 import {
   Upload,
   X,
@@ -21,25 +20,19 @@ import {
   MoreHorizontal,
   Users,
 } from "lucide-react";
-import {
-  cn,
-  formatRelativeTime,
-  formatBytes,
-  assetNameFromFile,
-  uploadNameForFile,
-} from "@/lib/utils";
+import { cn, formatRelativeTime, formatBytes } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/shared/avatar";
 import { AssetGrid } from "@/components/projects/asset-grid";
 import { DownloadMenu } from "@/components/shared/download-menu";
 import { downloadAsset, fetchAssetDownloadOptions } from "@/lib/asset-download";
 import { CommentPanel } from "@/components/review/comment-panel";
-import { UploadZone } from "@/components/upload/upload-zone";
+import { UploadMenu } from "@/components/upload/upload-menu";
 import { useFileDropRegion } from "@/components/projects/use-file-drop-region";
-import { useUploadStore } from "@/stores/upload-store";
+import { startDrop } from "@/lib/upload-drop";
+import type { Collected } from "@/lib/upload-folder-walk";
 import { useToast } from "@/components/shared/toast";
 import { useBranding } from "@/components/shared/branding-provider";
 import { useAuthStore } from "@/stores/auth-store";
@@ -77,9 +70,8 @@ export default function ProjectDetailPage() {
   const searchParams = useSearchParams();
   const projectId = params.id as string;
 
-  const [uploadOpen, setUploadOpen] = React.useState(false);
-  const [assetName, setAssetName] = React.useState("");
-  const [pendingFiles, setPendingFiles] = React.useState<File[]>([]);
+  // The Upload menu, opened from the toolbar button or the empty state.
+  const [uploadMenuOpen, setUploadMenuOpen] = React.useState(false);
   const [selectedAsset, setSelectedAsset] =
     React.useState<AssetResponse | null>(null);
   const [shareLinksExpanded, setShareLinksExpanded] = React.useState(true);
@@ -127,7 +119,6 @@ export default function ProjectDetailPage() {
   const [assetToRename, setAssetToRename] = React.useState<AssetResponse | null>(null);
   const [assetToDelete, setAssetToDelete] = React.useState<AssetResponse | null>(null);
 
-  const startUploads = useUploadStore((s) => s.startUploads);
   const toast = useToast();
   const { user, userFetched } = useAuthStore();
   const { poweredByFreeframe } = useBranding();
@@ -395,11 +386,6 @@ export default function ProjectDetailPage() {
   }, [mutateAssets, mutateSubfolders]);
   useRefetchOnUploadStatus(projectId, refetchGrid);
 
-  const handleFilesSelected = (files: File[]) => {
-    setPendingFiles(files);
-    if (files.length > 0) setAssetName(assetNameFromFile(files[0].name));
-  };
-
   // ─── Drop files onto the asset area ─────────────────────────────────────
   //
   // The drop target is the whole content region rather than the grid, so the
@@ -415,48 +401,41 @@ export default function ProjectDetailPage() {
   const canDropFiles = mayDropFiles && !showTrash && !showShareLinks;
 
   /**
-   * Hands a drop or pick to the upload queue. With no session the queue takes
-   * none of it, since an upload belongs to the account that added it, and the
-   * user is told once for the whole drop.
+   * Starts a drop or a pick into `folderId`, straight away: its folders are
+   * made under that one and each file is queued into its own, named after the
+   * file (`startDrop`). What the drop left out is said in the Uploads panel.
+   * With no session nothing is queued, since an upload belongs to the account
+   * that added it, and the user is told once for the whole drop.
    */
-  const queueUploads = React.useCallback(
-    (items: Parameters<typeof startUploads>[0], folderId: string | null) => {
-      const ids = startUploads(items, projectId, project?.name, folderId);
-      if (items.length > 0 && ids.length === 0) toast.error("Sign in to upload");
-    },
-    [startUploads, projectId, project?.name, toast],
-  );
-
   const queueDrop = React.useCallback(
-    (folderId: string | null, files: File[]) => {
-      // Straight to the queue rather than through the dialog. Dragging a file
-      // onto the project has already said everything the dialog asks: which
-      // file, which folder, and the name comes from the file. The single-file
-      // rename field is skipped; the row in the uploads panel takes the rename
-      // while the file waits or goes up. One call for the whole drop, so the
-      // files keep their order and start in turn.
-      queueUploads(
-        files.map((file) => ({ file, assetName: assetNameFromFile(file.name) })),
+    (folderId: string | null, dropped: Collected | Promise<Collected>) => {
+      void startDrop(dropped, {
+        projectId,
+        projectName: project?.name,
         folderId,
-      );
+      }).then((outcome) => {
+        if (outcome.kind === "signed-out") toast.error("Sign in to upload");
+      });
     },
-    [queueUploads],
+    [projectId, project?.name, toast],
   );
 
   // Drops made while the role is still loading, each with the project it was
   // made on so a drop never lands in a project the user has since left. Drops
-  // held for a project the user has left are discarded on purpose.
+  // held for a project the user has left are discarded on purpose. What a drop
+  // held is read during the drop all the same (it cannot be read later), and
+  // only started once the role is known.
   const heldDrops = React.useRef<
-    { projectId: string; folderId: string | null; files: File[] }[]
+    { projectId: string; folderId: string | null; dropped: Promise<Collected> }[]
   >([]);
 
   const startDroppedUploads = React.useCallback(
-    (folderId: string | null, files: File[]) => {
+    (folderId: string | null, dropped: Promise<Collected>) => {
       if (dropRole === "wait") {
-        heldDrops.current.push({ projectId, folderId, files });
+        heldDrops.current.push({ projectId, folderId, dropped });
         return;
       }
-      queueDrop(folderId, files);
+      queueDrop(folderId, dropped);
     },
     [dropRole, projectId, queueDrop],
   );
@@ -470,7 +449,7 @@ export default function ProjectDetailPage() {
       toast.error("You don't have permission to upload to this project");
       return;
     }
-    for (const d of held) queueDrop(d.folderId, d.files);
+    for (const d of held) queueDrop(d.folderId, d.dropped);
   }, [dropRole, projectId, queueDrop, toast]);
 
   const {
@@ -486,18 +465,13 @@ export default function ProjectDetailPage() {
     onUploadFiles: startDroppedUploads,
   });
 
-  const handleStartUpload = () => {
-    queueUploads(
-      pendingFiles.map((file) => ({
-        file,
-        assetName: uploadNameForFile(file.name, assetName, pendingFiles.length),
-      })),
-      currentFolderId,
-    );
-    setPendingFiles([]);
-    setAssetName("");
-    setUploadOpen(false);
-  };
+  // A pick from the Upload menu starts at once, into the folder on screen.
+  // The menu is only offered once the role allows uploading, so there is
+  // nothing to hold.
+  const handlePick = React.useCallback(
+    (picked: Collected) => queueDrop(currentFolderId, picked),
+    [queueDrop, currentFolderId],
+  );
 
   const handleSelectFolder = React.useCallback(
     (folderId: string | null) => {
@@ -836,7 +810,9 @@ export default function ProjectDetailPage() {
               selectedAssetId={selectedAsset?.id}
               selectionShortcuts
               onDeselectAll={() => setSelectedAsset(null)}
-              onUpload={() => setUploadOpen(true)}
+              // The toolbar's Upload menu, which this opens, is there only
+              // for a role that may upload.
+              onUpload={canUpload ? () => setUploadMenuOpen(true) : undefined}
               onAssetSelect={(asset, e) => {
                 e?.stopPropagation();
                 setSelectedAsset(asset as AssetResponse);
@@ -978,79 +954,23 @@ export default function ProjectDetailPage() {
                     </button>
                   )}
                   {canUpload && (
-                    <Button size="sm" onClick={() => setUploadOpen(true)}>
-                      <Upload className="h-4 w-4" />
-                      Upload
-                    </Button>
+                    <UploadMenu
+                      open={uploadMenuOpen}
+                      onOpenChange={setUploadMenuOpen}
+                      onPick={handlePick}
+                      trigger={
+                        <Button size="sm">
+                          <Upload className="h-4 w-4" />
+                          Upload
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </Button>
+                      }
+                    />
                   )}
                 </>
               }
             />
           )}
-
-          {/* Upload dialog */}
-          <Dialog.Root open={uploadOpen} onOpenChange={setUploadOpen}>
-            <Dialog.Portal>
-              <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-              <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] rounded-xl border border-border bg-bg-secondary p-6 shadow-xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
-                <Dialog.Close className="absolute right-4 top-4 text-text-tertiary hover:text-text-primary transition-colors">
-                  <X className="h-4 w-4" />
-                </Dialog.Close>
-                <Dialog.Title className="text-base font-semibold text-text-primary">
-                  Upload asset
-                </Dialog.Title>
-                <Dialog.Description className="mt-1 text-sm text-text-secondary">
-                  Add new media to this project.
-                </Dialog.Description>
-                <div className="mt-4 space-y-4">
-                  {pendingFiles.length === 0 ? (
-                    <UploadZone onFilesSelected={handleFilesSelected} />
-                  ) : (
-                    <>
-                      <div className="rounded-lg border border-border bg-bg-tertiary">
-                        <div className="px-3 py-2 text-xs font-medium text-text-tertiary border-b border-border">
-                          {pendingFiles.length} file{pendingFiles.length !== 1 ? "s" : ""} selected
-                        </div>
-                        <div className="max-h-40 overflow-y-auto divide-y divide-border">
-                          {pendingFiles.map((f, i) => (
-                            <div key={i} className="flex items-center justify-between px-3 py-1.5">
-                              <span className="text-sm text-text-primary truncate mr-2">{f.name}</span>
-                              <span className="text-xs text-text-tertiary shrink-0">
-                                {f.size < 1024 * 1024
-                                  ? `${(f.size / 1024).toFixed(0)} KB`
-                                  : `${(f.size / (1024 * 1024)).toFixed(1)} MB`}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      {pendingFiles.length === 1 && (
-                        <Input
-                          label="Asset name"
-                          value={assetName}
-                          onChange={(e) => setAssetName(e.target.value)}
-                          placeholder="e.g. Hero Video Final"
-                        />
-                      )}
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => setPendingFiles([])}
-                        >
-                          Change files
-                        </Button>
-                        <Button size="sm" onClick={handleStartUpload}>
-                          Start upload
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </Dialog.Content>
-            </Dialog.Portal>
-          </Dialog.Root>
         </div>
       </div>
       {showRegionFrame && (

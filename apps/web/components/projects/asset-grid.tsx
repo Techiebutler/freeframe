@@ -18,6 +18,7 @@ import { MoveToDialog } from './move-to-dialog'
 import { useViewStore } from '@/stores/view-store'
 import { sortAssets } from '@/lib/sort-assets'
 import type { Asset, DownloadOption, User, Folder, FolderTreeNode } from '@/types'
+import type { Collected } from '@/lib/upload-folder-walk'
 
 function isCoarsePointer(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
@@ -61,7 +62,7 @@ interface AssetGridProps {
   onFolderNewSubfolder?: (parentId: string) => void
   onDropToFolder?: (targetFolderId: string, assetIds: string[], folderIds: string[]) => void
   /** Files dropped on a folder card upload into it. Absent = uploads not allowed. */
-  onDropFilesToFolder?: (targetFolderId: string, files: File[]) => void
+  onDropFilesToFolder?: (targetFolderId: string, dropped: Promise<Collected>) => void
   /** See FolderCard: lets the region above shrink its marking to one folder. */
   onFileDragOverFolder?: (folderId: string | null, from?: string) => void
   /** Which folder holds the file-drag marking. See FolderCard. */
