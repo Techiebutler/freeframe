@@ -27,6 +27,11 @@ vi.mock('@/lib/avatar-image', async (orig) => ({
 import { ProjectGeneralTab } from '../general-tab'
 import { useBrandingStore } from '@/stores/branding-store'
 
+// jsdom has no ResizeObserver, and Radix measures with it in layout effects. Set once for
+// the file, not with vi.stubGlobal: afterEach's unstubAllGlobals would remove it, and a
+// render that commits after a test's last await (Retry, SWR revalidation) then throws.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+
 // The General tab saves the project's details, its cover and its share-page
 // branding with one Save, each to its own endpoint, sending only what changed.
 // A part that fails is named and stays unsaved; the rest is saved.
@@ -131,7 +136,6 @@ beforeEach(() => {
     calls.push(`${init?.method} ${url}`)
     return { ok: true }
   }))
-  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:pick-${++blobCount}`)
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   push.mockReset()

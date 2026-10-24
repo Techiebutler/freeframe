@@ -11,6 +11,11 @@ vi.mock('@/lib/api', async (orig) => ({ ...(await orig<typeof import('@/lib/api'
 import { ProjectPeopleTab } from '../people-tab'
 import { useAuthStore } from '@/stores/auth-store'
 
+// jsdom has no ResizeObserver, and Radix measures with it in layout effects. Set once for
+// the file, not with vi.stubGlobal: afterEach's unstubAllGlobals would remove it, and a
+// render that commits after a test's last await (Retry, SWR revalidation) then throws.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+
 // The People tab is the old members dialog moved onto the settings page, with
 // every failure shown rather than swallowed, a Joined column, and no message
 // box the API never read.
@@ -51,7 +56,6 @@ beforeEach(() => {
   })
   api.patch.mockReset().mockResolvedValue({})
   api.delete.mockReset().mockResolvedValue(undefined)
-  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 })
 
 afterEach(() => {

@@ -19,6 +19,11 @@ import ProjectSettingsPage from '../page'
 import { useAuthStore } from '@/stores/auth-store'
 import { useBrandingStore } from '@/stores/branding-store'
 
+// jsdom has no ResizeObserver, and Radix measures with it in layout effects. Set once for
+// the file, not with vi.stubGlobal: afterEach's unstubAllGlobals would remove it, and a
+// render that commits after a test's last await (Retry, SWR revalidation) then throws.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+
 // Project settings is the owner's page: the API refuses everyone else's saves
 // on it, so they get a short card instead of forms. Each tab is reachable as
 // ?tab=, and a draft on General survives a visit to another tab.
@@ -69,7 +74,6 @@ beforeEach(() => {
     if (url.startsWith('/users?ids=')) return [{ id: 'u1', name: 'Owner', email: 'o@example.com' }]
     throw new Error(`unexpected GET ${url}`)
   })
-  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 })
 
 afterEach(() => {
