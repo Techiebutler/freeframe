@@ -36,9 +36,10 @@ export function ShareBrandMark({ theme }: { theme: 'dark' | 'light' }) {
       <img
         src={displayLogo}
         alt={orgName}
-        // Capped, and tighter on a phone, so a wide wordmark cannot squeeze the
-        // asset name out of a header that also holds Download and the toggle.
-        className="h-6 w-auto max-w-[64px] sm:max-w-[128px] object-contain shrink-0"
+        // Capped, tighter on a phone, and the first thing in the header to give
+        // way (down to 24px, the size of the default mark), so a wide wordmark
+        // cannot squeeze out the asset name beside it.
+        className="h-6 w-auto min-w-6 max-w-[64px] sm:max-w-[128px] object-contain object-left shrink"
         onError={() => setFailedUrl(displayLogo)}
       />
     )

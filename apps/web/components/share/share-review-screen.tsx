@@ -291,7 +291,7 @@ function ShareReviewInner({
     <div className="flex flex-col h-dvh bg-bg-primary text-text-primary pl-safe pr-safe">
       {/* Top bar — same style as project review */}
       <div className="flex items-center justify-between border-b border-border px-3 h-12 bg-bg-secondary shrink-0">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        <div className="flex items-center gap-1 sm:gap-2 min-w-0 flex-1">
           {/* A single-asset link has no grid to go back to, so there is nothing
               for this to do there. */}
           {onBack && (
@@ -300,7 +300,9 @@ function ShareReviewInner({
             </button>
           )}
           <ShareBrandMark theme={theme} />
-          <span className="text-[13px] font-medium text-text-primary truncate">{assetName}</span>
+          {/* The name gives way last: the logo shrinks first (ShareBrandMark),
+              and Download is icon-only on a phone. */}
+          <span className="text-[13px] font-medium text-text-primary truncate min-w-[4rem]">{assetName}</span>
         </div>
         <div className="flex items-center gap-2">
           {showVersions && VersionSwitcher && versions.length > 0 && (
@@ -311,8 +313,8 @@ function ShareReviewInner({
               load={() => fetchShareDownloadOptions(token, asset.id, shareSession)}
               onPick={(rendition) => handleDownload(token, asset.id, shareSession, rendition)}
             >
-              <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors">
-                <Download className="h-3 w-3" /> Download
+              <button aria-label="Download" className="flex items-center gap-1.5 h-7 px-2 sm:px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors">
+                <Download className="h-3 w-3" /> <span className="hidden sm:inline">Download</span>
                 <ChevronDown className="h-3 w-3 opacity-70" />
               </button>
             </DownloadMenu>
