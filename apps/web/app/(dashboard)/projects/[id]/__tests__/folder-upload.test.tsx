@@ -19,6 +19,8 @@ import { render, screen, fireEvent, createEvent, waitFor } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 
 const project = { id: 'p1', name: 'Launch film', is_public: false }
+// The signed-in user's role, as the members request answers it.
+const { member } = vi.hoisted(() => ({ member: { role: 'editor' } }))
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: 'p1' }),
@@ -29,7 +31,7 @@ vi.mock('swr', () => ({
   default: (key: string | null) => ({
     data: typeof key !== 'string' ? undefined
       : key === '/projects/p1' ? project
-      : key === '/projects/p1/members' ? [{ user_id: 'u1', role: 'editor' }]
+      : key === '/projects/p1/members' ? [{ user_id: 'u1', role: member.role }]
       : key.startsWith('/projects/p1/assets') ? []
       : key.startsWith('/projects/p1/folders') ? []
       : undefined,
@@ -134,6 +136,7 @@ beforeEach(() => {
   window.localStorage.clear()
   useUploadStore.setState({ files: [], dropNotes: [], panelOpen: false })
   signInAs('u1')
+  member.role = 'editor'
   giveEverythingABox()
   vi.mocked(api.post).mockImplementation(((path: string, body?: unknown) => {
     if (path === '/projects/p1/folders/ensure') {
@@ -198,5 +201,27 @@ describe('the Upload button', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Upload your first asset' }))
 
     expect(await screen.findByRole('menuitem', { name: /Upload folder/ })).toBeInTheDocument()
+  })
+})
+
+describe('who is offered an upload', () => {
+  it.each(['owner', 'editor'])('a project %s gets the Upload menu, the empty-state button and both inputs', (role) => {
+    member.role = role
+    render(page())
+
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Upload your first asset' })).toBeInTheDocument()
+    expect(screen.getByTestId('upload-files-input')).toBeInTheDocument()
+    expect(screen.getByTestId('upload-folder-input')).toBeInTheDocument()
+  })
+
+  it.each(['reviewer', 'viewer'])('a project %s gets no Upload menu, no empty-state button and no inputs', (role) => {
+    member.role = role
+    render(page())
+
+    expect(screen.queryByRole('button', { name: 'Upload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Upload your first asset' })).toBeNull()
+    expect(screen.queryByTestId('upload-files-input')).toBeNull()
+    expect(screen.queryByTestId('upload-folder-input')).toBeNull()
   })
 })
