@@ -541,3 +541,144 @@ def test_get_depth_terminates_on_a_parent_cycle(w):
     chain = _chain(w, 3)
     assert _get_depth(w.db, chain[-1]) == 3
     assert _get_depth(w.db, None) == 0
+
+
+# ─── Racing ordinary writers ──────────────────────────────────────────────────
+#
+# These also need connections that really commit, so they make and remove
+# their own rows through the `committed` fixture.
+
+
+class Committed:
+    pass
+
+
+@pytest.fixture
+def committed():
+    """A committed editor, project and root folder `P`, removed afterwards."""
+    from apps.api.database import engine
+
+    c = Committed()
+    c.engine = engine
+    suffix = uuid.uuid4().hex[:10]
+    c.user_id, c.project_id, c.parent_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    with Session(engine) as setup:
+        setup.add(User(id=c.user_id, email=f"ensure-race-{suffix}@t.local", name="Race"))
+        setup.flush()
+        setup.add(Project(id=c.project_id, name=f"ensure-race-{suffix}",
+                          project_type=ProjectType.personal, created_by=c.user_id))
+        setup.flush()
+        setup.add(ProjectMember(project_id=c.project_id, user_id=c.user_id,
+                                role=ProjectRole.editor))
+        setup.add(Folder(id=c.parent_id, project_id=c.project_id, name="P",
+                         created_by=c.user_id))
+        setup.commit()
+    try:
+        yield c
+    finally:
+        with engine.begin() as conn:
+            for _ in range(MAX_DEPTH + 2):
+                conn.execute(
+                    text("DELETE FROM folders f WHERE f.project_id = :p AND NOT EXISTS "
+                         "(SELECT 1 FROM folders c WHERE c.parent_id = f.id)"),
+                    {"p": c.project_id},
+                )
+            conn.execute(text("DELETE FROM project_members WHERE project_id = :p"),
+                         {"p": c.project_id})
+            conn.execute(text("DELETE FROM projects WHERE id = :p"), {"p": c.project_id})
+            conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": c.user_id})
+
+
+def _in_thread(engine, work):
+    """Run `work(session)` on its own connection in a thread. Returns the
+    thread, a queue holding the connection's backend pid, and one that gets the
+    result or the exception."""
+    pid: queue.Queue = queue.Queue()
+    result: queue.Queue = queue.Queue()
+
+    def run():
+        try:
+            with Session(engine) as s:
+                pid.put(s.execute(text("SELECT pg_backend_pid()")).scalar())
+                result.put(work(s))
+        except Exception as e:  # surfaced by the caller
+            result.put(e)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, pid, result
+
+
+def _wait_until_blocked(engine, pid: int, thread: threading.Thread) -> bool:
+    """True once backend `pid` waits on any lock, False if `thread` ends first
+    or ten seconds pass."""
+    deadline = time.monotonic() + 10
+    with engine.connect() as probe:
+        while time.monotonic() < deadline and thread.is_alive():
+            waiting = probe.execute(
+                text("SELECT count(*) FROM pg_locks WHERE pid = :pid AND NOT granted"),
+                {"pid": pid},
+            ).scalar()
+            if waiting:
+                return True
+            time.sleep(0.02)
+    return False
+
+
+def _live_folders(engine, project_id) -> list[tuple]:
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT id, parent_id, name FROM folders WHERE project_id = :p "
+                 "AND deleted_at IS NULL"),
+            {"p": project_id},
+        ).all()
+
+
+@pytest.mark.parametrize("outcome", ["commit", "rollback"])
+def test_a_plain_create_in_flight_under_the_parent_is_reused_or_replaced(committed, outcome):
+    """An ordinary folder create does not take the project lock. When it has
+    inserted `N` under P but not committed, ensure's insert of N waits on the
+    unique index, skips the row if the create commits and reuses that folder,
+    and makes N itself if the create rolls back. Either way there is one N."""
+    from apps.api.services.folder_paths import ensure_folder_paths
+
+    c = committed
+    plain = Session(c.engine)
+    plain_n_id = uuid.uuid4()
+    plain.add(Folder(id=plain_n_id, project_id=c.project_id, parent_id=c.parent_id,
+                     name="N", created_by=c.user_id))
+    plain.flush()
+
+    def ensure(s):
+        got = ensure_folder_paths(s, c.project_id, c.parent_id, [("N", "M")], c.user_id)
+        s.commit()
+        return got
+
+    thread, pid, result = _in_thread(c.engine, ensure)
+    try:
+        assert _wait_until_blocked(c.engine, pid.get(timeout=10), thread), \
+            "ensure never waited for the uncommitted N"
+        if outcome == "commit":
+            plain.commit()
+        else:
+            plain.rollback()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        got = result.get(timeout=1)
+        assert not isinstance(got, Exception), got
+    finally:
+        plain.close()
+
+    rows = _live_folders(c.engine, c.project_id)
+    by_name: dict[str, list] = {}
+    for row in rows:
+        by_name.setdefault(row.name, []).append(row)
+    assert sorted(by_name) == ["M", "N", "P"]
+    assert all(len(v) == 1 for v in by_name.values()), rows
+    n, m = by_name["N"][0], by_name["M"][0]
+    assert n.parent_id == c.parent_id and m.parent_id == n.id
+    assert got[("N", "M")] == m.id
+    if outcome == "commit":
+        assert n.id == plain_n_id
+    else:
+        assert n.id != plain_n_id
