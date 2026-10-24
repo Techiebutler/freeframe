@@ -140,7 +140,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  useBrandingStore.setState({ loaded: false, primaryColor: null })
+  useBrandingStore.setState({ loaded: false, primaryColor: null, poweredByFreeframe: true })
 })
 
 describe('project details', () => {
@@ -353,6 +353,31 @@ describe('saving several parts', () => {
     expect(screen.getByLabelText('Name')).toHaveValue('Launch film')
     expect(screen.getByLabelText('Footer text')).toHaveValue('Confidential')
     expect(saveButton()).toBeDisabled()
+  })
+})
+
+describe('the save bar under the floating credit', () => {
+  // The dashboard shell floats "Powered by FreeFrame" 1rem from the window's
+  // bottom-right corner, and the bar is pinned to the bottom of the page with
+  // Save at its right end. Measured in Chromium at 375x740, 768x900 and
+  // 1280x800, `elementFromPoint` at the centre of Save returned the badge's
+  // span, and a click on Save opened the repository in a new tab instead of
+  // saving. jsdom cannot hit-test, so what is checked is the reservation that
+  // keeps the bar's controls above the badge, as on the project page's panel.
+  const RESERVE = 'pb-[calc(3.5rem+env(safe-area-inset-bottom))]'
+
+  it('keeps the badge corner clear while the badge is shown', async () => {
+    useBrandingStore.setState({ loaded: true, poweredByFreeframe: true })
+    renderTab()
+    await loaded()
+    expect(saveBar().className.split(/\s+/)).toContain(RESERVE)
+  })
+
+  it('reserves nothing when "Powered by FreeFrame" is turned off', async () => {
+    useBrandingStore.setState({ loaded: true, poweredByFreeframe: false })
+    renderTab()
+    await loaded()
+    expect(saveBar().className).not.toContain('safe-area-inset-bottom')
   })
 })
 

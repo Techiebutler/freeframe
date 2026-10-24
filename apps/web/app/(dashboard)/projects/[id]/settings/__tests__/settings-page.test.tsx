@@ -17,6 +17,7 @@ vi.mock('@/hooks/use-page-title', () => ({ usePageTitle: () => undefined }))
 
 import ProjectSettingsPage from '../page'
 import { useAuthStore } from '@/stores/auth-store'
+import { useBrandingStore } from '@/stores/branding-store'
 
 // Project settings is the owner's page: the API refuses everyone else's saves
 // on it, so they get a short card instead of forms. Each tab is reachable as
@@ -74,6 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   useAuthStore.setState({ user: null } as never)
+  useBrandingStore.setState({ loaded: false, poweredByFreeframe: true })
 })
 
 describe('who sees the settings', () => {
@@ -170,5 +172,34 @@ describe('the General draft', () => {
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'General' }))
     await waitFor(() => expect(panel()).toHaveAttribute('data-state', 'active'))
     expect(screen.getByLabelText('Name')).toHaveValue('Unsaved name')
+  })
+})
+
+describe('the end of a tab under the floating credit', () => {
+  // The shell floats "Powered by FreeFrame" 1rem above the window's bottom
+  // edge, on the right. Measured in Chromium at 375x740 with four members,
+  // the last row's Remove button was under it at the end of the scroll:
+  // `elementFromPoint` returned the badge's span. People and Danger end in
+  // that corner, so they leave room below their content while the badge is
+  // shown. General needs none: its save bar reserves the corner itself.
+  const RESERVE = 'pb-[calc(3.5rem+env(safe-area-inset-bottom))]'
+  // General stays mounted behind the others, so there are two panels.
+  const activePanel = () =>
+    screen.getAllByRole('tabpanel').find((p) => p.getAttribute('data-state') === 'active') as HTMLElement
+
+  it.each([['people'], ['danger']])('the %s tab can scroll its last control clear of the badge', async (tab) => {
+    useBrandingStore.setState({ loaded: true, poweredByFreeframe: true })
+    nav.search = `tab=${tab}`
+    renderPage()
+    await screen.findByRole('tab', { name: tab === 'people' ? 'People' : 'Danger' })
+    expect(activePanel().className.split(/\s+/)).toContain(RESERVE)
+  })
+
+  it('reserves nothing when "Powered by FreeFrame" is turned off', async () => {
+    useBrandingStore.setState({ loaded: true, poweredByFreeframe: false })
+    nav.search = 'tab=people'
+    renderPage()
+    await screen.findByRole('tab', { name: 'People' })
+    expect(activePanel().className).not.toContain('safe-area-inset-bottom')
   })
 })

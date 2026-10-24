@@ -684,11 +684,21 @@ function SaveBar({
   status: SaveStatus
   onDiscard: () => void
 }) {
+  const { poweredByFreeframe } = useBranding()
   return (
     <div
       role="region"
       aria-label="Save changes"
-      className="sticky bottom-0 z-10 -mx-4 border-t border-border bg-bg-primary/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6"
+      className={cn(
+        'sticky bottom-0 z-10 -mx-4 border-t border-border bg-bg-primary/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6',
+        // The shell's floating "Powered by FreeFrame" badge sits 1rem from the
+        // window's bottom-right corner, which is where this bar pins Save, and
+        // it is drawn above the bar: a click on Save opened the repository in
+        // a new tab instead. The reserve is the badge's inset plus its height
+        // with room to spare, so the buttons sit above it. See the badge in
+        // (dashboard)/layout.tsx.
+        poweredByFreeframe && 'pb-[calc(3.5rem+env(safe-area-inset-bottom))]',
+      )}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div aria-live="polite" className="min-w-0 flex-1 text-sm">

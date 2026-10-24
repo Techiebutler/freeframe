@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/shared/skeleton'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useAuthStore } from '@/stores/auth-store'
+import { useBranding } from '@/components/shared/branding-provider'
 import { ProjectGeneralTab } from '@/components/projects/settings/general-tab'
 import { ProjectPeopleTab } from '@/components/projects/settings/people-tab'
 import { ProjectDangerTab } from '@/components/projects/settings/danger-tab'
@@ -43,6 +44,7 @@ export default function ProjectSettingsPage() {
   const searchParams = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const userId = useAuthStore((s) => s.user?.id)
+  const { poweredByFreeframe } = useBranding()
 
   const projectKey = `/projects/${projectId}`
   const {
@@ -106,6 +108,11 @@ export default function ProjectSettingsPage() {
       </div>
     )
   } else {
+    // People and Danger end in the bottom-right corner, where the shell floats
+    // "Powered by FreeFrame" above the page, so they leave room below their
+    // last control to scroll it clear. General needs none: its save bar
+    // reserves the corner itself. See the badge in (dashboard)/layout.tsx.
+    const clearBadge = poweredByFreeframe ? 'pb-[calc(3.5rem+env(safe-area-inset-bottom))]' : 'pb-6'
     body = (
       <Tabs.Root value={tab} onValueChange={selectTab}>
         {/* Scrolls sideways on a phone rather than wrapping. */}
@@ -134,10 +141,10 @@ export default function ProjectSettingsPage() {
         <Tabs.Content value="general" forceMount className="pt-6 data-[state=inactive]:hidden">
           <ProjectGeneralTab project={project} />
         </Tabs.Content>
-        <Tabs.Content value="people" className="pt-6">
+        <Tabs.Content value="people" className={cn('pt-6', clearBadge)}>
           <ProjectPeopleTab projectId={projectId} />
         </Tabs.Content>
-        <Tabs.Content value="danger" className="pt-6">
+        <Tabs.Content value="danger" className={cn('pt-6', clearBadge)}>
           <ProjectDangerTab projectId={projectId} projectName={project.name} />
         </Tabs.Content>
       </Tabs.Root>
