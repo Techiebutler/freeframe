@@ -17,6 +17,10 @@ interface ConfirmDialogProps {
   loading?: boolean
   /** Message from a rejected onConfirm — the dialog stays open so the caller can explain the failure. */
   error?: string | null
+  /** Holds the confirm button disabled, e.g. until a typed confirmation matches. */
+  confirmDisabled?: boolean
+  /** Extra content between the description and the buttons, such as a confirmation field. */
+  children?: React.ReactNode
   onConfirm: () => void | Promise<void>
 }
 
@@ -30,11 +34,14 @@ export function ConfirmDialog({
   variant = 'default',
   loading = false,
   error,
+  confirmDisabled = false,
+  children,
   onConfirm,
 }: ConfirmDialogProps) {
   const [isLoading, setIsLoading] = React.useState(false)
 
   async function handleConfirm() {
+    if (confirmDisabled) return
     setIsLoading(true)
     try {
       await onConfirm()
@@ -79,8 +86,10 @@ export function ConfirmDialog({
             </div>
           </div>
 
+          {children && <div className="mt-4">{children}</div>}
+
           {error && (
-            <p className="mt-3 text-xs text-status-error">{error}</p>
+            <p role="alert" className="mt-3 text-xs text-status-error">{error}</p>
           )}
 
           <div className="flex items-center justify-end gap-2 mt-5">
@@ -97,6 +106,7 @@ export function ConfirmDialog({
               size="sm"
               onClick={handleConfirm}
               loading={busy}
+              disabled={confirmDisabled}
             >
               {confirmLabel}
             </Button>

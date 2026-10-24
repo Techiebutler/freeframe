@@ -33,11 +33,13 @@ function hasIdentity(): boolean {
 }
 
 export function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, theme = 'dark', onBack,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, theme = 'dark', projectLogoUrl, onBack,
 }: {
   token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean
   /** The link's theme, which the page renders in; picks the logo variant. Dark, the share pages' default, when not given. */
   theme?: 'dark' | 'light'
+  /** The project's logo from the link's branding, shown ahead of the instance's. */
+  projectLogoUrl?: string | null
   onBack?: () => void
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
@@ -85,6 +87,7 @@ export function ShareReviewScreen({
         allowDownload={allowDownload}
         showVersions={showVersions}
         theme={theme}
+        projectLogoUrl={projectLogoUrl}
         onBack={onBack}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
@@ -98,7 +101,7 @@ export function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, showVersions, theme, onBack,
+  token, shareSession, assetName, permission, allowDownload, showVersions, theme, projectLogoUrl, onBack,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment, togglePlayback } = useReview()
@@ -299,7 +302,7 @@ function ShareReviewInner({
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
-          <ShareBrandMark theme={theme} />
+          <ShareBrandMark theme={theme} projectLogoUrl={projectLogoUrl} />
           {/* The name gives way last: the logo shrinks first (ShareBrandMark),
               and Download is icon-only on a phone. */}
           <span className="text-[13px] font-medium text-text-primary truncate min-w-[4rem]">{assetName}</span>

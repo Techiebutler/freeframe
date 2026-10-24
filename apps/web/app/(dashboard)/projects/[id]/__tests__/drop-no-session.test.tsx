@@ -81,7 +81,6 @@ vi.mock('@/components/projects/share-link-detail', () => ({
   ShareLinkSettingsPanel: () => null,
 }))
 vi.mock('@/components/projects/share-create-dialog', () => ({ ShareCreateDialog: () => null }))
-vi.mock('@/components/projects/project-members-dialog', () => ({ ProjectMembersDialog: () => null }))
 
 import ProjectDetailPage from '../page'
 import { ToastProvider } from '@/components/shared/toast'

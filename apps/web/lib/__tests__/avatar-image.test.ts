@@ -5,7 +5,7 @@
  * orientation, the centre crop, and never scaling a small picture up.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { AvatarImageError, prepareAvatar } from '../avatar-image'
+import { AvatarImageError, prepareAvatar, prepareLogo } from '../avatar-image'
 
 function file(type: string, size = 1000): File {
   const f = new File(['x'], 'pic', { type })
@@ -88,5 +88,32 @@ describe('prepareAvatar', () => {
   it('reports a canvas that will not encode', async () => {
     vi.mocked(HTMLCanvasElement.prototype.toBlob).mockImplementation((cb) => cb(null))
     await expect(prepareAvatar(file('image/png'))).rejects.toThrow("couldn't be read")
+  })
+})
+
+// A project logo is often a wide wordmark: the whole picture is kept and only
+// scaled down, never cropped to a square.
+describe('prepareLogo', () => {
+  it('keeps a wide logo whole and scales its longest side to 512', async () => {
+    bitmap = { width: 2000, height: 500, close: vi.fn() }
+    await prepareLogo(file('image/png'))
+
+    expect(canvas.width).toBe(512)
+    expect(canvas.height).toBe(128)
+    expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 2000, 500, 0, 0, 512, 128)
+    expect(toBlobType).toBe('image/webp')
+    expect(bitmap.close).toHaveBeenCalled()
+  })
+
+  it('does not scale a small logo up', async () => {
+    bitmap = { width: 200, height: 80, close: vi.fn() }
+    await prepareLogo(file('image/jpeg'))
+    expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 200, 80, 0, 0, 200, 80)
+  })
+
+  it('applies the same type and size checks as an avatar', async () => {
+    await expect(prepareLogo(file('image/gif'))).rejects.toThrow(AvatarImageError)
+    await expect(prepareLogo(file('image/png', 10 * 1024 * 1024 + 1))).rejects.toThrow('under 10 MB')
+    expect(createImageBitmap).not.toHaveBeenCalled()
   })
 })

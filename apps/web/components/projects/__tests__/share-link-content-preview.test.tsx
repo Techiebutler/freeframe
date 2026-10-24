@@ -228,6 +228,60 @@ describe('ShareLinkContent preview', () => {
         </SWRConfig>,
       )
       await waitFor(() => expect(frame().style.getPropertyValue('--accent')).toBe('#0000cc'))
+      // A single asset opens in the review screen, which has no footer.
+      expect(screen.queryByTestId('share-preview-footer')).toBeNull()
+    })
+  })
+
+  // The share API now sends the project's branding for every link type, so a
+  // folder or project link previews it too: colour, logo and footer.
+  describe('project branding on a folder link', () => {
+    const frame = () => screen.getByTestId('share-preview-frame')
+
+    function renderWithBranding(branding: Record<string, unknown>, project: Record<string, unknown> = {}) {
+      useBrandingStore.setState({ loaded: true, primaryColor: '#00aa00' })
+      get.mockReset().mockImplementation((url: string) => {
+        if (url === '/projects/p1/branding') return Promise.resolve(branding)
+        if (url === '/projects/p1') return Promise.resolve({ id: 'p1', name: 'P', poster_url: null, ...project })
+        return Promise.resolve({
+          id: 'l1', token: 'tok', title: 'Link', folder_id: 'f1', asset_id: null,
+          permission: 'comment', visibility: 'public', allow_download: false,
+          show_versions: true, show_watermark: false, is_enabled: true,
+          has_password: false, appearance: APPEARANCE, created_at: '2026-10-01T00:00:00Z',
+          expires_at: null,
+        })
+      })
+      return render(
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+          <ShareLinkContent token="tok" projectId="p1" onBack={() => {}} frontendUrl="http://localhost:3000" />
+        </SWRConfig>,
+      )
+    }
+
+    it('takes the project colour ahead of the instance one', async () => {
+      renderWithBranding({ primary_color: '#0000cc', use_cover_as_logo: false, logo_url: null, custom_footer: null })
+      await waitFor(() => expect(frame().style.getPropertyValue('--accent')).toBe('#0000cc'))
+    })
+
+    it('shows the project logo and footer', async () => {
+      renderWithBranding({
+        primary_color: null,
+        use_cover_as_logo: false,
+        logo_url: 'https://cdn.example/logo.webp',
+        custom_footer: 'All rights reserved',
+      })
+      expect(await screen.findByText('All rights reserved')).toBeTruthy()
+      expect(screen.getByAltText('Project logo')).toHaveAttribute('src', 'https://cdn.example/logo.webp')
+    })
+
+    it('shows the cover when the project uses it as its logo', async () => {
+      renderWithBranding(
+        { primary_color: null, use_cover_as_logo: true, logo_url: 'https://cdn.example/logo.webp', custom_footer: null },
+        { poster_url: 'https://cdn.example/cover.jpg' },
+      )
+      await waitFor(() =>
+        expect(screen.getByAltText('Project logo')).toHaveAttribute('src', 'https://cdn.example/cover.jpg'),
+      )
     })
   })
 })

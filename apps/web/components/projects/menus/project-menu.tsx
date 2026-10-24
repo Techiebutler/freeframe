@@ -1,12 +1,11 @@
 'use client'
 
 import * as React from 'react'
+import { useRouter } from 'next/navigation'
 import { ExternalLink, Link as LinkIcon, Settings, Trash2 } from 'lucide-react'
-import { api } from '@/lib/api'
 import { copyToClipboard } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { MenuAction, MenuLabel, MenuSeparator } from '@/components/shared/item-menu'
-import { ProjectSettingsDialog } from '../project-settings-dialog'
 import type { Project } from '@/types'
 
 /**
@@ -14,28 +13,14 @@ import type { Project } from '@/types'
  * list row. Owners only: everyone else gets null, and keeps the browser's menu.
  * The card is a link, and this menu replaces the browser's, so it carries the
  * two link entries people use there.
- * The settings dialog comes back as `dialogs`, for the caller to render once.
+ *
+ * Settings and Delete both open the project's settings page; deleting happens
+ * on its Danger tab, behind a typed confirmation.
  */
-export function useProjectMenu(
-  project: Project,
-  { isOwner, onMutate }: { isOwner?: boolean; onMutate?: () => void },
-) {
-  const [settingsOpen, setSettingsOpen] = React.useState(false)
-  const [deleting, setDeleting] = React.useState(false)
+export function useProjectMenu(project: Project, { isOwner }: { isOwner?: boolean }) {
+  const router = useRouter()
   const canManage = isOwner || project.role === 'owner'
-
-  const handleDelete = async () => {
-    if (!confirm(`Delete "${project.name}"? This action cannot be undone.`)) return
-    setDeleting(true)
-    try {
-      await api.delete(`/projects/${project.id}`)
-      onMutate?.()
-    } catch {
-      // silently fail
-    } finally {
-      setDeleting(false)
-    }
-  }
+  const settingsPath = `/projects/${project.id}/settings`
 
   const projectUrl = () => `${window.location.origin}${withBasePath(`/projects/${project.id}`)}`
 
@@ -49,24 +34,15 @@ export function useProjectMenu(
         Copy Link
       </MenuAction>
       <MenuSeparator />
-      <MenuAction icon={Settings} onSelect={() => setSettingsOpen(true)}>
+      <MenuAction icon={Settings} onSelect={() => router.push(settingsPath)}>
         Project Settings
       </MenuAction>
       <MenuSeparator />
-      <MenuAction icon={Trash2} onSelect={handleDelete} disabled={deleting} danger>
-        Delete
+      <MenuAction icon={Trash2} onSelect={() => router.push(`${settingsPath}?tab=danger`)} danger>
+        Delete Project
       </MenuAction>
     </>
   ) : null
 
-  const dialogs = canManage ? (
-    <ProjectSettingsDialog
-      project={project}
-      open={settingsOpen}
-      onOpenChange={setSettingsOpen}
-      onUpdated={() => onMutate?.()}
-    />
-  ) : null
-
-  return { items, dialogs }
+  return { items }
 }

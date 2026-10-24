@@ -12,6 +12,9 @@ import type { Project, ShareLinkListItem } from '@/types'
 const mockApi = vi.hoisted(() => ({ get: vi.fn(), delete: vi.fn(), patch: vi.fn(), post: vi.fn() }))
 vi.mock('@/lib/api', () => ({ api: mockApi }))
 
+const mockPush = vi.hoisted(() => vi.fn())
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush, replace: vi.fn() }) }))
+
 const mockCopy = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/utils', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/utils')>()),
@@ -59,7 +62,7 @@ describe('ProjectCard', () => {
     render(<ProjectCard project={project} isOwner />)
     fireEvent.contextMenu(screen.getByText('Season 2'))
     const items = await menuItems()
-    expect(items).toEqual(['Open in New Tab', 'Copy Link', 'Project Settings', 'Delete'])
+    expect(items).toEqual(['Open in New Tab', 'Copy Link', 'Project Settings', 'Delete Project'])
     await user().keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
 
@@ -79,6 +82,25 @@ describe('ProjectCard', () => {
     await user().click(await screen.findByRole('menuitem', { name: 'Copy Link' }))
     expect(mockCopy).toHaveBeenCalledWith(expect.stringMatching(/\/projects\/p1$/))
     open.mockRestore()
+  })
+
+  // Settings and deleting both live on the settings page now: no dialog over
+  // the grid, and no native confirm() for the one action that cannot be undone.
+  it('opens the settings page, and its Danger tab to delete', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm')
+    render(<ProjectCard project={project} isOwner />)
+
+    fireEvent.contextMenu(screen.getByText('Season 2'))
+    await user().click(await screen.findByRole('menuitem', { name: 'Project Settings' }))
+    expect(mockPush).toHaveBeenLastCalledWith('/projects/p1/settings')
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.contextMenu(screen.getByText('Season 2'))
+    await user().click(await screen.findByRole('menuitem', { name: 'Delete Project' }))
+    expect(mockPush).toHaveBeenLastCalledWith('/projects/p1/settings?tab=danger')
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(mockApi.delete).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
   })
 
   it('gives everyone else the browser menu, as there is no ⋯ for them', () => {

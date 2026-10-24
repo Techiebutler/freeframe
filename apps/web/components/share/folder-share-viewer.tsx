@@ -38,6 +38,7 @@ import type {
   FolderShareAssetsResponse,
   FolderShareAssetItem,
   FolderShareSubfolder,
+  ShareBranding,
 } from '@/types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -64,12 +65,8 @@ interface FolderShareViewerProps {
   allowDownload: boolean
   showVersions: boolean
   appearance: ShareLinkAppearance
-  branding: {
-    logo_url?: string
-    primary_color?: string
-    custom_title?: string
-    custom_footer?: string
-  } | null
+  /** The project's, sent for every link type: header logo, accent and footer. */
+  branding: ShareBranding | null
   onAssetClick?: (assetId: string) => void
 }
 
@@ -575,6 +572,7 @@ interface AssetViewerProps {
   allowDownload: boolean
   showVersions: boolean
   theme: 'dark' | 'light'
+  projectLogoUrl: string | null
   onBack: () => void
 }
 
@@ -608,7 +606,7 @@ function HlsVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={videoRef} controls className={className} />
 }
 
-function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, theme, onBack }: AssetViewerProps) {
+function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, theme, projectLogoUrl, onBack }: AssetViewerProps) {
   // Use the same ReviewProvider as the project review page, but with shareToken
   // This gives us the same video player, image viewer, comment panel, etc.
   return (
@@ -622,6 +620,7 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, sh
         allowDownload={allowDownload}
         showVersions={showVersions}
         theme={theme}
+        projectLogoUrl={projectLogoUrl}
         onBack={onBack}
       />
     </div>
@@ -840,6 +839,7 @@ export function FolderShareViewer({
         allowDownload={allowDownload}
         showVersions={showVersions}
         theme={isDark ? 'dark' : 'light'}
+        projectLogoUrl={branding?.logo_url ?? null}
         onBack={() => setViewingAsset(null)}
       />
     )
@@ -907,7 +907,7 @@ export function FolderShareViewer({
             </DropdownMenu.Root>
           ) : (
             // The same mark the asset view shows once one is opened (#308).
-            <ShareBrandMark theme={isDark ? 'dark' : 'light'} />
+            <ShareBrandMark theme={isDark ? 'dark' : 'light'} projectLogoUrl={branding?.logo_url} />
           )}
 
           {/* Breadcrumb */}

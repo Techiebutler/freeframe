@@ -19,6 +19,7 @@ import {
   FileText,
   MoreHorizontal,
   Users,
+  Settings,
 } from "lucide-react";
 import { cn, formatRelativeTime, formatBytes } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
@@ -52,7 +53,6 @@ import {
 } from "@/components/projects/share-link-detail";
 import { NameDialog } from "@/components/projects/name-dialog";
 import { ShareCreateDialog } from "@/components/projects/share-create-dialog";
-import { ProjectMembersDialog } from "@/components/projects/project-members-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useRefetchOnUploadStatus } from "@/hooks/use-upload-refetch";
@@ -112,7 +112,6 @@ export default function ProjectDetailPage() {
     projectId?: string | null;
   } | null>(null);
   const [shareMode, setShareMode] = React.useState(false);
-  const [membersDialogOpen, setMembersDialogOpen] = React.useState(false);
   const [pendingBulkDelete, setPendingBulkDelete] = React.useState<{
     assetIds: string[];
     folderIds: string[];
@@ -938,13 +937,26 @@ export default function ProjectDetailPage() {
               actions={
                 <>
                   {canManageMembers && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setMembersDialogOpen(true)}
-                    >
-                      <Users className="h-4 w-4" />
-                    </Button>
+                    <>
+                      <Button variant="secondary" size="sm" asChild>
+                        <Link
+                          href={`/projects/${projectId}/settings?tab=people`}
+                          aria-label="Members"
+                          title="Members"
+                        >
+                          <Users className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                      <Button variant="secondary" size="sm" asChild>
+                        <Link
+                          href={`/projects/${projectId}/settings`}
+                          aria-label="Project settings"
+                          title="Project settings"
+                        >
+                          <Settings className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    </>
                   )}
                   {canShare && (
                     <Button
@@ -1302,14 +1314,6 @@ export default function ProjectDetailPage() {
           setSelectedShareLink(token);
           setShowTrash(false);
         }}
-      />
-
-      {/* Project members dialog */}
-      <ProjectMembersDialog
-        open={membersDialogOpen}
-        onOpenChange={setMembersDialogOpen}
-        projectId={projectId}
-        projectName={project?.name ?? ""}
       />
 
       {/* Bulk delete confirmation */}

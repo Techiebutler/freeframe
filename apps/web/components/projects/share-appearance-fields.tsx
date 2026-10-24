@@ -71,17 +71,24 @@ export function appearanceFromView(): Partial<ShareLinkAppearance> {
 }
 
 /**
- * A link's own accent: a hex field and a colour picker. The field commits on
- * blur or Enter; blank clears the accent (the page falls back to the
- * project's branding, then the theme's), and anything that isn't a 6-digit hex
- * snaps back rather than being sent for the API to refuse.
+ * A colour setting: a hex field and a colour picker. The field commits on blur
+ * or Enter; blank clears the colour (whatever the setting falls back to takes
+ * over), and anything that isn't a 6-digit hex snaps back rather than being
+ * sent for the API to refuse.
+ *
+ * A link's own accent uses it, as does a project's branding colour.
+ * `name` is the setting's name in its accessible labels ("accent colour").
  */
-function AccentRow({
+export function HexColorField({
+  label,
+  name,
   value,
   onChange,
 }: {
+  label: string
+  name: string
   value: string | null
-  onChange: (accent: string | null) => void
+  onChange: (color: string | null) => void
 }) {
   const stored = value?.replace('#', '') ?? ''
   const [draft, setDraft] = React.useState(stored)
@@ -100,9 +107,10 @@ function AccentRow({
     }
     if (color !== value?.toLowerCase()) onChange(color)
   }
+  const Name = name.charAt(0).toUpperCase() + name.slice(1)
 
   return (
-    <SettingRow label="Accent Color">
+    <SettingRow label={label}>
       <div className="flex items-center gap-2">
         <div className="flex items-center rounded-md border border-border bg-bg-tertiary pl-2 focus-within:ring-2 focus-within:ring-accent">
           <span className="text-xs text-text-tertiary">#</span>
@@ -119,7 +127,7 @@ function AccentRow({
             }}
             placeholder="Default"
             maxLength={7}
-            aria-label="Accent colour hex"
+            aria-label={`${Name} hex`}
             className="w-16 bg-transparent px-1 py-1 text-xs font-mono text-text-primary placeholder:text-text-tertiary outline-none"
           />
         </div>
@@ -131,7 +139,7 @@ function AccentRow({
             type="color"
             value={value ?? '#5b8def'}
             onChange={(e) => onChange(e.target.value)}
-            aria-label="Accent colour picker"
+            aria-label={`${Name} picker`}
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
           />
         </label>
@@ -139,7 +147,7 @@ function AccentRow({
           <button
             type="button"
             onClick={() => onChange(null)}
-            aria-label="Clear accent colour"
+            aria-label={`Clear ${name}`}
             className="rounded p-0.5 text-text-tertiary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <X className="h-3.5 w-3.5" />
@@ -281,7 +289,9 @@ export function ShareAppearanceFields({
           value={appearance.theme === 'light' ? 'light' : 'dark'}
           onChange={(theme) => onChange({ theme })}
         />
-        <AccentRow
+        <HexColorField
+          label="Accent Color"
+          name="accent colour"
           value={appearance.accent_color}
           onChange={(accent_color) => onChange({ accent_color })}
         />

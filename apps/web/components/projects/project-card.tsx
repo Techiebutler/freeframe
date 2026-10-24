@@ -16,7 +16,6 @@ interface ProjectCardProps {
   /** Show the info row under the poster. */
   showInfo?: boolean
   className?: string
-  onMutate?: () => void
 }
 
 export function ProjectCard({
@@ -25,10 +24,9 @@ export function ProjectCard({
   isOwner,
   showInfo = true,
   className,
-  onMutate,
 }: ProjectCardProps) {
   const assetCount = project.asset_count ?? 0
-  const { items: menuItems, dialogs: menuDialogs } = useProjectMenu(project, { isOwner, onMutate })
+  const { items: menuItems } = useProjectMenu(project, { isOwner })
 
   return (
     <>
@@ -105,8 +103,6 @@ export function ProjectCard({
         )}
       </div>
       </ContextMenuArea>
-
-      {menuDialogs}
     </>
   )
 }

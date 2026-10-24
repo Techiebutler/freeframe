@@ -48,18 +48,13 @@ function ProjectListRow({
   project,
   showRole,
   isOwner,
-  onMutate,
 }: {
   project: Project;
   showRole?: boolean;
   isOwner?: boolean;
-  onMutate?: () => void;
 }) {
   // The card's menu, on right-click: a list row has no ⋯ button.
-  const { items: menuItems, dialogs: menuDialogs } = useProjectMenu(project, {
-    isOwner,
-    onMutate,
-  });
+  const { items: menuItems } = useProjectMenu(project, { isOwner });
   const roleName =
     project.role === "owner"
       ? "Owner"
@@ -121,7 +116,6 @@ function ProjectListRow({
       )}
     </Link>
     </ContextMenuArea>
-    {menuDialogs}
     </>
   );
 }
@@ -138,7 +132,6 @@ function ProjectSection({
   showNewButton,
   showRole,
   userId,
-  onMutate,
 }: {
   title: string;
   icon?: React.ReactNode;
@@ -151,7 +144,6 @@ function ProjectSection({
   showNewButton?: boolean;
   showRole?: boolean;
   userId?: string;
-  onMutate?: () => void;
 }) {
   if (projects.length === 0 && !showNewButton) {
     return null;
@@ -193,7 +185,6 @@ function ProjectSection({
               showRole={showRole}
               isOwner={!!userId && project.created_by === userId}
               showInfo={showCardInfo}
-              onMutate={onMutate}
             />
           ))}
           {showNewButton && onNewProject && (
@@ -218,7 +209,6 @@ function ProjectSection({
               project={project}
               showRole={showRole}
               isOwner={!!userId && project.created_by === userId}
-              onMutate={onMutate}
             />
           ))}
           {showNewButton && onNewProject && (
@@ -488,7 +478,6 @@ export default function ProjectsPage() {
             onNewProject={() => setDialogOpen(true)}
             showNewButton
             userId={user?.id}
-            onMutate={() => mutate()}
           />
           {sharedProjects.length > 0 && (
             <ProjectSection
@@ -501,7 +490,6 @@ export default function ProjectsPage() {
               emptyMessage=""
               showRole
               userId={user?.id}
-              onMutate={() => mutate()}
             />
           )}
           {publicProjects.length > 0 && (
@@ -514,7 +502,6 @@ export default function ProjectsPage() {
               showCardInfo={showCardInfo}
               emptyMessage=""
               userId={user?.id}
-              onMutate={() => mutate()}
             />
           )}
         </div>

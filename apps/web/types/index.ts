@@ -454,18 +454,29 @@ export interface Notification {
 
 // ─── Branding & Watermarking ──────────────────────────────────────────────────
 
+/** GET/PUT /projects/{id}/branding. */
 export interface ProjectBranding {
   id: string;
   project_id: string;
   logo_s3_key: string | null;
+  /** A signed URL for `logo_s3_key`, or null when there is no logo. */
+  logo_url: string | null;
   primary_color: string | null;
   secondary_color: string | null;
   custom_title: string | null;
   custom_footer: string | null;
   viewer_layout: ViewerLayout;
   featured_field: string | null;
-  created_at: string;
-  updated_at: string;
+  /** Share pages show the project cover as their logo when one is set. */
+  use_cover_as_logo: boolean;
+}
+
+/** The project branding a share link's validate response carries, for every link type. */
+export interface ShareBranding {
+  /** Already resolved by the API: the cover when the project uses it, else the logo. */
+  logo_url: string | null;
+  primary_color: string | null;
+  custom_footer: string | null;
 }
 
 export interface WatermarkSettings {
