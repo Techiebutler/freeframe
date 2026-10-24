@@ -311,6 +311,28 @@ describe('saving several parts', () => {
     expect(within(saveBar()).queryByText('Saved.')).toBeNull()
   })
 
+  it('a logo that uploaded before the branding write failed is not uploaded again on retry', async () => {
+    // The object is already in the bucket under the key the API handed out.
+    // Uploading it again would leave that first object orphaned.
+    api.put.mockRejectedValueOnce(new Error('Service unavailable'))
+    renderTab()
+    await loaded()
+    pick('logo-input', 'logo.png')
+    await save()
+    expect(within(saveBar()).getByText('Branding: Service unavailable')).toBeInTheDocument()
+    expect(calls.filter((c) => c === 'POST /projects/p1/branding/logo-upload')).toHaveLength(1)
+
+    api.post.mockImplementation(async (url: string) => {
+      calls.push(`POST ${url}`)
+      return { upload_url: 'https://s3.example/second', key: 'branding/p1/logo/3.webp' }
+    })
+    calls = []
+    await save()
+    expect(calls).toEqual(['PUT /projects/p1/branding'])
+    expect(api.put).toHaveBeenLastCalledWith('/projects/p1/branding', { logo_s3_key: 'branding/p1/logo/2.webp' })
+    expect(within(saveBar()).getByText('Saved.')).toBeInTheDocument()
+  })
+
   it('a failed branding write is reported with the details still saved', async () => {
     api.put.mockRejectedValueOnce(new Error('custom_footer: too long'))
     renderTab()

@@ -128,6 +128,25 @@ describe('deep links', () => {
     expect(await screen.findByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('follows a link to another tab while the page stays mounted', async () => {
+    // The toolbar's People button and the card menu's Delete link change only
+    // the query, so the page is not remounted and has to switch on its own.
+    nav.search = 'tab=general'
+    const view = renderPage()
+    expect(await screen.findByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true')
+
+    nav.search = 'tab=people'
+    view.rerender(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0, shouldRetryOnError: false }}>
+        <ProjectSettingsPage />
+      </SWRConfig>,
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'People' })).toHaveAttribute('aria-selected', 'true'),
+    )
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'false')
+  })
+
   it('choosing a tab puts it in the URL', async () => {
     renderPage()
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'People' }))
