@@ -17,16 +17,31 @@ from ..models.user import User
 from ..schemas.folder import (
     AssetMoveRequest,
     BulkMoveRequest,
+    EnsuredFolder,
+    EnsureFoldersRequest,
+    EnsureFoldersResponse,
     FolderCreate,
     FolderResponse,
     FolderTreeNode,
     FolderUpdate,
 )
-from ..services.permissions import require_project_role, require_project_visible
+from ..services.folder_paths import (
+    MAX_ENSURE_NODES,
+    MAX_FOLDER_DEPTH,
+    _get_depth,
+    distinct_prefixes,
+    ensure_folder_paths,
+)
+from ..services.permissions import (
+    folder_chain_is_live,
+    require_project_role,
+    require_project_visible,
+)
 
 router = APIRouter(tags=["folders"])
 
-MAX_FOLDER_DEPTH = 10
+# MAX_FOLDER_DEPTH and _get_depth live in services/folder_paths, shared with
+# the folder-upload ensure service.
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -104,19 +119,6 @@ def _get_descendant_ids(db: Session, folder_id: uuid.UUID) -> list[uuid.UUID]:
             descendants.append(child_id)
             queue.append(child_id)
     return descendants
-
-
-def _get_depth(db: Session, folder_id: Optional[uuid.UUID]) -> int:
-    """Count depth from root to folder_id."""
-    depth = 0
-    current_id = folder_id
-    while current_id:
-        depth += 1
-        folder = db.query(Folder).filter(Folder.id == current_id).first()
-        if not folder:
-            break
-        current_id = folder.parent_id
-    return depth
 
 
 def _compute_item_count(db: Session, folder_id: uuid.UUID) -> int:
@@ -217,6 +219,70 @@ def create_folder(
         db.commit()
     db.refresh(folder)
     return _folder_to_response(db, folder)
+
+
+@router.post("/projects/{project_id}/folders/ensure", response_model=EnsureFoldersResponse)
+def ensure_folders(
+    project_id: uuid.UUID,
+    body: EnsureFoldersRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find or create each folder path under `parent_id` (None: the project
+    root), for a folder upload. Each segment reuses the live folder of that
+    name under that parent, or is created, so uploading the same folder twice
+    merges. Paths deeper than MAX_FOLDER_DEPTH allows, counted from the project
+    root, are cut; a null folder_id means the parent itself.
+
+    Editor or above. The parent must be a live folder of this project with no
+    trashed folder above it.
+    """
+    require_project_role(db, project_id, current_user, ProjectRole.editor)
+
+    paths = body.normalized_paths()
+    if distinct_prefixes(paths) > MAX_ENSURE_NODES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "too_many_folders",
+                "message": (
+                    f"This upload names more than {MAX_ENSURE_NODES} folders. "
+                    "Upload fewer folders at a time."
+                ),
+            },
+        )
+
+    if body.parent_id is not None:
+        parent = (
+            db.query(Folder.id)
+            .filter(
+                Folder.id == body.parent_id,
+                Folder.project_id == project_id,
+                Folder.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if parent is None or not folder_chain_is_live(db, body.parent_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "folder_not_in_project",
+                    "message": (
+                        "The folder you are uploading into is no longer in this project. "
+                        "Refresh the page and try again."
+                    ),
+                },
+            )
+
+    ensured = ensure_folder_paths(db, project_id, body.parent_id, paths, current_user.id)
+    db.commit()
+
+    return EnsureFoldersResponse(
+        folders=[
+            EnsuredFolder(path=sent, folder_id=ensured[normalized])
+            for sent, normalized in zip(body.paths, paths)
+        ]
+    )
 
 
 @router.get("/projects/{project_id}/folders", response_model=list[FolderResponse])
