@@ -11,6 +11,12 @@
  * The folders are made before anything is queued, and when that fails nothing
  * is: half a folder tree uploaded into the wrong place is harder to put right
  * than a drop that can be made again.
+ *
+ * A drop belongs to the account signed in when it was made. Tokens are shared
+ * by every tab, so another tab can sign in as someone else while the drop is
+ * read or its folders are made: the folders are asked for as the drop's
+ * account only (`pinSubject`), and if the tab is no longer acting as it once
+ * they exist, nothing is queued.
  */
 import { mutate as swrMutate } from 'swr'
 
@@ -57,6 +63,9 @@ export type DropOutcome =
   /** Nobody is signed in in this tab: nothing was asked or queued, and the
    *  caller tells the user to sign in. */
   | { kind: 'signed-out' }
+  /** Another account signed in after the drop was made: nothing was queued,
+   *  and nothing is said to the new account in the panel. */
+  | { kind: 'account-changed' }
 
 interface EnsureResponse {
   folders: Array<{ path: string[]; folder_id: string | null }>
@@ -99,6 +108,7 @@ export async function ensureUploadFolders(
   projectId: string,
   parentId: string | null,
   paths: string[][],
+  owner: string,
 ): Promise<Map<string, string | null>> {
   const seen = new Set<string>()
   const distinct: string[][] = []
@@ -117,6 +127,7 @@ export async function ensureUploadFolders(
     const answer = await api.post<EnsureResponse>(
       `/projects/${encodeURIComponent(projectId)}/folders/ensure`,
       { parent_id: parentId, paths: chunk },
+      { pinSubject: owner },
     )
     const folders = answer?.folders ?? []
     // One answer per path asked, in the order asked. Matched by position, not
@@ -151,20 +162,34 @@ function reasonOf(err: unknown): string {
   return 'the server did not answer'
 }
 
+/** What a drop comes to when this tab is no longer acting as `owner`. */
+function ownerGone(owner: string): DropOutcome | null {
+  const now = currentSubject()
+  if (now === owner) return null
+  return now === null ? { kind: 'signed-out' } : { kind: 'account-changed' }
+}
+
 /**
- * Starts a drop or a pick into `dest`.
+ * Starts a drop or a pick into `dest`, as `owner`.
  *
  * `collected` may be the promise `collectDataTransfer` returned during the
  * drop event: the walk goes on after the event, and this waits for it.
+ *
+ * `owner` is the account the drop was made as. It defaults to the one signed
+ * in when this is called, so call it during the drop event, or pass the
+ * account read then (a drop held until the role is known).
  */
 export async function startDrop(
   collected: Collected | Promise<Collected>,
   dest: DropDestination,
+  owner: string | null = currentSubject(),
 ): Promise<DropOutcome> {
-  const got = await collected
   // An upload belongs to the account that added it; with no session there is
   // nobody to make folders as, either.
-  if (currentSubject() === null) return { kind: 'signed-out' }
+  if (owner === null) return { kind: 'signed-out' }
+  const got = await collected
+  const goneWhileReading = ownerGone(owner)
+  if (goneWhileReading) return goneWhileReading
 
   const store = useUploadStore.getState()
   const plan = planDrop(got.files)
@@ -173,7 +198,7 @@ export async function startDrop(
   if (unread > 0) notes.push(unreadableNote(unread))
 
   if (plan.upload.length === 0) {
-    for (const text of notes.length > 0 ? notes : [NOTHING_TO_UPLOAD]) store.addDropNote(text)
+    for (const text of notes.length > 0 ? notes : [NOTHING_TO_UPLOAD]) store.addDropNote(text, owner)
     return { kind: 'nothing' }
   }
 
@@ -181,14 +206,22 @@ export async function startDrop(
   let folders = new Map<string, string | null>()
   if (dirsOf.some((d) => d.length > 0)) {
     try {
-      folders = await ensureUploadFolders(dest.projectId, dest.folderId, dirsOf)
+      folders = await ensureUploadFolders(dest.projectId, dest.folderId, dirsOf, owner)
     } catch (err) {
-      for (const text of notes) store.addDropNote(text)
-      store.addDropNote(ensureFailedNote(reasonOf(err)))
+      // A pinned request refused because the account changed is not a
+      // failure to tell the new account about.
+      const goneWhileAsking = ownerGone(owner)
+      if (goneWhileAsking) return goneWhileAsking
+      for (const text of notes) store.addDropNote(text, owner)
+      store.addDropNote(ensureFailedNote(reasonOf(err)), owner)
       return { kind: 'failed' }
     }
     await revalidateFolderCaches(dest.projectId)
   }
+
+  // Checked in the same turn as the queueing, which reads the account again.
+  const goneBeforeQueueing = ownerGone(owner)
+  if (goneBeforeQueueing) return goneBeforeQueueing
 
   const items: StartItem[] = plan.upload.map((f, i) => ({
     file: f.file,
@@ -197,8 +230,7 @@ export async function startDrop(
     folderId: dirsOf[i].length > 0 ? (folders.get(keyOf(dirsOf[i])) ?? dest.folderId) : dest.folderId,
   }))
   const ids = useUploadStore.getState().startUploads(items, dest.projectId, dest.projectName, dest.folderId)
-  // Signed out while the folders were being made.
   if (ids.length === 0) return { kind: 'signed-out' }
-  for (const text of notes) useUploadStore.getState().addDropNote(text)
+  for (const text of notes) useUploadStore.getState().addDropNote(text, owner)
   return { kind: 'queued', ids }
 }

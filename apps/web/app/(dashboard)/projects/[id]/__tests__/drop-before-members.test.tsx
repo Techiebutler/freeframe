@@ -130,6 +130,7 @@ import { ApiError } from '@/lib/api'
 import { signInAs, signOutElsewhere } from '@/test/upload-session'
 
 const NO_PERMISSION = "You don't have permission to upload to this project"
+const ACCOUNT_CHANGED = 'Another account signed in, so nothing was uploaded'
 // A new element each time: `rerender` with the same one would skip the page.
 const page = () => (
   <ToastProvider>
@@ -268,6 +269,19 @@ describe('a drop before the role is known', () => {
 
     expect(rowNames()).toEqual([])
     expect(await screen.findAllByText('Sign in to upload')).toHaveLength(1)
+  })
+
+  it('starts a held drop as the account that made it, not one signed in since', async () => {
+    const { rerender } = render(page())
+    dropFiles(screen.getByTestId('grid'), [take()])
+
+    // Another tab signs in as someone else before the role answers.
+    signInAs('u2')
+    members.data = [{ user_id: 'u1', role: 'editor' }]
+    rerender(page())
+
+    expect(await screen.findByText(ACCOUNT_CHANGED)).toBeTruthy()
+    expect(useUploadStore.getState().files).toEqual([])
   })
 
   it('holds drops on grid and sidebar folders too, then starts them once the members say editor', async () => {

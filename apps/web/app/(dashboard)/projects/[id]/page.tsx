@@ -32,6 +32,7 @@ import { CommentPanel } from "@/components/review/comment-panel";
 import { UploadMenu } from "@/components/upload/upload-menu";
 import { useFileDropRegion } from "@/components/projects/use-file-drop-region";
 import { startDrop } from "@/lib/upload-drop";
+import { currentSubject } from "@/lib/upload-owner";
 import type { Collected } from "@/lib/upload-folder-walk";
 import { useToast } from "@/components/shared/toast";
 import { useBranding } from "@/components/shared/branding-provider";
@@ -405,16 +406,24 @@ export default function ProjectDetailPage() {
    * made under that one and each file is queued into its own, named after the
    * file (`startDrop`). What the drop left out is said in the Uploads panel.
    * With no session nothing is queued, since an upload belongs to the account
-   * that added it, and the user is told once for the whole drop.
+   * that added it, and the user is told once for the whole drop. `owner` is
+   * the account the drop was made as, read when it was made: another tab can
+   * sign in as someone else before a held drop starts.
    */
   const queueDrop = React.useCallback(
-    (folderId: string | null, dropped: Collected | Promise<Collected>) => {
-      void startDrop(dropped, {
-        projectId,
-        projectName: project?.name,
-        folderId,
-      }).then((outcome) => {
+    (
+      folderId: string | null,
+      dropped: Collected | Promise<Collected>,
+      owner: string | null,
+    ) => {
+      void startDrop(
+        dropped,
+        { projectId, projectName: project?.name, folderId },
+        owner,
+      ).then((outcome) => {
         if (outcome.kind === "signed-out") toast.error("Sign in to upload");
+        if (outcome.kind === "account-changed")
+          toast.error("Another account signed in, so nothing was uploaded");
       });
     },
     [projectId, project?.name, toast],
@@ -426,16 +435,22 @@ export default function ProjectDetailPage() {
   // held is read during the drop all the same (it cannot be read later), and
   // only started once the role is known.
   const heldDrops = React.useRef<
-    { projectId: string; folderId: string | null; dropped: Promise<Collected> }[]
+    {
+      projectId: string;
+      folderId: string | null;
+      dropped: Promise<Collected>;
+      owner: string | null;
+    }[]
   >([]);
 
   const startDroppedUploads = React.useCallback(
     (folderId: string | null, dropped: Promise<Collected>) => {
+      const owner = currentSubject();
       if (dropRole === "wait") {
-        heldDrops.current.push({ projectId, folderId, dropped });
+        heldDrops.current.push({ projectId, folderId, dropped, owner });
         return;
       }
-      queueDrop(folderId, dropped);
+      queueDrop(folderId, dropped, owner);
     },
     [dropRole, projectId, queueDrop],
   );
@@ -449,7 +464,7 @@ export default function ProjectDetailPage() {
       toast.error("You don't have permission to upload to this project");
       return;
     }
-    for (const d of held) queueDrop(d.folderId, d.dropped);
+    for (const d of held) queueDrop(d.folderId, d.dropped, d.owner);
   }, [dropRole, projectId, queueDrop, toast]);
 
   const {
@@ -469,7 +484,7 @@ export default function ProjectDetailPage() {
   // The menu is only offered once the role allows uploading, so there is
   // nothing to hold.
   const handlePick = React.useCallback(
-    (picked: Collected) => queueDrop(currentFolderId, picked),
+    (picked: Collected) => queueDrop(currentFolderId, picked, currentSubject()),
     [queueDrop, currentFolderId],
   );
 

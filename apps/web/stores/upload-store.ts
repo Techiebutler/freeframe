@@ -1735,8 +1735,10 @@ export interface UploadStore {
    * file is sent as when the browser's own will not do (see `planDrop`).
    */
   startUploads: (items: StartItem[], projectId: string, projectName?: string, folderId?: string | null) => string[]
-  /** Adds a line to the top of the Uploads panel, and opens the panel to show it. */
-  addDropNote: (text: string) => void
+  /** Adds a line to the top of the Uploads panel, and opens the panel to show
+   *  it. It is shown only to `ownerId`, the account that made the drop, which
+   *  defaults to the one signed in now. */
+  addDropNote: (text: string, ownerId?: string | null) => void
   dismissDropNote: (id: string) => void
   /** Queues an interrupted row to carry on with `file`, ahead of every file not yet started. */
   resumeUpload: (fileId: string, file: File) => void
@@ -3287,8 +3289,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
       projectName,
     ),
 
-  addDropNote: (text) => {
-    const note: DropNote = { id: newRowId(), text, ownerId: currentSubject() }
+  addDropNote: (text, ownerId) => {
+    const note: DropNote = { id: newRowId(), text, ownerId: ownerId !== undefined ? ownerId : currentSubject() }
     set((s) => ({ dropNotes: [...s.dropNotes, note].slice(-MAX_DROP_NOTES), panelOpen: true }))
   },
 

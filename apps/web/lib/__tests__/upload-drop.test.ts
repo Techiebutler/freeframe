@@ -266,3 +266,117 @@ describe('what a drop leaves out', () => {
     expect(useUploadStore.getState().panelOpen).toBe(false)
   })
 })
+
+describe('a drop belongs to the account that made it', () => {
+  /** Holds every ensure answer until the test lets it go. */
+  function holdEnsure(): { release: () => void; fail: (err: unknown) => void } {
+    let release!: () => void
+    let fail!: (err: unknown) => void
+    ensureAnswer = (body) =>
+      new Promise((resolve, reject) => {
+        release = () => resolve({ folders: body.paths.map((path) => ({ path, folder_id: idFor(path) })) })
+        fail = reject
+      })
+    return {
+      release: () => release(),
+      fail: (err) => fail(err),
+    }
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+  const allNotes = () => useUploadStore.getState().dropNotes
+
+  it('asks for the folders as that account', async () => {
+    await startDrop(collected([media('a.mov', ['Shoot'])]), dest)
+
+    const ensure = vi.mocked(api.post).mock.calls.find(([path]) => String(path).endsWith('/folders/ensure'))
+    expect(ensure?.[2]).toEqual({ pinSubject: 'user-1' })
+  })
+
+  it('queues nothing when another account signs in while the folders are being made', async () => {
+    const held = holdEnsure()
+    const pending = startDrop(collected([media('a.mov', ['Shoot'])]), dest)
+    await flush()
+    expect(ensureCalls).toHaveLength(1)
+
+    signInAs('user-2')
+    held.release()
+    const out = await pending
+
+    expect(out.kind).toBe('account-changed')
+    expect(useUploadStore.getState().files).toEqual([])
+    expect(allNotes()).toEqual([])
+  })
+
+  it('says nothing to the new account when the folders fail after it signed in', async () => {
+    const held = holdEnsure()
+    const pending = startDrop(collected([media('a.mov', ['Shoot'])], { unreadable: 1 }), dest)
+    await flush()
+
+    signInAs('user-2')
+    held.fail(new ApiError(401, 'identity changed', { code: 'identity_changed' }))
+    const out = await pending
+
+    expect(out.kind).toBe('account-changed')
+    expect(useUploadStore.getState().files).toEqual([])
+    expect(allNotes()).toEqual([])
+  })
+
+  it('queues nothing when the account signs out while the folders are being made', async () => {
+    const held = holdEnsure()
+    const pending = startDrop(collected([media('a.mov', ['Shoot'])]), dest)
+    await flush()
+
+    signOutElsewhere()
+    held.release()
+    const out = await pending
+
+    expect(out.kind).toBe('signed-out')
+    expect(useUploadStore.getState().files).toEqual([])
+  })
+
+  it('asks for no folders when another account signs in while the drop is being read', async () => {
+    let finishWalk!: (c: Collected) => void
+    const walking = new Promise<Collected>((r) => (finishWalk = r))
+    const pending = startDrop(walking, dest)
+
+    signInAs('user-2')
+    finishWalk(collected([media('a.mov', ['Shoot']), media('b.mov')]))
+    const out = await pending
+
+    expect(out.kind).toBe('account-changed')
+    expect(api.post).not.toHaveBeenCalled()
+    expect(useUploadStore.getState().files).toEqual([])
+    expect(allNotes()).toEqual([])
+  })
+
+  it('queues no loose files when another account signs in while the drop is being read', async () => {
+    let finishWalk!: (c: Collected) => void
+    const walking = new Promise<Collected>((r) => (finishWalk = r))
+    const pending = startDrop(walking, dest)
+
+    signInAs('user-2')
+    finishWalk(collected([media('a.mov'), media('notes.txt')]))
+    const out = await pending
+
+    expect(out.kind).toBe('account-changed')
+    expect(useUploadStore.getState().files).toEqual([])
+    expect(allNotes()).toEqual([])
+  })
+
+  it('takes the account it is given, for a drop held since before the role was known', async () => {
+    // Made as user-1, started after user-2 signed in.
+    signInAs('user-2')
+
+    const out = await startDrop(collected([media('a.mov', ['Shoot'])]), dest, 'user-1')
+
+    expect(out.kind).toBe('account-changed')
+    expect(api.post).not.toHaveBeenCalled()
+    expect(useUploadStore.getState().files).toEqual([])
+  })
+
+  it('gives the notes of a drop to the account that made it', async () => {
+    await startDrop(collected([media('a.mov'), media('notes.txt')]), dest)
+
+    expect(allNotes().map((n) => n.ownerId)).toEqual(['user-1'])
+  })
+})
