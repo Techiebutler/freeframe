@@ -232,6 +232,30 @@ describe('collectDataTransfer', () => {
 
     expect(out.files).toEqual([{ file: f, dirs: [] }])
   })
+
+  it('counts an item the browser gives neither an entry nor a file for, and keeps the rest', async () => {
+    const f = new File([new Uint8Array(1)], 'a.mov')
+    const lost = { kind: 'file', webkitGetAsEntry: () => null, getAsFile: () => null }
+    const good = { kind: 'file', webkitGetAsEntry: () => null, getAsFile: () => f }
+    const items = Object.assign([lost, good], { length: 2 })
+    const dt = { items, files: [], types: ['Files'] } as unknown as DataTransfer
+
+    const out = await collectDataTransfer(dt)
+
+    expect(out.files).toEqual([{ file: f, dirs: [] }])
+    expect(out.unreadable).toBe(1)
+  })
+
+  it('counts items it could not read at all when the drop has no files either', async () => {
+    const lost = { kind: 'file', webkitGetAsEntry: () => null, getAsFile: () => null }
+    const items = Object.assign([lost, lost], { length: 2 })
+    const dt = { items, files: [], types: ['Files'] } as unknown as DataTransfer
+
+    const out = await collectDataTransfer(dt)
+
+    expect(out.files).toEqual([])
+    expect(out.unreadable).toBe(2)
+  })
 })
 
 describe('collectInputFiles', () => {

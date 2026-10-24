@@ -72,13 +72,14 @@ const nfc = (s: string) => s.normalize('NFC')
  * by the time anything awaited has resolved, `items` is empty. So this has to be
  * called synchronously in the drop handler, and it reads every
  * `webkitGetAsEntry()` before its first await. An item with no entry is taken
- * with `getAsFile()`; when the browser offers no items at all, the drop's
- * `files` are taken as loose files.
+ * with `getAsFile()`, and one with neither is counted as unreadable. When no
+ * item could be read, the drop's `files` are taken as loose files.
  *
  * Never rejects: whatever cannot be read is counted instead.
  */
 export function collectDataTransfer(dt: DataTransfer): Promise<Collected> {
   const dropped: Dropped[] = []
+  let lost = 0
   const items = dt.items as DataTransferItemList | undefined
   if (items && items.length > 0) {
     for (let i = 0; i < items.length; i++) {
@@ -96,17 +97,18 @@ export function collectDataTransfer(dt: DataTransfer): Promise<Collected> {
       }
       const file = item.getAsFile()
       if (file) dropped.push({ file })
+      else lost++
     }
   }
   if (dropped.length === 0) {
     const files = Array.from(dt.files ?? []).map((file) => ({ file, dirs: [] }))
-    return Promise.resolve({ files, unreadable: 0, unreadableFolders: 0 })
+    return Promise.resolve({ files, unreadable: files.length > 0 ? 0 : lost, unreadableFolders: 0 })
   }
-  return walkAll(dropped)
+  return walkAll(dropped, lost)
 }
 
-async function walkAll(dropped: Dropped[]): Promise<Collected> {
-  const state: WalkState = { listed: 0, unreadable: 0, unreadableFolders: 0 }
+async function walkAll(dropped: Dropped[], lost: number): Promise<Collected> {
+  const state: WalkState = { listed: 0, unreadable: lost, unreadableFolders: 0 }
   const out = await Promise.all(
     dropped.map((d) => ('file' in d ? [{ file: d.file, dirs: [] }] : walk(d.entry, [], state))),
   )
