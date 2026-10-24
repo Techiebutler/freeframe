@@ -91,8 +91,8 @@ describe('loose files', () => {
     expect(out.kind).toBe('queued')
     expect(ensureCalls).toEqual([])
     expect(rows().map((r) => [r.fileName, r.assetName, r.fileType])).toEqual([
-      ['a.mov', 'a.mov', 'video/quicktime'],
-      ['b.jpg', 'b.jpg', 'image/jpeg'],
+      ['a.mov', 'a', 'video/quicktime'],
+      ['b.jpg', 'b', 'image/jpeg'],
     ])
     expect(initiatedFolders()).toEqual({ 'a.mov': 'f-here', 'b.jpg': 'f-here' })
   })

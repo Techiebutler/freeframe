@@ -109,9 +109,6 @@ export function isHiddenFile(name: string): boolean {
 export const MAX_ASSET_NAME_LENGTH = 255
 /** The server's limit on a file's name (`media_files.original_filename`). */
 export const MAX_FILE_NAME_LENGTH = 500
-/** Longer than this, an "extension" is not worth keeping over the name. */
-const MAX_KEPT_EXTENSION_LENGTH = 32
-
 /** `s` cut to at most `n` UTF-16 units, never through a surrogate pair. */
 function cutTo(s: string, n: number): string {
   if (s.length <= n) return s
@@ -120,15 +117,13 @@ function cutTo(s: string, n: number): string {
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut
 }
 
-/** The asset name a file is uploaded under: its own name in NFC, cut to 255
- *  characters with the extension kept. */
+/** The asset name a file is uploaded under: its name in NFC without the last
+ *  extension, as every upload path names assets, cut to 255 characters. A name
+ *  that is nothing but an extension keeps it: `.gitignore` is the whole name,
+ *  and stripping it would leave an asset called "". */
 export function assetNameFor(fileName: string): string {
   const name = fileName.normalize('NFC')
-  if (name.length <= MAX_ASSET_NAME_LENGTH) return name
-  const ext = extensionOf(name)
-  if (ext.length === 0 || ext.length > MAX_KEPT_EXTENSION_LENGTH) return cutTo(name, MAX_ASSET_NAME_LENGTH)
-  const stem = name.slice(0, name.length - ext.length)
-  return cutTo(stem, MAX_ASSET_NAME_LENGTH - ext.length) + name.slice(name.length - ext.length)
+  return cutTo(name.replace(/\.[^/.]+$/, '') || name, MAX_ASSET_NAME_LENGTH)
 }
 
 /** A file the drop uploads, with the type it is sent as. */

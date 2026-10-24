@@ -101,18 +101,31 @@ describe('planNotes', () => {
 })
 
 describe('assetNameFor', () => {
-  it('is the file name, extension and all', () => {
-    expect(assetNameFor('A047C012.mov')).toBe('A047C012.mov')
+  it('drops the extension', () => {
+    expect(assetNameFor('A047C012_230815_R1AB.mov')).toBe('A047C012_230815_R1AB')
   })
 
-  it('cuts a long name to 255 characters and keeps the extension', () => {
-    const name = assetNameFor(`${'x'.repeat(300)}.mov`)
+  it('drops only the last one', () => {
+    expect(assetNameFor('rushes.tar.gz')).toBe('rushes.tar')
+  })
 
-    expect(name).toHaveLength(255)
-    expect(name.endsWith('.mov')).toBe(true)
+  it('leaves a name that has no extension', () => {
+    expect(assetNameFor('Rushes')).toBe('Rushes')
+  })
+
+  it('keeps a name that is nothing but an extension', () => {
+    expect(assetNameFor('.gitignore')).toBe('.gitignore')
+  })
+
+  it('keeps a dot that is part of the name', () => {
+    expect(assetNameFor('Ep04 v2.1 final.mov')).toBe('Ep04 v2.1 final')
+  })
+
+  it('cuts a long name to 255 characters', () => {
+    expect(assetNameFor(`${'x'.repeat(300)}.mov`)).toBe('x'.repeat(255))
   })
 
   it('is NFC', () => {
-    expect(assetNameFor('Café.mov')).toBe('Café.mov')
+    expect(assetNameFor('Cafe\u0301.mov')).toBe('Caf\u00e9')
   })
 })
