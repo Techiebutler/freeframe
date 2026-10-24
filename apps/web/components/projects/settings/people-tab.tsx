@@ -324,13 +324,19 @@ export function ProjectPeopleTab({ projectId }: { projectId: string }) {
               const isSelf = m.user_id === currentUserId
               return (
                 <tr key={m.id} className="group border-b border-border last:border-0">
-                  <td className="px-4 py-3">
+                  {/* The only column that gives way. `truncate` has no effect
+                      in an auto-layout cell, which grows to its unbroken text
+                      and pushes the table past its card, so this cell has no
+                      minimum width and takes whatever room is left. */}
+                  <td className="w-full max-w-0 py-3 pl-3 pr-2 sm:px-4">
                     <div className="flex min-w-0 items-center gap-2.5">
                       <Avatar
                         name={m.user?.name ?? '?'}
                         src={m.user?.avatar_url}
                         color={m.user?.avatar_color}
                         size="sm"
+                        // Left out on a phone, where the name needs the room.
+                        className="hidden sm:inline-flex"
                       />
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium text-text-primary">
@@ -342,7 +348,7 @@ export function ProjectPeopleTab({ projectId }: { projectId: string }) {
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="whitespace-nowrap px-2 py-3 sm:px-4">
                     {isSelf ? (
                       <span
                         className="inline-flex items-center gap-1 text-xs font-medium text-text-tertiary"
@@ -363,10 +369,10 @@ export function ProjectPeopleTab({ projectId }: { projectId: string }) {
                       </span>
                     )}
                   </td>
-                  <td className="hidden px-4 py-3 text-xs text-text-tertiary sm:table-cell">
+                  <td className="hidden whitespace-nowrap px-4 py-3 text-xs text-text-tertiary sm:table-cell">
                     {formatJoined(m.invited_at)}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="whitespace-nowrap py-3 pl-1 pr-3 text-right sm:px-4">
                     {!isSelf && (
                       <button
                         type="button"

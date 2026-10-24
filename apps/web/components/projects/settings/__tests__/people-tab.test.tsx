@@ -90,6 +90,23 @@ describe('the member list', () => {
     expect(remove.className).not.toMatch(/(^|\s)opacity-0/)
   })
 
+  it('lets the name column give way on a narrow screen, not the actions', async () => {
+    // `truncate` does nothing in an auto-layout cell: the cell grows to the
+    // full unbroken email instead, and the table with it. Measured in Chromium
+    // at 375px, the table came out 443px wide inside a 291px card that clips,
+    // so the role picker and the Remove button were off the screen for every
+    // member. A cell with no minimum width (`max-w-0`) that takes the spare
+    // room (`w-full`) is what lets the name and email shorten instead.
+    renderTab()
+    await screen.findByText('Members (2)')
+    const cell = screen.getByText('ed@example.com').closest('td') as HTMLElement
+    expect(cell.className.split(/\s+/)).toEqual(expect.arrayContaining(['max-w-0', 'w-full']))
+    // The other cells hold their content on one line rather than wrapping it.
+    for (const other of Array.from(rowOf('Ed Editor').querySelectorAll('td')).filter((td) => td !== cell)) {
+      expect(other.className).toContain('whitespace-nowrap')
+    }
+  })
+
   it('says when members cannot be loaded, and Retry tries again', async () => {
     api.get.mockImplementation(async (url: string) => {
       if (url === '/projects/p1/members') throw new Error('Not a project member')
