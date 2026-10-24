@@ -682,3 +682,75 @@ def test_a_plain_create_in_flight_under_the_parent_is_reused_or_replaced(committ
         assert n.id == plain_n_id
     else:
         assert n.id != plain_n_id
+
+
+def test_a_delete_in_flight_wins_over_ensure_into_that_folder(committed):
+    """A delete of P that has started but not committed holds the project lock.
+    An ensure into P must wait for it and then refuse, instead of checking P
+    before the lock and making live folders inside a trashed one."""
+    from fastapi import HTTPException
+
+    from apps.api.routers.folders import ensure_folders
+    from apps.api.schemas.folder import EnsureFoldersRequest
+    from apps.api.services.folder_paths import lock_project_folders
+
+    c = committed
+    deleting = Session(c.engine)
+    lock_project_folders(deleting, c.project_id)
+    deleting.execute(
+        text("UPDATE folders SET deleted_at = now() WHERE id = :id"), {"id": c.parent_id},
+    )
+
+    def ensure(s):
+        user = s.get(User, c.user_id)
+        body = EnsureFoldersRequest(parent_id=c.parent_id, paths=[["New"]])
+        try:
+            return ensure_folders(c.project_id, body, db=s, current_user=user)
+        except HTTPException as e:
+            return e
+
+    thread, pid, result = _in_thread(c.engine, ensure)
+    try:
+        assert _wait_until_blocked(c.engine, pid.get(timeout=10), thread), \
+            "ensure did not wait for the delete in flight"
+        deleting.commit()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        got = result.get(timeout=1)
+    finally:
+        deleting.close()
+
+    assert isinstance(got, HTTPException), got
+    assert got.status_code == 400 and got.detail["code"] == "folder_not_in_project"
+    assert _live_folders(c.engine, c.project_id) == []
+
+
+def test_a_delete_waits_for_an_ensure_in_flight_and_trashes_what_it_made(committed):
+    """The other order: ensure has made folders inside P but not committed.
+    Deleting P must wait for it and then trash those folders as well, rather
+    than list P's contents too early and leave them live inside the trash."""
+    from apps.api.routers.folders import delete_folder
+    from apps.api.services.folder_paths import ensure_folder_paths
+
+    c = committed
+    ensuring = Session(c.engine)
+    made = ensure_folder_paths(ensuring, c.project_id, c.parent_id, [("New", "Inner")],
+                               c.user_id)
+
+    def delete(s):
+        delete_folder(c.parent_id, db=s, current_user=s.get(User, c.user_id))
+
+    thread, pid, result = _in_thread(c.engine, delete)
+    try:
+        assert _wait_until_blocked(c.engine, pid.get(timeout=10), thread), \
+            "the delete did not wait for the ensure in flight"
+        ensuring.commit()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        got = result.get(timeout=1)
+        assert not isinstance(got, Exception), got
+    finally:
+        ensuring.close()
+
+    assert made[("New", "Inner")] is not None
+    assert _live_folders(c.engine, c.project_id) == []

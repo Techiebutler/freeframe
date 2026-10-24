@@ -31,6 +31,7 @@ from ..services.folder_paths import (
     _get_depth,
     distinct_prefixes,
     ensure_folder_paths,
+    lock_project_folders,
 )
 from ..services.permissions import (
     folder_chain_is_live,
@@ -252,6 +253,10 @@ def ensure_folders(
             },
         )
 
+    # Checked under the project lock that delete_folder also takes, so a delete
+    # of the parent either finishes first and is seen here, or waits for this
+    # transaction and then trashes the folders it made along with the rest.
+    lock_project_folders(db, project_id)
     if body.parent_id is not None:
         parent = (
             db.query(Folder.id)
@@ -413,6 +418,9 @@ def delete_folder(
 ):
     folder = _get_folder(db, folder_id)
     require_project_role(db, folder.project_id, current_user, ProjectRole.editor)
+    # Wait for any folder ensure in flight, so the descendants listed below
+    # include the folders it is making inside this one.
+    lock_project_folders(db, folder.project_id)
 
     now = datetime.now(timezone.utc)
 

@@ -89,7 +89,11 @@ def lock_project_folders(db: Session, project_id: uuid.UUID) -> None:
     """Serialize folder find-or-create in `project_id` until the caller's
     transaction ends. At the project root the unique index never fires (a NULL
     parent_id is never equal to another), so this lock is the only thing that
-    stops two concurrent uploads of one folder making two root folders."""
+    stops two concurrent uploads of one folder making two root folders.
+
+    Folder deletes take it too, so a delete and an ensure into the folder being
+    deleted run one after the other. Ordinary creates, renames and moves do not
+    take it; at the root they may still add a folder of a name ensure uses."""
     db.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:project_id AS text), 0))"),
         {"project_id": str(project_id)},
