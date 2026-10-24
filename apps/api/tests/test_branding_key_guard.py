@@ -277,7 +277,8 @@ def test_share_validate_does_not_echo_a_foreign_stored_logo(api, real_db, s3):
     owned = api(None).get(f"/share/{link.token}").json()["branding"]
 
     assert foreign["logo_url"] is None
-    assert owned["logo_url"] == own
+    # A link the page can load, not the key itself.
+    assert owned["logo_url"] == _fake_sign(own)
 
 
 # ── project purge ────────────────────────────────────────────────────────────

@@ -27,6 +27,7 @@ from ..schemas.share import (
     FolderShareAssetsResponse,
     FolderShareSubfolder,
     ShareAssetVersionItem,
+    ShareBranding,
     MultiShareCreate,
     ShareLinkActivityResponse,
     ShareLinkCreate,
@@ -43,7 +44,7 @@ from ..services.permissions import (
 from ..services.auth_service import bcrypt_password_bytes
 from ..services.redis_service import create_share_session
 from ..services.search import escape_like
-from ..services.owned_keys import is_project_logo_key
+from ..services.owned_keys import is_project_logo_key, sign_if_owned
 from ..services.avatar_keys import sign_avatar
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..schemas.asset import DownloadOption
@@ -249,6 +250,36 @@ def list_share_links(
     ).all()
 
 
+def _share_branding(db: Session, project_id: uuid.UUID) -> Optional[ShareBranding]:
+    """The project branding a share page shows, the same for every link type.
+
+    The logo is a link the browser can load, never a storage key: the project's
+    cover when the owner chose it and there is one, otherwise the project's own
+    uploaded logo, otherwise null so the page falls back to the instance logo.
+    """
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if project is None:
+        return None
+    branding = db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).first()
+    if branding is None:
+        return ShareBranding()
+
+    logo_url = None
+    if branding.use_cover_as_logo and project.poster_s3_key:
+        try:
+            logo_url = generate_presigned_get_url(project.poster_s3_key)
+        except Exception:
+            logo_url = None
+    if logo_url is None:
+        # Only this project's own uploaded logo, the rule GET /projects/{id}/branding applies.
+        logo_url = sign_if_owned(is_project_logo_key(project_id, branding.logo_s3_key), branding.logo_s3_key)
+    return ShareBranding(
+        logo_url=logo_url,
+        primary_color=branding.primary_color,
+        custom_footer=branding.custom_footer,
+    )
+
+
 def _build_share_validate_response(
     db: Session,
     link: ShareLink,
@@ -264,10 +295,12 @@ def _build_share_validate_response(
     # Resolve folder / project names
     folder_name = None
     project_name = None
+    branding_project_id = link.project_id
     if link.folder_id:
         folder = db.query(Folder).filter(Folder.id == link.folder_id, Folder.deleted_at.is_(None)).first()
         if folder:
             folder_name = folder.name
+            branding_project_id = folder.project_id
     if link.project_id:
         project = db.query(Project).filter(Project.id == link.project_id, Project.deleted_at.is_(None)).first()
         if project:
@@ -280,7 +313,6 @@ def _build_share_validate_response(
 
     # Build asset details for asset shares
     asset_data = None
-    branding_data = None
     if link.asset_id:
         asset = _get_asset(db, link.asset_id)
         # Get thumbnail URL
@@ -309,21 +341,9 @@ def _build_share_validate_response(
             "thumbnail_url": thumbnail_url,
             "stream_url": stream_url,
         }
-        # Get project branding
-        branding = db.query(ProjectBranding).filter(
-            ProjectBranding.project_id == asset.project_id
-        ).first()
-        if branding:
-            branding_data = {
-                # A key, not a link, and only when it is this project's own
-                # uploaded logo, the same rule GET /projects/{id}/branding applies.
-                "logo_url": (branding.logo_s3_key
-                             if is_project_logo_key(asset.project_id, branding.logo_s3_key)
-                             else None),
-                "primary_color": branding.primary_color,
-                "custom_title": branding.custom_title,
-                "custom_footer": branding.custom_footer,
-            }
+        branding_project_id = asset.project_id
+
+    branding_data = _share_branding(db, branding_project_id) if branding_project_id else None
 
     # Resolve creator name
     creator = db.query(User).filter(User.id == link.created_by).first()

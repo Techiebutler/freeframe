@@ -153,8 +153,9 @@ def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: Session = Dep
     _require_project_owner(db, project_id, current_user)
     if body.name is not None:
         project.name = body.name
-    if body.description is not None:
-        project.description = body.description
+    # Sent as null or "" clears the description; left out keeps it.
+    if "description" in body.model_fields_set:
+        project.description = body.description or None
     if body.is_public is not None:
         project.is_public = body.is_public
     db.commit()
@@ -196,9 +197,12 @@ def add_project_member(project_id: uuid.UUID, body: AddProjectMemberRequest, db:
     if existing:
         if existing.deleted_at is None:
             raise HTTPException(status_code=400, detail="User already a project member")
-        # Reactivate soft-deleted membership
+        # Reactivate soft-deleted membership. It is a new membership as far as
+        # the member list's joined date and inviter go.
         existing.deleted_at = None
         existing.role = body.role
+        existing.invited_by = current_user.id
+        existing.invited_at = func.now()
         db.commit()
         db.refresh(existing)
         member = existing

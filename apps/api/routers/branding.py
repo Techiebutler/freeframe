@@ -84,23 +84,34 @@ def upsert_branding(
     current_user: User = Depends(get_current_user),
 ):
     require_project_role(db, project_id, current_user, ProjectRole.editor)
-    update_data = body.model_dump(exclude_none=True)
-    if "logo_s3_key" in body.model_fields_set:
+    # Only the fields the caller sent: one left out is unchanged, and an
+    # explicit null clears it (the schema refuses null for NOT NULL columns).
+    update_data = body.model_dump(exclude_unset=True)
+    if "logo_s3_key" in update_data:
         # The logo is a storage key the response signs and the project purge
         # deletes, so only a key the logo upload step issued for this project is
         # accepted. Null or empty clears it.
-        if not body.logo_s3_key:
+        if not update_data["logo_s3_key"]:
             update_data["logo_s3_key"] = None
-        elif not is_project_logo_key(project_id, body.logo_s3_key):
+        elif not is_project_logo_key(project_id, update_data["logo_s3_key"]):
             raise HTTPException(
                 status_code=422,
                 detail="logo_s3_key must be a key issued by this project's logo upload",
             )
     branding = _get_or_create_branding(db, project_id)
+    old_logo = branding.logo_s3_key
     for field, value in update_data.items():
         setattr(branding, field, value)
     db.commit()
     db.refresh(branding)
+    # A replaced or cleared logo is deleted only once the row no longer names
+    # it is committed, and only when it is a key this project's upload step
+    # issued: a stored value from before that was checked can name any object.
+    if old_logo != branding.logo_s3_key and is_project_logo_key(project_id, old_logo):
+        try:
+            s3_service.delete_object(old_logo)
+        except Exception:
+            pass
     return _branding_to_response(branding)
 
 

@@ -33,6 +33,7 @@ class ProjectMemberResponse(BaseModel):
     project_id: uuid.UUID
     user_id: uuid.UUID
     role: ProjectRole
+    invited_at: datetime | None = None  # when the member joined the project
     model_config = {"from_attributes": True}
 
 class AddProjectMemberRequest(BaseModel):
