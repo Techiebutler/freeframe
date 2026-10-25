@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Compare's comment panels no longer re-render on every playback frame, and annotation and timecode buttons pause playback again.** Comment updates and pane-local seeking remain live. (#170)
+
 ## [1.22.0] - 2026-10-29
 
 ### Upgrade notes

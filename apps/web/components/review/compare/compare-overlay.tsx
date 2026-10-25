@@ -33,6 +33,59 @@ interface CompareOverlayProps {
   canModerate?: boolean
 }
 
+interface CompareCommentPanelProps {
+  assetId: string
+  versionId: string
+  side: 'a' | 'b'
+  currentUserId?: string
+  canModerate: boolean
+  offset: number
+  isPlaying: boolean
+  seekTo(time: number): void
+  toggle(): void
+  showAnnotation(side: 'a' | 'b', drawing: Record<string, unknown> | null): void
+}
+
+// Keep the comment subscription and its mutation callbacks inside the memo
+// boundary. The overlay also subscribes to the same SWR cache for markers and
+// the composer, but its rAF clock must not reconcile the whole comment tree.
+// Only pane configuration/playback changes and actual comment updates enter.
+const CompareCommentPanel = React.memo(function CompareCommentPanel({
+  assetId, versionId, side, currentUserId, canModerate, offset, isPlaying,
+  seekTo, toggle, showAnnotation,
+}: CompareCommentPanelProps) {
+  const comments = useComments(assetId, versionId)
+  const playingRef = React.useRef(isPlaying)
+  React.useEffect(() => { playingRef.current = isPlaying }, [isPlaying])
+  return (
+    <CommentPanel
+      comments={comments.comments}
+      currentUserId={currentUserId}
+      canModerate={canModerate}
+      onResolve={comments.resolveComment}
+      onDelete={comments.deleteComment}
+      onAddReaction={comments.addReaction}
+      onRemoveReaction={comments.removeReaction}
+      onReply={() => {}}
+      onSubmitReply={async (parentId, body) => {
+        await comments.createComment(body, undefined, undefined, undefined, parentId)
+      }}
+      onSeekToTimecode={(tc, pause) => {
+        seekTo(tc + offset)
+        // Annotation/timecode buttons also bubble to the row. Make repeated
+        // pause requests idempotent before React commits the playback change.
+        // Only toggle updates the transport's playingRef as well as state.
+        if (pause && playingRef.current) {
+          playingRef.current = false
+          toggle()
+        }
+      }}
+      onShowAnnotation={(drawing) => showAnnotation(side, drawing)}
+      exportVersionId={versionId}
+    />
+  )
+})
+
 function mediaOf(v: AssetVersion | null | undefined): { fps?: number | null; duration_seconds?: number | null } {
   // AssetVersion embeds media metadata as `files` (MediaFile[], types/index.ts);
   // fps / duration_seconds live on the first entry.
@@ -313,22 +366,6 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
     [transport, timingA.offset, timingB.offset, setFocusedCommentId, setPanelAOpen, setPanelBOpen, sideA, sideB, showAnnotationFor],
   )
 
-  // Per-side reply adapters — mirror page.tsx's handleSubmitReply (createComment
-  // with only body + parentId, no timecode) so CommentPanel's inline reply box
-  // renders (it's gated on onSubmitReply being defined).
-  const handleReplyA = React.useCallback(
-    async (parentId: string, body: string) => {
-      await sideA.createComment(body, undefined, undefined, undefined, parentId)
-    },
-    [sideA],
-  )
-  const handleReplyB = React.useCallback(
-    async (parentId: string, body: string) => {
-      await sideB.createComment(body, undefined, undefined, undefined, parentId)
-    },
-    [sideB],
-  )
-
   // Version switch (either pane): offA/offB were calibrated for the OLD pair —
   // they no longer describe the new one, so drop them rather than silently
   // misapplying a stale sync offset to the new pair (#182). The switched
@@ -449,23 +486,17 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
         <aside className={cn('shrink-0 border-r border-border transition-all', panelAOpen ? 'w-80' : 'w-0 overflow-hidden')}>
           {panelAOpen && (
             <div className="flex h-full flex-col">
-              <CommentPanel
-                comments={sideA.comments}
+              <CompareCommentPanel
+                assetId={asset.id}
+                versionId={left.id}
+                side="a"
                 currentUserId={user?.id}
                 canModerate={canModerate}
-                onResolve={async (id) => { await sideA.resolveComment(id) }}
-                onDelete={async (id) => { await sideA.deleteComment(id) }}
-                onAddReaction={async (id, e) => { await sideA.addReaction(id, e) }}
-                onRemoveReaction={async (id, e) => { await sideA.removeReaction(id, e) }}
-                onReply={() => {}}
-                onSubmitReply={handleReplyA}
-                onSeekToTimecode={(tc, pause) => {
-                  transport.seekTo(tc + timingA.offset)
-                  // Normal-player parity: comment clicks pass pause=true.
-                  if (pause && transport.isPlaying) transport.toggle()
-                }}
-                onShowAnnotation={(d) => showAnnotationFor('a', d)}
-                exportVersionId={left.id}
+                offset={timingA.offset}
+                isPlaying={transport.isPlaying}
+                seekTo={transport.seekTo}
+                toggle={transport.toggle}
+                showAnnotation={showAnnotationFor}
               />
               {canComment && (
               <CommentInput
@@ -694,22 +725,17 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
         <aside className={cn('shrink-0 border-l border-border transition-all', panelBOpen ? 'w-80' : 'w-0 overflow-hidden')}>
           {panelBOpen && (
             <div className="flex h-full flex-col">
-              <CommentPanel
-                comments={sideB.comments}
+              <CompareCommentPanel
+                assetId={asset.id}
+                versionId={right.id}
+                side="b"
                 currentUserId={user?.id}
                 canModerate={canModerate}
-                onResolve={async (id) => { await sideB.resolveComment(id) }}
-                onDelete={async (id) => { await sideB.deleteComment(id) }}
-                onAddReaction={async (id, e) => { await sideB.addReaction(id, e) }}
-                onRemoveReaction={async (id, e) => { await sideB.removeReaction(id, e) }}
-                onReply={() => {}}
-                onSubmitReply={handleReplyB}
-                onSeekToTimecode={(tc, pause) => {
-                  transport.seekTo(tc + timingB.offset)
-                  if (pause && transport.isPlaying) transport.toggle()
-                }}
-                onShowAnnotation={(d) => showAnnotationFor('b', d)}
-                exportVersionId={right.id}
+                offset={timingB.offset}
+                isPlaying={transport.isPlaying}
+                seekTo={transport.seekTo}
+                toggle={transport.toggle}
+                showAnnotation={showAnnotationFor}
               />
               {canComment && (
               <CommentInput
