@@ -19,6 +19,7 @@ import { renderedMediaBox } from "@/lib/media-frame";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
+import { useShuttle } from "@/hooks/use-shuttle";
 import { useMediaQuery, MEDIA_SM } from "@/hooks/use-media-query";
 import { useReview } from "./review-provider";
 import { ProgressBar } from "./progress-bar";
@@ -268,14 +269,19 @@ export function VideoPlayer({
     isFullscreen,
     error,
     pause,
-    togglePlay,
     seek,
-    setPlaybackRate,
     setQuality,
     setVolume,
     toggleMute,
     toggleFullscreen,
   } = player;
+
+  // J/K/L shuttle. Its togglePlay also stops reverse playback, so every play
+  // control goes through it rather than the player's own.
+  const { reverseRate, shuttleForward, shuttleReverse, togglePlay, setPlaybackRate } =
+    useShuttle(player);
+  const playing = isPlaying || reverseRate > 0;
+  const speedLabel = reverseRate ? `-${reverseRate}x` : `${playbackRate}x`;
 
   const currentQualityLabel = qualityLevels.find((level) => level.index === currentQuality)?.label;
   const autoQualityLabel = currentQualityLabel ? "Auto (" + currentQualityLabel + ")" : "Auto";
@@ -346,21 +352,23 @@ export function VideoPlayer({
           e.preventDefault();
           seek(currentTime + 5);
           break;
+        // Shuttle: each press of J or L is one step faster in that
+        // direction, so a held key's auto-repeat is ignored.
         case "KeyJ":
-          seek(currentTime - 10);
+          if (!e.repeat) shuttleReverse();
           break;
         case "KeyK":
-          togglePlay();
+          if (!e.repeat) togglePlay();
           break;
         case "KeyL":
-          seek(currentTime + 10);
+          if (!e.repeat) shuttleForward();
           break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, seek, currentTime, isDrawingMode]);
+  }, [togglePlay, shuttleForward, shuttleReverse, seek, currentTime, isDrawingMode]);
 
   const handleContainerClick = useCallback(() => {
     if (swallowStageClickRef.current) {
@@ -502,9 +510,9 @@ export function VideoPlayer({
           <button
             onClick={togglePlay}
             className={cn("flex items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors", compact ? "h-11 w-11" : "h-7 w-7")}
-            aria-label={isPlaying ? "Pause" : "Play"}
+            aria-label={playing ? "Pause" : "Play"}
           >
-            {isPlaying ? (
+            {playing ? (
               <Pause className="h-4 w-4" />
             ) : (
               <Play className="h-4 w-4" />
@@ -531,7 +539,7 @@ export function VideoPlayer({
               className="flex h-7 items-center justify-center rounded px-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors tabular-nums"
               aria-label="Playback speed"
             >
-              {playbackRate}x
+              {speedLabel}
             </button>
   
             <button
@@ -657,7 +665,7 @@ export function VideoPlayer({
                         className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
                       >
                         Speed
-                        <span className="tabular-nums text-text-tertiary">{playbackRate}x</span>
+                        <span className="tabular-nums text-text-tertiary">{speedLabel}</span>
                       </button>
                       <button
                         onClick={() => { toggleMute(); setOverflowOpen(false); }}

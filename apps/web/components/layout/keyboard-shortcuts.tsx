@@ -33,9 +33,9 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: 'Review',
     items: [
       { keys: ['Space'], label: 'Play / pause video or audio' },
-      { keys: ['J'], label: 'Jump back 10 seconds' },
-      { keys: ['K'], label: 'Play / pause' },
-      { keys: ['L'], label: 'Jump forward 10 seconds' },
+      { keys: ['J'], label: 'Play in reverse; press again to go faster' },
+      { keys: ['K'], label: 'Stop / play' },
+      { keys: ['L'], label: 'Play forward; press again to go faster' },
     ],
   },
   {
