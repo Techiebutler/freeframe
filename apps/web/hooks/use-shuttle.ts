@@ -13,7 +13,7 @@ export function nextShuttleRate(rate: number): number {
 
 type ShuttlePlayer = Pick<
   UseVideoPlayerReturn,
-  'videoRef' | 'isPlaying' | 'playbackRate' | 'play' | 'pause' | 'togglePlay' | 'seek' | 'setPlaybackRate'
+  'videoRef' | 'playbackRate' | 'play' | 'pause' | 'togglePlay' | 'seek' | 'setPlaybackRate'
 >
 
 export interface UseShuttleReturn {
@@ -25,6 +25,8 @@ export interface UseShuttleReturn {
   shuttleReverse: () => void
   /** K, Space and the play button: stops either direction, else toggles play. */
   togglePlay: () => void
+  /** Pause requests (a comment taking focus): stops either direction in place. */
+  pause: () => void
   /** The speed menu: a speed picked there is kept when K stops playback. */
   setPlaybackRate: (rate: number) => void
 }
@@ -40,12 +42,23 @@ export interface UseShuttleReturn {
  * and they never queue up behind each other.
  */
 export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
-  const { videoRef, isPlaying, playbackRate, play, pause, seek } = player
-  const { togglePlay: playerTogglePlay, setPlaybackRate: setRate } = player
+  const { videoRef, playbackRate, play, seek } = player
+  const { pause: playerPause, togglePlay: playerTogglePlay, setPlaybackRate: setRate } = player
   const [reverseRate, setReverseRate] = useState(0)
-  // Set while the forward speed came from L rather than the speed menu, so K
-  // drops back to 1x instead of leaving the next play running at 8x.
+  // Set while the forward speed came from L rather than the speed menu, so a
+  // stop drops back to 1x instead of leaving the next play running at 8x.
   const forwardShuttledRef = useRef(false)
+  // The pending reverse step. Stopping cancels it on the spot rather than on
+  // the next render, so no step lands after a pause request and moves the
+  // playhead off the time it asked for.
+  const rafRef = useRef(0)
+
+  // Read from the element, not the isPlaying state: that only updates on the
+  // `play` event, so two quick presses of L would both see a paused player.
+  const playingNow = useCallback(() => {
+    const video = videoRef.current
+    return !!video && !video.paused
+  }, [videoRef])
 
   useEffect(() => {
     if (!reverseRate) return
@@ -54,7 +67,7 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
 
     let last = performance.now()
     let owed = 0
-    let raf = requestAnimationFrame(function step(now) {
+    rafRef.current = requestAnimationFrame(function step(now) {
       owed += ((now - last) / 1000) * reverseRate
       last = now
       if (!video.seeking) {
@@ -66,7 +79,7 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
           return
         }
       }
-      raf = requestAnimationFrame(step)
+      rafRef.current = requestAnimationFrame(step)
     })
 
     // Forward playback from anywhere (the scrubber, the mobile sheet, a
@@ -75,11 +88,16 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
     video.addEventListener('play', stop)
     video.addEventListener('emptied', stop)
     return () => {
-      cancelAnimationFrame(raf)
+      cancelAnimationFrame(rafRef.current)
       video.removeEventListener('play', stop)
       video.removeEventListener('emptied', stop)
     }
   }, [reverseRate, videoRef, seek])
+
+  const stopReverse = useCallback(() => {
+    cancelAnimationFrame(rafRef.current)
+    setReverseRate(0)
+  }, [])
 
   const resetForwardShuttle = useCallback(() => {
     if (!forwardShuttledRef.current) return
@@ -87,9 +105,18 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
     setRate(1)
   }, [setRate])
 
+  // However forward playback stops (K, the end of the clip, a comment taking
+  // focus), an L speed-up ends with it.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    video.addEventListener('pause', resetForwardShuttle)
+    return () => video.removeEventListener('pause', resetForwardShuttle)
+  }, [videoRef, resetForwardShuttle])
+
   const shuttleForward = useCallback(() => {
-    if (reverseRate || !isPlaying) {
-      setReverseRate(0)
+    if (reverseRate || !playingNow()) {
+      stopReverse()
       forwardShuttledRef.current = false
       setRate(1)
       play()
@@ -98,35 +125,35 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
     const next = nextShuttleRate(playbackRate)
     forwardShuttledRef.current = next > 1
     setRate(next)
-  }, [reverseRate, isPlaying, playbackRate, play, setRate])
+  }, [reverseRate, playingNow, stopReverse, playbackRate, play, setRate])
 
   const shuttleReverse = useCallback(() => {
     if (reverseRate) {
       setReverseRate(nextShuttleRate(reverseRate))
       return
     }
-    if (isPlaying) pause()
+    if (playingNow()) playerPause()
     resetForwardShuttle()
     setReverseRate(1)
-  }, [reverseRate, isPlaying, pause, resetForwardShuttle])
+  }, [reverseRate, playingNow, playerPause, resetForwardShuttle])
 
   const togglePlay = useCallback(() => {
     if (reverseRate) {
-      setReverseRate(0)
-      return
-    }
-    if (isPlaying && forwardShuttledRef.current) {
-      pause()
-      resetForwardShuttle()
+      stopReverse()
       return
     }
     playerTogglePlay()
-  }, [reverseRate, isPlaying, pause, resetForwardShuttle, playerTogglePlay])
+  }, [reverseRate, stopReverse, playerTogglePlay])
+
+  const pause = useCallback(() => {
+    stopReverse()
+    playerPause()
+  }, [stopReverse, playerPause])
 
   const setPlaybackRate = useCallback((rate: number) => {
     forwardShuttledRef.current = false
     setRate(rate)
   }, [setRate])
 
-  return { reverseRate, shuttleForward, shuttleReverse, togglePlay, setPlaybackRate }
+  return { reverseRate, shuttleForward, shuttleReverse, togglePlay, pause, setPlaybackRate }
 }

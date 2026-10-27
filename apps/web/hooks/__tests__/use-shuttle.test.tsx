@@ -4,16 +4,17 @@ import { render, act } from '@testing-library/react'
 import { useShuttle, nextShuttleRate, type UseShuttleReturn } from '../use-shuttle'
 
 /**
- * Drives the real shuttle hook over a stand-in player. The player keeps
- * isPlaying and playbackRate in React state, as the real one does, so each
- * press sees what the previous one did.
+ * Drives the real shuttle hook over a stand-in player. playbackRate is React
+ * state, as in the real player, and the stand-in element flips `paused` and
+ * fires `play` and `pause` the way a media element does, so each press sees
+ * what the previous one did.
  *
  * Reverse runs on requestAnimationFrame, which is replaced with a queue that
  * `frame(ms)` flushes at a chosen timestamp, so a test controls exactly how
  * much wall-clock time each step covers.
  */
 
-type FakeVideo = EventTarget & { currentTime: number; seeking: boolean }
+type FakeVideo = EventTarget & { currentTime: number; seeking: boolean; paused: boolean }
 
 let shuttle: UseShuttleReturn
 let video: FakeVideo
@@ -21,21 +22,25 @@ let state: { isPlaying: boolean; playbackRate: number }
 const calls = { play: vi.fn(), pause: vi.fn(), togglePlay: vi.fn() }
 
 function Harness() {
-  const [isPlaying, setIsPlaying] = React.useState(false)
   const [playbackRate, setPlaybackRate] = React.useState(1)
-  state = { isPlaying, playbackRate }
+  state = { isPlaying: !video.paused, playbackRate }
   const videoRef = React.useRef<HTMLVideoElement | null>(video as unknown as HTMLVideoElement)
   shuttle = useShuttle({
     videoRef,
-    isPlaying,
     playbackRate,
-    play: React.useCallback(() => { calls.play(); setIsPlaying(true); video.dispatchEvent(new Event('play')) }, []),
-    pause: React.useCallback(() => { calls.pause(); setIsPlaying(false) }, []),
-    togglePlay: React.useCallback(() => { calls.togglePlay(); setIsPlaying((p) => !p) }, []),
+    play: React.useCallback(() => { calls.play(); setPaused(false) }, []),
+    pause: React.useCallback(() => { calls.pause(); setPaused(true) }, []),
+    togglePlay: React.useCallback(() => { calls.togglePlay(); setPaused(!video.paused) }, []),
     seek: React.useCallback((t: number) => { video.currentTime = t }, []),
     setPlaybackRate,
   })
   return null
+}
+
+function setPaused(paused: boolean) {
+  if (video.paused === paused) return
+  video.paused = paused
+  video.dispatchEvent(new Event(paused ? 'pause' : 'play'))
 }
 
 let queue: FrameRequestCallback[] = []
@@ -48,7 +53,7 @@ function frame(ms: number) {
 }
 
 beforeEach(() => {
-  video = Object.assign(new EventTarget(), { currentTime: 60, seeking: false })
+  video = Object.assign(new EventTarget(), { currentTime: 60, seeking: false, paused: true })
   queue = []
   now = 0
   vi.spyOn(performance, 'now').mockImplementation(() => now)
@@ -63,6 +68,8 @@ afterEach(() => {
 })
 
 const press = (fn: () => void) => act(() => fn())
+// isPlaying is read off the element at render, so re-render to see it.
+const current = () => ({ isPlaying: !video.paused, playbackRate: state.playbackRate })
 
 describe('nextShuttleRate', () => {
   it('steps 1, 2, 4, 8 and holds at 8', () => {
@@ -79,7 +86,7 @@ describe('L', () => {
   it('plays forward at 1x from paused, then speeds up on each press', () => {
     press(() => shuttle.shuttleForward())
     expect(calls.play).toHaveBeenCalledOnce()
-    expect(state).toEqual({ isPlaying: true, playbackRate: 1 })
+    expect(current()).toEqual({ isPlaying: true, playbackRate: 1 })
 
     const rates = [2, 4, 8, 8].map(() => {
       press(() => shuttle.shuttleForward())
@@ -88,12 +95,28 @@ describe('L', () => {
     expect(rates).toEqual([2, 4, 8, 8])
   })
 
+  it('speeds up on a second quick press, before the player re-renders as playing', () => {
+    act(() => {
+      shuttle.shuttleForward()
+      shuttle.shuttleForward()
+    })
+    expect(current()).toEqual({ isPlaying: true, playbackRate: 2 })
+  })
+
+  it('drops back to 1x however playback stops, such as the end of the clip', () => {
+    press(() => shuttle.shuttleForward())
+    press(() => shuttle.shuttleForward())
+    press(() => shuttle.shuttleForward()) // 4x
+    act(() => setPaused(true))
+    expect(current()).toEqual({ isPlaying: false, playbackRate: 1 })
+  })
+
   it('switches reverse to forward at 1x', () => {
     press(() => shuttle.shuttleReverse())
     press(() => shuttle.shuttleReverse())
     press(() => shuttle.shuttleForward())
     expect(shuttle.reverseRate).toBe(0)
-    expect(state).toEqual({ isPlaying: true, playbackRate: 1 })
+    expect(current()).toEqual({ isPlaying: true, playbackRate: 1 })
   })
 })
 
@@ -132,7 +155,7 @@ describe('J', () => {
     press(() => shuttle.shuttleForward()) // 2x
     press(() => shuttle.shuttleReverse())
     expect(calls.pause).toHaveBeenCalledOnce()
-    expect(state).toEqual({ isPlaying: false, playbackRate: 1 })
+    expect(current()).toEqual({ isPlaying: false, playbackRate: 1 })
     expect(shuttle.reverseRate).toBe(1)
   })
 
@@ -152,13 +175,25 @@ describe('J', () => {
   })
 })
 
+describe('pause', () => {
+  it('stops reverse where it is, with no step after', () => {
+    press(() => shuttle.shuttleReverse())
+    frame(500)
+    const at = video.currentTime
+    press(() => shuttle.pause())
+    frame(500)
+    expect(shuttle.reverseRate).toBe(0)
+    expect(video.currentTime).toBe(at)
+  })
+})
+
 describe('K', () => {
   it('stops reverse without starting forward playback', () => {
     press(() => shuttle.shuttleReverse())
     press(() => shuttle.togglePlay())
     expect(shuttle.reverseRate).toBe(0)
     expect(calls.togglePlay).not.toHaveBeenCalled()
-    expect(state.isPlaying).toBe(false)
+    expect(current().isPlaying).toBe(false)
     frame(500)
     expect(video.currentTime).toBe(60)
   })
@@ -168,7 +203,7 @@ describe('K', () => {
     press(() => shuttle.shuttleForward())
     press(() => shuttle.shuttleForward()) // 4x
     press(() => shuttle.togglePlay())
-    expect(state).toEqual({ isPlaying: false, playbackRate: 1 })
+    expect(current()).toEqual({ isPlaying: false, playbackRate: 1 })
   })
 
   it('keeps a speed picked from the menu', () => {

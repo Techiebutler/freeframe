@@ -136,8 +136,15 @@ export function VideoPlayer({
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [loop, setLoop] = useState(false);
 
-  const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime, currentVersion } =
-    useReviewStore();
+  const {
+    isDrawingMode,
+    timeFormat,
+    setTimeFormat,
+    setPlayheadTime,
+    setActiveAnnotation,
+    seekTarget,
+    currentVersion,
+  } = useReviewStore();
   const { registerPauseHandler, registerTogglePlayHandler } = useReview();
   const [timeFormatOpen, setTimeFormatOpen] = useState(false);
   // The media's own width/height ratio, used to size the stage on a portrait
@@ -268,7 +275,6 @@ export function VideoPlayer({
     isLoading,
     isFullscreen,
     error,
-    pause,
     seek,
     setQuality,
     setVolume,
@@ -276,9 +282,9 @@ export function VideoPlayer({
     toggleFullscreen,
   } = player;
 
-  // J/K/L shuttle. Its togglePlay also stops reverse playback, so every play
-  // control goes through it rather than the player's own.
-  const { reverseRate, shuttleForward, shuttleReverse, togglePlay, setPlaybackRate } =
+  // J/K/L shuttle. Its togglePlay and pause also stop reverse playback, so
+  // every play control goes through it rather than the player's own.
+  const { reverseRate, shuttleForward, shuttleReverse, togglePlay, pause, setPlaybackRate } =
     useShuttle(player);
   const playing = isPlaying || reverseRate > 0;
   const speedLabel = reverseRate ? `-${reverseRate}x` : `${playbackRate}x`;
@@ -314,6 +320,17 @@ export function VideoPlayer({
     registerPauseHandler(pause);
   }, [registerPauseHandler, pause]);
 
+  // A seek that pauses (clicking a comment) lands and holds; the player pauses
+  // the element, but reverse keeps it paused anyway and would walk on from
+  // the comment's time.
+  // Once per seek, by its id, so it never pauses playback that started after.
+  const handledSeekRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!seekTarget?.pause || handledSeekRef.current === seekTarget.id) return;
+    handledSeekRef.current = seekTarget.id;
+    pause();
+  }, [seekTarget, pause]);
+
   // And the toggle, for the mobile comment sheet's play/pause button, so it
   // gets the same first-tap retry and pause disarm as this player's own.
   useEffect(() => registerTogglePlayHandler(togglePlay), [registerTogglePlayHandler, togglePlay]);
@@ -339,6 +356,11 @@ export function VideoPlayer({
         return;
       }
 
+      // Shuttle keys: each press of J or L is one step faster in that
+      // direction, so a held key's auto-repeat is ignored, and so is a
+      // browser or app shortcut such as Cmd+K or Ctrl+L.
+      const shuttleKey = !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey;
+
       switch (e.code) {
         case "Space":
           e.preventDefault();
@@ -352,23 +374,26 @@ export function VideoPlayer({
           e.preventDefault();
           seek(currentTime + 5);
           break;
-        // Shuttle: each press of J or L is one step faster in that
-        // direction, so a held key's auto-repeat is ignored.
         case "KeyJ":
-          if (!e.repeat) shuttleReverse();
+          if (shuttleKey) {
+            shuttleReverse();
+            // As forward playback does, so a comment's drawing doesn't sit
+            // over frames it wasn't drawn on.
+            setActiveAnnotation(null);
+          }
           break;
         case "KeyK":
-          if (!e.repeat) togglePlay();
+          if (shuttleKey) togglePlay();
           break;
         case "KeyL":
-          if (!e.repeat) shuttleForward();
+          if (shuttleKey) shuttleForward();
           break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, shuttleForward, shuttleReverse, seek, currentTime, isDrawingMode]);
+  }, [togglePlay, shuttleForward, shuttleReverse, setActiveAnnotation, seek, currentTime, isDrawingMode]);
 
   const handleContainerClick = useCallback(() => {
     if (swallowStageClickRef.current) {
