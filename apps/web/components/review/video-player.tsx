@@ -19,6 +19,7 @@ import { renderedMediaBox } from "@/lib/media-frame";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
+import { useShuttle } from "@/hooks/use-shuttle";
 import { useMediaQuery, MEDIA_SM } from "@/hooks/use-media-query";
 import { useReview } from "./review-provider";
 import { ProgressBar } from "./progress-bar";
@@ -135,8 +136,15 @@ export function VideoPlayer({
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [loop, setLoop] = useState(false);
 
-  const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime, currentVersion } =
-    useReviewStore();
+  const {
+    isDrawingMode,
+    timeFormat,
+    setTimeFormat,
+    setPlayheadTime,
+    setActiveAnnotation,
+    seekTarget,
+    currentVersion,
+  } = useReviewStore();
   const { registerPauseHandler, registerTogglePlayHandler } = useReview();
   const [timeFormatOpen, setTimeFormatOpen] = useState(false);
   // The media's own width/height ratio, used to size the stage on a portrait
@@ -267,15 +275,26 @@ export function VideoPlayer({
     isLoading,
     isFullscreen,
     error,
-    pause,
-    togglePlay,
     seek,
-    setPlaybackRate,
     setQuality,
     setVolume,
     toggleMute,
     toggleFullscreen,
   } = player;
+
+  // J/K/L shuttle. Its togglePlay and pause also stop reverse playback, so
+  // every play control goes through it rather than the player's own.
+  const {
+    reverseRate,
+    shuttleForward,
+    shuttleReverse,
+    togglePlay,
+    pause,
+    setPlaybackRate,
+    cycleReverseRate,
+  } = useShuttle(player);
+  const playing = isPlaying || reverseRate > 0;
+  const speedLabel = reverseRate ? `-${reverseRate}x` : `${playbackRate}x`;
 
   const currentQualityLabel = qualityLevels.find((level) => level.index === currentQuality)?.label;
   const autoQualityLabel = currentQualityLabel ? "Auto (" + currentQualityLabel + ")" : "Auto";
@@ -308,6 +327,17 @@ export function VideoPlayer({
     registerPauseHandler(pause);
   }, [registerPauseHandler, pause]);
 
+  // A seek that pauses (clicking a comment) lands and holds; the player pauses
+  // the element, but reverse keeps it paused anyway and would walk on from
+  // the comment's time.
+  // Once per seek, by its id, so it never pauses playback that started after.
+  const handledSeekRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!seekTarget?.pause || handledSeekRef.current === seekTarget.id) return;
+    handledSeekRef.current = seekTarget.id;
+    pause();
+  }, [seekTarget, pause]);
+
   // And the toggle, for the mobile comment sheet's play/pause button, so it
   // gets the same first-tap retry and pause disarm as this player's own.
   useEffect(() => registerTogglePlayHandler(togglePlay), [registerTogglePlayHandler, togglePlay]);
@@ -333,6 +363,11 @@ export function VideoPlayer({
         return;
       }
 
+      // Shuttle keys: each press of J or L is one step faster in that
+      // direction, so a held key's auto-repeat is ignored, and so is a
+      // browser or app shortcut such as Cmd+K or Ctrl+L.
+      const shuttleKey = !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey;
+
       switch (e.code) {
         case "Space":
           e.preventDefault();
@@ -347,20 +382,25 @@ export function VideoPlayer({
           seek(currentTime + 5);
           break;
         case "KeyJ":
-          seek(currentTime - 10);
+          if (shuttleKey) {
+            shuttleReverse();
+            // As forward playback does, so a comment's drawing doesn't sit
+            // over frames it wasn't drawn on.
+            setActiveAnnotation(null);
+          }
           break;
         case "KeyK":
-          togglePlay();
+          if (shuttleKey) togglePlay();
           break;
         case "KeyL":
-          seek(currentTime + 10);
+          if (shuttleKey) shuttleForward();
           break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, seek, currentTime, isDrawingMode]);
+  }, [togglePlay, shuttleForward, shuttleReverse, setActiveAnnotation, seek, currentTime, isDrawingMode]);
 
   const handleContainerClick = useCallback(() => {
     if (swallowStageClickRef.current) {
@@ -378,13 +418,18 @@ export function VideoPlayer({
     }
   }, [toggleFullscreen]);
 
+  // In reverse the button shows, and so steps, the reverse speed.
   const handleSpeedCycle = useCallback(() => {
+    if (reverseRate) {
+      cycleReverseRate();
+      return;
+    }
     const idx = SPEED_OPTIONS.indexOf(
       playbackRate as (typeof SPEED_OPTIONS)[number],
     );
     const next = SPEED_OPTIONS[(idx + 1) % SPEED_OPTIONS.length];
     setPlaybackRate(next);
-  }, [playbackRate, setPlaybackRate]);
+  }, [reverseRate, cycleReverseRate, playbackRate, setPlaybackRate]);
 
   return (
     <div
@@ -502,9 +547,9 @@ export function VideoPlayer({
           <button
             onClick={togglePlay}
             className={cn("flex items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors", compact ? "h-11 w-11" : "h-7 w-7")}
-            aria-label={isPlaying ? "Pause" : "Play"}
+            aria-label={playing ? "Pause" : "Play"}
           >
-            {isPlaying ? (
+            {playing ? (
               <Pause className="h-4 w-4" />
             ) : (
               <Play className="h-4 w-4" />
@@ -531,7 +576,7 @@ export function VideoPlayer({
               className="flex h-7 items-center justify-center rounded px-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors tabular-nums"
               aria-label="Playback speed"
             >
-              {playbackRate}x
+              {speedLabel}
             </button>
   
             <button
@@ -657,7 +702,7 @@ export function VideoPlayer({
                         className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
                       >
                         Speed
-                        <span className="tabular-nums text-text-tertiary">{playbackRate}x</span>
+                        <span className="tabular-nums text-text-tertiary">{speedLabel}</span>
                       </button>
                       <button
                         onClick={() => { toggleMute(); setOverflowOpen(false); }}
