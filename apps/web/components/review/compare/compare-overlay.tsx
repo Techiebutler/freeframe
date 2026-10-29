@@ -40,23 +40,20 @@ interface CompareCommentPanelProps {
   currentUserId?: string
   canModerate: boolean
   offset: number
-  isPlaying: boolean
   seekTo(time: number): void
-  toggle(): void
+  pause(): void
   showAnnotation(side: 'a' | 'b', drawing: Record<string, unknown> | null): void
 }
 
 // Keep the comment subscription and its mutation callbacks inside the memo
 // boundary. The overlay also subscribes to the same SWR cache for markers and
 // the composer, but its rAF clock must not reconcile the whole comment tree.
-// Only pane configuration/playback changes and actual comment updates enter.
+// Only pane configuration changes and actual comment updates enter.
 const CompareCommentPanel = React.memo(function CompareCommentPanel({
-  assetId, versionId, side, currentUserId, canModerate, offset, isPlaying,
-  seekTo, toggle, showAnnotation,
+  assetId, versionId, side, currentUserId, canModerate, offset,
+  seekTo, pause, showAnnotation,
 }: CompareCommentPanelProps) {
   const comments = useComments(assetId, versionId)
-  const playingRef = React.useRef(isPlaying)
-  React.useEffect(() => { playingRef.current = isPlaying }, [isPlaying])
   return (
     <CommentPanel
       comments={comments.comments}
@@ -70,15 +67,9 @@ const CompareCommentPanel = React.memo(function CompareCommentPanel({
       onSubmitReply={async (parentId, body) => {
         await comments.createComment(body, undefined, undefined, undefined, parentId)
       }}
-      onSeekToTimecode={(tc, pause) => {
+      onSeekToTimecode={(tc, shouldPause) => {
         seekTo(tc + offset)
-        // Annotation/timecode buttons also bubble to the row. Make repeated
-        // pause requests idempotent before React commits the playback change.
-        // Only toggle updates the transport's playingRef as well as state.
-        if (pause && playingRef.current) {
-          playingRef.current = false
-          toggle()
-        }
+        if (shouldPause) pause()
       }}
       onShowAnnotation={(drawing) => showAnnotation(side, drawing)}
       exportVersionId={versionId}
@@ -354,9 +345,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const handleMarkerClick = React.useCallback(
     (side: 'a' | 'b', marker: ScrubberMarker) => {
       transport.seekTo(marker.tc + (side === 'a' ? timingA.offset : timingB.offset))
-      // CRITICAL: toggle() (not setIsPlaying) — only toggle() updates the
-      // transport's internal playingRef; setIsPlaying is the raw state setter.
-      if (transport.isPlaying) transport.toggle()
+      transport.pause()
       setFocusedCommentId(marker.id)
       if (side === 'a') setPanelAOpen(true)
       else setPanelBOpen(true)
@@ -493,9 +482,8 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 currentUserId={user?.id}
                 canModerate={canModerate}
                 offset={timingA.offset}
-                isPlaying={transport.isPlaying}
                 seekTo={transport.seekTo}
-                toggle={transport.toggle}
+                pause={transport.pause}
                 showAnnotation={showAnnotationFor}
               />
               {canComment && (
@@ -507,7 +495,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 disableAnnotations={!canAuthor}
                 annotationActive={drawingSide === 'a'}
                 onToggleAnnotation={() => toggleDrawing('a')}
-                onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
+                onPauseVideo={transport.pause}
                 onSubmit={async (
                   body: string,
                   // Pane-local already (via playheadTimeOverride); undefined when
@@ -732,9 +720,8 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 currentUserId={user?.id}
                 canModerate={canModerate}
                 offset={timingB.offset}
-                isPlaying={transport.isPlaying}
                 seekTo={transport.seekTo}
-                toggle={transport.toggle}
+                pause={transport.pause}
                 showAnnotation={showAnnotationFor}
               />
               {canComment && (
@@ -746,7 +733,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 disableAnnotations={!canAuthor}
                 annotationActive={drawingSide === 'b'}
                 onToggleAnnotation={() => toggleDrawing('b')}
-                onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
+                onPauseVideo={transport.pause}
                 onSubmit={async (
                   body: string,
                   // Pane-local already (via playheadTimeOverride); undefined when

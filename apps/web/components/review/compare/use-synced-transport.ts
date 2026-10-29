@@ -180,5 +180,13 @@ export function useSyncedTransport({ urlA, urlB, timingA, timingB, audibleSide =
     setIsPlaying(playingRef.current)
   }, [])
 
-  return { playerA, playerB, t, total, isPlaying, toggle, seekTo, setIsPlaying }
+  // One-way pause requests can bubble through more than one click handler.
+  // Read the live flag so repeated requests cannot toggle playback back on.
+  const pause = React.useCallback(() => {
+    if (!playingRef.current) return
+    playingRef.current = false
+    setIsPlaying(false)
+  }, [])
+
+  return { playerA, playerB, t, total, isPlaying, toggle, pause, seekTo, setIsPlaying }
 }

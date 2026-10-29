@@ -267,4 +267,43 @@ describe('compare comment panels during real transport playback (#170)', () => {
     expect(overlays).toHaveLength(1)
     expect(overlays[0].parentElement?.parentElement).toContainElement(own)
   })
+
+  it.each(['a', 'b'] as const)('pauses pane %s composer, timecode and marker clicks without resuming', async (side) => {
+    mount()
+    fireEvent.click(screen.getByLabelText('Toggle left comments'))
+    const id = side === 'a' ? 'left' : 'right'
+    await screen.findByText(id)
+    const pane = screen.getByText(id).closest('aside') as HTMLElement
+    fireEvent.click(screen.getByLabelText('Mute v3'))
+    fireEvent.click(screen.getByLabelText('Play'))
+    now = performance.now()
+    for (let i = 0; i < 6; i++) frame()
+
+    const input = within(pane).getByPlaceholderText('Leave your comment...')
+    fireEvent.click(input)
+    expect(screen.getByLabelText('Play')).toBeInTheDocument()
+    fireEvent.click(input)
+    expect(screen.getByLabelText('Play')).toBeInTheDocument()
+    frame()
+    const videos = document.querySelectorAll('video')
+    const heldTimes = [...videos].map((v) => v.currentTime)
+    frame()
+    frame()
+    expect([...videos].map((v) => v.currentTime)).toEqual(heldTimes)
+
+    // The timecode button also reaches the row handler: both requests pause.
+    fireEvent.click(screen.getByLabelText('Play'))
+    fireEvent.click(within(pane).getByTitle('Jump to timecode'))
+    expect(screen.getByLabelText('Play')).toBeInTheDocument()
+    expect([...videos].map((v) => v.currentTime)).toEqual([5, 5])
+
+    fireEvent.click(screen.getByLabelText('Play'))
+    fireEvent.click(screen.getByTestId(`marker-${side}-${id}`))
+    expect(screen.getByLabelText('Play')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId(`marker-${side}-${id}`))
+    expect(screen.getByLabelText('Play')).toBeInTheDocument()
+    frame()
+    frame()
+    expect([...videos].map((v) => v.currentTime)).toEqual([5, 5])
+  })
 })
