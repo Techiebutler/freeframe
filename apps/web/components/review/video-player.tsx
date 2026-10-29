@@ -284,8 +284,15 @@ export function VideoPlayer({
 
   // J/K/L shuttle. Its togglePlay and pause also stop reverse playback, so
   // every play control goes through it rather than the player's own.
-  const { reverseRate, shuttleForward, shuttleReverse, togglePlay, pause, setPlaybackRate } =
-    useShuttle(player);
+  const {
+    reverseRate,
+    shuttleForward,
+    shuttleReverse,
+    togglePlay,
+    pause,
+    setPlaybackRate,
+    cycleReverseRate,
+  } = useShuttle(player);
   const playing = isPlaying || reverseRate > 0;
   const speedLabel = reverseRate ? `-${reverseRate}x` : `${playbackRate}x`;
 
@@ -411,13 +418,18 @@ export function VideoPlayer({
     }
   }, [toggleFullscreen]);
 
+  // In reverse the button shows, and so steps, the reverse speed.
   const handleSpeedCycle = useCallback(() => {
+    if (reverseRate) {
+      cycleReverseRate();
+      return;
+    }
     const idx = SPEED_OPTIONS.indexOf(
       playbackRate as (typeof SPEED_OPTIONS)[number],
     );
     const next = SPEED_OPTIONS[(idx + 1) % SPEED_OPTIONS.length];
     setPlaybackRate(next);
-  }, [playbackRate, setPlaybackRate]);
+  }, [reverseRate, cycleReverseRate, playbackRate, setPlaybackRate]);
 
   return (
     <div

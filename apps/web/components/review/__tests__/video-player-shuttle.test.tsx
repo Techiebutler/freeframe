@@ -58,6 +58,13 @@ describe('J/K/L in the video player', () => {
     expect(screen.getByLabelText('Pause')).toBeTruthy()
   })
 
+  it('the speed button steps the reverse speed while in reverse', () => {
+    render(<VideoPlayer {...props} />)
+    fireEvent.keyDown(window, { code: 'KeyJ' })
+    fireEvent.click(screen.getByLabelText('Playback speed'))
+    expect(speed()).toBe('-2x')
+  })
+
   it('ignores a held key and a modified one, such as Cmd+K or Ctrl+L', () => {
     render(<VideoPlayer {...props} />)
     fireEvent.keyDown(window, { code: 'KeyL', ctrlKey: true })

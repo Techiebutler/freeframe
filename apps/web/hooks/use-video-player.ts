@@ -82,6 +82,9 @@ export function useVideoPlayer(
   const [volume, setVolumeState] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [playbackRate, setPlaybackRateState] = useState(1)
+  // Loading a new source resets the element to its default rate without a
+  // `ratechange` the label could follow, so the chosen rate is put back on it.
+  const playbackRateRef = useRef(1)
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([])
   const [currentQuality, setCurrentQuality] = useState(-1) // -1 = no active rung reported
   const [selectedQuality, setSelectedQuality] = useState(-1) // -1 = auto
@@ -186,6 +189,7 @@ export function useVideoPlayer(
     setIsLoading(true)
 
     const onLoadedMetadata = () => {
+      video.playbackRate = playbackRateRef.current
       setDuration(video.duration)
       setIsLoading(false)
     }
@@ -364,6 +368,7 @@ export function useVideoPlayer(
     const video = videoRef.current
     if (!video) return
     video.playbackRate = rate
+    playbackRateRef.current = rate
     setPlaybackRateState(rate)
   }, [])
 

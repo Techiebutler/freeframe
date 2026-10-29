@@ -29,6 +29,8 @@ export interface UseShuttleReturn {
   pause: () => void
   /** The speed menu: a speed picked there is kept when K stops playback. */
   setPlaybackRate: (rate: number) => void
+  /** The speed button during reverse: the next shuttle speed, back to 1x after 8x. */
+  cycleReverseRate: () => void
 }
 
 /**
@@ -40,6 +42,13 @@ export interface UseShuttleReturn {
  * the speed. It only steps when the previous seek has finished, carrying the
  * time owed over, so the speed holds even when seeks are slower than frames
  * and they never queue up behind each other.
+ *
+ * Steps write the element directly, not through the player's seek(), which
+ * also writes the review store's playhead: the asset page re-renders on every
+ * store write, and at frame rate that is several times what forward playback
+ * costs. The element's `timeupdate` moves the transport as it does forward,
+ * and seek() runs once when reverse stops, so the store ends where the
+ * element did.
  */
 export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
   const { videoRef, playbackRate, play, seek } = player
@@ -73,7 +82,7 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
       if (!video.seeking) {
         const next = Math.max(0, video.currentTime - owed)
         owed = 0
-        seek(next)
+        video.currentTime = next
         if (next === 0) {
           setReverseRate(0)
           return
@@ -84,13 +93,21 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
 
     // Forward playback from anywhere (the scrubber, the mobile sheet, a
     // comment) ends reverse, and so does the element moving to another source.
+    // After a source change the element's time is the new source's, so the
+    // playhead is left where it was rather than synced to it.
+    let sourceChanged = false
     const stop = () => setReverseRate(0)
+    const onEmptied = () => {
+      sourceChanged = true
+      stop()
+    }
     video.addEventListener('play', stop)
-    video.addEventListener('emptied', stop)
+    video.addEventListener('emptied', onEmptied)
     return () => {
       cancelAnimationFrame(rafRef.current)
       video.removeEventListener('play', stop)
-      video.removeEventListener('emptied', stop)
+      video.removeEventListener('emptied', onEmptied)
+      if (!sourceChanged) seek(video.currentTime)
     }
   }, [reverseRate, videoRef, seek])
 
@@ -106,12 +123,17 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
   }, [setRate])
 
   // However forward playback stops (K, the end of the clip, a comment taking
-  // focus), an L speed-up ends with it.
+  // focus), an L speed-up ends with it. A source change stops playback too,
+  // but fires no `pause`, only `emptied`.
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
     video.addEventListener('pause', resetForwardShuttle)
-    return () => video.removeEventListener('pause', resetForwardShuttle)
+    video.addEventListener('emptied', resetForwardShuttle)
+    return () => {
+      video.removeEventListener('pause', resetForwardShuttle)
+      video.removeEventListener('emptied', resetForwardShuttle)
+    }
   }, [videoRef, resetForwardShuttle])
 
   const shuttleForward = useCallback(() => {
@@ -155,5 +177,21 @@ export function useShuttle(player: ShuttlePlayer): UseShuttleReturn {
     setRate(rate)
   }, [setRate])
 
-  return { reverseRate, shuttleForward, shuttleReverse, togglePlay, pause, setPlaybackRate }
+  const cycleReverseRate = useCallback(() => {
+    setReverseRate((rate) => {
+      if (!rate) return rate
+      const i = SHUTTLE_RATES.indexOf(rate as (typeof SHUTTLE_RATES)[number])
+      return SHUTTLE_RATES[(i + 1) % SHUTTLE_RATES.length]
+    })
+  }, [])
+
+  return {
+    reverseRate,
+    shuttleForward,
+    shuttleReverse,
+    togglePlay,
+    pause,
+    setPlaybackRate,
+    cycleReverseRate,
+  }
 }
