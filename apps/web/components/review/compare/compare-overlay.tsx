@@ -33,6 +33,50 @@ interface CompareOverlayProps {
   canModerate?: boolean
 }
 
+interface CompareCommentPanelProps {
+  assetId: string
+  versionId: string
+  side: 'a' | 'b'
+  currentUserId?: string
+  canModerate: boolean
+  offset: number
+  seekTo(time: number): void
+  pause(): void
+  showAnnotation(side: 'a' | 'b', drawing: Record<string, unknown> | null): void
+}
+
+// Keep the comment subscription and its mutation callbacks inside the memo
+// boundary. The overlay also subscribes to the same SWR cache for markers and
+// the composer, but its rAF clock must not reconcile the whole comment tree.
+// Only pane configuration changes and actual comment updates enter.
+const CompareCommentPanel = React.memo(function CompareCommentPanel({
+  assetId, versionId, side, currentUserId, canModerate, offset,
+  seekTo, pause, showAnnotation,
+}: CompareCommentPanelProps) {
+  const comments = useComments(assetId, versionId)
+  return (
+    <CommentPanel
+      comments={comments.comments}
+      currentUserId={currentUserId}
+      canModerate={canModerate}
+      onResolve={comments.resolveComment}
+      onDelete={comments.deleteComment}
+      onAddReaction={comments.addReaction}
+      onRemoveReaction={comments.removeReaction}
+      onReply={() => {}}
+      onSubmitReply={async (parentId, body) => {
+        await comments.createComment(body, undefined, undefined, undefined, parentId)
+      }}
+      onSeekToTimecode={(tc, shouldPause) => {
+        seekTo(tc + offset)
+        if (shouldPause) pause()
+      }}
+      onShowAnnotation={(drawing) => showAnnotation(side, drawing)}
+      exportVersionId={versionId}
+    />
+  )
+})
+
 function mediaOf(v: AssetVersion | null | undefined): { fps?: number | null; duration_seconds?: number | null } {
   // AssetVersion embeds media metadata as `files` (MediaFile[], types/index.ts);
   // fps / duration_seconds live on the first entry.
@@ -301,9 +345,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
   const handleMarkerClick = React.useCallback(
     (side: 'a' | 'b', marker: ScrubberMarker) => {
       transport.seekTo(marker.tc + (side === 'a' ? timingA.offset : timingB.offset))
-      // CRITICAL: toggle() (not setIsPlaying) — only toggle() updates the
-      // transport's internal playingRef; setIsPlaying is the raw state setter.
-      if (transport.isPlaying) transport.toggle()
+      transport.pause()
       setFocusedCommentId(marker.id)
       if (side === 'a') setPanelAOpen(true)
       else setPanelBOpen(true)
@@ -311,22 +353,6 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
       showAnnotationFor(side, comment?.annotation?.drawing_data ?? null)
     },
     [transport, timingA.offset, timingB.offset, setFocusedCommentId, setPanelAOpen, setPanelBOpen, sideA, sideB, showAnnotationFor],
-  )
-
-  // Per-side reply adapters — mirror page.tsx's handleSubmitReply (createComment
-  // with only body + parentId, no timecode) so CommentPanel's inline reply box
-  // renders (it's gated on onSubmitReply being defined).
-  const handleReplyA = React.useCallback(
-    async (parentId: string, body: string) => {
-      await sideA.createComment(body, undefined, undefined, undefined, parentId)
-    },
-    [sideA],
-  )
-  const handleReplyB = React.useCallback(
-    async (parentId: string, body: string) => {
-      await sideB.createComment(body, undefined, undefined, undefined, parentId)
-    },
-    [sideB],
   )
 
   // Version switch (either pane): offA/offB were calibrated for the OLD pair —
@@ -449,23 +475,16 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
         <aside className={cn('shrink-0 border-r border-border transition-all', panelAOpen ? 'w-80' : 'w-0 overflow-hidden')}>
           {panelAOpen && (
             <div className="flex h-full flex-col">
-              <CommentPanel
-                comments={sideA.comments}
+              <CompareCommentPanel
+                assetId={asset.id}
+                versionId={left.id}
+                side="a"
                 currentUserId={user?.id}
                 canModerate={canModerate}
-                onResolve={async (id) => { await sideA.resolveComment(id) }}
-                onDelete={async (id) => { await sideA.deleteComment(id) }}
-                onAddReaction={async (id, e) => { await sideA.addReaction(id, e) }}
-                onRemoveReaction={async (id, e) => { await sideA.removeReaction(id, e) }}
-                onReply={() => {}}
-                onSubmitReply={handleReplyA}
-                onSeekToTimecode={(tc, pause) => {
-                  transport.seekTo(tc + timingA.offset)
-                  // Normal-player parity: comment clicks pass pause=true.
-                  if (pause && transport.isPlaying) transport.toggle()
-                }}
-                onShowAnnotation={(d) => showAnnotationFor('a', d)}
-                exportVersionId={left.id}
+                offset={timingA.offset}
+                seekTo={transport.seekTo}
+                pause={transport.pause}
+                showAnnotation={showAnnotationFor}
               />
               {canComment && (
               <CommentInput
@@ -476,7 +495,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 disableAnnotations={!canAuthor}
                 annotationActive={drawingSide === 'a'}
                 onToggleAnnotation={() => toggleDrawing('a')}
-                onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
+                onPauseVideo={transport.pause}
                 onSubmit={async (
                   body: string,
                   // Pane-local already (via playheadTimeOverride); undefined when
@@ -694,22 +713,16 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
         <aside className={cn('shrink-0 border-l border-border transition-all', panelBOpen ? 'w-80' : 'w-0 overflow-hidden')}>
           {panelBOpen && (
             <div className="flex h-full flex-col">
-              <CommentPanel
-                comments={sideB.comments}
+              <CompareCommentPanel
+                assetId={asset.id}
+                versionId={right.id}
+                side="b"
                 currentUserId={user?.id}
                 canModerate={canModerate}
-                onResolve={async (id) => { await sideB.resolveComment(id) }}
-                onDelete={async (id) => { await sideB.deleteComment(id) }}
-                onAddReaction={async (id, e) => { await sideB.addReaction(id, e) }}
-                onRemoveReaction={async (id, e) => { await sideB.removeReaction(id, e) }}
-                onReply={() => {}}
-                onSubmitReply={handleReplyB}
-                onSeekToTimecode={(tc, pause) => {
-                  transport.seekTo(tc + timingB.offset)
-                  if (pause && transport.isPlaying) transport.toggle()
-                }}
-                onShowAnnotation={(d) => showAnnotationFor('b', d)}
-                exportVersionId={right.id}
+                offset={timingB.offset}
+                seekTo={transport.seekTo}
+                pause={transport.pause}
+                showAnnotation={showAnnotationFor}
               />
               {canComment && (
               <CommentInput
@@ -720,7 +733,7 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
                 disableAnnotations={!canAuthor}
                 annotationActive={drawingSide === 'b'}
                 onToggleAnnotation={() => toggleDrawing('b')}
-                onPauseVideo={() => { if (transport.isPlaying) transport.toggle() }}
+                onPauseVideo={transport.pause}
                 onSubmit={async (
                   body: string,
                   // Pane-local already (via playheadTimeOverride); undefined when

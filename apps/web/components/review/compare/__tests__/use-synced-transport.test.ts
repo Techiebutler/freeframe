@@ -164,6 +164,52 @@ describe('useSyncedTransport playback', () => {
     expect(b.paused).toBe(true)
   })
 
+  it('provides a stable idempotent pause using the live state before React commits', () => {
+    const { a, b, transport } = mountPair()
+    const pause = transport.current.pause
+
+    // A saved callback must see a play request in the same batch. A closure
+    // over the previous render's isPlaying would miss it.
+    act(() => {
+      transport.current.toggle()
+      pause()
+      pause()
+    })
+    expect(transport.current.isPlaying).toBe(false)
+    frame()
+    expect(transport.current.t).toBe(0)
+    expect(a.paused && b.paused).toBe(true)
+
+    act(() => transport.current.toggle())
+    frame()
+    expect(a.paused || b.paused).toBe(false)
+    const heldTime = transport.current.t
+    act(() => { pause(); pause() })
+    expect(transport.current.pause).toBe(pause)
+    expect(transport.current.isPlaying).toBe(false)
+    frame()
+    frame()
+    expect(transport.current.t).toBe(heldTime)
+    expect(a.paused && b.paused).toBe(true)
+
+    // The one-way pause does not prevent a later intentional play request.
+    act(() => transport.current.toggle())
+    frame()
+    expect(transport.current.isPlaying).toBe(true)
+    expect(transport.current.t).toBeGreaterThan(heldTime)
+  })
+
+  it('leaves an already paused transport at its end without restarting it', () => {
+    const { transport } = mountPair()
+    act(() => transport.current.pause())
+    expect(transport.current.isPlaying).toBe(false)
+    act(() => transport.current.seekTo(60))
+    act(() => { transport.current.pause(); transport.current.pause() })
+    frame()
+    expect(transport.current.t).toBe(60)
+    expect(transport.current.isPlaying).toBe(false)
+  })
+
   it('follows the audible side clock and hands off when the audible side switches', () => {
     const { a, b, transport } = mountPair({
       audibleSide: 'b',
