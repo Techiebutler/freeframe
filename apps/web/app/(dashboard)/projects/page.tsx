@@ -12,11 +12,13 @@ import {
   Users,
   Share2,
   Globe,
+  Shield,
 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Segment } from "@/components/ui/setting-controls";
 import { ProjectCard } from "@/components/projects/project-card";
 import { useProjectMenu } from "@/components/projects/menus/project-menu";
 import { ContextMenuArea } from "@/components/shared/item-menu";
@@ -231,7 +233,7 @@ function ProjectSection({
 export default function ProjectsPage() {
   usePageTitle("Projects");
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, isSuperAdmin } = useAuthStore();
   const {
     layout: viewMode,
     cardSize,
@@ -246,17 +248,26 @@ export default function ProjectsPage() {
   const [isCreating, setIsCreating] = React.useState(false);
   const [formError, setFormError] = React.useState("");
 
+  // Instance administrators can look past their own memberships. Not persisted:
+  // "every project on the instance" is a thing you reach for, not a default to
+  // come back to, and `mine` is what the page has always shown.
+  const [scope, setScope] = React.useState<"mine" | "all">("mine");
+  // Falls back the moment the flag goes away, so a demoted admin's next fetch
+  // is the ordinary one rather than a 403.
+  const effectiveScope = isSuperAdmin ? scope : "mine";
+
   const [form, setForm] = React.useState<CreateProjectForm>({
     name: "",
     description: "",
     project_type: "personal",
   });
 
+  const listKey = effectiveScope === "all" ? "/projects?scope=all" : "/projects";
   const {
     data: projects,
     isLoading,
     mutate,
-  } = useSWR<Project[]>("/projects", () => api.get<Project[]>("/projects"));
+  } = useSWR<Project[]>(listKey, (key: string) => api.get<Project[]>(key));
 
   const sortedProjects = React.useMemo(
     () => sortProjects(projects ?? [], sortKey, sortDirection),
@@ -341,6 +352,21 @@ export default function ProjectsPage() {
           <ProjectsAppearancePopover />
           <div className="h-4 w-px bg-border mx-0.5" />
           <ProjectsSortPopover />
+          {isSuperAdmin && (
+            <>
+              <div className="h-4 w-px bg-border mx-0.5" />
+              {/* The same segmented control the appearance popovers use. */}
+              <Segment<"mine" | "all">
+                label="Which projects"
+                value={scope}
+                onChange={setScope}
+                options={[
+                  { value: "mine", label: "Mine" },
+                  { value: "all", label: "All projects" },
+                ]}
+              />
+            </>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -467,42 +493,61 @@ export default function ProjectsPage() {
         </div>
       ) : (
         <div className="space-y-8">
-          <ProjectSection
-            title="My Projects"
-            icon={<FolderOpen className="h-4 w-4 text-text-tertiary" />}
-            projects={myProjects}
-            viewMode={viewMode}
-            cardSize={cardSize}
-            showCardInfo={showCardInfo}
-            emptyMessage="You haven't created any projects yet."
-            onNewProject={() => setDialogOpen(true)}
-            showNewButton
-            userId={user?.id}
-          />
-          {sharedProjects.length > 0 && (
+          {effectiveScope === "all" ? (
+            // One flat list: in this scope most projects belong to nobody the
+            // signed-in admin has a relationship with, so the three
+            // relationship sections would leave them in no section at all.
             <ProjectSection
-              title="Shared with Me"
-              icon={<Share2 className="h-4 w-4 text-text-tertiary" />}
-              projects={sharedProjects}
+              title="All projects on this instance"
+              icon={<Shield className="h-4 w-4 text-text-tertiary" />}
+              projects={sortedProjects}
               viewMode={viewMode}
               cardSize={cardSize}
               showCardInfo={showCardInfo}
-              emptyMessage=""
+              emptyMessage="This instance has no projects yet."
               showRole
               userId={user?.id}
             />
-          )}
-          {publicProjects.length > 0 && (
-            <ProjectSection
-              title="Public Projects"
-              icon={<Globe className="h-4 w-4 text-text-tertiary" />}
-              projects={publicProjects}
-              viewMode={viewMode}
-              cardSize={cardSize}
-              showCardInfo={showCardInfo}
-              emptyMessage=""
-              userId={user?.id}
-            />
+          ) : (
+            <>
+              <ProjectSection
+                title="My Projects"
+                icon={<FolderOpen className="h-4 w-4 text-text-tertiary" />}
+                projects={myProjects}
+                viewMode={viewMode}
+                cardSize={cardSize}
+                showCardInfo={showCardInfo}
+                emptyMessage="You haven't created any projects yet."
+                onNewProject={() => setDialogOpen(true)}
+                showNewButton
+                userId={user?.id}
+              />
+              {sharedProjects.length > 0 && (
+                <ProjectSection
+                  title="Shared with Me"
+                  icon={<Share2 className="h-4 w-4 text-text-tertiary" />}
+                  projects={sharedProjects}
+                  viewMode={viewMode}
+                  cardSize={cardSize}
+                  showCardInfo={showCardInfo}
+                  emptyMessage=""
+                  showRole
+                  userId={user?.id}
+                />
+              )}
+              {publicProjects.length > 0 && (
+                <ProjectSection
+                  title="Public Projects"
+                  icon={<Globe className="h-4 w-4 text-text-tertiary" />}
+                  projects={publicProjects}
+                  viewMode={viewMode}
+                  cardSize={cardSize}
+                  showCardInfo={showCardInfo}
+                  emptyMessage=""
+                  userId={user?.id}
+                />
+              )}
+            </>
           )}
         </div>
       )}

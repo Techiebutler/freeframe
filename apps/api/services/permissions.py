@@ -1,6 +1,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
+import logging
 import uuid
 from ..models.user import User, UserStatus
 from ..models.project import Project, ProjectMember, ProjectRole
@@ -10,16 +11,230 @@ from ..models.share import AssetShare, ShareLink, ShareLinkItem, SharePermission
 from ..services.redis_service import verify_share_session
 
 
+_log = logging.getLogger("freeframe.permissions")
+
+
+# ── Instance administrators ────────────────────────────────────────────────────
+
+# The one role that reaches past project membership. `users.is_superadmin` is the
+# instance administrator the setup wizard creates and the admin dashboard calls
+# "Admin"; there is no second instance-level role to extend, and adding one would
+# leave two places to keep in step. Project roles (owner > editor > reviewer >
+# viewer) are untouched: a project owner still cannot see a project they are not
+# in, and nothing below superadmin gains anything from this module.
+#
+# Every bypass lives here on purpose. The routers call require_project_role,
+# require_project_visible and can_access_asset, so a new endpoint inherits the
+# rule instead of having to remember it.
+
+
+def is_instance_admin(user: "User | None") -> bool:
+    """Whether the account carries the instance-wide superadmin flag.
+
+    Tolerates a missing attribute so a share-link caller (no user) and a mock
+    in a test both answer False rather than raising.
+    """
+    return bool(getattr(user, "is_superadmin", False))
+
+
+def admin_membership(project_id: uuid.UUID, user: User) -> ProjectMember:
+    """A transient owner-equivalent membership standing in for a superadmin's
+    instance-wide access.
+
+    Never added to the session: the administrator is *not* a member, and the
+    project's member list, its member count and its emails must keep saying so.
+    It exists only so the permission helpers can keep returning a ProjectMember
+    to callers that type against one.
+    """
+    return ProjectMember(project_id=project_id, user_id=user.id, role=ProjectRole.owner)
+
+
+# The action string for an administrator acting on a project they are not a
+# member of. `payload.via = "superadmin"` is what separates these rows from the
+# same action taken by a member.
+ADMIN_ACCESS_ACTION = "admin_project_access"
+
+# Every path an administrator can reach a project by is audited, read tiers
+# included: a review tool's whole reason for wanting this log is the line that
+# says an outsider was in there, and "they only looked" is exactly the case a
+# project owner asks about afterwards.
+#
+# The scopes that are not a role tier. A project tier is logged as the tier it
+# asked for; these two name a path that has no tier of its own.
+AUDIT_SCOPE_ASSET = "asset"      # require_asset_access: asset, version, comment, attachment
+AUDIT_SCOPE_EVENTS = "events"    # the live event stream, at connect
+
+# What `asset_access_reason` answers when nothing but the instance-admin flag
+# let the caller through. The one reason that is audited.
+ASSET_ACCESS_VIA_SUPERADMIN = "superadmin"
+
+# How much each path proves about what the administrator did, so one row per
+# request can carry the heaviest access instead of the first one. A request that
+# reads an asset and then deletes it reports the delete.
+_SCOPE_WEIGHT = {
+    AUDIT_SCOPE_EVENTS: 1,
+    ProjectRole.viewer: 1,
+    AUDIT_SCOPE_ASSET: 2,
+    ProjectRole.reviewer: 3,
+    ProjectRole.editor: 4,
+    ProjectRole.owner: 5,
+}
+
+# Where the per-request bookkeeping lives. `Session.info` is a plain dict that
+# belongs to the one session, and a session is one request (`get_db`), so it is
+# the request scope without a middleware or a context variable to keep in step.
+_AUDIT_STATE_KEY = "admin_project_access_rows"
+
+
+def _audit_state(db: Session) -> "dict | None":
+    """The per-session map of project_id -> (weight, row), or None for a session
+    that cannot carry one.
+
+    The unit-test harness hands the routers a MagicMock whose `.info` is another
+    MagicMock. Refusing to dedupe there is the safe direction: a duplicate row
+    in a test is visible, a swallowed one is not.
+    """
+    info = getattr(db, "info", None)
+    if not isinstance(info, dict):
+        return None
+    return info.setdefault(_AUDIT_STATE_KEY, {})
+
+
+def log_admin_project_access(
+    db: Session,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    scope: "ProjectRole | str",
+    *,
+    membership: str = "none",
+    asset_id: "uuid.UUID | None" = None,
+) -> None:
+    """Record that a superadmin reached a project their own membership did not
+    cover, either because they are not a member or because their project role
+    ranks below what the endpoint asked for.
+
+    `payload.membership` says which of the two it was, so the log distinguishes
+    "an outsider acted here" from "a member used their admin powers".
+    `payload.scope` says which path got them in, and `payload.required_role` the
+    tier, where the path has one.
+
+    **One row per request and project, not one per object.** A listing checks
+    every asset it returns, and `GET /events` re-checks for as long as the
+    stream stays open; a row per check would turn one open tab into unbounded
+    rows in a table that is never pruned. The first access in a request writes
+    the row, a later heavier one rewrites it in place (it is still pending, or
+    at worst dirty, in the same session), and anything lighter is dropped.
+
+    Added to the session, not committed: the request's own commit carries it, so
+    a write that ends in a rollback leaves no row claiming it happened. A
+    read-only request commits nothing of its own, so `get_db` commits the row on
+    its way out; see `persist_admin_access_audit`.
+    """
+    from ..models.activity import ActivityLog
+    from ..services.activity_service import log_activity
+
+    weight = _SCOPE_WEIGHT.get(scope, 0)
+    payload = {
+        "via": "superadmin",
+        "membership": membership,
+        "scope": scope.value if isinstance(scope, ProjectRole) else scope,
+        "required_role": scope.value if isinstance(scope, ProjectRole) else None,
+    }
+
+    state = _audit_state(db)
+    if state is not None:
+        previous = state.get(project_id)
+        if previous is not None:
+            seen_weight, row = previous
+            if weight <= seen_weight:
+                return
+            # Rewrite rather than add: reassigned, not mutated in place, so a
+            # row that has already been flushed is marked dirty and updated.
+            row.payload = payload
+            if asset_id is not None:
+                row.asset_id = asset_id
+            state[project_id] = (weight, row)
+            return
+
+    log_activity(
+        db,
+        action=ADMIN_ACCESS_ACTION,
+        user_id=user_id,
+        project_id=project_id,
+        asset_id=asset_id,
+        payload=payload,
+    )
+    if state is not None:
+        row = next(
+            (
+                o for o in reversed(list(db.new))
+                if isinstance(o, ActivityLog) and o.action == ADMIN_ACCESS_ACTION
+            ),
+            None,
+        )
+        if row is not None:
+            state[project_id] = (weight, row)
+
+
+def persist_admin_access_audit(db: Session) -> int:
+    """Commit the admin-access rows of a request that committed nothing itself,
+    and return how many were written.
+
+    A read-only endpoint never commits, so without this the row for a
+    superadmin reading a project they are not in would be dropped when the
+    session closes, and the log would only ever show writes.
+
+    Only when those rows are the *whole* of the pending work. A request with its
+    own pending changes either committed already (nothing is pending) or is on
+    its way to a rollback, and committing half of someone else's transaction to
+    save a log row would be the worse bug by far.
+    """
+    from ..models.activity import ActivityLog
+
+    try:
+        pending = list(db.new)
+        if not pending or db.dirty or db.deleted:
+            return 0
+        rows = [
+            o for o in pending
+            if isinstance(o, ActivityLog) and o.action == ADMIN_ACCESS_ACTION
+        ]
+        if not rows or len(rows) != len(pending):
+            return 0
+        db.commit()
+        return len(rows)
+    except Exception:
+        _log.warning("could not persist the admin access audit rows", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0
+
+
 # ── Project-level ──────────────────────────────────────────────────────────────
 
-def get_project_member(db: Session, project_id: uuid.UUID, user_id: uuid.UUID) -> ProjectMember | None:
-    """The user's live membership of a live project. A deleted project has no members."""
-    return db.query(ProjectMember).join(Project, Project.id == ProjectMember.project_id).filter(
+def get_project_member(
+    db: Session,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    include_trashed: bool = False,
+) -> ProjectMember | None:
+    """The user's live membership of a live project. A deleted project has no members.
+
+    `include_trashed=True` answers for a project that is in the trash as well, for
+    the one endpoint whose whole subject is such a project: `POST /{id}/restore`.
+    The membership itself must still be live either way, so a member whose own
+    membership was removed is not an owner of the trashed project.
+    """
+    q = db.query(ProjectMember).join(Project, Project.id == ProjectMember.project_id).filter(
         ProjectMember.project_id == project_id,
         ProjectMember.user_id == user_id,
         ProjectMember.deleted_at.is_(None),
-        Project.deleted_at.is_(None),
-    ).first()
+    )
+    if not include_trashed:
+        q = q.filter(Project.deleted_at.is_(None))
+    return q.first()
 
 
 def require_live_project(db: Session, project_id: uuid.UUID) -> Project:
@@ -58,11 +273,31 @@ def require_project_role(
     project_id: uuid.UUID,
     user: User,
     minimum_role: ProjectRole,
+    project: "Project | None" = None,
+    include_trashed: bool = False,
 ) -> ProjectMember:
     """Require the user to have at least `minimum_role` on the project.
 
     Role hierarchy (descending): owner > editor > reviewer > viewer
     A project that does not exist or is deleted is 404, before the role check.
+    Pass `project` when the caller has already established it is live, to save
+    the lookup; it must be the live row for `project_id`.
+
+    An instance superadmin passes every tier on every live project, membership
+    or not, and is answered with a transient owner membership. Reaching a tier
+    that their own membership did not cover writes an activity-log row, read
+    tiers included, deduplicated to one row per request and project. A
+    superadmin whose real role already covers the tier takes the ordinary path,
+    is answered with their real membership, and is not logged: nothing about
+    that access was administrative.
+
+    `include_trashed=True` is for `POST /{id}/restore`, the one endpoint that
+    acts on a project precisely because it is in the trash. Such a caller has
+    already loaded the trashed row and must pass it as `project`, because the
+    404 above is exactly what it does not want. The tier, the refusals and the
+    audit row are then the same ones every other reach gets, which is the point:
+    a superadmin taking somebody else's project out of the trash is a reach past
+    their own membership and belongs in the log with the rest.
     """
     ROLE_RANK = {
         ProjectRole.owner: 4,
@@ -70,25 +305,46 @@ def require_project_role(
         ProjectRole.reviewer: 2,
         ProjectRole.viewer: 1,
     }
-    require_live_project(db, project_id)
-    member = get_project_member(db, project_id, user.id)
+    if project is None:
+        require_live_project(db, project_id)
+    member = get_project_member(db, project_id, user.id, include_trashed=include_trashed)
+    if member and ROLE_RANK[member.role] >= ROLE_RANK[minimum_role]:
+        return member
+    if is_instance_admin(user):
+        log_admin_project_access(
+            db, project_id, user.id, minimum_role,
+            membership=member.role.value if member else "none",
+        )
+        return admin_membership(project_id, user)
     if not member:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a project member")
-    if ROLE_RANK[member.role] < ROLE_RANK[minimum_role]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Requires {minimum_role.value} role or higher",
-        )
-    return member
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Requires {minimum_role.value} role or higher",
+    )
 
 
-def require_project_visible(db: Session, project_id: uuid.UUID, user: User) -> ProjectMember | None:
+def require_project_visible(
+    db: Session,
+    project_id: uuid.UUID,
+    user: User,
+    project: "Project | None" = None,
+) -> ProjectMember | None:
     """For what a public project also shows non-members: 404 for a project that does
     not exist or is deleted, 403 unless the user is a member or the project is public.
-    Returns the membership, if any."""
-    project = require_live_project(db, project_id)
+    Returns the membership, if any. Pass `project` when the caller already has
+    the live row.
+
+    An instance superadmin is visible on every live project. The read is logged
+    as the viewer tier, once per request and project.
+    """
+    if project is None:
+        project = require_live_project(db, project_id)
     member = get_project_member(db, project_id, user.id)
     if not member and not project.is_public:
+        if is_instance_admin(user):
+            log_admin_project_access(db, project_id, user.id, ProjectRole.viewer)
+            return admin_membership(project_id, user)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a project member")
     return member
 
@@ -117,6 +373,7 @@ def project_events_denial(
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     token_version: int,
+    audit: bool = False,
 ) -> str | None:
     """Why this user, holding an access token minted at `token_version`, may not
     receive the project's live events. None means they may.
@@ -127,6 +384,16 @@ def project_events_denial(
     member of or which is public. An open event stream calls this repeatedly
     for as long as it stays open, so it is a single indexed round trip.
     Token expiry is not checked here; the caller has the token's `exp`.
+
+    An instance superadmin passes the membership test, so a project they opened
+    without being a member streams instead of revoking a second later. The flag
+    is read from the same row, so this stays one round trip, and losing it mid
+    stream revokes the subscriber like losing a membership does.
+
+    `audit=True` logs an admin-only subscription. The caller passes it on the
+    check at connect and not on the rechecks: the stream re-checks on its own
+    short-lived session for as long as it stays open, so a row per check would
+    be a row per recheck interval per open tab.
     """
     is_member = exists().where(
         ProjectMember.project_id == project_id,
@@ -134,7 +401,13 @@ def project_events_denial(
         ProjectMember.deleted_at.is_(None),
     )
     row = db.execute(
-        select(User.status, User.token_version, Project.is_public, is_member.label("is_member"))
+        select(
+            User.status,
+            User.token_version,
+            User.is_superadmin,
+            Project.is_public,
+            is_member.label("is_member"),
+        )
         .join(Project, Project.id == project_id)
         .where(
             User.id == user_id,
@@ -146,13 +419,22 @@ def project_events_denial(
         return EVENTS_ACCESS_REVOKED
     if row.token_version != token_version:
         return EVENTS_TOKEN_REVOKED
-    if not (row.is_member or row.is_public):
+    if not (row.is_member or row.is_public or row.is_superadmin):
         return EVENTS_ACCESS_REVOKED
+    if audit and row.is_superadmin and not row.is_member and not row.is_public:
+        log_admin_project_access(db, project_id, user_id, AUDIT_SCOPE_EVENTS)
     return None
 
 
-def can_access_asset(db: Session, asset: Asset, user: User) -> bool:
-    """Check if user can access the asset via any path.
+def asset_access_reason(db: Session, asset: Asset, user: User) -> "str | None":
+    """Why this user may reach the asset, or None if they may not.
+
+    Split out of `can_access_asset` so the one caller that gates on it can tell
+    an access that only the instance-admin flag allowed from one any member
+    would have had, and log the first. `can_access_asset` itself must not log:
+    it is also read to filter a list (which mentions resolve, who sees a
+    comment), and a row per item in a list is exactly the flood this audit has
+    to avoid.
 
     No path reaches an asset whose project is in the trash.
     """
@@ -161,15 +443,15 @@ def can_access_asset(db: Session, asset: Asset, user: User) -> bool:
         Project.deleted_at.is_(None),
     ).first()
     if not project_live:
-        return False
+        return None
 
     # 1. Asset creator
     if asset.created_by == user.id:
-        return True
+        return "creator"
 
     # 2. Project member
     if get_project_member(db, asset.project_id, user.id):
-        return True
+        return "member"
 
     # 3. Direct AssetShare with user
     direct = db.query(AssetShare).filter(
@@ -178,18 +460,43 @@ def can_access_asset(db: Session, asset: Asset, user: User) -> bool:
         AssetShare.deleted_at.is_(None),
     ).first()
     if direct:
-        return True
+        return "share"
 
     # 4. Public project — any authenticated user can view
     if is_public_project(db, asset.project_id):
-        return True
+        return "public"
 
-    return False
+    # 5. Instance superadmin — every live project, membership or not. Last, so
+    #    an admin who is a member or creator still takes the cheaper path above.
+    if is_instance_admin(user):
+        return ASSET_ACCESS_VIA_SUPERADMIN
+
+    return None
+
+
+def can_access_asset(db: Session, asset: Asset, user: User) -> bool:
+    """Check if user can access the asset via any path.
+
+    No path reaches an asset whose project is in the trash. Never logs; see
+    `asset_access_reason`.
+    """
+    return asset_access_reason(db, asset, user) is not None
 
 
 def require_asset_access(db: Session, asset: Asset, user: User) -> None:
-    if not can_access_asset(db, asset, user):
+    """403 unless the user may reach the asset.
+
+    The gate every asset, version, comment and attachment route goes through,
+    and therefore where an administrator's reach past membership into the asset
+    path is logged: `can_access_asset` has no business writing rows, this does.
+    """
+    reason = asset_access_reason(db, asset, user)
+    if reason is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    if reason == ASSET_ACCESS_VIA_SUPERADMIN:
+        log_admin_project_access(
+            db, asset.project_id, user.id, AUDIT_SCOPE_ASSET, asset_id=asset.id,
+        )
 
 
 def get_asset_share_permission(db: Session, asset: Asset, user: User) -> SharePermission:

@@ -176,19 +176,66 @@ Share Link (unauthenticated access, by token)
 └── view     ── read-only
 ```
 
-`User.is_superadmin` is a separate, instance-level flag covering user administration only:
-invite, deactivate, role change, first-run setup. It grants **no** content access and is not
-consulted when resolving asset permissions.
+`User.is_superadmin` is the one instance-level role: the account the first-run setup creates,
+shown as **Admin** in the dashboard. It covers user administration (invite, deactivate, role
+change), instance settings and branding, **and instance-wide project access** — a superadmin
+may see, open, upload to and change every live project without being a member of it.
 
-**Asset access** is resolved by `can_access_asset` in `apps/api/services/permissions.py`, which
-returns true on the first of these that matches:
+That last part lives in exactly one place, `apps/api/services/permissions.py`, in the three
+functions every router goes through:
+
+| Function | What a superadmin gets |
+|---|---|
+| `require_project_role` | passes every tier (viewer to owner) on any live project |
+| `require_project_visible` | visible on any live project, not only a public one |
+| `require_asset_access` | reaches any asset whose project is live, and logs it |
+| `can_access_asset` | the same answer as a boolean, for filtering a list; never logs |
+| `project_events_denial` | may subscribe to any live project's event stream |
+
+No router repeats the rule, so a new endpoint that calls one of these inherits it rather than
+having to remember it. `routers/comments.py` was the last router with a membership query of its
+own (editing and deleting someone else's comment, and deleting an attachment); it now goes
+through `require_project_role` as well, with the refusal wording those routes always gave.
+The membership a superadmin is answered with is a **transient**
+`ProjectMember` that is never added to the session: the project's member list, its member count
+and its emails keep saying they are not a member.
+
+What this deliberately does **not** change:
+
+- **Project roles.** owner > editor > reviewer > viewer behaves exactly as before, and a
+  project owner still has no access to a project they are not in.
+- **Share links and the customer-facing viewer.** Share-link validation reads nothing off a
+  signed-in user, so the flag cannot change which links resolve or what a guest sees.
+- **A deleted project.** Still 404 for everyone, superadmin included.
+
+**Auditing.** Every path past membership is logged, reads included: an `ActivityLog` row with
+`action="admin_project_access"` and a payload naming `via: "superadmin"`, the role they actually
+held (`membership`, or `"none"`), the `scope` that let them in and the `required_role` where the
+scope is a tier. `scope` is a role tier for the project gate, `"asset"` for the asset, version,
+comment and attachment path, and `"events"` for the live stream at connect.
+
+**One row per request and project, not one per object.** A listing runs the gate for every item
+it returns and `GET /events/{project_id}` re-checks for as long as the stream stays open;
+`activity_logs` is never pruned, so a row per check would turn one open tab into unbounded rows.
+The bookkeeping lives in `Session.info`, which is the request scope, and a heavier access later
+in the same request rewrites the row instead of adding one. `can_access_asset` therefore has no
+audit hook at all: it is also read per item to resolve mentions and filter comments.
+
+The row is added to the session and carried by the request's own commit, so a write that ends in
+a rollback leaves nothing behind. A read-only request commits nothing of its own, so `get_db`
+commits the row on its way out, and only ever when those rows are the whole of the pending work
+(`permissions.persist_admin_access_audit`).
+
+**Asset access** is resolved by `asset_access_reason` in `apps/api/services/permissions.py`,
+which returns why the caller may reach the asset, on the first of these that matches:
 
 1. The user created the asset (`Asset.created_by`)
 2. The user is a `ProjectMember` in any role
 3. The asset is shared directly with the user (`AssetShare.shared_with_user_id`)
 4. The project is public (`Project.is_public`) — any authenticated user may reach it
+5. The user is an instance superadmin (`User.is_superadmin`)
 
-Anything outside those four paths requires a `ShareLink` token. A share link targets an asset,
+Anything outside those five paths requires a `ShareLink` token. A share link targets an asset,
 a folder, a project, or an explicit set of items, and may be password-protected; folder-scoped
 links apply transitively to the folder's contents. Guests commenting through a share link are
 recorded in the `GuestUser` table with email and name only, no account required.
@@ -283,6 +330,8 @@ migrated database. They are created by the initial migration and were never drop
 have no ORM model and no route behind them. Ignore them.
 
 **ORM:** SQLAlchemy 2.0 with Alembic for migrations.
+
+---
 
 ## Storage Accounting
 

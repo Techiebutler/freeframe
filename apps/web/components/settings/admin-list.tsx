@@ -1,19 +1,23 @@
 "use client";
 
 import * as React from "react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { Segment } from "@/components/ui/setting-controls";
 import { EmptyState } from "@/components/shared/empty-state";
+import { LAYOUT_OPTIONS } from "@/components/projects/appearance-popover";
+import type { ViewLayout } from "@/stores/view-store";
 import type { LucideIcon } from "lucide-react";
 
 /**
- * The parts an admin tab is built from.
+ * The parts every admin tab is built from.
  *
- * A tab is a list, at most four fields wide, with at most one button.
- * Factoring that out is not tidiness, it is the only way further tabs stay the
- * same shape a year from now; a tab with its own hand-written table drifts
- * within a release.
+ * All four tabs are the same thing with different columns: a list, at most four
+ * fields wide, and at most one button. Factoring that out is not tidiness, it
+ * is the only way four tabs stay the same shape a year from now; a tab with its
+ * own hand-written table drifts within a release.
  *
  * Nothing new is introduced here. The row is a `<tr>`, the button is `Button`,
  * the confirmation is `ConfirmDialog`, the empty state is `EmptyState` and the
@@ -23,6 +27,7 @@ import type { LucideIcon } from "lucide-react";
 
 /** Cell padding, shared so columns line up between tabs. */
 export const TD = "px-4 py-2.5";
+export const TH = "px-4 py-2 text-left text-xs font-medium text-text-tertiary";
 
 export function Checkbox({
   checked,
@@ -63,6 +68,28 @@ export function Bytes({ children }: { children: React.ReactNode }) {
 export function Name({ children, title }: { children: React.ReactNode; title: string }) {
   return (
     <span className="block truncate text-sm text-text-primary" title={title}>
+      {children}
+    </span>
+  );
+}
+
+/** A role or permission, as a quiet pill. */
+export function Pill({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "warning";
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs",
+        tone === "warning"
+          ? "bg-status-warning/15 text-status-warning"
+          : "bg-bg-tertiary text-text-secondary",
+      )}
+    >
       {children}
     </span>
   );
@@ -127,6 +154,107 @@ export function ListFrame({ children }: { children: React.ReactNode }) {
       <table className="w-full table-fixed text-sm">{children}</table>
     </div>
   )
+}
+
+/**
+ * Cards or rows, as the projects page asks it.
+ *
+ * `Segment` with `LAYOUT_OPTIONS` is literally the control the projects page's
+ * Appearance popover uses, so the icons, their order and their labels are one
+ * definition rather than a lookalike. `tone` stays the default here because
+ * these tabs sit on the themed settings surface, not in the popover's fixed
+ * dark frame.
+ */
+export function LayoutSwitch({
+  value,
+  onChange,
+}: {
+  value: ViewLayout;
+  onChange: (next: ViewLayout) => void;
+}) {
+  return (
+    <Segment<ViewLayout>
+      label="Layout"
+      options={LAYOUT_OPTIONS}
+      value={value}
+      onChange={onChange}
+    />
+  );
+}
+
+/**
+ * A tab's one line above its content: what the list answers, and the switch.
+ *
+ * The hint is not decoration. A tab whose only affordance appears once
+ * something is selected has to say what the selecting is for before it happens,
+ * which is the finding that put this here.
+ */
+export function TabBar({
+  hint,
+  layout,
+  onLayout,
+}: {
+  hint?: string;
+  layout?: ViewLayout;
+  onLayout?: (next: ViewLayout) => void;
+}) {
+  if (!hint && !layout) return null;
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <p className="text-xs text-text-tertiary">{hint}</p>
+      {layout && onLayout && <LayoutSwitch value={layout} onChange={onLayout} />}
+    </div>
+  );
+}
+
+/**
+ * The grid the cards sit in.
+ *
+ * The same column steps the projects page uses at card size M, so a card here
+ * is the size a card there is and the two pages do not look like two products.
+ */
+export function CardGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {children}
+    </div>
+  );
+}
+
+/** One card: the same frame as a project card, without its menus. */
+export function Card({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <article
+      className={cn(
+        "flex flex-col overflow-hidden rounded-xl border border-border bg-bg-secondary transition-colors hover:border-accent/40",
+        className,
+      )}
+    >
+      {children}
+    </article>
+  );
+}
+
+/** A quiet fact under a card's title: an icon and a short value. */
+export function CardFact({
+  icon: Icon,
+  children,
+}: {
+  icon: LucideIcon;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="flex items-center gap-1.5 text-2xs text-text-tertiary">
+      <Icon className="h-3 w-3 shrink-0" />
+      {children}
+    </span>
+  );
 }
 
 /**

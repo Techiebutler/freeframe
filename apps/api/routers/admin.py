@@ -1,4 +1,4 @@
-"""Admin endpoints: user management, and the storage overview."""
+"""Admin endpoints: user management, and the four tabs of the admin panel."""
 
 from datetime import datetime, timedelta, timezone
 import logging
@@ -21,11 +21,14 @@ from ..services import admin_panel
 from ..schemas.admin import (
     AdminDeleteRequest,
     AdminDeleteResponse,
+    AdminProjectRow,
     AdminPurgeRequest,
     AdminPurgeResponse,
     AdminRestoreRequest,
     AdminRestoreResponse,
     BackfillStartResponse,
+    ExternalShareRow,
+    InternalShareRow,
     PurgeStartResponse,
     StorageOverviewResponse,
     StorageProjectFilesResponse,
@@ -227,6 +230,44 @@ def storage_project_files(
         name=project.name,
         assets=admin_panel.storage_asset_rows(db, project_id),
     )
+
+
+@router.get("/projects", response_model=list[AdminProjectRow])
+def admin_projects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Every live project with its member count, size and last activity.
+    Superadmin only. Four queries, none of them per project."""
+    return admin_panel.project_overview_rows(db)
+
+
+@router.get("/shares/internal", response_model=list[InternalShareRow])
+def admin_internal_shares(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Who inside the instance can reach which project, grouped by project.
+
+    Superadmin only, and read-only: the roles shown are the ones the project
+    settings page writes, and this tab links back there rather than being a
+    second place that writes rights.
+    """
+    return admin_panel.internal_share_rows(db)
+
+
+@router.get("/shares/external", response_model=list[ExternalShareRow])
+def admin_external_shares(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Every share link that works right now. Superadmin only.
+
+    Active means not revoked, enabled, and not past its expiry. Switching one
+    off is the app's existing `DELETE /share/{token}`, which notifies nobody;
+    there is no second revoke path for admins.
+    """
+    return admin_panel.external_share_rows(db)
 
 
 @router.post("/delete", response_model=AdminDeleteResponse)

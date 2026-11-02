@@ -1,11 +1,14 @@
 /**
- * Fixture builders for the admin Storage tab tests.
+ * Fixture builders for the admin panel tests.
  *
- * Shared because the tab and its trash read the same shapes; two copies of
- * these drifted apart once already. The `vi.mock` of the API client stays in
- * each test file, since it has to be hoisted there.
+ * Shared because the storage tab and the other three tabs read the same shapes;
+ * two copies of these drifted apart once already. The `vi.mock` of the API
+ * client stays in each test file, since it has to be hoisted there.
  */
 import type {
+  AdminProjectRow,
+  ExternalShareRow,
+  InternalShareRow,
   StorageOverview,
   StorageProjectFiles,
   TrashOverview,
@@ -14,6 +17,7 @@ import type {
 export const MB = 1024 * 1024
 export const GB = 1024 * MB
 export const HOUR_AGO = new Date(Date.now() - 3600_000).toISOString()
+export const IN_A_WEEK = new Date(Date.now() + 7 * 86_400_000).toISOString()
 
 export function summary(
   partial: Partial<StorageOverview['summary']> = {},
@@ -82,4 +86,34 @@ export const FULL_BIN = trash({
   ],
   versions: [],
 })
+
+export const PROJECTS: AdminProjectRow[] = [
+  { project_id: 'p-1', name: 'Sportbrand Campaign Autumn Winter Launch Film Director Cut',
+    poster_url: 'https://example.invalid/poster.jpg',
+    member_count: 5, total_bytes: 250 * GB, last_activity_at: HOUR_AGO },
+  { project_id: 'p-2', name: 'Archive 2024', poster_url: null,
+    member_count: 1, total_bytes: 2 * GB, last_activity_at: null },
+]
+
+export const INTERNAL: InternalShareRow[] = [
+  {
+    project_id: 'p-1', project_name: 'Sportbrand Campaign', has_live_people: true,
+    people: [
+      { user_id: 'u-1', name: 'Olive Owner', email: 'olive@example.com',
+        avatar_url: null, avatar_color: '#ff8800', role: 'owner' },
+      { user_id: 'u-2', name: 'Sam Editor', email: 'sam@example.com',
+        avatar_url: null, avatar_color: null, role: 'editor' },
+    ],
+  },
+  { project_id: 'p-2', project_name: 'Orphaned Project', has_live_people: false, people: [] },
+]
+
+export const EXTERNAL: ExternalShareRow[] = [
+  { token: 'tok-download', kind: 'asset', what: 'Hero 4K Master', title: null,
+    permission: 'view', allow_download: true, has_password: false,
+    expires_at: null, created_by_name: 'Sam Example', created_at: HOUR_AGO },
+  { token: 'tok-plain', kind: 'project', what: 'Sportbrand Campaign', title: null,
+    permission: 'comment', allow_download: false, has_password: true,
+    expires_at: IN_A_WEEK, created_by_name: 'Alex Example', created_at: HOUR_AGO },
+]
 
