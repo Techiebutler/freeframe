@@ -126,7 +126,9 @@ def _asset_report_context(db: Session, asset, version_id) -> Optional[dict]:
     title = getattr(asset, "name", None) or None
     client = _project_name(db, getattr(asset, "project_id", None))
     if req is not None:
-        editor_email = (getattr(req, "last_uploader_email", None) or "").strip() or None
+        # Only the guest /r/<token> lane records an uploader email on the request. An editor signed in
+        # to FreeFrame uploads through routers/upload.py instead: the version's own uploader is them.
+        editor_email = (getattr(req, "last_uploader_email", None) or "").strip() or _responsible_editor_email(db, asset, version_id)
         internal = req.iteration_state["internal_handin"]
         card_url = (internal.get("card_url") or "").strip() or None
         review_url = _review_url(req) or _asset_page_url(asset)

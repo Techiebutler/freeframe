@@ -252,7 +252,7 @@ def trial_context(paid=False):
 def test_cached_trial_cannot_cross_cutoff(monkeypatch, redis):
     from apps.api.services import campaign_access
     user = customer(suite_campaign=trial_context())
-    service.store_owner_session(user, service.owner_from_token(token(exp=campaign_access.ENDS_AT_TIMESTAMP + 600)))
+    service.store_owner_session(user, service.owner_from_token(token(exp=max(campaign_access.ENDS_AT_TIMESTAMP, int(time.time())) + 600)))
     redis.setex(service.gate_key(user.id), 60, redis.get(service.session_key(user.id)))
     monkeypatch.setattr(service.time, 'time', lambda: campaign_access.ENDS_AT_TIMESTAMP)
     monkeypatch.setattr(service, '_post', lambda *a, **k: {'allow': False, 'reason': 'campaign_expired', 'campaign': trial_context()})
@@ -265,7 +265,7 @@ def test_cached_trial_cannot_cross_cutoff(monkeypatch, redis):
 def test_expired_trial_preserves_identity_but_not_tool_access(monkeypatch, redis):
     from apps.api.services import campaign_access
     user = customer(suite_campaign=trial_context())
-    owner_token = token(exp=campaign_access.ENDS_AT_TIMESTAMP + 600)
+    owner_token = token(exp=max(campaign_access.ENDS_AT_TIMESTAMP, int(time.time())) + 600)
     service.store_owner_session(user, service.owner_from_token(owner_token))
     monkeypatch.setattr(service.time, 'time', lambda: campaign_access.ENDS_AT_TIMESTAMP)
     monkeypatch.setattr(service, '_post', lambda *a, **k: {'allow': False, 'reason': 'campaign_expired', 'campaign': trial_context()})

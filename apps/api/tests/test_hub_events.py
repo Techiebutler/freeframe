@@ -409,6 +409,41 @@ def test_a_completed_handin_version_also_posts_a_signed_portal_handin_event(monk
         settings.portal_events_webhook_secret = ""
 
 
+def test_a_staff_upload_into_a_handin_folder_still_tells_the_portal(monkeypatch):
+    """An editor signed in to FreeFrame uploads into a portal-made hand-in folder (routers/upload.py
+    `complete`): the request has no guest uploader email, because only the /r/<token> lane records one.
+    The file is real, so the portal must hear about it, keyed on the card, attributed to the version's
+    uploader. VEL-022, 2026-11-01: three files landed, the portal never knew."""
+    from apps.api.services import hub_events
+    settings.hub_events_webhook_url = ""
+    settings.portal_events_webhook_url = "https://app.aditor.ai/api/freeframe/handin-webhook"
+    settings.portal_events_webhook_secret = "portalsecret"
+    settings.frontend_url = FRONTEND
+    try:
+        card = "https://trello.com/c/ilukhhho"
+        folder_id = uuid.uuid4()
+        req = _handin_request(card_url=card, folder_id=folder_id, editor_email=None)
+        req.token = "tok_abc123"
+        db = _db_non_handin(editor_email="arianna@aditor.ai")
+        db.query.return_value.filter.return_value.first.return_value = req
+        asset = SimpleNamespace(folder_id=folder_id, project_id=None, id=None, name=None, created_by=None)
+        version_id = uuid.uuid4()
+
+        sent = []
+        monkeypatch.setattr(hub_events.httpx, "post", lambda url, content=None, headers=None, timeout=None: sent.append(content) or MagicMock(status_code=200))
+        hub_events.announce_revision_submitted(db, asset, version_id)
+
+        assert len(sent) == 1
+        payload = json.loads(sent[0])
+        assert payload["event"] == "handin_uploaded"
+        assert payload["card_url"] == card
+        assert payload["editor_email"] == "arianna@aditor.ai"
+        assert payload["folder_id"] == str(folder_id)
+    finally:
+        settings.portal_events_webhook_url = ""
+        settings.portal_events_webhook_secret = ""
+
+
 def test_portal_handin_event_is_off_by_default_and_skips_non_handin(monkeypatch):
     """No portal webhook configured -> nothing to the portal. And a non-hand-in upload (no folder_id)
     never posts a portal event even when it is configured."""
