@@ -53,7 +53,7 @@ export function PartsWorkspace({ token, brand, who: signedIn, onActivity }: { to
     busyIds.current.add(job.slot.id)
     update(job.id, { phase: 'queued', error: undefined })
     try {
-      await queue.current(async () => {
+      await queue.current(async release => {
         if (!job.declared) {
           await declareParts(token, [{ id: job.slot.id, role: job.slot.role, label: job.slot.label }])
           job.declared = true
@@ -62,10 +62,18 @@ export function PartsWorkspace({ token, brand, who: signedIn, onActivity }: { to
         update(job.id, { phase: 'uploading', progress: 0 })
         const result = await uploadToRequest(token, identity.current || who, job.file, p => update(job.id, { progress: p }), {
           slotId: job.slot.id, assetId: job.assetId,
+          onTransferred: release,
           identity: async () => {
             if (identity.current) return identity.current
             setWaitingIdentity(true)
             return new Promise<Who>(resolve => identityWaiters.current.push(resolve))
+          },
+          // A signed-in identity has no form to correct it in, so that case stays a plain failure.
+          onIdentityRejected: signedIn ? undefined : rejected => {
+            if (identity.current !== rejected) return
+            identity.current = null
+            try { localStorage.removeItem('aditor-request-who') } catch { /* optional convenience */ }
+            setError('That name or email was not accepted. Check it to submit your files. They are still uploaded.')
           },
         })
         update(job.id, { phase: 'done', progress: 1, assetId: result.asset_id })
@@ -96,6 +104,7 @@ export function PartsWorkspace({ token, brand, who: signedIn, onActivity }: { to
     const value = { name: who.name.trim(), email: who.email.trim() }
     identity.current = value
     try { localStorage.setItem('aditor-request-who', JSON.stringify(value)) } catch { /* optional convenience */ }
+    if (identityWaiters.current.length) setError('')
     identityWaiters.current.splice(0).forEach(resolve => resolve(value)); setWaitingIdentity(false)
   }
   const seal = async () => {

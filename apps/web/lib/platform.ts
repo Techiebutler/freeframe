@@ -320,7 +320,14 @@ export async function uploadToRequest(
   who: { name: string; email: string },
   file: File,
   onProgress: (fraction: number) => void,
-  options?: { slotId?: string; assetId?: string; identity?: () => Promise<{ name: string; email: string }> },
+  options?: {
+    slotId?: string
+    assetId?: string
+    onTransferred?: () => void
+    identity?: () => Promise<{ name: string; email: string }>
+    /** With this set, details the server refuses are asked for again; the transferred bytes stay put. */
+    onIdentityRejected?: (who: { name: string; email: string }) => void
+  },
 ): Promise<{ asset_id: string; version_number: number }> {
   const init = await pub<{ upload_id: string; s3_key: string; asset_id: string; version_id: string; version_number: number }>(
     'POST', `/r/${token}/upload/initiate`, {
@@ -357,8 +364,19 @@ export async function uploadToRequest(
     const failure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')
     if (failure) throw failure.reason
     parts.sort((a, b) => a.PartNumber - b.PartNumber)
-    const identity = options?.identity ? await options.identity() : who
-    await pub('POST', `/r/${token}/upload/complete`, { s3_key: init.s3_key, upload_id: init.upload_id, parts, ...identity })
+    // All bytes are up. The details below only name the submission, and can take as long as they take.
+    options?.onTransferred?.()
+    let identity = options?.identity ? await options.identity() : who
+    for (;;) {
+      try {
+        await pub('POST', `/r/${token}/upload/complete`, { s3_key: init.s3_key, upload_id: init.upload_id, parts, ...identity })
+        break
+      } catch (e) {
+        if ((e as { status?: number }).status !== 422 || !options?.identity || !options.onIdentityRejected) throw e
+        options.onIdentityRejected(identity)
+        identity = await options.identity()
+      }
+    }
   } catch (e) {
     await pub('POST', `/r/${token}/upload/abort`, { s3_key: init.s3_key, upload_id: init.upload_id, part_number: 1 }).catch(() => {})
     throw e

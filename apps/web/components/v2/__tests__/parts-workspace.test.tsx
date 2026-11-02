@@ -55,6 +55,19 @@ it('accepts signed-in identity that arrives after mount, including an in-flight 
   view.rerender(<SWRConfig value={{ provider: () => provider }}><PartsWorkspace token="test" who={{ name: 'Fred', email: 'fred@example.test' }} /></SWRConfig>)
   await waitFor(() => expect(screen.queryByText('Keep this tab open until all files are saved.')).not.toBeInTheDocument())
 })
+it('does not let parts waiting for contact details hold back the rest of the drop', async () => {
+  const started: string[] = []
+  vi.mocked(uploadToRequest).mockImplementation(async (_token, _who, file, _progress, options) => {
+    started.push(file.name)
+    options!.onTransferred!()
+    await options!.identity!()
+    return { asset_id: file.name, version_number: 1 }
+  })
+  render(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><PartsWorkspace token="test" /></SWRConfig>)
+  const names = ['h1.mp4', 'h2.mp4', 'h3.mp4', 'h4.mp4']
+  fireEvent.change(await screen.findByLabelText('Upload hooks'), { target: { files: names.map(name => new File(['a'], name, { type: 'video/mp4' })) } })
+  await waitFor(() => expect(started).toEqual(names))
+})
 const saved: IterationProgress = { ...base, total: 1, manifest: { ...base.manifest, slots: [{ id: 'h', label: 'Hook.mp4', role: 'hook', group: '', script: '' }, { id: 'b', label: 'Body.mp4', role: 'body', group: '', script: '' }] }, slots: [{ slot_id: 'h', asset_id: 'ha', version_id: 'hv', version_number: 1, status: 'clear', findings: [], bytes_stored: true }, { slot_id: 'b', asset_id: 'ba', version_id: 'bv', version_number: 1, status: 'reviewing', findings: [], bytes_stored: true }] }
 it('seals the complete saved batch explicitly and displays only the returned server handoff', async () => {
   vi.mocked(requestIterations).mockResolvedValue(saved)

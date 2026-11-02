@@ -7,10 +7,13 @@ import { formatBytes } from '@/lib/platform'
 import { FolderArt } from './folder-art'
 import { ReviewWaiting } from './review-waiting'
 
-export type UploadPhase = 'uploading' | 'reviewing' | 'done' | 'error'
+export type UploadPhase = 'queued' | 'uploading' | 'uploaded' | 'submitted' | 'reviewing' | 'done' | 'error'
 
 const PHASE_TEXT: Record<UploadPhase, string> = {
+  queued: 'Waiting to upload',
   uploading: 'Uploading',
+  uploaded: 'Uploaded',
+  submitted: 'Submitted',
   reviewing: 'Reviewing',
   done: 'Reviewed',
   error: 'Stopped',
@@ -49,10 +52,11 @@ export function UploadCard({ name, size, progress, phase, error, onRetry, onRemo
   className?: string
 }) {
   const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100)
+  const finished = phase === 'done' || phase === 'uploaded' || phase === 'submitted'
   return (
     <div className={cn('glass p-5 sm:p-6', className)} role="status" aria-live="polite">
       <div className="flex items-center gap-4">
-        <Thumb file={file} done={phase === 'done'} />
+        <Thumb file={file} done={finished} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[17px] font-semibold tracking-tight text-text-primary">{name}</p>
           <p className="mt-0.5 text-[13px] text-text-secondary">{formatBytes(size)}</p>
@@ -66,8 +70,9 @@ export function UploadCard({ name, size, progress, phase, error, onRetry, onRemo
       {phase === 'reviewing' ? <ReviewWaiting /> : <div className="mt-5 rounded-[var(--radius-lg)] border border-border bg-bg-primary/40 px-4 py-3.5">
         <div className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-2 text-[15px] text-text-primary">
-            {phase === 'done' ? <Check className="h-4 w-4 text-status-success" /> :
+            {finished ? <Check className="h-4 w-4 text-status-success" /> :
              phase === 'error' ? <span className="h-2 w-2 rounded-full bg-status-error" /> :
+             phase === 'queued' ? <span className="h-2 w-2 rounded-full bg-text-tertiary" /> :
              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-text-tertiary border-t-accent" />}
             {PHASE_TEXT[phase]}{phase === 'uploading' ? '…' : ''}
           </span>

@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password sign-in) is now the sole way to sign in to FreeFrame.
 
 ### Fixed
+- Hand-in upload: a batch no longer stalls on the first file. Files transfer two at a time in the background whether or not the uploader's details are in yet, a transferred file says "Uploaded" instead of "Uploading... 100%", and details submit every waiting file at once. Details the server refuses are asked for again without losing the transferred files.
 - Video processing downloads the original before encoding instead of streaming it from storage. A valid MP4 with audio and video stored far apart (some editors' exports) made every seek a new range request: a 9-minute file never finished and failed with "Processing failed"; it now processes in about two minutes. `FFMPEG_INPUT_RW_TIMEOUT_SECONDS` is gone (the download has its own timeout and retries).
 - Preserve briefing notes alongside one document link or attachment in requests, setup and brand rules. Read common TXT encodings correctly and reject empty, unreadable or oversized text with clear limits.
 - Show failed briefing preparation on request cards and shared-link dialogs, with a retry for the same request; file uploads remain available.
