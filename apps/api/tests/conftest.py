@@ -309,3 +309,43 @@ class MediaSeed:
 def seed(live_db):
     """Row factory bound to `live_db`; see `MediaSeed`."""
     return MediaSeed(live_db)
+
+
+@pytest.fixture
+def admin(seed):
+    """The one superadmin the panel tests sign in as."""
+    return seed.user(superadmin=True, name="Ada Admin")
+
+
+@pytest.fixture
+def s3(monkeypatch):
+    """Record every object-store call the purge cascade makes, patched on
+    `tasks.cleanup_tasks`, which is where the cascade reaches for them."""
+    calls = {"delete_object": [], "delete_prefix": [], "abort": []}
+    import apps.api.tasks.cleanup_tasks as ct
+    monkeypatch.setattr(ct, "delete_object", lambda k: calls["delete_object"].append(k))
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: calls["delete_prefix"].append(k))
+    monkeypatch.setattr(ct, "abort_multipart_upload", lambda k, u: calls["abort"].append(k))
+    return calls
+
+
+class _Panel:
+    """The two panel reads the delete and purge tests quote their figures from."""
+
+    @staticmethod
+    def summary(client):
+        return client.get("/admin/storage").json()["summary"]
+
+    @staticmethod
+    def trash_counts(client):
+        """The count and byte figures the purge dialog would echo back."""
+        body = client.get("/admin/trash").json()
+        return {
+            "confirm_count": len(body["projects"]) + len(body["assets"]) + len(body["versions"]),
+            "confirm_bytes": body["total_bytes"],
+        }
+
+
+@pytest.fixture
+def panel():
+    return _Panel()

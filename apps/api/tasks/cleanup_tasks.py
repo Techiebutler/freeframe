@@ -96,7 +96,23 @@ def _purge_comment(db, comment_id, counts: PurgeCounts) -> None:
 
 
 def _reclaim_media_s3(mf, counts: PurgeCounts) -> None:
-    """Best-effort delete of a MediaFile's S3 objects. processed is a prefix (HLS or single key)."""
+    """Best-effort delete of a MediaFile's S3 objects. processed is a prefix (HLS or single key).
+
+    Deletes by key, with no check that another live row points at the same
+    object, and that is safe only because of an invariant this app holds today:
+    every media file gets its own keys, derived from its own version id, at
+    upload and at transcode. Nothing copies, duplicates or re-parents a
+    `media_files` row onto an existing key.
+
+    **If that ever changes** -- a duplicate-asset feature, a cheap "copy to
+    another project", an import that reuses an existing object -- this function
+    becomes a way to delete somebody else's media. A reference check belongs
+    here then, and it is not a one-liner: the equality cases (`s3_key_raw`,
+    `s3_key_download`, `s3_key_thumbnail`) are easy, but `s3_key_processed` is a
+    *prefix* delete, and a prefix cannot be cleared by asking whether another
+    row holds the same string. It has to ask whether any live row's keys fall
+    under it.
+    """
     _safe(delete_object, mf.s3_key_raw)
     counts.s3_deletes += 1
     if mf.s3_key_processed:

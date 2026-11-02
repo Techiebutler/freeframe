@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
@@ -159,6 +159,66 @@ def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db), current
     _require_project_owner(db, project_id, current_user)
     project.deleted_at = datetime.now(timezone.utc)
     db.commit()
+
+@router.post("/{project_id}/restore", response_model=dict)
+def restore_project(project_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Take a soft-deleted project back out of the trash.
+
+    The counterpart to `DELETE /{project_id}`, and the missing half of the
+    retention window the delete dialog promises. Until this existed a deleted
+    project was present but unreachable for everyone: no endpoint, no page, and
+    the only way back was an UPDATE against the database by hand.
+
+    `_get_project` and `_require_project_owner` cannot be used, because both
+    insist on a live project and this one is deliberately not. The checks are
+    therefore spelled out, matching what those two would have done:
+
+    * An owner of the project, by a membership that is itself still live. A
+      member whose own membership was removed is not an owner any more.
+    * Or an instance superadmin, as elsewhere in the admin surface.
+    * Inside the retention window, or 409. Past it the row is the collector's,
+      and reporting a restore that the next nightly pass undoes would be worse
+      than refusing.
+
+    The UPDATE is guarded on the row still being in the trash, so a restore that
+    races the collector's locked cascade matches nothing and answers 404 rather
+    than resurrecting a half-purged project.
+    """
+    project = db.query(Project).filter(
+        Project.id == project_id, Project.deleted_at.isnot(None),
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Deleted project not found")
+
+    if not current_user.is_superadmin:
+        owner = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id,
+            ProjectMember.role == ProjectRole.owner,
+            ProjectMember.deleted_at.is_(None),
+        ).first()
+        if not owner:
+            raise HTTPException(status_code=403, detail="Project owner access required")
+
+    days = settings.soft_delete_retention_days
+    if days > 0 and project.deleted_at is not None:
+        deleted_at = project.deleted_at
+        if deleted_at.tzinfo is None:
+            deleted_at = deleted_at.replace(tzinfo=timezone.utc)
+        if deleted_at < datetime.now(timezone.utc) - timedelta(days=days):
+            raise HTTPException(
+                status_code=409,
+                detail=f"This project was deleted more than {days} days ago and can no longer be restored.",
+            )
+
+    restored = db.query(Project).filter(
+        Project.id == project_id, Project.deleted_at.isnot(None),
+    ).update({"deleted_at": None}, synchronize_session="fetch")
+    if not restored:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Deleted project not found")
+    db.commit()
+    return {"ok": True}
 
 @router.get("/{project_id}/members", response_model=list[ProjectMemberResponse])
 def list_project_members(project_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
