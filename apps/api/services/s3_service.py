@@ -228,8 +228,13 @@ def ensure_bucket_exists():
                             # Silo and Garage enforce this list: a new header
                             # the browser sends to storage must be added here.
                             "AllowedHeaders": [
-                                "Content-Type",
-                                "Content-MD5",
+                                # Lowercase: browsers send
+                                # Access-Control-Request-Headers with lowercased
+                                # names (Fetch spec) and Garage compares
+                                # AllowedHeaders case-sensitively; a
+                                # case-insensitive store is unaffected.
+                                "content-type",
+                                "content-md5",
                                 "x-amz-content-sha256",
                                 "x-amz-date",
                                 "x-amz-decoded-content-length",
