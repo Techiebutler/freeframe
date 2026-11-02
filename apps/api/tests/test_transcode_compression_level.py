@@ -54,8 +54,13 @@ def test_the_chosen_level_reaches_the_job_as_an_offset(level, offset):
 
 
 def test_a_transcode_never_creates_the_settings_row():
+    # The "no row" case, which is the one that can fail: with a row present the
+    # mocked session returns a MagicMock from `first()`, so a switch to
+    # `get_or_create_instance_settings` would find that row and never reach
+    # `add` or `commit` either. An instance that has no row is where creating
+    # one would turn "nobody has chosen" into a stored level nobody chose.
     db = MagicMock()
-    _job_for(None, db=db)
+    _job_for("no row", db=db)
     db.add.assert_not_called()
     db.commit.assert_not_called()
 
@@ -80,13 +85,18 @@ def test_an_unreadable_setting_rolls_back_and_still_transcodes():
 def test_the_column_is_there_and_nullable_once_the_migration_has_run(real_db):
     # The one test that needs a real database: the migration, as the worker
     # meets it. A read against a migrated instance has to find the column and
-    # find it empty, because no instance starts with a level chosen.
+    # read a missing level as "nobody has chosen".
     row = real_db.execute(text(
         "SELECT is_nullable, column_default FROM information_schema.columns"
         " WHERE table_name = 'instance_settings' AND column_name = 'compression_level'"
     )).one()
 
     assert row == ("YES", None)
+    # Cleared inside the fixture's transaction, which is rolled back: AGENTS.md
+    # has people run this suite against their dev database, and asserting the
+    # committed singleton row would fail for anyone who has moved the slider
+    # there.
+    real_db.execute(text("UPDATE instance_settings SET compression_level = NULL"))
     assert _instance_compression_level(real_db) is None
 
 

@@ -12,7 +12,6 @@ import pytest
 
 import apps.api.routers.instance_settings as settings_module
 from apps.api.models.instance_settings import InstanceSettings
-from apps.api.schemas.instance_settings import InstanceSettingsUpdate
 from apps.api.services import storage as storage_service
 from packages.transcoder.base import COMPRESSION_LEVELS, DEFAULT_COMPRESSION_LEVEL
 
@@ -76,17 +75,17 @@ def test_an_admin_can_set_every_level_on_the_scale(
     assert body["compression_crf_offset"] == COMPRESSION_LEVELS[level]
 
 
-@pytest.mark.parametrize("level", [0, 6, -1])
+@pytest.mark.parametrize("level", [
+    min(COMPRESSION_LEVELS) - 1, max(COMPRESSION_LEVELS) + 1,
+])
 def test_a_level_off_the_scale_is_refused(
     client, auth_headers, mock_db, test_user, level
 ):
     # The bounds come from the scale itself rather than being written out again,
-    # so adding a sixth step cannot leave the API rejecting it silently.
+    # so adding a sixth step cannot leave the API rejecting it silently. The
+    # parameters are derived from the scale for the same reason, and the test
+    # above is the other half of it: every step on the scale is accepted.
     test_user.is_superadmin = True
-    bounds = {type(m).__name__: m for m
-              in InstanceSettingsUpdate.model_fields["compression_level"].metadata}
-    assert bounds["Ge"].ge == min(COMPRESSION_LEVELS)
-    assert bounds["Le"].le == max(COMPRESSION_LEVELS)
 
     r = client.put("/instance/settings", headers=auth_headers,
                    json={"compression_level": level})

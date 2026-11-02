@@ -1,7 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
 
-from packages.transcoder.base import MAX_COMPRESSION_LEVEL, MIN_COMPRESSION_LEVEL
-
 from .upload import MAX_PART_SIZE_BYTES, MIN_PART_SIZE_BYTES, _format_bytes
 
 
@@ -14,14 +12,32 @@ class InstanceSettingsUpdate(BaseModel):
     # originals. Project members always can.
     allow_original_downloads: bool | None = None
     # How hard review streams are compressed, 1 (highest quality) to 5
-    # (smallest files). The bounds come from the scale itself, so adding a step
-    # cannot leave the API rejecting it. Unlike every other field here, an
-    # explicit null means something: clear the stored level and follow
-    # `TRANSCODER_CRF_OFFSET` again. Omitting the key still leaves it alone;
-    # the router tells the two apart through `model_fields_set`.
-    compression_level: int | None = Field(
-        default=None, ge=MIN_COMPRESSION_LEVEL, le=MAX_COMPRESSION_LEVEL
-    )
+    # (smallest files). Unlike every other field here, an explicit null means
+    # something: clear the stored level and follow `TRANSCODER_CRF_OFFSET`
+    # again. Omitting the key still leaves it alone; the router tells the two
+    # apart through `model_fields_set`.
+    compression_level: int | None = None
+
+    @field_validator("compression_level")
+    @classmethod
+    def validate_compression_level(cls, v):
+        # The bounds come from the scale itself rather than being written out
+        # again, so adding a step cannot leave the API rejecting it. In a
+        # validator rather than `Field(ge=..., le=...)` so the transcoder
+        # package is imported lazily, as everything else under `apps/api`
+        # imports it.
+        if v is None:
+            return v
+        from packages.transcoder.base import (
+            MAX_COMPRESSION_LEVEL, MIN_COMPRESSION_LEVEL,
+        )
+
+        if not MIN_COMPRESSION_LEVEL <= v <= MAX_COMPRESSION_LEVEL:
+            raise ValueError(
+                f"Compression level must be between {MIN_COMPRESSION_LEVEL} "
+                f"and {MAX_COMPRESSION_LEVEL}"
+            )
+        return v
 
     @field_validator("upload_part_size_bytes")
     @classmethod

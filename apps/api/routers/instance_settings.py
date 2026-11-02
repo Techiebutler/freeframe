@@ -4,9 +4,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from packages.transcoder.base import crf_offset_for_level, level_for_crf_offset
-from packages.transcoder.ffmpeg_transcoder import get_crf_offset
-
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
@@ -44,12 +41,20 @@ def effective_crf_offset(row: InstanceSettings | None) -> int:
     is not. The same precedence the worker applies, in one place, so the number
     the settings page shows is the number the encoder gets.
     """
+    # Imported here, as everything else under `apps/api` imports the transcoder
+    # package: it pulls in the ffmpeg backend detection, which has no business
+    # running when the API module is merely imported.
+    from packages.transcoder.base import crf_offset_for_level
+    from packages.transcoder.ffmpeg_transcoder import get_crf_offset
+
     chosen = crf_offset_for_level(row.compression_level if row else None)
     return chosen if chosen is not None else get_crf_offset()
 
 
 def _build_response(db: Session, row: InstanceSettings | None, user: User) -> InstanceSettingsResponse:
     """`row` is None before the first PUT creates it, which reads as the defaults."""
+    from packages.transcoder.base import level_for_crf_offset
+
     offset = effective_crf_offset(row) if user.is_superadmin else None
     return InstanceSettingsResponse(
         storage_limit_bytes=row.storage_limit_bytes if row else 0,
