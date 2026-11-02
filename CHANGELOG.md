@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **J, K and L shuttle the video player like an edit suite.** L plays forward and each further press goes faster (2x, 4x, 8x); J does the same in reverse; K stops. Pressing the opposite key switches direction at 1x. J and L used to jump 10 seconds; the arrow keys still jump 5. (#589 by @jdanna)
 
+### Fixed
+- **Compare's comment panels no longer re-render on every playback frame, and annotation and timecode buttons pause playback again.** Comment updates and pane-local seeking remain live. (#170, #582 by @WhyTan00)
+
 ## [1.22.0] - 2026-10-29
 
 ### Upgrade notes
