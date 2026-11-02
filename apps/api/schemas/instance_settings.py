@@ -3,6 +3,21 @@ from pydantic import BaseModel, Field, field_validator
 from .upload import MAX_PART_SIZE_BYTES, MIN_PART_SIZE_BYTES, _format_bytes
 
 
+def _compression_level_bounds(schema: dict) -> None:
+    # The generated OpenAPI schema keeps `minimum`/`maximum` even though the
+    # bounds are enforced in a validator rather than `Field(ge=..., le=...)`:
+    # this runs when the schema is built, so the transcoder import stays out of
+    # module import time, which is the whole reason the bounds moved.
+    from packages.transcoder.base import (
+        MAX_COMPRESSION_LEVEL, MIN_COMPRESSION_LEVEL,
+    )
+
+    for branch in schema.get("anyOf", ()):
+        if branch.get("type") == "integer":
+            branch["minimum"] = MIN_COMPRESSION_LEVEL
+            branch["maximum"] = MAX_COMPRESSION_LEVEL
+
+
 class InstanceSettingsUpdate(BaseModel):
     # Upper bound = PostgreSQL BigInteger max (2**63 - 1); rejects overflow with 422 instead of a 500.
     storage_limit_bytes: int | None = Field(default=None, ge=0, le=9223372036854775807)
@@ -16,7 +31,9 @@ class InstanceSettingsUpdate(BaseModel):
     # something: clear the stored level and follow `TRANSCODER_CRF_OFFSET`
     # again. Omitting the key still leaves it alone; the router tells the two
     # apart through `model_fields_set`.
-    compression_level: int | None = None
+    compression_level: int | None = Field(
+        default=None, json_schema_extra=_compression_level_bounds
+    )
 
     @field_validator("compression_level")
     @classmethod

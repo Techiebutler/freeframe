@@ -12,6 +12,7 @@ import pytest
 
 import apps.api.routers.instance_settings as settings_module
 from apps.api.models.instance_settings import InstanceSettings
+from apps.api.schemas.instance_settings import InstanceSettingsUpdate
 from apps.api.services import storage as storage_service
 from packages.transcoder.base import COMPRESSION_LEVELS, DEFAULT_COMPRESSION_LEVEL
 
@@ -90,6 +91,18 @@ def test_a_level_off_the_scale_is_refused(
     r = client.put("/instance/settings", headers=auth_headers,
                    json={"compression_level": level})
     assert r.status_code == 422
+
+
+def test_the_scale_bounds_are_in_the_api_schema():
+    # The range the API refuses also has to be in the generated OpenAPI schema,
+    # and with the same numbers: the bounds sit in a validator so the transcoder
+    # stays out of this module's imports, and a validator contributes nothing to
+    # the schema on its own.
+    field = InstanceSettingsUpdate.model_json_schema()["properties"]["compression_level"]
+    integer = next(branch for branch in field["anyOf"] if branch.get("type") == "integer")
+    assert (integer["minimum"], integer["maximum"]) == (
+        min(COMPRESSION_LEVELS), max(COMPRESSION_LEVELS),
+    )
 
 
 @pytest.mark.parametrize("stored,env,offset,step", [
