@@ -76,6 +76,7 @@ def process_asset(self, asset_id: str, version_id: str):
             elif asset.asset_type in (AssetType.image, AssetType.image_carousel):
                 _process_image(db, asset, version, media_file, s3, output_prefix)
 
+            _record_derived_size(db, media_file, output_prefix)
             version.processing_status = ProcessingStatus.ready
             db.commit()
 
@@ -126,6 +127,37 @@ def process_asset(self, asset_id: str, version_id: str):
 
     finally:
         db.close()
+
+
+def _record_derived_size(db, media_file, output_prefix: str) -> None:
+    """Measure what this job wrote under `output_prefix` and store it on the
+    media file. Best effort.
+
+    Once per job, so the storage overview is a grouped SUM over existing rows
+    instead of a bucket listing on every page view. The listing is the only
+    thing that can fail here, and failing it must not fail a transcode that
+    already produced its output: the column stays NULL, the overview reports
+    the file as unmeasured, and `backfill_media_derived_size` picks it up.
+
+    A re-transcode of the same version overwrites the value, which is correct —
+    the old objects were replaced under the same prefix.
+    """
+    from ..services.s3_service import prefix_size_bytes
+    from packages.transcoder.redact import redact_presigned_urls
+
+    try:
+        total = prefix_size_bytes(output_prefix)
+    except Exception as exc:
+        # The prefix, not the row: this runs on whatever `media_file` the job
+        # was handed, and reaching for another of its attributes here would
+        # turn a logged warning into a second exception.
+        log.warning(
+            "could not measure derived size under %s: %s",
+            output_prefix, redact_presigned_urls(str(exc)),
+        )
+        return
+    media_file.derived_size_bytes = total
+    db.flush()
 
 
 def _process_video(

@@ -283,3 +283,73 @@ migrated database. They are created by the initial migration and were never drop
 have no ORM model and no route behind them. Ignore them.
 
 **ORM:** SQLAlchemy 2.0 with Alembic for migrations.
+
+## Storage Accounting
+
+Two columns on `media_files` hold everything the storage figures are built from, so no code
+path has to list the object store to answer "how big is this":
+
+| Column | Holds | Written by |
+|---|---|---|
+| `file_size_bytes` | the uploaded original | `POST /upload/complete` |
+| `derived_size_bytes` | everything the transcode produced for that version | the transcode job |
+
+`derived_size_bytes` is measured once, when a job finishes, with a single listing of its own
+output prefix (`processed/{project_id}/{asset_id}/{version_id}`). That prefix covers the HLS
+renditions, the single-file MP4/MP3/WebP, the poster thumbnail and the audio waveform, which is
+why it is measured as a prefix rather than key by key.
+
+**NULL means "not measured", never "nothing derived."** Every row written before the column
+existed is NULL until `backfill_media_derived_size` (`apps/api/tasks/storage_tasks.py`,
+maintenance queue, idempotent and resumable) has summed its prefix. Reports count those rows
+and say how many there are instead of summing NULL as zero, which would claim a total the
+bucket does not hold. A prefix that holds nothing is recorded as `0`, so a later run does not
+list it again.
+
+The backfill works in keyset batches of `BATCH_SIZE`, so an instance with a hundred thousand
+unmeasured files costs the worker the same memory as one with two hundred, and the keyset
+carries `(created_at, id)` because a row whose listing failed stays NULL and paging on the NULL
+filter alone would hand it out forever. It takes a Postgres advisory lock, so a second call to
+`POST /admin/storage/backfill` returns instead of paying for the same listings again, and it
+pauses between batches to leave S3 request budget for the people working on the instance.
+
+`derived_size_bytes` is measured for a *version's* output prefix but stored per media file, and
+`uq_media_files_version_id` holds the one row per version that makes those two the same thing. A
+version that has to carry several files is then a decision, with the total moving to
+`asset_versions`, rather than a silently doubled figure.
+
+**What "used storage" means** is defined once, in `apps/api/services/storage.py`
+(`committed_media` with `_USED_SUM` on it): every byte the bucket still holds for a media file
+whose version is in `processing` or `ready` — the original (`file_size_bytes`) plus whatever the
+transcode wrote for it (`derived_size_bytes`). An `uploading` or `failed` version is not counted,
+because its bytes are not (reliably) in the bucket. **The trash is counted**, because deleting is
+not freeing: a soft-deleted project, asset or version keeps its objects until the retention
+collector removes them. The admin overview, the member indicator on `GET /instance/settings`,
+the per-project figures and the upload guard are all that one sum, so no surface can report
+space as free that the next upload is refused for.
+
+Two scoped views refine it with a single filter each, `live_media` and `trashed_media`, so no
+second query can drift from it. The per-project rows, the asset tree and a project's own figure
+are `live_media`: those are lists of things somebody can still open. `trash_bytes` in the
+overview is `trashed_media`, the part of used that emptying the trash would free, which is why
+it reads "of which" and not "plus" — the live rows plus that figure add up to used.
+
+**The overview returns a bounded list.** `GET /admin/storage` answers with the largest
+`limit` projects (default 200, maximum 1000) and `project_count` for how many there are; the
+byte totals in the summary are always instance-wide, so a truncated list says so rather than
+looking complete.
+
+**The storage cap is enforced against that same figure** (`instance_storage_used_bytes`, which
+is `instance_storage_totals()["used_bytes"]`, read by `storage_cap_error`). Derived bytes are in
+it because the bucket holds them: a cap that ignored the renditions would be a cap on a fraction
+of the storage it is set against, and a header that counted them while the cap did not reported
+"0 B free" over an upload that still went through. The price is that an instance which has only
+just measured its renditions reads fuller than it did the day before on an unchanged bucket;
+`derived_size_bytes IS NULL` is "not measured yet" and counts as nothing until it is measured,
+`unmeasured_files` says how many of those are left, and the upgrade note tells an administrator
+to re-check the cap once the backfill has finished.
+
+**Not counted anywhere**, because no row records their size: project posters, instance branding
+logos, user avatars, comment attachments, and any object the retention purge has yet to
+reclaim. The figure is therefore the media the database knows the size of, not the bucket's
+total, and should not be read as one.

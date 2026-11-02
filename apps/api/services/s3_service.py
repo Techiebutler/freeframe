@@ -676,6 +676,17 @@ def list_keys(prefix: str):
             break
 
 
+def prefix_size_bytes(prefix: str) -> int:
+    """Total bytes of every object under `prefix` (a single key is its own prefix).
+
+    One listing, which is the whole point: the transcode calls this once when a
+    job finishes and the figure is stored on the media file, so the storage
+    overview never lists the bucket on a page view. Also used by the backfill
+    task for rows written before that column existed.
+    """
+    return sum(size for _key, _modified, size in list_keys(prefix))
+
+
 def delete_prefix(prefix: str) -> None:
     """Delete every object whose key starts with `prefix` (works for a single key too —
     a key is its own prefix). Used to reclaim HLS folders and single processed keys."""
