@@ -128,12 +128,45 @@ def process_asset(self, asset_id: str, version_id: str):
         db.close()
 
 
+def _instance_compression_level(db):
+    """The compression level this instance has chosen, or None if it has not.
+
+    Read-only on purpose: a row created here would turn "nobody has chosen"
+    into a stored level the next reader cannot tell apart. And a settings
+    problem never fails an upload: the quality shift is a preference, and the
+    environment's answer is a perfectly good one.
+    """
+    from ..models.instance_settings import InstanceSettings
+
+    try:
+        row = db.query(InstanceSettings).first()
+    except Exception:
+        # Roll back before returning, or swallowing the error makes things
+        # worse than not catching it: a failed statement leaves the session's
+        # transaction aborted, Postgres then refuses every further statement on
+        # that connection, and the next db.flush() in _process_video fails the
+        # upload. Exactly the case this branch exists for is a new worker
+        # against a database the migration has not reached yet. The rollback is
+        # itself guarded, because a dead connection can raise here too.
+        try:
+            db.rollback()
+        except Exception:
+            log.warning(
+                "could not roll back the session after a failed compression-level read",
+                exc_info=True,
+            )
+        log.warning("could not read the instance compression level; "
+                    "using TRANSCODER_CRF_OFFSET", exc_info=True)
+        return None
+    return row.compression_level if row else None
+
+
 def _process_video(
     db, asset, version, media_file, s3, output_prefix, *,
     final_attempt: bool = False,
 ):
     from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, parse_qualities
-    from packages.transcoder.base import TranscodeJob
+    from packages.transcoder.base import TranscodeJob, crf_offset_for_level
 
     transcoder = FFmpegTranscoder(
         s3, settings.s3_bucket, settings.s3_endpoint, storage_class=settings.s3_storage_class,
@@ -171,6 +204,10 @@ def _process_video(
         qualities=parse_qualities(settings.transcoder_qualities),
         progress_cb=_on_progress,
         final_attempt=final_attempt,
+        # Read per job, not once per worker process: an admin who moves the
+        # slider expects the next upload to follow, not the next deploy. None
+        # when no level is chosen, leaving TRANSCODER_CRF_OFFSET in charge.
+        crf_offset=crf_offset_for_level(_instance_compression_level(db)),
     )
     result = _run_async(transcoder.transcode(job))
 

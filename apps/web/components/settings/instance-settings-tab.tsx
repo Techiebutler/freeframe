@@ -29,6 +29,30 @@ const ORIGINAL_DOWNLOADS_LABELS: Record<OriginalDownloads, string> = {
   original: "Original or transcode",
 };
 
+/**
+ * How hard review streams are compressed: the names and the order the slider
+ * shows them in. The CRF offset each step means lives in COMPRESSION_LEVELS in
+ * packages/transcoder/base.py and is never copied here; the server resolves the
+ * offset it will use into a step and sends it as `compression_level_effective`,
+ * so there is one scale. Level 3 is what the transcoder always did, so the
+ * default position changes nothing. A Python test pins this list against the
+ * scale, so adding a step on one side only goes red.
+ */
+const COMPRESSION_LEVELS = [1, 2, 3, 4, 5] as const;
+const COMPRESSION_LABELS: Record<number, string> = {
+  1: "Highest quality",
+  2: "Higher quality",
+  3: "Balanced",
+  4: "Smaller files",
+  5: "Smallest files",
+};
+const DEFAULT_COMPRESSION_LEVEL = 3;
+// How long after the last step of a drag the save goes out. Long enough that
+// one sweep across the track is one PUT, short enough to feel immediate when
+// the thumb is released. A release (pointerup, keyup, blur) flushes it, so this
+// only ever runs for a gesture that is still going.
+const COMPRESSION_SAVE_DELAY_MS = 250;
+
 const MB = 1024 * 1024;
 // The bounds the API enforces: 5 MB is the smallest part S3, R2 and B2 accept.
 const MIN_PART_MB = 5;
@@ -150,6 +174,110 @@ export function InstanceSettingsTab() {
     });
     mutate("/instance/settings", updated, { revalidate: false });
     flashPartSaved();
+  };
+
+  // Compression. The slider is driven by a local draft while the admin is
+  // moving it, and the save is debounced and flushed on release, because the
+  // obvious shape does not work: disabling the input on the first change event
+  // aborts the pointer gesture mid-drag (one drag then moves exactly one step)
+  // and drops keyboard focus to BODY, swallowing every arrow key after the
+  // first. So the input is never disabled while data is loaded, and responses
+  // that arrive out of order are discarded by sequence number instead.
+  const [draftCompression, setDraftCompression] = React.useState<number | null>(null);
+  const [compressionError, setCompressionError] = React.useState("");
+  const [compressionSaved, flashCompressionSaved] = useSavedFlash();
+  // The step the pending save is for, as a ref: the flush handlers run inside
+  // the same gesture and must see the newest step, not the render's closure.
+  const compressionTarget = React.useRef<number | null>(null);
+  const compressionTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Bumped per save. An answer whose number is no longer the current one is a
+  // save that a later one has already superseded, so its result is dropped.
+  const compressionSeq = React.useRef(0);
+  React.useEffect(() => () => clearTimeout(compressionTimer.current), []);
+
+  // Which step the instance is on. The stored level when there is one;
+  // otherwise the step the server resolved its effective CRF offset to. Both
+  // come from the API, so the offsets live in exactly one place
+  // (COMPRESSION_LEVELS in packages/transcoder/base.py).
+  const effectiveCompression = data?.compression_level ?? data?.compression_level_effective;
+  const savedCompression = effectiveCompression ?? DEFAULT_COMPRESSION_LEVEL;
+  const compression = draftCompression ?? savedCompression;
+  // An offset the environment sets that no step names (-5, say). The slider has
+  // nowhere honest to stand, so it says what is actually in force rather than
+  // showing "Balanced" while the encoder runs at -5. Only ever true for an
+  // admin, who is the only one the API sends these fields to.
+  const compressionIsCustom =
+    draftCompression === null &&
+    data?.compression_crf_offset !== undefined &&
+    effectiveCompression === undefined;
+  // There is something to clear only once a level is stored: without one the
+  // instance already follows the environment.
+  const canResetCompression = data?.compression_level != null;
+
+  const saveCompression = React.useCallback(
+    async (level: number | null) => {
+      const seq = ++compressionSeq.current;
+      setCompressionError("");
+      try {
+        const updated = await api.put<InstanceSettings>("/instance/settings", {
+          compression_level: level,
+        });
+        if (seq !== compressionSeq.current) return;
+        mutate("/instance/settings", updated, { revalidate: false });
+        setDraftCompression(null);
+        flashCompressionSaved();
+      } catch (err: unknown) {
+        if (seq !== compressionSeq.current) return;
+        setCompressionError(err instanceof Error ? err.message : "Failed to save");
+        // Back to the saved level, as the selects on this tab do: the thumb
+        // must not sit on a step the instance is not on.
+        setDraftCompression(null);
+      }
+    },
+    [flashCompressionSaved],
+  );
+
+  // Takes whatever step the gesture has arrived at and saves it, or drops the
+  // draft when it is the step the instance is already on. One place, so the
+  // debounce and the release path cannot drift apart.
+  const commitCompression = React.useCallback(
+    (saved: number) => {
+      const target = compressionTarget.current;
+      compressionTarget.current = null;
+      if (target !== null && target !== saved) void saveCompression(target);
+      else setDraftCompression(null);
+    },
+    [saveCompression],
+  );
+
+  const handleCompressionChange = (level: number) => {
+    setDraftCompression(level);
+    setCompressionError("");
+    compressionTarget.current = level;
+    clearTimeout(compressionTimer.current);
+    compressionTimer.current = setTimeout(() => {
+      compressionTimer.current = undefined;
+      commitCompression(savedCompression);
+    }, COMPRESSION_SAVE_DELAY_MS);
+  };
+
+  // Release ends the gesture, so the save need not wait out the debounce.
+  const flushCompression = () => {
+    if (compressionTimer.current === undefined) return;
+    clearTimeout(compressionTimer.current);
+    compressionTimer.current = undefined;
+    commitCompression(savedCompression);
+  };
+
+  // Clearing the level puts the instance back on TRANSCODER_CRF_OFFSET, which
+  // is what "no level" means and the only way back without psql on the
+  // production database. An explicit null in the body, not an omitted key.
+  const resetCompression = () => {
+    clearTimeout(compressionTimer.current);
+    compressionTimer.current = undefined;
+    compressionTarget.current = null;
+    setDraftCompression(null);
+    void saveCompression(null);
   };
 
   const handlePartModeChange = async (mode: PartSizeMode) => {
@@ -365,6 +493,79 @@ export function InstanceSettingsTab() {
             )}
           </div>
         )}
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold text-text-primary">Review streams</h2>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            {/* Value in the label, as the watermark Opacity slider in project
+                settings does it: this app has one slider idiom and this is it.
+                The label row carries the Saved mark like every other control
+                in this tab. */}
+            <label htmlFor="compression-level" className="text-sm font-medium text-text-secondary">
+              Compression: {compressionIsCustom ? "Custom (env)" : COMPRESSION_LABELS[compression]}
+            </label>
+            {compressionSaved && <SavedMark />}
+          </div>
+          <input
+            id="compression-level"
+            type="range"
+            min={COMPRESSION_LEVELS[0]}
+            max={COMPRESSION_LEVELS[COMPRESSION_LEVELS.length - 1]}
+            step={1}
+            value={compression}
+            /* The step name, not the number: a screen reader otherwise reads
+               "2", "3", "4" while dragging, and the name only lives in the
+               label, which is not re-announced on a value change. */
+            aria-valuetext={
+              compressionIsCustom ? "Custom (env)" : COMPRESSION_LABELS[compression]
+            }
+            onChange={(e) => handleCompressionChange(Number(e.target.value))}
+            /* Released, so there is nothing left to interrupt: save now rather
+               than waiting out the debounce. onBlur covers tabbing away
+               mid-gesture. */
+            onPointerUp={flushCompression}
+            onKeyUp={flushCompression}
+            onBlur={flushCompression}
+            /* Never disabled once the settings have loaded. Disabling it on the
+               first change event -- the obvious way to serialise the saves --
+               makes the browser abort the pointer drag and move focus to BODY,
+               so a drag advanced one step and the second arrow key was lost.
+               Out-of-order answers are handled in saveCompression instead. */
+            disabled={!data}
+            className="w-full accent-accent disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          {compressionError ? (
+            <p className="text-xs text-status-error">{compressionError}</p>
+          ) : (
+            <p className="text-xs text-text-tertiary">
+              How hard video review streams are compressed, from highest quality to
+              smallest files. Less compression means a cleaner picture in dark and
+              graded shots, and larger files. Applies to versions uploaded from now
+              on; videos already transcoded keep the streams they have.
+            </p>
+          )}
+          {compressionIsCustom && (
+            <p className="text-xs text-text-tertiary">
+              Currently set by TRANSCODER_CRF_OFFSET ({data?.compression_crf_offset}), which
+              is not one of the steps. Moving the slider overrides it.
+            </p>
+          )}
+          {canResetCompression && (
+            /* Plain text button, as the inline actions elsewhere in the app are
+               (share review screen, folder share viewer): a full Button under
+               the slider would outweigh the control it belongs to. Tokens only,
+               and the focus ring is the one the selects on this tab use. */
+            <button
+              type="button"
+              onClick={resetCompression}
+              className="mt-0.5 self-start rounded text-xs font-medium text-text-secondary transition-colors hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+            >
+              Use server default
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="space-y-4">

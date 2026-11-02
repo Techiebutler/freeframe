@@ -658,6 +658,94 @@ def parse_qualities(raw: str | None) -> list[str]:
     return [q for q in QUALITY_MAP if q in known]
 
 
+# ------------------------------------------------------- review-stream quality
+#
+# A shift applied to the whole ladder (TRANSCODER_CRF_OFFSET).
+#
+# QUALITY_MAP's numbers are tuned for ordinary review footage, and the 8-bit
+# default adds four on top, so the top rung of the default ladder encodes at
+# CRF 24. That is a deliberate storage trade, and it holds for talking heads
+# and daylight material. It does not hold for graded work with large dark
+# gradients, which bands visibly there.
+#
+# A shift rather than new defaults, because the right number is a property of
+# the footage and not of the software: an instance reviewing camera rushes
+# wants what it has, one reviewing graded animation wants several steps lower
+# and will pay for it in storage. Negative is better quality and bigger files,
+# and about six steps is a doubling of bitrate. Zero, the default, leaves every
+# command byte-identical to what it was.
+#
+# It shifts whatever quality number the chosen backend emits -- CRF for libx264
+# and libx265, `-global_quality` on QSV and VAAPI, `-qp` on NVENC -- so the
+# setting means the same thing wherever a deployment runs. All four scales run
+# 0..51 with lower meaning better, which is what lets one number cover them.
+_CRF_OFFSET_ENV = "TRANSCODER_CRF_OFFSET"
+# Wide enough to take the top rung from 24 to visually lossless, and well past
+# preview quality the other way. Narrow enough that a stray "-80" or a pasted
+# bitrate is refused and logged rather than silently clamped to lossless, which
+# is the mistake that fills a disk.
+_CRF_OFFSET_RANGE = (-12, 12)
+# What ffmpeg accepts for each of those options.
+_CRF_BOUNDS = (0, 51)
+
+
+def parse_crf_offset(raw: str | None) -> int:
+    """Turn TRANSCODER_CRF_OFFSET into a number of quality steps, or 0.
+
+    Like TRANSCODER_CPU_LIMIT and TRANSCODER_AUDIO_BITRATE, an unusable value
+    falls back to the default with a line in the log rather than failing jobs.
+    The log line matters: a typo that quietly changed nothing would leave the
+    operator looking at the same picture with nothing pointing at the setting.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return 0
+    low, high = _CRF_OFFSET_RANGE
+    # An optional leading sign, because "-8" is the shape this is written in and
+    # "+2" is the one someone writes to save storage. [0-9] rather than \d for
+    # the reason parse_audio_bitrate gives: \d also matches non-ASCII digits,
+    # which int() reads and ffmpeg refuses.
+    if not re.fullmatch(r"[+-]?[0-9]+", text) or not low <= int(text) <= high:
+        print(f"[transcoder] {_CRF_OFFSET_ENV}={raw!r} is not a whole number of "
+              f"quality steps between {low} and {high}; leaving the ladder's own "
+              "quality", flush=True)
+        return 0
+    return int(text)
+
+
+def get_crf_offset() -> int:
+    return parse_crf_offset(os.environ.get(_CRF_OFFSET_ENV))
+
+
+def job_crf_offset(requested: Optional[int]) -> int:
+    """The offset this job encodes at: the caller's, else the environment's.
+
+    The instance setting is the caller, and it wins when set -- the point of
+    having it in the database. An out-of-range value is treated the way a
+    broken env var is, rather than clamped: the only callers that pass one map
+    it from a fixed scale, so such a value is a bug worth seeing in the log.
+    """
+    if requested is None:
+        return get_crf_offset()
+    low, high = _CRF_OFFSET_RANGE
+    if not low <= requested <= high:
+        print(f"[transcoder] job asked for a CRF offset of {requested}, which is "
+              f"outside {low}..{high}; falling back to {_CRF_OFFSET_ENV}", flush=True)
+        return get_crf_offset()
+    return requested
+
+
+def shift_quality(value: int, offset: int) -> int:
+    """A rung's quality number, shifted and kept inside ffmpeg's range.
+
+    `_CRF_OFFSET_RANGE` bounds the offset, not the sum: an output mode or a
+    rung added later could put the result outside 0..51, where ffmpeg refuses
+    the option and fails the whole job.
+    """
+    low, high = _CRF_BOUNDS
+    return max(low, min(high, value + offset))
+
+
 # ----------------------------------------------------------------- CPU budget
 #
 # How much of the machine one transcode may take (TRANSCODER_CPU_LIMIT).
@@ -2123,6 +2211,7 @@ class FFmpegTranscoder(BaseTranscoder):
             cpu_plan = thread_plan(get_cpu_budget(), len(qualities))
             # Read once for the same reason: a typo is reported once per job.
             audio_bitrate = get_audio_bitrate() if has_audio else None
+            crf_offset = job_crf_offset(job.crf_offset)
 
             hls_dir = work_dir / "hls"
             hls_dir.mkdir()
@@ -2345,12 +2434,28 @@ class FFmpegTranscoder(BaseTranscoder):
                         enc = "libx265" if family == "hevc" else "libx264"
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
                                        f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
+                        if enc == "libx264":
+                            # Adaptive quantisation mode 3, "auto-variance with
+                            # bias to dark scenes". x264's default is 1, plain
+                            # variance AQ, which spends bits where there is
+                            # detail -- and a dark gradient has none, so the
+                            # area most likely to band is the one that gets
+                            # starved. Costs a few percent of bitrate.
+                            #
+                            # libx264 only: `aq-mode` is a private option of
+                            # that wrapper, ffmpeg's libx265 wrapper has no
+                            # such option (x265's lives behind `-x265-params`),
+                            # and the hardware encoders quantise on the device.
+                            # Indexed like everything else in this loop.
+                            ffmpeg_cmd += [f"-aq-mode:v:{i}", "3"]
                         if ten_bit:
                             ffmpeg_cmd += [f"-pix_fmt:v:{i}", "yuv420p10le",
-                                           f"-crf:v:{i}", str(crf - 4)]
+                                           f"-crf:v:{i}",
+                                           str(shift_quality(crf - 4, crf_offset))]
                         else:
                             ffmpeg_cmd += [f"-pix_fmt:v:{i}", "yuv420p",
-                                           f"-crf:v:{i}", str(crf + 4)]
+                                           f"-crf:v:{i}",
+                                           str(shift_quality(crf + 4, crf_offset))]
                         if cpu_plan is not None:
                             # Software encoders only. The hardware ones do their
                             # work on the device and take their thread counts
@@ -2368,7 +2473,7 @@ class FFmpegTranscoder(BaseTranscoder):
                         enc = "hevc_nvenc" if family == "hevc" else "h264_nvenc"
                         cq = _NVENC_CQ.get(get_output_mode(), 26)
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "p6", "-rc", "constqp",
-                                       f"-qp:v:{i}", str(cq),
+                                       f"-qp:v:{i}", str(shift_quality(cq, crf_offset)),
                                        f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
                         if family == "hevc":
                             ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]
@@ -2376,12 +2481,14 @@ class FFmpegTranscoder(BaseTranscoder):
                             ffmpeg_cmd += ["-profile:v", "high"]
                     elif backend == "qsv":
                         enc = "hevc_qsv" if family == "hevc" else "h264_qsv"
-                        ffmpeg_cmd += [f"-c:v:{i}", enc, f"-global_quality:v:{i}", str(crf),
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, f"-global_quality:v:{i}",
+                                       str(shift_quality(crf, crf_offset)),
                                        "-look_ahead", "1",
                                        f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
                     elif backend == "vaapi":
                         enc = "hevc_vaapi" if family == "hevc" else "h264_vaapi"
-                        ffmpeg_cmd += [f"-c:v:{i}", enc, f"-global_quality:v:{i}", str(crf),
+                        ffmpeg_cmd += [f"-c:v:{i}", enc, f"-global_quality:v:{i}",
+                                       str(shift_quality(crf, crf_offset)),
                                        f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
                         if family == "hevc":
                             ffmpeg_cmd += ["-profile:v", "main10" if ten_bit else "main"]

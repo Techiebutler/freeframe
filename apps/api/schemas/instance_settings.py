@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
+from packages.transcoder.base import MAX_COMPRESSION_LEVEL, MIN_COMPRESSION_LEVEL
+
 from .upload import MAX_PART_SIZE_BYTES, MIN_PART_SIZE_BYTES, _format_bytes
 
 
@@ -11,6 +13,15 @@ class InstanceSettingsUpdate(BaseModel):
     # Lets share-link visitors, public-project visitors and direct shares download
     # originals. Project members always can.
     allow_original_downloads: bool | None = None
+    # How hard review streams are compressed, 1 (highest quality) to 5
+    # (smallest files). The bounds come from the scale itself, so adding a step
+    # cannot leave the API rejecting it. Unlike every other field here, an
+    # explicit null means something: clear the stored level and follow
+    # `TRANSCODER_CRF_OFFSET` again. Omitting the key still leaves it alone;
+    # the router tells the two apart through `model_fields_set`.
+    compression_level: int | None = Field(
+        default=None, ge=MIN_COMPRESSION_LEVEL, le=MAX_COMPRESSION_LEVEL
+    )
 
     @field_validator("upload_part_size_bytes")
     @classmethod
@@ -33,3 +44,12 @@ class InstanceSettingsResponse(BaseModel):
     # Admin only.
     upload_part_size_bytes: int | None = None
     allow_original_downloads: bool | None = None
+    # Admin only, and null means something here: nobody has chosen a level, so
+    # the transcoder is following TRANSCODER_CRF_OFFSET. The offset below says
+    # what that works out to, so the slider can show where the instance sits.
+    compression_level: int | None = None
+    compression_crf_offset: int | None = None
+    # Which step of the scale that effective offset is, resolved server-side
+    # from the single scale in packages/transcoder/base.py, so the UI keeps no
+    # copy of the offsets. Null means no step names the offset.
+    compression_level_effective: int | None = None
