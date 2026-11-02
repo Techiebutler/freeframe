@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 const GB = 1024 ** 3
 
@@ -50,9 +50,12 @@ const MB = 1024 ** 2
 const partModeSelect = () => screen.getByLabelText(/upload part size/i) as HTMLSelectElement
 const partSizeInput = () => screen.queryByLabelText(/part size \(mb\)/i) as HTMLInputElement | null
 const originalsSelect = () => screen.getByLabelText(/outside a project/i) as HTMLSelectElement
-// The step name is part of the label, as it is for the watermark Opacity
-// slider in project settings, so the accessible name is what names the step.
+// The step name is part of the label, which is where this app puts a slider's
+// readout, so the accessible name is what names the step.
 const compressionSlider = () => screen.getByLabelText(/^compression:/i) as HTMLInputElement
+// Mirrors COMPRESSION_SAVE_DELAY_MS in the component; the one test that has to
+// let the debounce run out rather than release the slider needs the number.
+const COMPRESSION_SAVE_DELAY_MS = 250
 
 describe('InstanceSettingsTab', () => {
   beforeEach(() => {
@@ -369,8 +372,9 @@ describe('InstanceSettingsTab', () => {
     // disabling the input on the first change event makes the browser abort the
     // pointer drag and move focus to BODY, so one sweep moved one step and the
     // second arrow key was lost. jsdom reproduces neither, so what is pinned is
-    // the cause (the input stays enabled and focused through the gesture) with
-    // the result (one PUT, for the step it was let go on, and none before).
+    // the cause (the input stays enabled and focused through the gesture, and
+    // while the PUT it triggered is still unanswered) with the result (one PUT,
+    // for the step it was let go on, and none before).
     it.each([
       ['a drag', () => fireEvent.pointerUp(compressionSlider())],
       ['arrow keys', () => fireEvent.keyUp(compressionSlider(), { key: 'ArrowLeft' })],
@@ -386,9 +390,85 @@ describe('InstanceSettingsTab', () => {
       expect(put).not.toHaveBeenCalled()
 
       release()
-      await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+      // Synchronously, before the answer: the release flushed the debounce
+      // instead of the test waiting it out, which is what makes the release
+      // handlers load-bearing rather than decoration.
       expect(settingsPuts()).toEqual([['/instance/settings', { compression_level: 5 }]])
       expect(compressionSlider()).not.toBeDisabled()
+      expect(document.activeElement).toBe(compressionSlider())
+
+      await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+      expect(settingsPuts()).toHaveLength(1)
+      expect(compressionSlider()).not.toBeDisabled()
+    })
+
+    // The window is the PUT round trip: deciding "nothing to save" against the
+    // value from the API drops the step the admin released on, because that
+    // value only changes when the answer arrives.
+    it('saves the step released on when a drag goes out and comes back', async () => {
+      const first = deferred()
+      put.mockReturnValueOnce(first.promise)
+      h.data = {
+        ...h.DEFAULT,
+        compression_level: 3,
+        compression_crf_offset: 0,
+        compression_level_effective: 3,
+      }
+      render(<InstanceSettingsTab />)
+
+      fireEvent.change(compressionSlider(), { target: { value: '5' } })
+      fireEvent.pointerUp(compressionSlider())
+      expect(settingsPuts()).toHaveLength(1)
+
+      fireEvent.change(compressionSlider(), { target: { value: '3' } })
+      fireEvent.pointerUp(compressionSlider())
+      expect(settingsPuts()[1]).toEqual(['/instance/settings', { compression_level: 3 }])
+
+      first.resolve({ compression_level: 5, compression_level_effective: 5 })
+      await waitFor(() => expect(settingsPuts()).toHaveLength(2))
+    })
+
+    // An environment offset no step names means the instance is on no step at
+    // all, so the middle of the track is a position and not a saved value: the
+    // note says moving the slider overrides the variable, and 3 to 4 to 3 in
+    // one gesture is the shortest way to ask for the middle step.
+    it('overrides an offset no step names in one gesture', () => {
+      h.data = { ...h.DEFAULT, compression_crf_offset: -5 }
+      render(<InstanceSettingsTab />)
+      expect(compressionSlider()).toHaveValue('3')
+
+      fireEvent.change(compressionSlider(), { target: { value: '4' } })
+      fireEvent.change(compressionSlider(), { target: { value: '3' } })
+      fireEvent.pointerUp(compressionSlider())
+
+      expect(settingsPuts()).toEqual([['/instance/settings', { compression_level: 3 }]])
+    })
+
+    // A drag that pauses longer than the debounce has its save sent while the
+    // finger is still down, so clearing the draft on the answer would snap the
+    // thumb back to the step that was saved.
+    it('keeps the thumb where the finger is when a save answers mid-drag', async () => {
+      const first = deferred()
+      put.mockReturnValueOnce(first.promise)
+      vi.useFakeTimers()
+      try {
+        render(<InstanceSettingsTab />)
+        fireEvent.change(compressionSlider(), { target: { value: '4' } })
+        // The debounce runs out with no release: the paused drag.
+        await act(async () => {
+          vi.advanceTimersByTime(COMPRESSION_SAVE_DELAY_MS + 50)
+        })
+        expect(settingsPuts()).toHaveLength(1)
+
+        fireEvent.change(compressionSlider(), { target: { value: '5' } })
+        await act(async () => {
+          first.resolve({ compression_level: 4, compression_level_effective: 4 })
+        })
+
+        expect(compressionSlider()).toHaveValue('5')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     // A slow first answer must not overwrite a step chosen after it. The guard
@@ -432,15 +512,20 @@ describe('InstanceSettingsTab', () => {
     // it is offered only once a level is stored.
     it('hands the instance back to the server default', async () => {
       const serverDefault = () => screen.queryByRole('button', { name: /use server default/i })
-      render(<InstanceSettingsTab />)
+      const first = render(<InstanceSettingsTab />)
       expect(serverDefault()).not.toBeInTheDocument()
+      first.unmount()
 
       h.data = { ...h.DEFAULT, compression_level: 1, compression_level_effective: 1 }
       render(<InstanceSettingsTab />)
+      serverDefault()!.focus()
       fireEvent.click(serverDefault()!)
 
       await waitFor(() => expect(settingsPuts()).toHaveLength(1))
       expect(settingsPuts()).toEqual([['/instance/settings', { compression_level: null }]])
+      // The button disappears the moment the level is cleared, so focus has to
+      // be put somewhere: on the control it belongs to, not on the document.
+      await waitFor(() => expect(document.activeElement).toBe(compressionSlider()))
     })
   })
 })

@@ -35,8 +35,7 @@ const ORIGINAL_DOWNLOADS_LABELS: Record<OriginalDownloads, string> = {
  * packages/transcoder/base.py and is never copied here; the server resolves the
  * offset it will use into a step and sends it as `compression_level_effective`,
  * so there is one scale. Level 3 is what the transcoder always did, so the
- * default position changes nothing. A Python test pins this list against the
- * scale, so adding a step on one side only goes red.
+ * default position changes nothing.
  */
 const COMPRESSION_LEVELS = [1, 2, 3, 4, 5] as const;
 const COMPRESSION_LABELS: Record<number, string> = {
@@ -190,9 +189,16 @@ export function InstanceSettingsTab() {
   // the same gesture and must see the newest step, not the render's closure.
   const compressionTarget = React.useRef<number | null>(null);
   const compressionTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The level the newest PUT was sent for: undefined until one has gone out,
+  // and null once "Use server default" has cleared the level. What "nothing to
+  // save" is decided against, because the SWR value only changes when a PUT
+  // answers -- see commitCompression.
+  const compressionSent = React.useRef<number | null | undefined>(undefined);
   // Bumped per save. An answer whose number is no longer the current one is a
   // save that a later one has already superseded, so its result is dropped.
   const compressionSeq = React.useRef(0);
+  // Focus goes back here when "Use server default" unmounts itself.
+  const compressionInput = React.useRef<HTMLInputElement | null>(null);
   React.useEffect(() => () => clearTimeout(compressionTimer.current), []);
 
   // Which step the instance is on. The stored level when there is one;
@@ -200,6 +206,10 @@ export function InstanceSettingsTab() {
   // come from the API, so the offsets live in exactly one place
   // (COMPRESSION_LEVELS in packages/transcoder/base.py).
   const effectiveCompression = data?.compression_level ?? data?.compression_level_effective;
+  // The level the instance is actually on, or null when it is on none: an
+  // environment offset no step names leaves the thumb in the middle without
+  // the instance being on the middle step, so the two cannot share a value.
+  const storedCompression = effectiveCompression ?? null;
   const savedCompression = effectiveCompression ?? DEFAULT_COMPRESSION_LEVEL;
   const compression = draftCompression ?? savedCompression;
   // An offset the environment sets that no step names (-5, say). The slider has
@@ -217,21 +227,30 @@ export function InstanceSettingsTab() {
   const saveCompression = React.useCallback(
     async (level: number | null) => {
       const seq = ++compressionSeq.current;
+      compressionSent.current = level;
       setCompressionError("");
       try {
         const updated = await api.put<InstanceSettings>("/instance/settings", {
           compression_level: level,
         });
-        if (seq !== compressionSeq.current) return;
+        if (seq !== compressionSeq.current) return false;
         mutate("/instance/settings", updated, { revalidate: false });
-        setDraftCompression(null);
+        // Only once the gesture has ended. A drag that pauses longer than the
+        // debounce has its save sent mid-drag, and clearing the draft then
+        // snaps the thumb back under the finger.
+        if (compressionTarget.current === null) setDraftCompression(null);
         flashCompressionSaved();
+        return true;
       } catch (err: unknown) {
-        if (seq !== compressionSeq.current) return;
+        if (seq !== compressionSeq.current) return false;
         setCompressionError(err instanceof Error ? err.message : "Failed to save");
+        // Nothing was stored, so the next attempt at this level has to go out
+        // again rather than read as "already sent".
+        compressionSent.current = undefined;
         // Back to the saved level, as the selects on this tab do: the thumb
         // must not sit on a step the instance is not on.
         setDraftCompression(null);
+        return false;
       }
     },
     [flashCompressionSaved],
@@ -241,10 +260,19 @@ export function InstanceSettingsTab() {
   // draft when it is the step the instance is already on. One place, so the
   // debounce and the release path cannot drift apart.
   const commitCompression = React.useCallback(
-    (saved: number) => {
+    (stored: number | null) => {
       const target = compressionTarget.current;
       compressionTarget.current = null;
-      if (target !== null && target !== saved) void saveCompression(target);
+      // Against the last level actually sent, not against the value from the
+      // API: that one only changes when a PUT answers, so for the length of a
+      // round trip it is stale. Saved 3, drag to 5 and release, drag back to 3
+      // and release before the answer: 3 equalled the stale 3, nothing went
+      // out, and the instance ended on 5 although the admin let go on 3.
+      // `stored` is null where no level is stored at all, where every step the
+      // admin releases on is a change -- which is how "Custom (env)" can be
+      // left for Balanced in one gesture.
+      const base = compressionSent.current === undefined ? stored : compressionSent.current;
+      if (target !== null && target !== base) void saveCompression(target);
       else setDraftCompression(null);
     },
     [saveCompression],
@@ -257,7 +285,7 @@ export function InstanceSettingsTab() {
     clearTimeout(compressionTimer.current);
     compressionTimer.current = setTimeout(() => {
       compressionTimer.current = undefined;
-      commitCompression(savedCompression);
+      commitCompression(storedCompression);
     }, COMPRESSION_SAVE_DELAY_MS);
   };
 
@@ -266,18 +294,20 @@ export function InstanceSettingsTab() {
     if (compressionTimer.current === undefined) return;
     clearTimeout(compressionTimer.current);
     compressionTimer.current = undefined;
-    commitCompression(savedCompression);
+    commitCompression(storedCompression);
   };
 
   // Clearing the level puts the instance back on TRANSCODER_CRF_OFFSET, which
   // is what "no level" means and the only way back without psql on the
   // production database. An explicit null in the body, not an omitted key.
-  const resetCompression = () => {
+  const resetCompression = async () => {
     clearTimeout(compressionTimer.current);
     compressionTimer.current = undefined;
     compressionTarget.current = null;
     setDraftCompression(null);
-    void saveCompression(null);
+    // The button unmounts itself the moment the level is cleared, which drops
+    // keyboard focus to the document. Move it to the control it belongs to.
+    if (await saveCompression(null)) compressionInput.current?.focus();
   };
 
   const handlePartModeChange = async (mode: PartSizeMode) => {
@@ -499,10 +529,9 @@ export function InstanceSettingsTab() {
         <h2 className="text-sm font-semibold text-text-primary">Review streams</h2>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            {/* Value in the label, as the watermark Opacity slider in project
-                settings does it: this app has one slider idiom and this is it.
-                The label row carries the Saved mark like every other control
-                in this tab. */}
+            {/* Value in the label, which is where this app puts a slider's
+                readout. The label row carries the Saved mark like every other
+                control in this tab. */}
             <label htmlFor="compression-level" className="text-sm font-medium text-text-secondary">
               Compression: {compressionIsCustom ? "Custom (env)" : COMPRESSION_LABELS[compression]}
             </label>
@@ -510,6 +539,7 @@ export function InstanceSettingsTab() {
           </div>
           <input
             id="compression-level"
+            ref={compressionInput}
             type="range"
             min={COMPRESSION_LEVELS[0]}
             max={COMPRESSION_LEVELS[COMPRESSION_LEVELS.length - 1]}
@@ -559,7 +589,7 @@ export function InstanceSettingsTab() {
                and the focus ring is the one the selects on this tab use. */
             <button
               type="button"
-              onClick={resetCompression}
+              onClick={() => void resetCompression()}
               className="mt-0.5 self-start rounded text-xs font-medium text-text-secondary transition-colors hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
             >
               Use server default
