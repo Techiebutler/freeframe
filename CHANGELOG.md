@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Software H.264 encodes bias their bits toward dark areas.** libx264 ran with x264's default adaptive quantisation, plain variance AQ, which spends bits where there is detail. A large dark gradient has none, so the area most likely to band was the area that got starved, and the dark ramps of graded footage banded in the browser. The ladder now encodes with `-aq-mode 3`, auto-variance AQ with a bias to dark scenes, on every software H.264 rung, which closes most of that gap for a few percent more bitrate at the same CRF. libx265 is unchanged, because `aq-mode` belongs to ffmpeg's libx264 wrapper, and the hardware encoders are unchanged because they quantise on the device.
+- **J, K and L shuttle the video player like an edit suite.** L plays forward and each further press goes faster (2x, 4x, 8x); J does the same in reverse; K stops. Pressing the opposite key switches direction at 1x. J and L used to jump 10 seconds; the arrow keys still jump 5. (#589 by @jdanna)
+
+### Fixed
+- **Compare's comment panels no longer re-render on every playback frame, and annotation and timecode buttons pause playback again.** Comment updates and pane-local seeking remain live. (#170, #582 by @WhyTan00)
 
 ## [1.22.0] - 2026-10-29
 
