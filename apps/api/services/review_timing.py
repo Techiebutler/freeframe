@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import select, func
 from ..config import settings
-from ..models.asset import Asset, AssetVersion
+from ..models.asset import Asset, AssetVersion, ProcessingStatus
+from ..models.user import User
 from ..models.upload_request import RequestUpload, UploadRequest
 
 PROVENANCE_SCHEMA = 'autoreview.submission-provenance.v1'
@@ -51,6 +52,21 @@ def attest_request_timing(db, request_id, project_id, share_token, *, apply=Fals
         req.timing_natural_intent = {**identity, 'attested_at': now.isoformat(), 'customer_order_verified': True}
     return dict(mode='apply' if apply else 'dry-run', already_present=existing is not None,
         attested_at=(req.timing_natural_intent or {}).get('attested_at'), **identity)
+
+
+def adopt_signed_in_upload(db, req, asset_id, version):
+    """A version a signed-in user uploaded into this request's folder, on the guest route's terms: the
+    RequestUpload row `_review_assets` reads as proof of the transfer. Called under U lock. Idempotent."""
+    record = db.query(RequestUpload).filter(RequestUpload.request_id == req.id,
+        RequestUpload.asset_id == asset_id, RequestUpload.version_number == version.version_number).first()
+    if not record:
+        author = db.get(User, version.created_by)
+        record = RequestUpload(request_id=req.id, asset_id=asset_id, version_number=version.version_number,
+            uploader_name=author.name, uploader_email=author.email)
+        db.add(record)
+    if record.submitted_at is None and version.processing_status in (ProcessingStatus.processing, ProcessingStatus.ready):
+        freeze_submission_timing(db, req, record, version, adopted=True)
+    return record
 
 
 def freeze_submission_timing(db, req, record, version, *, adopted=False):
@@ -179,7 +195,6 @@ def admit_timing(db, request_id, project_id, share_token, asset_id, version_id, 
 
 def admit_legacy_timing_exclusion(db, share_token, asset_id, version_id):
     """Only durable non-natural proof permits a context-free legacy review."""
-    from ..models.asset import ProcessingStatus
     from ..models.folder import Folder
     from ..models.project import Project
     from ..services.permissions import validate_share_link, validate_asset_in_share

@@ -17,6 +17,7 @@ from apps.api.models.share import SharePermission
 
 
 def test_complete_upload_announces_revision_submitted_for_a_handin(monkeypatch):
+    monkeypatch.setattr('apps.api.routers.upload._record_handin_submission', lambda *a: None)
     import apps.api.routers.upload as upload_module
     from apps.api.services import hub_events
 
