@@ -25,6 +25,7 @@ from ..models.folder import Folder
 from ..models.project import Project
 from ..models.user import UserStatus
 from ..services.auth_service import get_user_by_email
+from ..services.checklists import dispatch_binding, reserve_binding
 from .requests import CARD_URL, ensure_folder_assignment
 
 router = APIRouter(tags=["portal-integration"])
@@ -57,6 +58,28 @@ def _service_user(db: Session):
     if not user or user.status == UserStatus.deactivated:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Portal service account is unavailable")
     return user
+
+
+def review_binding(db: Session, req, folder: Folder, binding, actor_id):
+    """The binding that registers this hand-in with Auto Review, reserved when the folder has none.
+
+    Every other way a hand-in comes to exist reserves one (create_request, the staff hand-in page), and
+    only a binding ever calls register_request (tasks/checklist_tasks.py). A portal hand-in without one
+    was never heard of by Auto Review: the editor page said "Review unavailable" for good and finish
+    stayed blocked. Keyed on the request, so a repeated call or a later repair finds the same row.
+    """
+    if binding is not None:
+        # A binding with no share token is skipped by registration (_register) just the same.
+        if not binding.review_share_token:
+            binding.review_share_token = req.review_share_token
+        return binding
+    intent = {"brand": req.brand_slug, "title": req.title, "brief_text": "",
+              "brief_url": (folder.description or "").strip(), "brief_pdf_base64": ""}
+    binding = reserve_binding(db, req.project_id, actor_id, f"portal:{req.id}", intent)
+    binding.request_id = req.id
+    binding.folder_id = folder.id
+    binding.review_share_token = req.review_share_token
+    return binding
 
 
 @router.post("/integrations/portal/delivery-folder")
@@ -103,8 +126,12 @@ async def portal_delivery_folder(request: Request, db: Session = Depends(get_db)
 
     # The brand attestation (confirmed_brand mismatch -> 409) happens inside ensure_folder_assignment,
     # against folder.description - identical to card_url for both a brand-new and a reused folder.
-    req, _binding = ensure_folder_assignment(db, folder, project, service_user.id, create_share_if_missing=True)
+    req, binding = ensure_folder_assignment(db, folder, project, service_user.id, create_share_if_missing=True)
+    binding = review_binding(db, req, folder, binding, service_user.id)
     db.commit()
+    # After the commit, and fail-open like create_request: the links work even while Auto Review is down,
+    # and the binding's own retries (resume_checklists) finish the registration.
+    dispatch_binding(binding.id)
 
     base = (settings.frontend_url or "").rstrip("/")
     return {

@@ -15,12 +15,15 @@ from fastapi.testclient import TestClient
 
 from apps.api.config import settings
 from apps.api.database import get_db
+from apps.api.models.checklist_binding import ChecklistBinding
 from apps.api.models.folder import Folder
 from apps.api.models.project import Project
 from apps.api.models.share import ShareLink, SharePermission
 from apps.api.models.upload_request import UploadRequest
 from apps.api.models.user import User
+from apps.api.routers import portal as portal_module
 from apps.api.routers.portal import router
+from apps.api.services.checklists import reserve_binding
 
 SECRET = "portal-test-secret"
 CARD_URL = "https://trello.com/c/AbCd1234"
@@ -30,6 +33,8 @@ CARD_URL = "https://trello.com/c/AbCd1234"
 def portal_app(real_db, monkeypatch):
     monkeypatch.setattr(settings, "portal_freeframe_hmac_secret", SECRET)
     monkeypatch.setattr(settings, "frontend_url", "https://feedback.example.test")
+    dispatched = []
+    monkeypatch.setattr(portal_module, "dispatch_binding", dispatched.append)
     service = User(email=f"portal-service-{uuid.uuid4()}@example.test", name="Portal Service", is_staff=True)
     real_db.add(service)
     real_db.flush()
@@ -41,6 +46,7 @@ def portal_app(real_db, monkeypatch):
     app.include_router(router)
     app.dependency_overrides[get_db] = lambda: real_db
     with TestClient(app) as client:
+        client.dispatched = dispatched
         yield client, real_db, project, service
 
 
@@ -145,3 +151,53 @@ def test_reuses_a_folder_the_interactive_handin_flow_already_created_for_the_sam
     assert response.status_code == 200
     assert response.json()["folder_id"] == str(existing.id)
     assert db.query(Folder).filter(Folder.project_id == project.id).count() == 1
+
+
+# Auto Review only hears of a hand-in through its checklist binding (register_request runs from the
+# binding's task). A portal hand-in without one showed "Review unavailable" for good and could not finish.
+
+def test_first_call_reserves_the_binding_that_registers_the_handin_with_auto_review(portal_app):
+    client, db, project, service = portal_app
+    out = _post(client, {"card_url": CARD_URL, "workspace_project_id": str(project.id), "title": "Spring launch"}).json()
+
+    req = db.query(UploadRequest).filter(UploadRequest.token == out["token"]).one()
+    binding = db.query(ChecklistBinding).filter(ChecklistBinding.folder_id == uuid.UUID(out["folder_id"])).one()
+    assert binding.request_id == req.id
+    assert binding.project_id == project.id
+    assert binding.review_share_token == out["review_share_token"]
+    assert binding.created_by == service.id
+    assert binding.source_key == f"portal:{req.id}"
+    assert binding.intent["brief_url"] == CARD_URL
+    assert binding.intent["brand"] == req.brand_slug
+    assert client.dispatched == [binding.id]
+
+
+def test_a_repeated_call_keeps_the_one_binding(portal_app):
+    client, db, project, _service = portal_app
+    payload = {"card_url": CARD_URL, "workspace_project_id": str(project.id)}
+    first = _post(client, payload).json()
+    second = _post(client, payload).json()
+
+    assert first == second
+    rows = db.query(ChecklistBinding).filter(ChecklistBinding.folder_id == uuid.UUID(first["folder_id"])).all()
+    assert len(rows) == 1
+    assert client.dispatched == [rows[0].id, rows[0].id]
+
+
+def test_a_folder_that_already_has_a_binding_keeps_it(portal_app):
+    client, db, project, service = portal_app
+    existing = Folder(project_id=project.id, name="Already filed", description=CARD_URL, created_by=service.id)
+    db.add(existing)
+    db.flush()
+    staff = reserve_binding(db, project.id, service.id, "trello:0123456789abcdef01234567",
+                            {"brand": "", "title": "", "brief_text": "", "brief_url": CARD_URL, "brief_pdf_base64": ""})
+    staff.folder_id = existing.id
+    db.commit()
+
+    out = _post(client, {"card_url": CARD_URL, "workspace_project_id": str(project.id)}).json()
+
+    rows = db.query(ChecklistBinding).filter(ChecklistBinding.folder_id == existing.id).all()
+    assert [r.id for r in rows] == [staff.id]
+    assert rows[0].request_id == db.query(UploadRequest).filter(UploadRequest.token == out["token"]).one().id
+    assert rows[0].review_share_token == out["review_share_token"]
+    assert client.dispatched == [staff.id]
