@@ -751,9 +751,11 @@ dumps() { (cd "$BK" && LC_ALL=C ls freeframe-*.dump 2>/dev/null) || true; }
   assert_eq "$(dumps | wc -l | tr -d ' ')" 7
   [ ! -e "$BK/freeframe-20261001-030000-before-rollback.dump" ]
   [ ! -e "$BK/freeframe-20261001-030000-before-rollback.env.prod" ]
-  # The newest backup is a big rollback copy: twice its size is needed.
-  old_backup 20261030-030000-before-rollback
-  export STUB_BIG_LAST=$((700 * 1048576)) STUB_BIG_LAST_FILE="$BK/freeframe-20261030-030000-before-rollback.dump"
+  # The newest backup is a big rollback copy: twice its size is needed. Its
+  # name must sort after the backup made above, which is named with the real
+  # clock, so it is dated far ahead (as uninstall.bats does for its newest backup).
+  old_backup 20991230-030000-before-rollback
+  export STUB_BIG_LAST=$((700 * 1048576)) STUB_BIG_LAST_FILE="$BK/freeframe-20991230-030000-before-rollback.dump"
   export STUB_FREE_MB=1300
   ff backup
   [ "$status" -eq 1 ]
