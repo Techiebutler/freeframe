@@ -507,6 +507,29 @@ describe('InstanceSettingsTab', () => {
       expect(compressionSlider()).toHaveValue('2')
     })
 
+    // A failed save stored nothing, so the level it was sent for must stop
+    // counting as sent: otherwise the retry on that same step compares equal to
+    // it, nothing goes out, and the admin is left with an error message and a
+    // slider that has quietly stopped saving.
+    it('sends the same level again after a failed save', async () => {
+      put.mockRejectedValueOnce(new Error('nope'))
+      h.data = { ...h.DEFAULT, compression_level: 2, compression_level_effective: 2 }
+      render(<InstanceSettingsTab />)
+
+      fireEvent.change(compressionSlider(), { target: { value: '5' } })
+      fireEvent.pointerUp(compressionSlider())
+      await waitFor(() => expect(screen.getByText('nope')).toBeInTheDocument())
+      expect(settingsPuts()).toHaveLength(1)
+
+      fireEvent.change(compressionSlider(), { target: { value: '5' } })
+      fireEvent.pointerUp(compressionSlider())
+
+      expect(settingsPuts()).toEqual([
+        ['/instance/settings', { compression_level: 5 }],
+        ['/instance/settings', { compression_level: 5 }],
+      ])
+    })
+
     // Clearing the level is the only way back to TRANSCODER_CRF_OFFSET without
     // psql, so it has to send an explicit null rather than omit the key -- and
     // it is offered only once a level is stored.
