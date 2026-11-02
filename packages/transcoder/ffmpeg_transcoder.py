@@ -673,12 +673,20 @@ def parse_qualities(raw: str | None) -> list[str]:
 # wants what it has, one reviewing graded animation wants several steps lower
 # and will pay for it in storage. Negative is better quality and bigger files,
 # and about six steps is a doubling of bitrate. Zero, the default, leaves every
-# command byte-identical to what it was.
+# command byte-identical to what it was, which
+# `test_an_instance_that_has_chosen_nothing_gets_the_command_main_built` pins
+# against a literal.
+#
+# A negative offset additionally switches libx264 to `-aq-mode 3`, because
+# dark-gradient banding is what an instance raises quality for; see the loop
+# that builds the rungs.
 #
 # It shifts whatever quality number the chosen backend emits -- CRF for libx264
-# and libx265, `-global_quality` on QSV and VAAPI, `-qp` on NVENC -- so the
-# setting means the same thing wherever a deployment runs. All four scales run
-# 0..51 with lower meaning better, which is what lets one number cover them.
+# and libx265, `-global_quality` on QSV and VAAPI, `-qp` on NVENC -- so every
+# backend moves by the same number of steps. The absolute numbers differ: the
+# backends start from different ladders, so `-8` reads as CRF 16 / 18 / 22 on
+# software x264 and as other numbers elsewhere. All four scales run 0..51 with
+# lower meaning better, which is what lets one number cover them.
 _CRF_OFFSET_ENV = "TRANSCODER_CRF_OFFSET"
 # Wide enough to take the top rung from 24 to visually lossless, and well past
 # preview quality the other way. Narrow enough that a stray "-80" or a pasted
@@ -704,8 +712,11 @@ def parse_crf_offset(raw: str | None) -> int:
     # An optional leading sign, because "-8" is the shape this is written in and
     # "+2" is the one someone writes to save storage. [0-9] rather than \d for
     # the reason parse_audio_bitrate gives: \d also matches non-ASCII digits,
-    # which int() reads and ffmpeg refuses.
-    if not re.fullmatch(r"[+-]?[0-9]+", text) or not low <= int(text) <= high:
+    # which int() reads and ffmpeg refuses. Bounded to three digits, because an
+    # unbounded `+` lets a pasted wall of digits through the pattern and then
+    # raises from int() -- CPython refuses to parse an integer literal over
+    # 4300 digits -- where nothing catches it.
+    if not re.fullmatch(r"[+-]?[0-9]{1,3}", text) or not low <= int(text) <= high:
         print(f"[transcoder] {_CRF_OFFSET_ENV}={raw!r} is not a whole number of "
               f"quality steps between {low} and {high}; leaving the ladder's own "
               "quality", flush=True)
@@ -2434,13 +2445,21 @@ class FFmpegTranscoder(BaseTranscoder):
                         enc = "libx265" if family == "hevc" else "libx264"
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
                                        f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*2)"]
-                        if enc == "libx264":
+                        if enc == "libx264" and crf_offset < 0:
                             # Adaptive quantisation mode 3, "auto-variance with
                             # bias to dark scenes". x264's default is 1, plain
                             # variance AQ, which spends bits where there is
                             # detail -- and a dark gradient has none, so the
                             # area most likely to band is the one that gets
-                            # starved. Costs a few percent of bitrate.
+                            # starved.
+                            #
+                            # Only on a quality-raising offset, which is the
+                            # reason this exists: banding in dark gradients is
+                            # what an instance asks for quality for. At 0 --
+                            # unset, and the Balanced step -- the command stays
+                            # exactly main's, which is the upgrade promise, and
+                            # a positive offset is asking for smaller files,
+                            # not for more bits in the dark.
                             #
                             # libx264 only: `aq-mode` is a private option of
                             # that wrapper, ffmpeg's libx265 wrapper has no

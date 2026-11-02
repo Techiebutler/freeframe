@@ -13,10 +13,14 @@ from typing import Callable, Optional
 # Level 3 is 0, which is what every instance encoded at before this setting
 # existed, so an upgrade changes nothing until someone moves the slider. The
 # offsets are a shift of the active ladder, not an absolute CRF: on the default
-# 8-bit ladder -8 means CRF 16 / 18 / 22, while a 10-bit TRANSCODER_OUTPUT
-# already encodes 8 steps lower and so lands lower again. The compression steps
-# are deliberately smaller, because past about CRF 30 a review stream stops
-# being worth reviewing.
+# software x264 8-bit ladder -8 means CRF 16 / 18 / 22, while a 10-bit
+# TRANSCODER_OUTPUT already encodes 8 steps lower and so lands lower again, and
+# the hardware backends shift their own quality numbers by the same steps from
+# their own starting points. The compression steps are deliberately smaller
+# than the quality ones, because the top rung starts at CRF 24: +6 puts it at
+# 30, which is about as far as a review stream can go and still be worth
+# reviewing. The lower rungs go past that, at 32 and 36, as they already do
+# several steps earlier at the default.
 COMPRESSION_LEVELS: dict[int, int] = {
     1: -8,   # Highest quality
     2: -4,   # Higher quality

@@ -12,16 +12,34 @@ import pytest
 from apps.api.tests.test_source_copy import _transcode
 from apps.api.tests.test_transcoder_cpu_budget_applied import _ffmpeg_cmd_for
 from packages.transcoder.base import (
-    COMPRESSION_LEVELS, DEFAULT_COMPRESSION_LEVEL,
-    crf_offset_for_level, level_for_crf_offset,
+    COMPRESSION_LEVELS, crf_offset_for_level, level_for_crf_offset,
 )
 from packages.transcoder.ffmpeg_transcoder import (
     QUALITY_MAP, job_crf_offset, parse_crf_offset, shift_quality,
 )
 
 LADDER = ["1080p", "720p", "360p"]
-# What the 8-bit default path encodes at today: QUALITY_MAP plus four.
-BASELINE_8BIT = {q: QUALITY_MAP[q][1] + 4 for q in LADDER}
+
+# Every encoder option main builds for the default ladder, copied from
+# `packages/transcoder/ffmpeg_transcoder.py` on main rather than derived from
+# the code under test -- the point of the comparison is that this file does not
+# follow the branch. The upgrade promise is that an instance which has chosen
+# nothing still gets exactly this, so the whole run of options is pinned and
+# not only `-crf`, which is how an added `-aq-mode` slipped past.
+MAIN_DEFAULT_ENCODER_OPTIONS = [
+    "-map", "[1080p]",
+    "-c:v:0", "libx264", "-preset", "fast",
+    "-force_key_frames:v:0", "expr:gte(t,n_forced*2)",
+    "-pix_fmt:v:0", "yuv420p", "-crf:v:0", "24",
+    "-map", "[720p]",
+    "-c:v:1", "libx264", "-preset", "fast",
+    "-force_key_frames:v:1", "expr:gte(t,n_forced*2)",
+    "-pix_fmt:v:1", "yuv420p", "-crf:v:1", "26",
+    "-map", "[360p]",
+    "-c:v:2", "libx264", "-preset", "fast",
+    "-force_key_frames:v:2", "expr:gte(t,n_forced*2)",
+    "-pix_fmt:v:2", "yuv420p", "-crf:v:2", "30",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +59,9 @@ def _values_for(cmd: list[str], option: str) -> dict[str, str]:
     ("13", 0, True), ("-80", 0, True),   # outside the range this setting allows
     ("better", 0, True), ("-1.5", 0, True), ("1500k", 0, True),
     ("１２", 0, True),                     # non-ASCII digits: int() reads them, ffmpeg does not
+    # A pasted wall of digits: int() itself raises past about 4300 of them,
+    # where nothing would catch it.
+    pytest.param("9" * 4400, 0, True, id="4400-digits"),
 ])
 def test_the_value_is_read_as_steps_or_logged_and_ignored(raw, expected, logged, capsys):
     # Falling back is not enough on its own: the operator has to be able to find
@@ -78,17 +99,19 @@ def test_every_step_shifts_every_rung_of_every_backend(backend, option, level):
     assert [t for t in after if ":" not in t] == []
 
 
-def test_the_default_step_leaves_the_ladder_exactly_as_it_was(monkeypatch):
-    # The upgrade promise, at the level of the command: level 3 and an instance
-    # that has chosen nothing have to produce the CRFs the ladder produced
-    # before this setting existed.
-    expected = {f"-crf:v:{i}": str(BASELINE_8BIT[q]) for i, q in enumerate(LADDER)}
+@pytest.mark.parametrize("crf_offset", [None, 0])
+def test_an_instance_that_has_chosen_nothing_gets_the_command_main_built(crf_offset):
+    # The upgrade promise, at the level of the command. `None` is an instance
+    # that has never touched the setting, `0` is the Balanced step, which is a
+    # real choice of "what this always did"; both have to come out as main's
+    # encoder options, token for token. Compared against a literal rather than
+    # against the ladder's own numbers, because a comparison derived from this
+    # branch cannot show a difference against main -- that is how the
+    # unconditional `-aq-mode` got through.
+    cmd = _ffmpeg_cmd_for(LADDER, crf_offset=crf_offset)
+    start = cmd.index("-map")
 
-    assert _values_for(_ffmpeg_cmd_for(LADDER), "-crf") == expected
-    assert _values_for(
-        _ffmpeg_cmd_for(LADDER, crf_offset=crf_offset_for_level(DEFAULT_COMPRESSION_LEVEL)),
-        "-crf",
-    ) == expected
+    assert cmd[start:cmd.index("-f", start)] == MAIN_DEFAULT_ENCODER_OPTIONS
 
 
 def test_the_ten_bit_path_is_shifted_too(monkeypatch):
@@ -102,21 +125,33 @@ def test_the_ten_bit_path_is_shifted_too(monkeypatch):
     }
 
 
-@pytest.mark.parametrize("backend,output,expected", [
-    (None, "h264_8", {f"-aq-mode:v:{i}": "3" for i in range(len(LADDER))}),
-    (None, "h265_10", {}),   # `aq-mode` is a private option of the libx264 wrapper
-    ("nvenc", "h264_8", {}), # the hardware encoders quantise on the device
-    ("qsv", "h264_8", {}),
-    ("vaapi", "h264_8", {}),
+@pytest.mark.parametrize("backend,output,offset,env,on", [
+    (None, "h264_8", -4, None, True),     # a quality-raising step turns it on
+    (None, "h264_8", None, "-4", True),   # from the environment just the same
+    (None, "h264_8", None, None, False),  # unset: main's command, token for token
+    (None, "h264_8", 0, None, False),     # Balanced is a real choice of "as before"
+    (None, "h264_8", 6, None, False),     # smaller files is not asking for more bits
+    (None, "h265_10", -4, None, False),   # `aq-mode` is private to the libx264 wrapper
+    ("nvenc", "h264_8", -4, None, False),  # the hardware encoders quantise on the device
+    ("qsv", "h264_8", -4, None, False),
+    ("vaapi", "h264_8", -4, None, False),
 ])
-def test_the_dark_scene_aq_mode_is_libx264_only(backend, output, expected, monkeypatch):
-    # Mode 3 biases bits toward dark areas, which is where banding shows. It
-    # belongs to ffmpeg's libx264 wrapper alone: the libx265 wrapper has no such
-    # option (x265's lives behind `-x265-params`) and an option a codec does not
-    # know is not reliably just a warning.
+def test_the_dark_scene_aq_mode_rides_on_a_quality_raising_step(
+    backend, output, offset, env, on, monkeypatch
+):
+    # Mode 3 biases bits toward dark areas, which is where banding shows, so it
+    # belongs with the steps an instance moves to for exactly that reason -- and
+    # nowhere else: at an effective offset of 0 the command has to stay the one
+    # main builds, or an upgrade changes every CPU-only install's output. It
+    # also belongs to ffmpeg's libx264 wrapper alone: the libx265 wrapper has no
+    # such option (x265's lives behind `-x265-params`) and an option a codec
+    # does not know is not reliably just a warning.
     monkeypatch.setenv("TRANSCODER_OUTPUT", output)
-    cmd = _ffmpeg_cmd_for(LADDER, backend=backend)
+    if env is not None:
+        monkeypatch.setenv("TRANSCODER_CRF_OFFSET", env)
+    cmd = _ffmpeg_cmd_for(LADDER, backend=backend, crf_offset=offset)
 
+    expected = {f"-aq-mode:v:{i}": "3" for i in range(len(LADDER))} if on else {}
     assert _values_for(cmd, "-aq-mode") == expected
 
 
