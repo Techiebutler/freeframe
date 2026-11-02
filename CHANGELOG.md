@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **J, K and L shuttle the video player like an edit suite.** L plays forward and each further press goes faster (2x, 4x, 8x); J does the same in reverse; K stops. Pressing the opposite key switches direction at 1x. J and L used to jump 10 seconds; the arrow keys still jump 5. (#589 by @jdanna)
 
 ### Fixed
+- **Bucket CORS `AllowedHeaders` are now lowercase, so presigned uploads work on Garage.** Browsers lowercase every header name in `Access-Control-Request-Headers`, and Garage compares the bucket's allowed headers case-sensitively, so a rule listing `Content-Type` rejected the preflight of every upload that signs a content type (the branding logo upload, for example). The automatic bucket setup, the CORS JSON in `docs/deployment.md` and the installer's printout for an own AWS bucket now all use lowercase names; backends that compare case-insensitively (AWS S3, MinIO) behave exactly as before.
 - **Compare's comment panels no longer re-render on every playback frame, and annotation and timecode buttons pause playback again.** Comment updates and pane-local seeking remain live. (#170, #582 by @WhyTan00)
 
 ## [1.22.0] - 2026-10-29

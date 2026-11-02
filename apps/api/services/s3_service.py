@@ -227,9 +227,15 @@ def ensure_bucket_exists():
                             # browser upload + multipart flows actually send.
                             # Silo and Garage enforce this list: a new header
                             # the browser sends to storage must be added here.
+                            # Lowercase only: browsers lowercase every name in
+                            # Access-Control-Request-Headers (Fetch spec) and
+                            # Garage compares these by plain string equality,
+                            # so "Content-Type" never matches the
+                            # "content-type" a presigned PUT asks for. AWS S3
+                            # and MinIO match case-insensitively.
                             "AllowedHeaders": [
-                                "Content-Type",
-                                "Content-MD5",
+                                "content-type",
+                                "content-md5",
                                 "x-amz-content-sha256",
                                 "x-amz-date",
                                 "x-amz-decoded-content-length",
