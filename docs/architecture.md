@@ -176,9 +176,10 @@ Share Link (unauthenticated access, by token)
 └── view     ── read-only
 ```
 
-`User.is_superadmin` is a separate, instance-level flag covering user administration only:
-invite, deactivate, role change, first-run setup. It grants **no** content access and is not
-consulted when resolving asset permissions.
+`User.is_superadmin` is a separate, instance-level flag. It covers user administration (invite,
+deactivate, role change, first-run setup) and the admin panel's Storage tab, where it lists every
+project's files by name and size, moves them to the trash, restores them and deletes them
+permanently. It is not consulted when resolving asset permissions, so it does not open media.
 
 **Asset access** is resolved by `can_access_asset` in `apps/api/services/permissions.py`, which
 returns true on the first of these that matches:
@@ -252,7 +253,8 @@ review workflow.
 `Notification` and `ActivityLog`. Nothing filters the column automatically — every query does
 it by hand. Soft deletion is also not permanent: `tasks/cleanup_tasks.py` hard-deletes
 soft-deleted rows and reclaims their S3 objects after `SOFT_DELETE_RETENTION_DAYS`
-(default 30).
+(default 30), and an admin can do the same earlier for chosen items from the trash
+(`POST /admin/trash/purge`).
 
 Key entity relationships:
 
@@ -324,7 +326,8 @@ whose version is in `processing` or `ready` — the original (`file_size_bytes`)
 transcode wrote for it (`derived_size_bytes`). An `uploading` or `failed` version is not counted,
 because its bytes are not (reliably) in the bucket. **The trash is counted**, because deleting is
 not freeing: a soft-deleted project, asset or version keeps its objects until the retention
-collector removes them. The admin overview, the member indicator on `GET /instance/settings`,
+collector removes them, or until an admin deletes it permanently from the trash
+(`POST /admin/trash/purge`). The admin overview, the member indicator on `GET /instance/settings`,
 the per-project figures and the upload guard are all that one sum, so no surface can report
 space as free that the next upload is refused for.
 
