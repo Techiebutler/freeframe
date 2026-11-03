@@ -32,6 +32,12 @@ from packages.transcoder.ffmpeg_transcoder import QUALITY_MAP
 LADDER = ["1080p", "720p", "360p"]
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_offset(monkeypatch):
+    """The baselines below are literal; `TRANSCODER_CRF_OFFSET` shifts them."""
+    monkeypatch.delenv("TRANSCODER_CRF_OFFSET", raising=False)
+
+
 def _values_for(cmd: list[str], option: str) -> dict[str, str]:
     """Every `{option}...` token in `cmd`, mapped to the value that follows it."""
     return {t: cmd[i + 1] for i, t in enumerate(cmd) if t.split(":")[0] == option}
