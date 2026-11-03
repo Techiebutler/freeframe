@@ -47,6 +47,20 @@ def _mock_project_member(project_id: uuid.UUID, user_id: uuid.UUID, role: Projec
     return m
 
 
+def _with_joins(mock_db):
+    """Let the mock session answer a join.
+
+    These routes go through `services.permissions`, whose membership lookup
+    joins `projects` so a deleted project has no members. `conftest`'s mock
+    session only chains `query`/`filter`, so an unconfigured `join` returns a
+    fresh MagicMock and the lookup answers with a truthy mock instead of
+    reaching the `first()` side effect below.
+    """
+    mock_db.join.return_value = mock_db
+    mock_db.outerjoin.return_value = mock_db
+    return mock_db
+
+
 def test_create_project(client, auth_headers, mock_db, test_user):
     """POST /projects — happy path returns 201."""
     org_id = uuid.uuid4()
@@ -93,6 +107,8 @@ def test_get_project(client, auth_headers, mock_db, test_user):
     proj = _mock_project(org_id, test_user.id)
     member = _mock_project_member(proj.id, test_user.id)
 
+    _with_joins(mock_db)
+
     call_count = 0
 
     def _first_side_effect():
@@ -112,6 +128,8 @@ def test_get_project_not_member(client, auth_headers, mock_db, test_user):
     """GET /projects/{project_id} — 403 if user is not a member."""
     org_id = uuid.uuid4()
     proj = _mock_project(org_id, test_user.id)
+
+    _with_joins(mock_db)
 
     call_count = 0
 
@@ -134,6 +152,8 @@ def test_delete_project(client, auth_headers, mock_db, test_user):
     proj = _mock_project(org_id, test_user.id)
     member = _mock_project_member(proj.id, test_user.id, ProjectRole.owner)
 
+    _with_joins(mock_db)
+
     call_count = 0
 
     def _first_side_effect():
@@ -154,6 +174,8 @@ def test_update_project(client, auth_headers, mock_db, test_user):
     org_id = uuid.uuid4()
     proj = _mock_project(org_id, test_user.id, "Old Name")
     member = _mock_project_member(proj.id, test_user.id, ProjectRole.owner)
+
+    _with_joins(mock_db)
 
     call_count = 0
 

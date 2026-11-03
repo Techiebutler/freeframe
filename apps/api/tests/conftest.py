@@ -152,3 +152,212 @@ def real_db():
         session.close()
         trans.rollback()
         conn.close()
+
+# ── real-Postgres harness for the storage and admin panel tests ───────────────
+#
+# A grouped SUM over joins is the feature in those files and the mock session
+# cannot execute one. Shared harness: a real session whose commit stays inside
+# the test's transaction, a way to sign somebody in against it, a row factory,
+# and the panel helpers each of those files would otherwise copy.
+
+@pytest.fixture
+def live_db(real_db, monkeypatch):
+    """`real_db` whose `commit()` is a flush, so endpoint writes stay in the
+    test's transaction and are rolled back with it."""
+    monkeypatch.setattr(real_db, "commit", real_db.flush)
+    return real_db
+
+
+@pytest.fixture
+def as_user(live_db):
+    """Sign a user in against `live_db` and hand back a TestClient for them."""
+    from fastapi.testclient import TestClient
+    from apps.api.database import get_db
+    from apps.api.middleware.auth import get_current_user
+
+    with patch("apps.api.services.s3_service.ensure_bucket_exists"), \
+         patch("apps.api.services.s3_service.get_s3_client", return_value=MagicMock()):
+        from apps.api.main import app
+
+        def _sign_in(user):
+            app.dependency_overrides[get_db] = lambda: live_db
+            app.dependency_overrides[get_current_user] = lambda: user
+            return TestClient(app, raise_server_exceptions=False)
+
+        yield _sign_in
+        app.dependency_overrides.clear()
+
+
+class MediaSeed:
+    """Factories for the rows the storage and admin panel tests measure."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def user(self, superadmin=False, name="person", deleted=False):
+        from apps.api.models.user import User
+        u = User(
+            email=f"seed-{uuid.uuid4()}@test.local", name=name, is_superadmin=superadmin,
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        self.db.add(u)
+        self.db.flush()
+        return u
+
+    def project(self, owner, name="theirs", deleted=False, members=True, public=False):
+        from apps.api.models.project import Project, ProjectMember, ProjectRole, ProjectType
+        p = Project(
+            name=name, project_type=ProjectType.personal, created_by=owner.id, is_public=public,
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        self.db.add(p)
+        self.db.flush()
+        if members:
+            self.db.add(ProjectMember(project_id=p.id, user_id=owner.id, role=ProjectRole.owner))
+            self.db.flush()
+        return p
+
+    def member(self, project, user, role=None):
+        from apps.api.models.project import ProjectMember, ProjectRole
+        m = ProjectMember(
+            project_id=project.id, user_id=user.id, role=role or ProjectRole.viewer,
+        )
+        self.db.add(m)
+        self.db.flush()
+        return m
+
+    def folder(self, project, owner, name="shots", parent=None, deleted=False):
+        from apps.api.models.folder import Folder
+        f = Folder(
+            project_id=project.id, name=name, created_by=owner.id,
+            parent_id=parent.id if parent else None,
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        self.db.add(f)
+        self.db.flush()
+        return f
+
+    def asset(self, project, owner, name="clip", deleted=False, folder=None):
+        from apps.api.models.asset import Asset, AssetType
+        a = Asset(
+            project_id=project.id, name=name, asset_type=AssetType.video, created_by=owner.id,
+            folder_id=folder.id if folder else None,
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        self.db.add(a)
+        self.db.flush()
+        return a
+
+    def version(
+        self, asset, owner, number=1, original=1_000, derived: int | None = 0,
+        status=None, filename=None, deleted=False, s3_keys=False,
+    ):
+        """One version of `asset` plus the media file that carries its bytes."""
+        from apps.api.models.asset import (
+            AssetVersion, FileType, MediaFile, ProcessingStatus,
+        )
+        v = AssetVersion(
+            asset_id=asset.id, version_number=number,
+            processing_status=status or ProcessingStatus.ready, created_by=owner.id,
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        self.db.add(v)
+        self.db.flush()
+        extra = {}
+        if s3_keys:
+            extra = {
+                "s3_key_processed": f"processed/{v.id}/",
+                "s3_key_thumbnail": f"processed/{v.id}/poster.jpg",
+            }
+        mf = MediaFile(
+            version_id=v.id, file_type=FileType.video,
+            original_filename=filename or f"v{number}.mp4", mime_type="video/mp4",
+            file_size_bytes=original, s3_key_raw=f"raw/{v.id}",
+            derived_size_bytes=derived, **extra,
+        )
+        self.db.add(mf)
+        self.db.flush()
+        return v, mf
+
+    def media(
+        self, project, owner, name="clip", versions=1, original=1_000,
+        derived: int | None = 0, s3_keys=True, folder=None, status=None,
+    ):
+        """An asset holding `versions` ready versions of the given size each."""
+        a = self.asset(project, owner, name=name, folder=folder)
+        for n in range(1, versions + 1):
+            self.version(a, owner, number=n, original=original, derived=derived,
+                         filename=f"{name}-v{n}.mp4", s3_keys=s3_keys, status=status)
+        return a
+
+    def versions_of(self, asset):
+        """Every version row of `asset`, oldest first."""
+        from apps.api.models.asset import AssetVersion
+        return (
+            self.db.query(AssetVersion)
+            .filter(AssetVersion.asset_id == asset.id)
+            .order_by(AssetVersion.version_number)
+            .all()
+        )
+
+    def limit(self, cap: int) -> None:
+        """Set the instance storage cap the upload guard enforces."""
+        from apps.api.models.instance_settings import InstanceSettings
+        row = self.db.query(InstanceSettings).first()
+        if row is None:
+            self.db.add(InstanceSettings(storage_limit_bytes=cap))
+        else:
+            row.storage_limit_bytes = cap
+        self.db.flush()
+
+    def trash(self, *rows) -> None:
+        """Soft-delete anything already seeded."""
+        for row in rows:
+            row.deleted_at = datetime.now(timezone.utc)
+        self.db.flush()
+
+
+@pytest.fixture
+def seed(live_db):
+    """Row factory bound to `live_db`; see `MediaSeed`."""
+    return MediaSeed(live_db)
+
+
+@pytest.fixture
+def admin(seed):
+    """The one superadmin the panel tests sign in as."""
+    return seed.user(superadmin=True, name="Ada Admin")
+
+
+@pytest.fixture
+def s3(monkeypatch):
+    """Record every object-store call the purge cascade makes, patched on
+    `tasks.cleanup_tasks`, which is where the cascade reaches for them."""
+    calls = {"delete_object": [], "delete_prefix": [], "abort": []}
+    import apps.api.tasks.cleanup_tasks as ct
+    monkeypatch.setattr(ct, "delete_object", lambda k: calls["delete_object"].append(k))
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: calls["delete_prefix"].append(k))
+    monkeypatch.setattr(ct, "abort_multipart_upload", lambda k, u: calls["abort"].append(k))
+    return calls
+
+
+class _Panel:
+    """The two panel reads the delete and purge tests quote their figures from."""
+
+    @staticmethod
+    def summary(client):
+        return client.get("/admin/storage").json()["summary"]
+
+    @staticmethod
+    def trash_counts(client):
+        """The count and byte figures the purge dialog would echo back."""
+        body = client.get("/admin/trash").json()
+        return {
+            "confirm_count": len(body["projects"]) + len(body["assets"]) + len(body["versions"]),
+            "confirm_bytes": body["total_bytes"],
+        }
+
+
+@pytest.fixture
+def panel():
+    return _Panel()

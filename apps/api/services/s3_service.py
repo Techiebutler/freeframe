@@ -49,6 +49,17 @@ _INITIATE_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total
 # either way, so the next sweep no longer selects it.
 _ABORT_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 2})
 
+# The storage measurement's prefix listings (`prefix_size_bytes`). One
+# ListObjectsV2 per version, called once at the end of a transcode and in a loop
+# of thousands by the backfill, so a store that hangs rather than refuses must
+# fail the one listing instead of holding a finished transcode, or the whole
+# backfill, open for boto3's default ~60 s per attempt with five attempts behind
+# it. Every caller has a defined behaviour for "could not find out": the column
+# stays NULL, the figure reports the file as unmeasured, and the backfill stops
+# after MAX_CONSECUTIVE_LISTING_FAILURES of them. ListObjectsV2 is a read, so
+# the first request and two retries are safe to spend on a slow store.
+_LISTING_S3_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 3})
+
 # S3 Content-Type and Cache-Control mappings
 CONTENT_TYPE_MAP = {
     ".m3u8": ("application/vnd.apple.mpegurl", "no-cache"),
@@ -136,6 +147,16 @@ def _get_abort_client():
     CompleteMultipartUpload stays on the long timeouts it legitimately needs.
     """
     return _build_s3_client(_ABORT_S3_CONFIG)
+
+@lru_cache(maxsize=1)
+def _get_listing_client():
+    """Client for the storage measurement's prefix listings (see _LISTING_S3_CONFIG).
+
+    Separate from `get_s3_client` so bounding these listings does not bound the
+    calls that legitimately take minutes, and so the orphan sweep's own listings
+    keep the client they have always used.
+    """
+    return _build_s3_client(_LISTING_S3_CONFIG)
 
 @lru_cache(maxsize=1)
 def _get_presign_client():
@@ -670,9 +691,13 @@ def list_stale_multipart_uploads(cutoff):
     return stale
 
 
-def list_keys(prefix: str):
-    """Yield (key, last_modified, size) for every object under `prefix`, paginated."""
-    s3 = get_s3_client()
+def list_keys(prefix: str, client=None):
+    """Yield (key, last_modified, size) for every object under `prefix`, paginated.
+
+    `client` overrides the shared client, for a caller that needs bounded
+    timeouts; the orphan sweep keeps the shared one it has always used.
+    """
+    s3 = client if client is not None else get_s3_client()
     kwargs = {"Bucket": settings.s3_bucket, "Prefix": prefix}
     while True:
         resp = s3.list_objects_v2(**kwargs)
@@ -682,6 +707,25 @@ def list_keys(prefix: str):
             kwargs["ContinuationToken"] = resp.get("NextContinuationToken")
         else:
             break
+
+
+def prefix_size_bytes(prefix: str) -> int:
+    """Total bytes of every object under `prefix` (a single key is its own prefix).
+
+    One listing, which is the whole point: the transcode calls this once when a
+    job finishes and the figure is stored on the media file, so the storage
+    overview never lists the bucket on a page view. Also used by the backfill
+    task for rows written before that column existed.
+
+    On the bounded listing client (`_LISTING_S3_CONFIG`), because both callers
+    can carry on without an answer and neither can afford to wait on a store
+    that hangs: the transcode has already written its output, and the backfill
+    has thousands more rows behind this one.
+    """
+    return sum(
+        size for _key, _modified, size
+        in list_keys(prefix, client=_get_listing_client())
+    )
 
 
 def delete_prefix(prefix: str) -> None:

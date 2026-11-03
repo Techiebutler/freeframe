@@ -33,6 +33,10 @@ from ..services.folder_paths import (
     ensure_folder_paths,
     lock_project_folders,
 )
+from ..services.restore_rules import (
+    restore_asset_row,
+    was_ever_usable,
+)
 from ..services.permissions import (
     folder_chain_is_live,
     require_project_role,
@@ -542,39 +546,6 @@ def bulk_move(
 # ─── Trash & Restore ─────────────────────────────────────────────────────────
 
 
-def _was_ever_usable():
-    """Whether an asset ever had a version that got as far as `processing`.
-
-    A deleted asset that never did is not deleted work. It is an upload that was
-    discarded or reclaimed before it landed, soft-deleted by
-    `_strip_asset_with_no_versions` so it stops showing in the grid. Listed in
-    the trash it sits among the things people actually deleted, and restoring it
-    brings back the card that helper exists to remove: one that cannot be
-    opened, streamed or given a version.
-
-    `failed` counts. The question is how far the version ever got, not where it
-    stopped, and a failed transcode got as far as being dispatched: the bytes
-    landed, the asset carries a red Failed badge in the grid, and deleting it is
-    someone deleting their own work. Leaving it out took a restorable asset out
-    of the trash entirely and made restore answer 404. `uploading` is the one
-    status this excludes, and it is the one the helper was written for.
-
-    A version keeps its status when it is soft-deleted, so this still holds for
-    an asset whose versions went into the trash with it.
-    """
-    return (
-        select(AssetVersion.id)
-        .where(
-            AssetVersion.asset_id == Asset.id,
-            AssetVersion.processing_status.in_(
-                [ProcessingStatus.processing, ProcessingStatus.ready,
-                 ProcessingStatus.failed]
-            ),
-        )
-        .exists()
-    )
-
-
 def _can_restore_folder_asset():
     """Whether a folder cascade may restore usable work or a live upload."""
     has_live_version = (
@@ -585,7 +556,7 @@ def _can_restore_folder_asset():
         )
         .exists()
     )
-    return or_(_was_ever_usable(), has_live_version)
+    return or_(was_ever_usable(), has_live_version)
 
 
 @router.get("/projects/{project_id}/trash", response_model=dict)
@@ -612,7 +583,7 @@ def list_trash(
         .filter(
             Asset.project_id == project_id,
             Asset.deleted_at.isnot(None),
-            _was_ever_usable(),
+            was_ever_usable(),
         )
         .order_by(Asset.deleted_at.desc())
         .offset(skip)
@@ -651,7 +622,7 @@ def restore_asset(
     current_user: User = Depends(get_current_user),
 ):
     asset = db.query(Asset).filter(
-        Asset.id == asset_id, Asset.deleted_at.isnot(None), _was_ever_usable(),
+        Asset.id == asset_id, Asset.deleted_at.isnot(None), was_ever_usable(),
     ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Deleted asset not found")
@@ -664,23 +635,12 @@ def restore_asset(
     if project is None or project.deleted_at is not None:
         raise HTTPException(status_code=409, detail="Cannot restore: the project has been deleted")
 
-    # If parent folder is deleted, move to root
-    folder_id = asset.folder_id
-    if folder_id:
-        parent_folder = (
-            db.query(Folder)
-            .filter(Folder.id == folder_id, Folder.deleted_at.is_(None))
-            .first()
-        )
-        if not parent_folder:
-            folder_id = None
-
-    # Guarded on the row still being in the trash. The retention purge may have locked and
-    # hard-deleted it since it was read above; then nothing matches and the asset is gone.
-    restored = db.query(Asset).filter(
-        Asset.id == asset_id, Asset.deleted_at.isnot(None),
-    ).update({"deleted_at": None, "folder_id": folder_id}, synchronize_session="fetch")
-    if not restored:
+    # Everything about *how* it comes back is one rule, shared with the admin
+    # panel's bulk restore: a trashed folder means root, and an upload that was
+    # never usable work does not come back at all. The two used to differ, and
+    # the panel's version left the asset naming a trashed folder, where the
+    # retention collector hard-deleted it. See `services/restore_rules`.
+    if not restore_asset_row(db, asset_id):
         db.rollback()
         raise HTTPException(status_code=404, detail="Deleted asset not found")
     db.commit()
