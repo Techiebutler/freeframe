@@ -18,11 +18,6 @@ import type { User, UserStatus } from "@/types";
 import { InstanceSettingsTab } from "@/components/settings/instance-settings-tab";
 import { BrandingTab } from "@/components/settings/branding-tab";
 import { StorageTab } from "@/components/settings/storage-tab";
-import {
-  AdminExternalTab,
-  AdminInternalTab,
-  AdminProjectsTab,
-} from "@/components/settings/admin-tabs";
 
 // The API requires a name and the dialog doesn't ask for one, so each invitee
 // is listed under the local part of their address until they accept the invite
@@ -217,9 +212,6 @@ function userStatusBadge(status: UserStatus) {
 const TABS = [
   ["users", "Users"],
   ["storage", "Storage"],
-  ["projects", "Projects"],
-  ["internal", "Internal shared"],
-  ["external", "External shared"],
   ["instance", "Instance settings"],
   ["branding", "Branding"],
 ] as const;
@@ -230,9 +222,6 @@ type AdminTab = (typeof TABS)[number][0];
 const SUBTITLE: Record<AdminTab, string> = {
   users: "Manage platform users",
   storage: "See what takes up space, and clear it out",
-  projects: "Every project on this instance",
-  internal: "Who inside this instance can reach which project",
-  external: "What is reachable from outside right now",
   instance: "Configure this instance",
   branding: "Make this instance look like yours",
 };
@@ -395,9 +384,6 @@ export default function AdminPage() {
       {tab === "instance" && <InstanceSettingsTab />}
       {tab === "branding" && <BrandingTab />}
       {tab === "storage" && <StorageTab />}
-      {tab === "projects" && <AdminProjectsTab />}
-      {tab === "internal" && <AdminInternalTab />}
-      {tab === "external" && <AdminExternalTab />}
 
       {/* User management */}
       {tab === "users" && (

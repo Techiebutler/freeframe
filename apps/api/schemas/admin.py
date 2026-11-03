@@ -87,65 +87,6 @@ class StorageProjectFilesResponse(BaseModel):
 # ── Projects ──────────────────────────────────────────────────────────────────
 
 
-class AdminProjectRow(BaseModel):
-    project_id: uuid.UUID
-    name: str
-    #: Presigned the same way the projects page presigns it, so the grid view
-    #: draws the picture a project already has. None means no poster was set and
-    #: the card falls back to the gradient its id picks, as everywhere else.
-    poster_url: str | None
-    member_count: int
-    total_bytes: int
-    last_activity_at: datetime | None
-
-
-# ── Internal sharing ──────────────────────────────────────────────────────────
-
-
-class InternalSharePerson(BaseModel):
-    user_id: uuid.UUID
-    name: str
-    email: str
-    #: Carried so the grouped card draws the same avatar as the rest of the app
-    #: rather than a second way of showing a person.
-    avatar_url: str | None = None
-    avatar_color: str | None = None
-    role: str
-
-
-class InternalShareRow(BaseModel):
-    project_id: uuid.UUID
-    project_name: str
-    people: list[InternalSharePerson]
-    #: False when every member of this project has been deleted as a user. The
-    #: project still appears, because it is still a project whose access an
-    #: administrator may have to repair; the tab says so in a sentence rather
-    #: than drawing an empty space under a name.
-    has_live_people: bool = True
-
-
-# ── External sharing ──────────────────────────────────────────────────────────
-
-
-class ExternalShareRow(BaseModel):
-    #: The token is the link. It is returned because revoking needs it, and the
-    #: endpoint is superadmin-only for the same reason.
-    token: str
-    #: "project" | "folder" | "asset"
-    kind: str
-    what: str
-    title: str | None
-    permission: str
-    allow_download: bool
-    has_password: bool
-    expires_at: datetime | None
-    created_by_name: str | None
-    created_at: datetime | None
-
-
-# ── Delete, trash, restore ────────────────────────────────────────────────────
-
-
 class AdminDeleteRequest(BaseModel):
     """A confirmed bulk delete.
 

@@ -10,7 +10,6 @@ import {
   SegmentRow,
   SelectRow,
   ToggleRow as BaseToggleRow,
-  type SegmentOption,
 } from '@/components/ui/setting-controls'
 import {
   useViewStore,
@@ -26,24 +25,15 @@ export function ToggleRow(props: Omit<React.ComponentProps<typeof BaseToggleRow>
   return <BaseToggleRow {...props} tone="overlay" />
 }
 
-/**
- * The grid/list switch's options: the one definition in the app.
- *
- * The folder view's popover, the projects page's popover and the admin panel's
- * tabs all build their switch from this, so the two icons, their order and
- * their labels cannot drift apart between the three places.
- */
-export const LAYOUT_OPTIONS: SegmentOption<ViewLayout>[] = [
-  { value: 'grid', icon: <LayoutGrid className="h-3.5 w-3.5" />, ariaLabel: 'Grid' },
-  { value: 'list', icon: <List className="h-3.5 w-3.5" />, ariaLabel: 'List' },
-]
-
 export function LayoutRow({ value, onChange }: { value: ViewLayout; onChange: (v: ViewLayout) => void }) {
   return (
     <SegmentRow<ViewLayout>
       label="Layout"
       tone="overlay"
-      options={LAYOUT_OPTIONS}
+      options={[
+        { value: 'grid', icon: <LayoutGrid className="h-3.5 w-3.5" />, ariaLabel: 'Grid' },
+        { value: 'list', icon: <List className="h-3.5 w-3.5" />, ariaLabel: 'List' },
+      ]}
       value={value}
       onChange={onChange}
     />

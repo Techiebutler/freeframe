@@ -125,51 +125,6 @@ export interface StorageProjectFiles {
   assets: StorageAssetRow[];
 }
 
-export interface AdminProjectRow {
-  project_id: string;
-  name: string;
-  /** The project's poster, presigned, or null. The card falls back to the
-   *  gradient the project id picks, exactly as everywhere else in the app. */
-  poster_url: string | null;
-  member_count: number;
-  total_bytes: number;
-  last_activity_at: string | null;
-}
-
-export interface InternalSharePerson {
-  user_id: string;
-  name: string;
-  email: string;
-  /** So a grouped card draws the same avatar the rest of the app draws. */
-  avatar_url: string | null;
-  avatar_color: string | null;
-  role: string;
-}
-
-export interface InternalShareRow {
-  project_id: string;
-  project_name: string;
-  people: InternalSharePerson[];
-  /** False when every member of this project has been deleted as a user. The
-   *  project still appears, because its access is still an administrator's to
-   *  repair, and the block says so instead of standing empty. */
-  has_live_people: boolean;
-}
-
-export interface ExternalShareRow {
-  token: string;
-  /** "project" | "folder" | "asset" */
-  kind: string;
-  what: string;
-  title: string | null;
-  permission: string;
-  allow_download: boolean;
-  has_password: boolean;
-  expires_at: string | null;
-  created_by_name: string | null;
-  created_at: string | null;
-}
-
 export interface AdminDeleteResponse {
   deleted_projects: number;
   deleted_assets: number;

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { cleanup, render, screen, fireEvent } from '@testing-library/react'
 
-// The four panel surfaces sit where the other instance-wide admin surfaces sit:
-// sub-tabs of the Admin dashboard, each reachable by deep link like the others.
+// The Storage panel sits where the other instance-wide admin surfaces sit: a
+// sub-tab of the Admin dashboard, reachable by deep link like the others.
 
 vi.mock('swr', () => ({
   default: () => ({ data: [], isLoading: false }),
@@ -17,24 +17,11 @@ vi.mock('@/components/settings/branding-tab', () => ({ BrandingTab: () => null }
 vi.mock('@/components/settings/storage-tab', () => ({
   StorageTab: () => <div data-testid="storage-tab" />,
 }))
-vi.mock('@/components/settings/admin-tabs', () => ({
-  AdminProjectsTab: () => <div data-testid="projects-tab" />,
-  AdminInternalTab: () => <div data-testid="internal-tab" />,
-  AdminExternalTab: () => <div data-testid="external-tab" />,
-}))
 
 import AdminPage from '../page'
 import { useAuthStore } from '@/stores/auth-store'
 
-/** label, the stub it renders, and the ?tab= slug that deep-links to it. */
-const TABS = [
-  ['Storage', 'storage-tab', 'storage'],
-  ['Projects', 'projects-tab', 'projects'],
-  ['Internal shared', 'internal-tab', 'internal'],
-  ['External shared', 'external-tab', 'external'],
-] as const
-
-describe('the Admin dashboard panel tabs', () => {
+describe('the Admin dashboard Storage tab', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/settings/admin')
     useAuthStore.setState({
@@ -43,21 +30,21 @@ describe('the Admin dashboard panel tabs', () => {
     })
   })
 
-  it.each(TABS)('offers the %s tab, on click and by deep link', (label, testId, slug) => {
+  it('offers the Storage tab, on click and by deep link', () => {
     render(<AdminPage />)
-    expect(screen.queryByTestId(testId)).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: label }))
-    expect(screen.getByTestId(testId)).toBeInTheDocument()
+    expect(screen.queryByTestId('storage-tab')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Storage' }))
+    expect(screen.getByTestId('storage-tab')).toBeInTheDocument()
 
     // Unmounted first: with the clicked render still on screen the deep-link
     // assertion below could not fail, whatever the second render did.
     cleanup()
-    window.history.replaceState({}, '', `/settings/admin?tab=${slug}`)
+    window.history.replaceState({}, '', '/settings/admin?tab=storage')
     render(<AdminPage />)
-    expect(screen.getByTestId(testId)).toBeInTheDocument()
+    expect(screen.getByTestId('storage-tab')).toBeInTheDocument()
   })
 
-  it('offers none of them to a non-admin, and ignores a tab name it does not have', () => {
+  it('offers it to no non-admin, and ignores a tab name it does not have', () => {
     window.history.replaceState({}, '', '/settings/admin?tab=nonsense')
     render(<AdminPage />)
     // Falls back to Users rather than rendering a blank panel.
@@ -65,8 +52,6 @@ describe('the Admin dashboard panel tabs', () => {
 
     useAuthStore.setState({ isSuperAdmin: false })
     render(<AdminPage />)
-    for (const [label] of TABS) {
-      expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument()
-    }
+    expect(screen.queryByRole('button', { name: 'Storage' })).not.toBeInTheDocument()
   })
 })
