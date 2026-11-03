@@ -46,7 +46,7 @@ from ..models.checklist_binding import ChecklistBinding
 from ..services.checklists import reserve_binding, binding_out, dispatch_binding
 from ..services import review_bridge
 from ..services.briefing import docx_text, MAX_DOCUMENT_BASE64, validate_briefing_text
-from ..services.review_timing import adopt_signed_in_upload, freeze_submission_timing
+from ..services.review_timing import adopt_signed_in_upload, freeze_submission_timing, reopen_request
 from ..services.iteration_requests import request_fields, components, upload_slot, bind_upload, revision_target, stored_upload
 from ..services.permissions import effective_project_role, require_project_role
 from ..services.s3_service import (
@@ -312,8 +312,7 @@ def folder_editor_request(folder_id: uuid.UUID, db: Session = Depends(get_db),
             for version in versions:
                 adopt_signed_in_upload(db, req, asset.id, version)
                 if req.completion_versions and req.completion_versions.get(str(asset.id)) != str(version.id) and version == max(versions, key=lambda v: v.version_number):
-                    req.completed_at = None
-                    req.completion_versions = None
+                    reopen_request(req)
     db.commit()
     return _request_out(req, project, binding=binding)
 
@@ -507,7 +506,8 @@ def view_request(token: str, db: Session = Depends(get_db)):
 
 def _writable_request(db, token):
     req = locked_request(db, _live_request(db, token).id)
-    if req.completed_at or (components(req) and (req.iteration_state or {}).get('delivery',{}).get('started')):
+    # A finished complete-ads request stays writable: the file reopens it when it lands (`guest_complete`).
+    if components(req) and (req.completed_at or (req.iteration_state or {}).get('delivery',{}).get('started')):
         raise HTTPException(409, 'This request is complete.')
     return req
 
@@ -657,7 +657,7 @@ def guest_complete(token: str, body: GuestComplete, background_tasks: Background
     # Only acknowledge already accepted bytes after cutoff. New completion still
     # requires active campaign access; cleanup remains available separately.
     _live_request(db, token)
-    if req.completed_at:
+    if req.completed_at and components(req):
         raise HTTPException(409, "This request is complete.")
     record = _record_uploader(db, req, version, body)
     # Identity can arrive only at completion; SessionLocal disables autoflush.
@@ -681,6 +681,8 @@ def guest_complete(token: str, body: GuestComplete, background_tasks: Background
         db.commit()
         raise HTTPException(status_code=413, detail="The file is larger than announced. Upload it again.")
     freeze_submission_timing(db, req, record, version)
+    # Not at initiate: a transfer that never finishes must not undo a request already handed in.
+    reopen_request(req)
     if components(req): stored_upload(req,version)
     version.processing_status = ProcessingStatus.processing
     db.commit()
@@ -894,9 +896,14 @@ def finish_request(token: str, db: Session = Depends(get_db)):
             raise HTTPException(409, 'All submitted versions must finish review before completing this request.')
         req.completed_at = datetime.now(timezone.utc)
         req.completion_versions = {a['asset_id']: a['version_id'] for a in review['assets']}
+        # A reopened request finishes again here, but only its first finish is reported.
+        first_finish = req.first_completed_at is None
+        if first_finish:
+            req.first_completed_at = req.completed_at
         db.commit()
-        from ..services import workflow_events
-        workflow_events.announce_handin_finished(db, req)
+        if first_finish:
+            from ..services import workflow_events
+            workflow_events.announce_handin_finished(db, req)
     return {'completed_at': req.completed_at.isoformat(), 'completion_versions': req.completion_versions}
 
 

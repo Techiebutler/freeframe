@@ -24,7 +24,7 @@ from ..schemas.upload import (
 from ..services.storage import upload_guard_error
 
 from ..services.iteration_requests import components, require_unmanaged, require_unmanaged_destination
-from ..services.review_timing import adopt_signed_in_upload
+from ..services.review_timing import adopt_signed_in_upload, reopen_request
 from ..models.upload_request import UploadRequest
 
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -169,6 +169,7 @@ def _record_handin_submission(db: Session, asset, version) -> None:
         UploadRequest.revoked_at.is_(None)).populate_existing().with_for_update().first()
     if req is not None and not components(req):
         adopt_signed_in_upload(db, req, asset.id, version)
+        reopen_request(req)
 
 
 @router.post("/complete", response_model=CompleteUploadResponse)

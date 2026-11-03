@@ -138,7 +138,7 @@ def test_finish_request_announces_handin_finished(monkeypatch):
 
     _enable_workflow_events()
     try:
-        req = SimpleNamespace(id=uuid.uuid4(), completed_at=None, token="tok_done", brand_slug="brand-y",
+        req = SimpleNamespace(id=uuid.uuid4(), completed_at=None, first_completed_at=None, token="tok_done", brand_slug="brand-y",
                               last_uploader_email="editor@aditor.ai", completion_versions=None, iteration_state={})
 
         monkeypatch.setattr(requests_module, "_live_request", lambda *a, **k: req)

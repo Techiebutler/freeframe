@@ -126,7 +126,8 @@ def test_staged_revision_history_and_serialized_completion(monkeypatch):
             retry_v4 = rq.guest_initiate('token', rq.GuestInitiate(asset_id=init['asset_id'], original_filename='retry-v4.mp4', mime_type='video/mp4', file_size_bytes=100), db)
             assert retry_v4['version_number'] == 4
             rq.guest_abort('token', rq.GuestPart(s3_key=retry_v4['s3_key'], upload_id='multipart', part_number=1), db)
-        # A simultaneous initiation waits for the completion lock, then sees completed_at.
+        # A simultaneous initiation waits for the completion lock. It may start (the file reopens the request
+        # only when it lands), and it never changes what the finish just froze.
         checking, release = Event(), Event()
         def evidence(*args, **kwargs):
             checking.set(); assert release.wait(5); return stats
@@ -135,19 +136,17 @@ def test_staged_revision_history_and_serialized_completion(monkeypatch):
             with Session() as db: return rq.finish_request('token', db)
         def initiate():
             with Session() as db:
-                with pytest.raises(HTTPException) as closed:
-                    rq.guest_initiate('token', rq.GuestInitiate(original_filename='late.mp4', mime_type='video/mp4', file_size_bytes=100), db)
-                return closed.value.status_code
+                return rq.guest_initiate('token', rq.GuestInitiate(original_filename='late.mp4', mime_type='video/mp4', file_size_bytes=100), db)
         with ThreadPoolExecutor(max_workers=2) as pool:
             finished = pool.submit(finish)
             assert checking.wait(5)
             late = pool.submit(initiate)
             release.set()
             assert finished.result(5)['completion_versions'] == {init['asset_id']: revision['version_id']}
-            assert late.result(5) == 409
+            assert late.result(5)['version_number'] == 1
         with Session() as db:
             assert rq.view_request('token', db)['completed_at']
-            assert db.query(Asset).count() == 2  # cancelled history preserved, excluded from completion
+            assert db.query(Asset).count() == 3  # cancelled history preserved, excluded from completion; plus the late file
     finally:
         engine.dispose()
         with admin.begin() as conn: conn.execute(text(f'DROP SCHEMA {schema} CASCADE'))

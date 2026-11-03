@@ -96,8 +96,9 @@ def test_complete_submits_and_processes_with_deferred_or_existing_identity(monke
     complete.assert_called_once_with('raw/a', 'u', [])
 
 
-def test_finished_request_rejects_new_upload_but_remains_live(monkeypatch):
+def test_finished_component_batch_rejects_new_upload_but_remains_live(monkeypatch):
     req = request()
+    req.receive_iterations, req.iteration_mode = True, 'components'
     req.completed_at = datetime.now(timezone.utc)
     assert rq.request_state(req, datetime.now(timezone.utc)) == 'live'
     monkeypatch.setattr(rq, '_live_request', lambda *a, **kw: req)
