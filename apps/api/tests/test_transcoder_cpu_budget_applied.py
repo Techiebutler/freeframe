@@ -39,7 +39,8 @@ def _a_machine_of_a_known_size(monkeypatch):
 
 def _ffmpeg_cmd_for(qualities: list[str], source=(1920, 1080),
                     color_transfer: str | None = None,
-                    backend: str | None = None) -> list[str]:
+                    backend: str | None = None,
+                    crf_offset: int | None = None) -> list[str]:
     """Run a transcode with everything mocked and return the ffmpeg command.
 
     `color_transfer="arib-std-b67"` makes the source HDR, which is what puts the
@@ -47,6 +48,8 @@ def _ffmpeg_cmd_for(qualities: list[str], source=(1920, 1080),
     the one an ordinary phone clip goes through. `backend="nvenc"` forces a
     hardware attempt: the mocked `subprocess.run` reports success, so the first
     attempt is the only command built and there is no fallback to read past.
+    `crf_offset` is what the instance setting hands the job; None leaves
+    `TRANSCODER_CRF_OFFSET` in charge.
     """
     width, height = source
 
@@ -68,6 +71,7 @@ def _ffmpeg_cmd_for(qualities: list[str], source=(1920, 1080),
         media_id="media-1", version_id="v1",
         input_s3_key="uploads/video.mp4", output_s3_prefix="hls/media-1/v1",
         qualities=qualities,
+        crf_offset=crf_offset,
     )
     s3 = MagicMock()
     s3.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"

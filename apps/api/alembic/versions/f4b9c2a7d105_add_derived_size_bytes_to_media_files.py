@@ -24,7 +24,7 @@ has to hold several files is then a decision, and the total belongs on
 `asset_versions` at that point.
 
 Revision ID: f4b9c2a7d105
-Revises: c5d1f3a7b9e2
+Revises: c7f1a4b2e085
 Create Date: 2026-10-28
 
 """
@@ -36,7 +36,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'f4b9c2a7d105'
-down_revision: Union[str, Sequence[str], None] = 'c5d1f3a7b9e2'
+down_revision: Union[str, Sequence[str], None] = 'c7f1a4b2e085'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
