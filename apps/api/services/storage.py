@@ -57,10 +57,12 @@ def project_storage_used_bytes(db: Session, project_id) -> int:
     the admin project rows show for the same project; the same `_USED_SUM` as
     the instance figure, with one filter on it. The instance-wide figure counts
     the trash because the limit does; one project's own trashed assets sit in
-    the instance trash, which the project's members can neither see nor empty,
-    so quoting them here would be a number nobody on the project can act on.
-    The trashed bytes are reported where they can be acted on: beside the
-    instance figure, as the part of it that emptying the trash would free.
+    the instance trash, which the project's own members can neither empty nor
+    see in full (an editor can list the project's trash, but nothing on the
+    project frees its bytes), so quoting them here would be a number nobody on
+    the project can act on. The trashed bytes are reported where they can be
+    acted on: beside the instance figure, as the part of it that emptying the
+    trash would free.
     """
     return int(live_media(db, _USED_SUM).filter(
         Asset.project_id == project_id,
@@ -100,10 +102,13 @@ def project_storage_used_bytes_map(db: Session, project_ids) -> dict:
 #                                           the audio waveform
 #
 # NOT counted, because nothing in the database records their size: project
-# posters, instance branding logos, user avatars, comment attachments, and any
-# object in the bucket that no live row points at (the retention purge's job).
-# The figure is therefore the media whose size the database knows, never the
-# bucket's total.
+# posters, instance branding logos, user avatars, the `watermarked/` renders
+# `apply_watermark` writes, and any object in the bucket that no live row points
+# at (the orphan sweep's job). Comment attachments do record a size
+# (`comment_attachments.file_size_bytes`), and are still not counted here: this
+# figure is media, and adding another table to it would make the one definition
+# two. The figure is therefore the media whose size the database knows, never
+# the bucket's total.
 #
 # `derived_size_bytes` IS NULL is "not measured yet", so the overview also
 # reports how many committed files are still unmeasured. That is the number that
@@ -193,12 +198,27 @@ _DERIVED_SUM = func.coalesce(func.sum(MediaFile.derived_size_bytes), 0)
 #: a cap on 60 % of the storage it is set against. The cost is that an instance
 #: whose backfill has only just measured its renditions reads as fuller than it
 #: did the day before, on an unchanged bucket — true all along, merely unknown.
-#: `unmeasured_files` is reported beside the figure so that is visible, and the
-#: deploy note tells an administrator to re-check the cap after the backfill.
+#: `unmeasured_files` is reported beside the figure in `GET /admin/storage` so
+#: the gap is readable there (no screen renders it in this change), and the
+#: upgrade note tells an administrator to re-check the cap after the backfill.
 _USED_SUM = _ORIGINAL_SUM + _DERIVED_SUM
 # Files whose derived bytes have never been measured. Counted, not summed:
 # summing NULL as zero would report a total the bucket does not hold.
 _UNMEASURED_COUNT = func.count(MediaFile.id).filter(MediaFile.derived_size_bytes.is_(None))
+
+
+def byte_columns():
+    """The two labelled sums every byte figure is built from, as columns.
+
+    Here rather than spelled out again per caller: `_USED_SUM` is these two
+    added together, so a second spelling of either one is a second definition of
+    used storage. Callers that want the breakdown select these; callers that
+    want the total select `_USED_SUM`.
+    """
+    return (
+        _ORIGINAL_SUM.label("original_bytes"),
+        _DERIVED_SUM.label("derived_bytes"),
+    )
 
 
 def project_storage_rows(db: Session) -> list[dict]:
@@ -211,8 +231,7 @@ def project_storage_rows(db: Session) -> list[dict]:
         live_media(
             db,
             Asset.project_id.label("project_id"),
-            _ORIGINAL_SUM.label("original_bytes"),
-            _DERIVED_SUM.label("derived_bytes"),
+            *byte_columns(),
             _UNMEASURED_COUNT.label("unmeasured_files"),
             func.count(func.distinct(Asset.id)).label("asset_count"),
         )
@@ -238,88 +257,6 @@ def project_storage_rows(db: Session) -> list[dict]:
     return out
 
 
-def project_storage_tree(db: Session, project_id) -> list[dict]:
-    """One project's committed media as asset -> version -> file, each level with
-    its own byte totals, largest first at every level.
-
-    Two queries regardless of project size: one for the files, one for the asset
-    and version names. The tree is only ever fetched for the project an
-    administrator expanded, never for the whole instance.
-    """
-    files = (
-        live_media(
-            db,
-            Asset.id.label("asset_id"),
-            Asset.name.label("asset_name"),
-            Asset.asset_type.label("asset_type"),
-            AssetVersion.id.label("version_id"),
-            AssetVersion.version_number.label("version_number"),
-            MediaFile.id.label("file_id"),
-            MediaFile.original_filename.label("filename"),
-            MediaFile.file_size_bytes.label("original_bytes"),
-            MediaFile.derived_size_bytes.label("derived_bytes"),
-        )
-        .filter(Asset.project_id == project_id)
-        .all()
-    )
-
-    assets: dict = {}
-    for f in files:
-        asset = assets.setdefault(
-            f.asset_id,
-            {
-                "asset_id": f.asset_id,
-                "name": f.asset_name,
-                "asset_type": getattr(f.asset_type, "value", f.asset_type),
-                "original_bytes": 0,
-                "derived_bytes": 0,
-                "total_bytes": 0,
-                "unmeasured_files": 0,
-                "versions": {},
-            },
-        )
-        version = asset["versions"].setdefault(
-            f.version_id,
-            {
-                "version_id": f.version_id,
-                "version_number": f.version_number,
-                "original_bytes": 0,
-                "derived_bytes": 0,
-                "total_bytes": 0,
-                "unmeasured_files": 0,
-                "files": [],
-            },
-        )
-        original = int(f.original_bytes or 0)
-        derived = int(f.derived_bytes) if f.derived_bytes is not None else 0
-        version["files"].append({
-            "file_id": f.file_id,
-            "filename": f.filename,
-            "original_bytes": original,
-            # None, not 0: the UI marks an unmeasured file rather than drawing a
-            # bar that claims the transcode output is empty.
-            "derived_bytes": int(f.derived_bytes) if f.derived_bytes is not None else None,
-            "total_bytes": original + derived,
-        })
-        for level in (asset, version):
-            level["original_bytes"] += original
-            level["derived_bytes"] += derived
-            level["total_bytes"] += original + derived
-            if f.derived_bytes is None:
-                level["unmeasured_files"] += 1
-
-    tree = []
-    for asset in assets.values():
-        versions = list(asset["versions"].values())
-        for v in versions:
-            v["files"].sort(key=lambda x: x["total_bytes"], reverse=True)
-        versions.sort(key=lambda v: v["total_bytes"], reverse=True)
-        asset["versions"] = versions
-        tree.append(asset)
-    tree.sort(key=lambda a: a["total_bytes"], reverse=True)
-    return tree
-
-
 def instance_storage_totals(db: Session) -> dict:
     """Instance-wide originals, derived bytes, the used figure they add up to and
     the unmeasured file count, trash included — the figures the admin storage
@@ -334,8 +271,7 @@ def instance_storage_totals(db: Session) -> dict:
     """
     row = committed_media(
         db,
-        _ORIGINAL_SUM.label("original_bytes"),
-        _DERIVED_SUM.label("derived_bytes"),
+        *byte_columns(),
         _UNMEASURED_COUNT.label("unmeasured_files"),
         func.count(MediaFile.id).label("file_count"),
     ).one()
@@ -348,20 +284,14 @@ def instance_storage_totals(db: Session) -> dict:
     }
 
 
-def project_total_bytes(db: Session, project_id) -> int:
-    """What a live project holds — the figure the delete confirmation quotes as
-    what goes to the trash, and what emptying the trash afterwards would free.
-
-    The same call as the figure on the project and in the panel's row for it
-    (`project_storage_used_bytes`), kept as its own name because the
-    confirmation dialog asks a different question of it.
-    """
-    return project_storage_used_bytes(db, project_id)
-
-
 def storage_cap_error(db: Session, incoming_bytes: int) -> str | None:
     """Return an error detail if accepting `incoming_bytes` would exceed the instance
     storage cap, else None. Limit 0 (unlimited) short-circuits before any usage query.
+
+    `incoming_bytes` is the original being uploaded, so the cap is soft by one
+    transcode: the renditions that upload will produce are not known yet and are
+    counted only once the job has measured them. An instance can therefore end
+    up a little over its cap, after which the next upload is refused.
     """
     limit = get_storage_limit(db)
     if not limit:

@@ -1034,6 +1034,85 @@ Only for deployments that run the optional self-hosted storage block in `docker-
 3. Silo enforces the bucket CORS rules FreeFrame writes at startup, which MinIO ignored. Make sure `FRONTEND_URL` is the exact origin people browse to, and put any other browser origin in `CORS_ALLOW_ORIGINS`. If your `.env.prod` sets `MINIO_CORS_ALLOW_ORIGIN`, move that value to `CORS_ALLOW_ORIGINS`.
 4. `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d`
 
+### Upgrading past the storage measurement ([#599](https://github.com/Techiebutler/freeframe/pull/599))
+
+Only matters if your instance has a storage limit set (**Settings → Admin → Instance settings → Storage limit (GB)**, `storage_limit_bytes`; `0` is unlimited). With no limit, nothing here can refuse an upload and you can skip to step 4.
+
+Used storage now has one definition everywhere, and it counts two things it did not count before: **the trash**, from the moment the new API starts, and **what the transcoder wrote**, once the backfill has measured it. Nothing is deleted and no object moves; the bucket was always this full. But the number the cap is enforced against goes up, and on a near-full instance the first increase arrives before you have run anything.
+
+**1. Before you upgrade, find out what the trash will add.** Trashed assets and versions were left out of the old figure and are counted from the new API's first start.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec postgres \
+  psql -U freeframe -c "
+SELECT pg_size_pretty(sum(mf.file_size_bytes))                   AS originals_counted_after_upgrade,
+       pg_size_pretty(coalesce(sum(mf.file_size_bytes) FILTER (
+           WHERE p.deleted_at IS NOT NULL
+              OR a.deleted_at IS NOT NULL
+              OR v.deleted_at IS NOT NULL), 0))                  AS of_which_in_the_trash
+  FROM media_files mf
+  JOIN asset_versions v ON v.id = mf.version_id
+  JOIN assets        a ON a.id = v.asset_id
+  JOIN projects      p ON p.id = a.project_id
+ WHERE v.processing_status IN ('processing', 'ready');"
+```
+
+If `of_which_in_the_trash` is a large share of your limit, raise the limit **before** you upgrade. Deleting something is not a remedy any more: the figure stays where it is until the retention collector reclaims the objects, 30 days after the delete by default (`SOFT_DELETE_RETENTION_DAYS`) and never with `SOFT_DELETE_RETENTION_DAYS=0`, which switches the collector off. `POST /admin/purge` uses the same cutoff.
+
+**2. Upgrade, with the maintenance worker recreated alongside the API.** The backfill is a new Celery task on the `maintenance` queue, and a worker still running the old code does not know it, so a queued backfill would wait for a consumer that never comes.
+
+```bash
+git pull origin main
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+```
+
+The migration (`f4b9c2a7d105`) adds a nullable `media_files.derived_size_bytes` and a unique constraint on `media_files.version_id`. It runs in one transaction, so if your database somehow holds two media files for one version it names them, changes nothing at all and tells you which row to keep.
+
+**3. Run the backfill once, then re-check the limit.** It does one bucket listing per unmeasured version, is idempotent, resumable and safe to run while the instance is serving, and it pauses between batches. There is no button for it in this release. On the server it needs no token:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml \
+  exec api celery -A apps.api.tasks.celery_app call backfill_media_derived_size
+docker compose --env-file .env.prod -f docker-compose.prod.yml \
+  logs -f maintenance_worker
+```
+
+The worker logs `backfill_media_derived_size: measured=... failed=... bytes=... stopped=...` when it finishes. `failed` counts listings the object store refused; those rows stay unmeasured and a later run picks them up. `stopped=listing_failures` means several listings failed in a row and it gave up, which almost always means the store is unreachable: fix that and run it again.
+
+Over the API instead, with an access token for a superadmin account (the production compose serves the API under `/api` and disables the interactive docs page):
+
+```bash
+TOKEN='<a superadmin access token>'
+curl -fsS -X POST https://your-freeframe.example/api/admin/storage/backfill \
+  -H "Authorization: Bearer $TOKEN"
+curl -fsS https://your-freeframe.example/api/admin/storage \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+A 202 means enqueued, not finished, and calling it twice does not run it twice. Read the overview again until `unmeasured_files` reaches 0. Without the API, the same three numbers from `psql`:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec postgres \
+  psql -U freeframe -c "
+SELECT pg_size_pretty(sum(mf.file_size_bytes)
+                      + coalesce(sum(mf.derived_size_bytes), 0))  AS used,
+       pg_size_pretty(coalesce(sum(mf.file_size_bytes
+                      + coalesce(mf.derived_size_bytes, 0)) FILTER (
+           WHERE p.deleted_at IS NOT NULL
+              OR a.deleted_at IS NOT NULL
+              OR v.deleted_at IS NOT NULL), 0))                   AS of_which_in_the_trash,
+       count(*) FILTER (WHERE mf.derived_size_bytes IS NULL)      AS unmeasured_files
+  FROM media_files mf
+  JOIN asset_versions v ON v.id = mf.version_id
+  JOIN assets        a ON a.id = v.asset_id
+  JOIN projects      p ON p.id = a.project_id
+ WHERE v.processing_status IN ('processing', 'ready');"
+```
+
+How much the transcode output adds depends entirely on your media. Measured on 10 second synthetic 1080p clips through the default ladder, with the top rung stored twice as `download.mp4` by design, derived output came to between 0.16x and 2.84x the original, largest for already-compressed sources because CRF output follows the picture rather than the source bitrate. Synthetic clips are not footage, so treat that as a range and not as a prediction; the figure for your own library is the one the backfill produces. Then compare `used` with your limit and raise it if the new figure is close.
+
+**4. New uploads need none of this.** Every transcode from now on measures its own output when it finishes. A transcode whose bookkeeping listing failed leaves the row unmeasured, which is what `unmeasured_files` reports; nothing re-measures it on a schedule, so run the backfill again if that count grows. The cap is soft by one transcode, because the upload guard is given the incoming original only.
+
 ### Update Checklist
 
 1. **Read the changelog** — check for breaking changes or new env vars
