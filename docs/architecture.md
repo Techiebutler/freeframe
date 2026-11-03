@@ -210,18 +210,33 @@ What this deliberately does **not** change:
   signed-in user, so the flag cannot change which links resolve or what a guest sees.
 - **A deleted project.** Still 404 for everyone, superadmin included.
 
-**Auditing.** Every path past membership is logged, reads included: an `ActivityLog` row with
+**Auditing.** Every path into a project the superadmin is not a member of, or whose tier its own
+role does not cover, is logged, reads included: an `ActivityLog` row with
 `action="admin_project_access"` and a payload naming `via: "superadmin"`, the role they actually
 held (`membership`, or `"none"`), the `scope` that let them in and the `required_role` where the
 scope is a tier. `scope` is a role tier for the project gate, `"asset"` for the asset, version,
-comment and attachment path, and `"events"` for the live stream at connect.
+comment and attachment path (`GET /assets/batch` included, so one batch read logs what the
+per-asset reads it replaces would have), and `"events"` for the live stream at connect.
+
+The instance-wide lists are **not** logged: `GET /projects?scope=all`, the Storage overview
+(`GET /admin/storage`) and the admin trash. They list projects rather than open one, and a row
+per listed project on every page open would bury the rows that matter. Opening one project from
+them does log, including reading its file list (`GET /admin/storage/projects/{id}`).
 
 **One row per request and project, not one per object.** A listing runs the gate for every item
-it returns and `GET /events/{project_id}` re-checks for as long as the stream stays open;
-`activity_logs` is never pruned, so a row per check would turn one open tab into unbounded rows.
-The bookkeeping lives in `Session.info`, which is the request scope, and a heavier access later
-in the same request rewrites the row instead of adding one. `can_access_asset` therefore has no
-audit hook at all: it is also read per item to resolve mentions and filter comments.
+it returns and `GET /events/{project_id}` re-checks for as long as the stream stays open, so a
+row per check would turn one open tab into unbounded rows. The bookkeeping lives in
+`Session.info`, which is the request scope, and a heavier access later in the same request
+rewrites the row instead of adding one. `can_access_asset` therefore has no audit hook at all:
+it is also read per item to resolve mentions and filter comments, where the user named nothing.
+
+**The audit outlives what it audits.** Nothing prunes `activity_logs` on a schedule, and the
+retention collector, which does delete a purged project's or asset's history, keeps the admin
+audit actions (`admin_project_access`, `admin_bulk_delete`, `admin_restore`,
+`admin_trash_purge`). Their foreign key is cleared, since the row it named is gone, and the id
+moves into `payload` as `purged_project_id` or `purged_asset_id`
+(`tasks/cleanup_tasks.py:_purge_activity_logs`). So a superadmin's read of a project, followed
+by a trash and a purge, still has a record of the read.
 
 The row is added to the session and carried by the request's own commit, so a write that ends in
 a rollback leaves nothing behind. A read-only request commits nothing of its own, so `get_db`
