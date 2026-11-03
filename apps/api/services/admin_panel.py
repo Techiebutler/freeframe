@@ -7,11 +7,10 @@ the rows and the upload limit cannot disagree. Nothing here writes.
 
 import uuid
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models.asset import Asset, AssetVersion, MediaFile
+from ..models.asset import Asset, AssetVersion
 from ..models.project import Project
 from . import storage as storage_service
 
@@ -32,11 +31,10 @@ def _sum_bytes(query) -> int:
     return int(row.original_bytes) + int(row.derived_bytes)
 
 
-def _byte_columns():
-    return (
-        func.coalesce(func.sum(MediaFile.file_size_bytes), 0).label("original_bytes"),
-        func.coalesce(func.sum(MediaFile.derived_size_bytes), 0).label("derived_bytes"),
-    )
+#: The two sums, from `services/storage.py` rather than spelled out again here:
+#: a second spelling of either one is a second definition of used storage, which
+#: is the bug this whole change exists to close.
+_byte_columns = storage_service.byte_columns
 
 
 # ── Storage ───────────────────────────────────────────────────────────────────
