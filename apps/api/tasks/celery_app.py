@@ -18,6 +18,7 @@ celery_app = Celery(
         "apps.api.tasks.reminder_tasks",
         "apps.api.tasks.email_tasks",
         "apps.api.tasks.cleanup_tasks",
+        "apps.api.tasks.storage_tasks",
     ],
 )
 
@@ -58,6 +59,8 @@ celery_app.conf.update(
         "cleanup_soft_deleted": {"queue": "maintenance"},
         "requeue_stuck_processing": {"queue": "maintenance"},
         "sweep_orphan_s3": {"queue": "maintenance"},
+        # A listing per unmeasured version: long, I/O heavy, latency-insensitive.
+        "backfill_media_derived_size": {"queue": "maintenance"},
         # Not housekeeping: this one is dispatched from a request handler and
         # is a full FFmpeg re-encode, so it belongs with the other transcoding
         # work rather than behind an hour-long bucket sweep.

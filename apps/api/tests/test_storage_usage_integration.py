@@ -71,22 +71,33 @@ def test_committed_only_counts_ready_and_processing(real_db):
     # Counted: ready 1000 + processing 500 = 1500
     _version_with_file(db, asset, owner, 1, ProcessingStatus.ready, 1000)
     _version_with_file(db, asset, owner, 2, ProcessingStatus.processing, 500)
-    # Excluded: uploading (also 9 GB — proves file_size_bytes BigInteger holds > 2^31), failed, deleted version
+    # Excluded: uploading (also 9 GB — proves file_size_bytes BigInteger holds > 2^31)
+    # and failed, because their bytes are not (reliably) in the bucket.
     _version_with_file(db, asset, owner, 3, ProcessingStatus.uploading, 9_000_000_000)
     _version_with_file(db, asset, owner, 4, ProcessingStatus.failed, 8888)
+    # In the trash, and therefore still in the bucket: counted instance-wide,
+    # because that is what the storage limit blocks on until it is purged.
     _version_with_file(db, asset, owner, 5, ProcessingStatus.ready, 7777, version_deleted=True)
 
-    # Per-project sum: exact (fresh project)
+    # Per-project sum: what the project holds now, exact (fresh project)
     assert project_storage_used_bytes(db, project.id) == 1500
-    # Instance-wide sum: delta (independent of any pre-existing data)
-    assert instance_storage_used_bytes(db) - baseline == 1500
+    # Instance-wide sum: delta (independent of any pre-existing data), the
+    # trashed version included
+    assert instance_storage_used_bytes(db) - baseline == 1500 + 7777
 
 
-def test_soft_deleted_asset_excluded(real_db):
+def test_a_soft_deleted_asset_leaves_the_project_figure_but_not_the_instance_one(real_db):
+    """The two scopes of one definition. A trashed asset is out of its project's
+    own figure, which is what the project holds today; it stays in the
+    instance-wide figure, because its bytes are in the bucket until the trash is
+    emptied and the storage limit blocks on them the whole time.
+    """
     db = real_db
     owner = _user(db)
     project = _project(db, owner)
+    baseline = instance_storage_used_bytes(db)
     deleted_asset = _asset(db, project, owner, deleted=True)
     _version_with_file(db, deleted_asset, owner, 1, ProcessingStatus.ready, 5000)
 
     assert project_storage_used_bytes(db, project.id) == 0
+    assert instance_storage_used_bytes(db) - baseline == 5000

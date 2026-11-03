@@ -1,22 +1,39 @@
-"""Admin endpoints for user management."""
+"""Admin endpoints: user management, and the storage overview."""
 
 from datetime import datetime, timedelta, timezone
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 import uuid
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
+from ..models.project import Project
 from ..models.user import User, UserStatus
 from ..schemas.auth import UserResponse, AdminUserResponse, UpdateUserRoleRequest
 from .users import require_admin
 from ..tasks.celery_app import send_task_safe
 from ..tasks.cleanup_tasks import cleanup_soft_deleted
-from ..schemas.admin import PurgeStartResponse
+from ..tasks.storage_tasks import backfill_media_derived_size
+from ..services import admin_panel
+from ..schemas.admin import (
+    BackfillStartResponse,
+    PurgeStartResponse,
+    StorageOverviewResponse,
+    StorageProjectFilesResponse,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+#: How many project rows the storage overview returns by default, and the most
+#: it will return at all. The question it answers is which projects take up the
+#: space: the largest few hundred answer it, and the instance totals in the
+#: summary are never affected by the cap. `project_count` in the response says
+#: how many there are, so a truncated list says so rather than looking
+#: complete.
+DEFAULT_PROJECT_LIMIT = 200
+MAX_PROJECT_LIMIT = 1000
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -142,4 +159,89 @@ def purge_now(current_user: User = Depends(require_admin)):
     return PurgeStartResponse(
         status="started",
         detail="Retention garbage collection is running in the background; see worker logs for reclaimed counts.",
+    )
+
+
+# ── The storage overview ──────────────────────────────────────────────────────
+#
+# What the instance holds, in one summary line and a list of projects by size.
+# Every endpoint here is superadmin-only through `require_admin`, enforced on
+# the server. Only the backfill changes anything, and all it writes is the
+# measured size of output the instance already has.
+
+
+@router.get("/storage", response_model=StorageOverviewResponse)
+def storage_overview(
+    limit: int = Query(
+        DEFAULT_PROJECT_LIMIT, ge=1, le=MAX_PROJECT_LIMIT,
+        description="How many of the largest projects to return.",
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """One summary line, then the projects by size. Superadmin only.
+
+    A grouped sum over `media_files`, so this never lists the object store:
+    derived bytes are measured once when a transcode finishes and stored on the
+    row. Projects holding no committed bytes are left out, having nothing to
+    show on a storage page.
+
+    The list is bounded: the largest few hundred projects answer what takes up
+    the space. `project_count` reports how many there are so a truncated list
+    says so, and the summary is instance-wide either way.
+    """
+    projects, project_count = admin_panel.storage_project_rows(db, limit)
+    return StorageOverviewResponse(
+        summary=admin_panel.storage_summary(db),
+        projects=projects,
+        project_count=project_count,
+        limit=limit,
+    )
+
+
+@router.get("/storage/projects/{project_id}", response_model=StorageProjectFilesResponse)
+def storage_project_files(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """One project's files, largest first. Superadmin only; fetched when a row
+    is expanded, so opening the panel does not load every file on the instance."""
+    project = db.query(Project).filter(
+        Project.id == project_id, Project.deleted_at.is_(None),
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return StorageProjectFilesResponse(
+        project_id=project_id,
+        name=project.name,
+        assets=admin_panel.storage_asset_rows(db, project_id),
+    )
+
+
+@router.post(
+    "/storage/backfill",
+    response_model=BackfillStartResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def storage_backfill(current_user: User = Depends(require_admin)):
+    """Measure derived bytes for media that has never been measured.
+
+    Superadmin only. Enqueues `backfill_media_derived_size` on the maintenance
+    queue: one bucket listing per unmeasured version, which is why it does not
+    run in the request. Idempotent, resumable, and safe to run while the
+    instance is serving; a 202 means "enqueued", not "finished".
+
+    Calling it twice does not run it twice. The task takes a Postgres advisory
+    lock and a second run returns immediately, the same way `/admin/purge`
+    serializes against the daily beat; it also pauses between batches so a long
+    backfill leaves S3 request budget for the people working on the instance.
+    """
+    send_task_safe(backfill_media_derived_size)
+    return BackfillStartResponse(
+        status="started",
+        detail=(
+            "Measuring storage in the background. Read the overview again to "
+            "see the unmeasured count fall; see worker logs for totals."
+        ),
     )
