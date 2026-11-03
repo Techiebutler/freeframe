@@ -378,6 +378,9 @@ describe('InstanceSettingsTab', () => {
     it.each([
       ['a drag', () => fireEvent.pointerUp(compressionSlider())],
       ['arrow keys', () => fireEvent.keyUp(compressionSlider(), { key: 'ArrowLeft' })],
+      // Tabbing away ends the gesture too, and it is the one release the
+      // debounce would otherwise have to cover.
+      ['tabbing away', () => fireEvent.blur(compressionSlider())],
     ])('saves once on release of %s, and not before', async (_what, release) => {
       render(<InstanceSettingsTab />)
       compressionSlider().focus()

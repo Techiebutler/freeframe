@@ -130,6 +130,7 @@ def test_the_ten_bit_path_is_shifted_too(monkeypatch):
     (None, "h264_8", None, "-4", True),   # from the environment just the same
     (None, "h264_8", None, None, False),  # unset: main's command, token for token
     (None, "h264_8", 0, None, False),     # Balanced is a real choice of "as before"
+    (None, "h264_8", 0, "-5", False),     # and it holds over a negative environment value
     (None, "h264_8", 6, None, False),     # smaller files is not asking for more bits
     (None, "h265_10", -4, None, False),   # `aq-mode` is private to the libx264 wrapper
     ("nvenc", "h264_8", -4, None, False),  # the hardware encoders quantise on the device
@@ -157,6 +158,7 @@ def test_the_dark_scene_aq_mode_rides_on_a_quality_raising_step(
 
 @pytest.mark.parametrize("requested,env,expected", [
     (-8, "3", -8),     # the instance setting wins; that is why it is in the database
+    (0, "-8", 0),      # Balanced too: it is a choice of 0, not an absent one
     (None, "3", 3),    # a caller with no opinion follows the environment
     (None, None, 0),   # and with neither, nothing shifts
     (99, "3", 3),      # off the scale: a bug upstream, logged, not clamped
