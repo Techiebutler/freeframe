@@ -195,8 +195,8 @@ def ensure_bucket_exists():
     if not _is_aws_s3():
         # The same origins the API's CORS allows (settings.cors_origins):
         # a store that enforces bucket CORS (Silo, Garage) refuses uploads and
-        # playback from every other origin. Older MinIO answered PutBucketCors
-        # with NotImplemented and allowed every origin, which hid any gap.
+        # playback from every other origin. MinIO answers PutBucketCors
+        # with NotImplemented and allows every origin, which hides any gap.
         if settings.cors_allows_any_origin:
             _allowed_origins = ["*"]
         else:
@@ -231,8 +231,10 @@ def ensure_bucket_exists():
                             # Access-Control-Request-Headers (Fetch spec) and
                             # Garage compares these by plain string equality,
                             # so "Content-Type" never matches the
-                            # "content-type" a presigned PUT asks for. AWS S3
-                            # and MinIO match case-insensitively.
+                            # "content-type" a presigned PUT asks for. A
+                            # lowercase name matches what browsers send
+                            # whether a store compares exactly or ignoring
+                            # case.
                             "AllowedHeaders": [
                                 "content-type",
                                 "content-md5",

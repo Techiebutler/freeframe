@@ -610,7 +610,7 @@ Uploads go **directly from the browser to your bucket** via presigned URLs, so t
 
 `DELETE` is intentionally absent — FreeFrame has no presigned-DELETE flow, and the browser never needs it against the bucket. The `AllowedHeaders` list above is exactly what browser uploads and HLS segment fetches send; `["*"]` also works on most backends, but the list is sufficient and is what FreeFrame's automatic startup config now applies.
 
-Keep the header names **lowercase**, as above. Browsers lowercase every name in `Access-Control-Request-Headers`, and some backends (Garage) compare `AllowedHeaders` case-sensitively, so a rule listing `Content-Type` rejects the preflight of every upload that signs a content type. Backends that compare case-insensitively (AWS S3, MinIO) accept the lowercase list just the same.
+Keep the header names **lowercase**, as above. Browsers lowercase every name in `Access-Control-Request-Headers`, so on a store that compares these names exactly, a rule listing `Content-Type` rejects the preflight of every upload that signs a content type. Garage compares these names exactly; Silo, RustFS, Ceph RGW, Cloudflare R2 and AWS S3 ignore case; community MinIO does not apply bucket CORS rules at all. Lowercase works on all of them.
 
 If you allow **more than one origin**, give each origin its own rule rather than listing them all in one. Some backends (Garage) answer a multi-origin rule by joining every entry into a single comma-separated `Access-Control-Allow-Origin` header, which browsers reject — every upload and HLS segment fetch then fails CORS. FreeFrame's automatic startup config already emits one rule per origin.
 
