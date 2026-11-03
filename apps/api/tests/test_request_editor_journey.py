@@ -278,3 +278,18 @@ def test_stale_progress_only_waits_with_a_registered_watch(watching, expected):
     v = AssetVersion(id=uuid.uuid4(), version_number=2, processing_status=ProcessingStatus.ready)
     assert rq.editor_review_state(v, {'reviewed': False, 'version_id': None, 'watching': watching,
         'progress': {'stage': 'reading', 'version_id': str(uuid.uuid4())}}) == expected
+
+
+def test_only_a_running_or_finished_transfer_can_read_as_a_review():
+    v = AssetVersion(id=uuid.uuid4(), version_number=1, processing_status=ProcessingStatus.uploading)
+    assert rq.editor_review_state(v, {'watching': True, 'reviewed': False, 'progress': {'stage': 'waiting'}}) == 'upload_incomplete'
+    v.processing_status = ProcessingStatus.processing
+    assert rq.editor_review_state(v, {'watching': True, 'reviewed': False, 'progress': {'stage': 'waiting'}}) == 'reviewing'
+    v.processing_status = ProcessingStatus.failed
+    assert rq.editor_review_state(v, None) == 'unavailable'
+    assert rq.editor_review_state(None, None) == 'reviewing'
+
+
+def test_a_dead_transfer_keeps_the_gate_open_and_never_clears_it():
+    gate = rq._request_gate([{'review_state': 'clear'}, {'review_state': 'upload_incomplete'}], {'status': 'clear', 'openMustFixes': 0})
+    assert gate == {'status': 'reviewing', 'open_must_fixes': 0}

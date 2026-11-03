@@ -280,7 +280,7 @@ export interface ReviewProgress {
 export interface RequestAsset {
   asset_id: string; name: string; version: number; version_id?: string; processing: string; comments: ReviewComment[]
   asset_type?: string; media_url?: string | null; thumbnail_url?: string | null; duration_seconds?: number | null
-  review_state?: 'reviewing' | 'held' | 'clear' | 'unavailable'
+  review_state?: 'reviewing' | 'held' | 'clear' | 'unavailable' | 'upload_incomplete'
   review_progress?: ReviewProgress | null
   versions?: { id: string; version_number: number; processing: string }[]
 }
@@ -313,6 +313,10 @@ export const objectToNote = (token: string, body: { asset_id: string; version_id
   pub<{ withdrawn: boolean; why: string }>('POST', `/r/${token}/object`, body)
 
 const CHUNK = 10 * 1024 * 1024
+
+/** Remove a file whose transfer never completed, so the editor can start it over. */
+export const discardUpload = (token: string, body: { asset_id: string; version_id: string }) =>
+  pub<void>('POST', `/r/${token}/upload/discard`, body)
 
 /** Multipart upload into the request's folder, the same presigned-part path a signed-in editor uses. */
 export async function uploadToRequest(

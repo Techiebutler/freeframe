@@ -5,7 +5,7 @@ import useSWR from 'swr'
 import { PartsWorkspace } from '@/components/v2/parts-workspace'
 import { requestIterations } from '@/lib/iterations'
 import { ArrowLeft } from 'lucide-react'
-import { finishRequest, objectToNote, requestReview, uploadToRequest, viewRequest, type RequestAsset, type RequestView } from '@/lib/platform'
+import { discardUpload, finishRequest, objectToNote, requestReview, uploadToRequest, viewRequest, type RequestAsset, type RequestView } from '@/lib/platform'
 import { createUploadQueue } from '@/lib/part-upload-queue'
 import { DropZone } from '@/components/v2/drop-zone'
 import { UploadCard, type UploadPhase } from '@/components/v2/upload-card'
@@ -51,12 +51,12 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
   }, [uploading])
   const readyToFinish = !!review?.assets.length && review.assets.every(a => a.processing === 'ready' && a.review_state === 'clear') && review.gate.status === 'clear'
   React.useEffect(() => {
-    if (!readyToFinish || uploading || complete || jobs.some(j => j.phase === 'error')) return
+    if (!readyToFinish || uploadMode || uploading || complete || jobs.some(j => j.phase === 'error')) return
     const signature = review!.assets.map(a => a.version_id).join(',')
     if (finishAttempt.current === signature) return
     finishAttempt.current = signature
     finishRequest(token).then(r => { setCompletedAt(r.completed_at); refresh() }).catch(e => setError(e.message))
-  }, [readyToFinish, uploading, complete, jobs, review, token, refresh])
+  }, [readyToFinish, uploadMode, uploading, complete, jobs, review, token, refresh])
 
   const update = (id: string, patch: Partial<Job>) => setJobs(js => js.map(j => j.id === id ? { ...j, ...patch } : j))
   const submitIdentity = (e: React.FormEvent) => {
@@ -89,8 +89,10 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
           },
         })
       })
+      // Read the server first: the review still holds this file as `uploading` until then.
+      await refresh()
       update(job.id, { phase: 'submitted', progress: 1, assetId: result.asset_id })
-      setActiveId(result.asset_id); setUploadMode(false); setRevision(null); refresh()
+      setActiveId(result.asset_id); setUploadMode(false); setRevision(null)
     } catch (e) { update(job.id, { phase: 'error', error: e instanceof Error ? e.message : 'Upload stopped. Try again.' }) }
   }
   const onFiles = (files: File[]) => {
@@ -107,7 +109,7 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
     <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-text-tertiary">{waitingIdentity ? 'Add your details to submit your uploaded files. Keep this tab open.' : 'Your files can upload while you fill this in.'}</p>{!identity.current && <button className="min-h-11 rounded-full bg-accent px-5 text-sm font-semibold text-text-inverse">{uploading ? 'Submit my files' : 'Save details'}</button>}</div>
 
   </form>
-  const jobCard = (job: Job) => <div key={job.id} className="mt-3"><UploadCard file={job.file} name={job.file.name} size={job.file.size} phase={job.phase} progress={job.progress} error={job.error} onRetry={() => upload(job)} onRemove={job.phase === 'error' ? () => setJobs(js => js.filter(j => j.id !== job.id)) : undefined} />{job.phase === 'uploaded' && <p className="mt-2 text-xs text-text-secondary">{waitingIdentity ? 'Waiting for your details' : 'Submitting your file…'}</p>}</div>
+  const jobCard = (job: Job) => <div key={job.id} className="mt-3"><UploadCard file={job.file} name={job.file.name} size={job.file.size} phase={job.phase} progress={job.progress} error={job.error} onRetry={() => upload(job)} onRemove={job.phase === 'error' ? () => setJobs(js => js.filter(j => j.id !== job.id)) : undefined} />{job.phase === 'uploaded' && <p className="mt-2 text-xs text-text-secondary">{waitingIdentity ? 'Waiting for your details. Not handed in yet: add your name and email below, then press Submit my files.' : 'Submitting your file…'}</p>}</div>
   return <div data-system-appearance className="owner-workspace handin-workspace min-h-screen bg-bg-primary text-text-primary">
     <header className={`relative mx-auto flex h-20 max-w-[1120px] items-center border-b border-border px-5 sm:px-8 ${complete ? 'justify-center' : 'justify-between'}`}>{view?.logo_url ? /* eslint-disable-next-line @next/next/no-img-element */ <img src={view.logo_url} alt={view.brand} className="h-8 max-w-40 object-contain" /> : <span className="text-lg font-semibold tracking-tight">{view?.brand || 'File request'}</span>}<span className={`text-xs text-text-tertiary ${complete ? 'absolute right-5 sm:right-8' : ''}`}>{complete ? 'Completed' : showUpload ? 'Editor upload' : 'Editor review'}</span></header>
     <main className={`mx-auto px-5 pb-16 pt-8 sm:px-8 sm:pt-10 ${showUpload ? 'max-w-3xl' : 'max-w-[1120px]'}`}>
@@ -117,9 +119,10 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
       {complete ? <SubmissionSuccess token={token} brand={view.brand} /> : <>
       {showUpload ? <>
         {hasSubmission && !uploading && <button className="mb-4 flex min-h-11 items-center gap-2 text-sm text-text-secondary" onClick={() => { setUploadMode(false); setRevision(null) }}><ArrowLeft size={16} /> Back to {revision ? `v${revision.version} ` : ''}feedback</button>}
-        <DropZone onFiles={onFiles} multiple={!revision} accept="video/*" disabled={uploading} title={revision ? `Drop ${revision.name} · v${revision.version + 1}` : 'Drop your files to begin'} hint={revision ? 'New filename? No problem. This replaces the selected cut.' : 'Video files · or choose files'} />{jobs.filter(j => j.phase !== 'submitted' || batchOpen).map(jobCard)}{uploaderDetails}
+        <DropZone onFiles={onFiles} multiple={!revision} accept="video/*" disabled={uploading && !!revision} title={revision ? `Drop ${revision.name} · v${revision.version + 1}` : hasSubmission || batchOpen ? 'Drop more files to add them' : 'Drop your files to begin'} hint={revision ? 'New filename? No problem. This replaces the selected cut.' : 'Video files · or choose files'} />{jobs.filter(j => j.phase !== 'submitted' || batchOpen).map(jobCard)}{uploaderDetails}
       </> : <>
-        <RequestWorkspace statusUnavailable={!!reviewError} token={token} brand={view.brand} assets={assets} activeId={activeId} onSelect={setActiveId} onRefresh={refresh} onRevise={asset => { setRevision(asset); setUploadMode(true) }} onObject={async (asset, comment, text) => { const result = await objectToNote(token, { asset_id: asset.asset_id, version_id: asset.version_id, comment_id: comment.id, body: comment.body, text, name: who.name }); refresh(); return result }} />
+        <RequestWorkspace statusUnavailable={!!reviewError} token={token} brand={view.brand} assets={assets} activeId={activeId} onSelect={setActiveId} onRefresh={refresh} onRevise={asset => { setRevision(asset); setUploadMode(true) }} onDiscard={async asset => { try { await discardUpload(token, { asset_id: asset.asset_id, version_id: asset.version_id! }); setActiveId(undefined); await refresh() } catch (e) { setError(e instanceof Error ? e.message : 'That file could not be removed. Try again.'); await refresh() } }} onObject={async (asset, comment, text) => { const result = await objectToNote(token, { asset_id: asset.asset_id, version_id: asset.version_id, comment_id: comment.id, body: comment.body, text, name: who.name }); refresh(); return result }} />
+        <button className="mx-auto mt-5 flex min-h-11 rounded-full border border-border px-5 text-sm font-medium items-center" onClick={() => { setRevision(null); setUploadMode(true) }}>Add more files</button>
         {reviewError && <p role="alert" className="mb-5 text-sm text-status-error">Feedback is temporarily unavailable. Your files are safe. <button onClick={refresh} className="min-h-11 underline">Try again</button></p>}
 
       </>}
