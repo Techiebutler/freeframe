@@ -205,7 +205,9 @@ describe('Uploads panel render cost', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('2,000 queued rows render, and a progress write re-renders only its own row', () => {
+  // Rendering 2,000 rows is the slow part of this test, and it asserts render counts rather than
+  // speed, so a slow runner must not fail it: the budget lives in the UPLOAD_PERF test below.
+  it('2,000 queued rows render, and a progress write re-renders only its own row', { timeout: 30_000 }, () => {
     // One upload under way at the top of the drop, and 1,999 waiting their turn.
     openPanelWith(rows(2000, (i) => (i === 0 ? { status: 'uploading', progress: 0 } : { status: 'queued' })))
     expect(screen.getAllByTestId('upload-row')).toHaveLength(2000)
