@@ -13,6 +13,7 @@ from ..tasks.email_tasks import send_project_added_email
 from ..tasks.celery_app import send_task_safe
 from ..services.s3_service import put_object, generate_presigned_get_url, delete_object
 from ..services.storage import project_storage_used_bytes, project_storage_used_bytes_map
+from ..services.activity_service import log_activity
 from ..config import settings
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -165,9 +166,10 @@ def restore_project(project_id: uuid.UUID, db: Session = Depends(get_db), curren
     """Take a soft-deleted project back out of the trash.
 
     The counterpart to `DELETE /{project_id}`, and the missing half of the
-    retention window the delete dialog promises. Until this existed a deleted
-    project was present but unreachable for everyone: no endpoint, no page, and
-    the only way back was an UPDATE against the database by hand.
+    window `SOFT_DELETE_RETENTION_DAYS` keeps the rows for. Until this existed a
+    deleted project was present but unreachable for everyone: no endpoint, no
+    page, and the only way back was an UPDATE against the database by hand. The
+    delete dialog said so, and says so still for an owner without Admin.
 
     `_get_project` and `_require_project_owner` cannot be used, because both
     insist on a live project and this one is deliberately not. The checks are
@@ -211,12 +213,30 @@ def restore_project(project_id: uuid.UUID, db: Session = Depends(get_db), curren
                 detail=f"This project was deleted more than {days} days ago and can no longer be restored.",
             )
 
+    # Read before the UPDATE: `synchronize_session="fetch"` clears it on the
+    # instance, and the log line is about the deletion this undid.
+    was_deleted_at = project.deleted_at
     restored = db.query(Project).filter(
         Project.id == project_id, Project.deleted_at.isnot(None),
     ).update({"deleted_at": None}, synchronize_session="fetch")
     if not restored:
         db.rollback()
         raise HTTPException(status_code=404, detail="Deleted project not found")
+    # Logged here and not only in the admin panel: putting a project back in
+    # front of its members is the same reach as taking it away, and a superadmin
+    # who is not a member can do it. Rides this request's transaction, so a
+    # rolled-back restore leaves no entry claiming otherwise.
+    log_activity(
+        db,
+        "project_restored",
+        user_id=current_user.id,
+        project_id=project_id,
+        payload={
+            "via": "project_endpoint",
+            "by_superadmin": bool(current_user.is_superadmin),
+            "deleted_at": was_deleted_at.isoformat() if was_deleted_at else None,
+        },
+    )
     db.commit()
     return {"ok": True}
 
