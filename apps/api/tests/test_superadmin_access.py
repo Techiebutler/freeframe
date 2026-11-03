@@ -5,7 +5,9 @@ and which status comes back, and the mock session answers every query truthily.
 Pinned here: every tier passes for an admin with no membership and the stand-in
 membership is never persisted; the ordinary 403s are untouched; every tier taken
 past one's own membership lands in the activity log, read tiers and the asset
-path included, one row per request and project; `can_access_asset`, the event
+path included, whether the client reads one asset or a batch of ids, one row per
+request and project, and the row outlives a purge of what it names;
+`can_access_asset`, the event
 stream and share links agree with the role gate; and over HTTP reading, listing
 with `scope=all`, deleting, uploading, moderating someone else's comment and
 reading one project's file list from the Storage tab all reach a project the
@@ -172,6 +174,82 @@ def test_the_asset_and_event_paths_are_logged_once_each(seed, scope):
     if scope == "asset":
         assert logged.asset_id == asset.id
         assert logged.payload["required_role"] is None
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "ids"),
+    [("/assets/{one}", 1), ("/assets/batch", 3)],
+    ids=["one asset per request", "many ids in one request"],
+)
+def test_an_asset_read_is_logged_whichever_endpoint_the_client_calls(
+    seed, as_user, endpoint, ids,
+):
+    """`GET /assets/batch` is `GET /assets/{id}` for up to a hundred ids in one request, and
+    it answers with presigned thumbnail URLs, so an administrator reading someone else's
+    project through it has to leave the same row. It gated on `can_access_asset`, which
+    writes none by design, so whether the read was recorded depended on which of the two
+    endpoints the client happened to call. Still one row per request and project, however
+    many ids the batch carries."""
+    owner = seed.user()
+    project = seed.project(owner)
+    assets = [seed.media(project, owner, name=f"clip {i}") for i in range(ids)]
+    admin = seed.user(superadmin=True)
+    if endpoint == "/assets/batch":
+        query = "&".join(f"ids={a.id}" for a in assets)
+        resp = as_user(admin).get(f"/assets/batch?{query}")
+        assert {a["id"] for a in resp.json()} == {str(a.id) for a in assets}
+    else:
+        resp = as_user(admin).get(f"/assets/{assets[0].id}")
+    assert resp.status_code == 200
+    seed.db.flush()
+    [logged] = admin_log(seed.db, project.id)
+    assert logged.user_id == admin.id
+    assert logged.payload["scope"] == "asset"
+    assert logged.payload["membership"] == "none"
+
+
+@pytest.mark.parametrize(
+    "purge", ["the asset", "the whole project"],
+    ids=["the asset is purged", "the project is purged"],
+)
+def test_the_admin_audit_outlives_a_purge_of_what_it_names(seed, as_user, monkeypatch, purge):
+    """A read, a trash and a purge used to leave no record of the read: the retention
+    cascade deletes a purged row's activity by `project_id` and by `asset_id`, and the
+    audit row names both. The audit's whole job is to say an outsider was in there, so it
+    stays; the foreign key is cleared, because what it pointed at is gone, and the id moves
+    into `payload`. Ordinary activity on the same project still goes with it."""
+    from apps.api.models.activity import ActivityLog as Row
+    from apps.api.tasks import cleanup_tasks as ct
+    monkeypatch.setattr(ct, "delete_object", lambda key: None)
+    monkeypatch.setattr(ct, "delete_prefix", lambda key: None)
+
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.media(project, owner)
+    admin = seed.user(superadmin=True)
+    assert as_user(admin).get(f"/assets/{asset.id}").status_code == 200
+    ordinary = Row(project_id=project.id, asset_id=asset.id, action="created", payload={})
+    seed.db.add(ordinary)
+    seed.db.flush()
+    [audit] = admin_log(seed.db, project.id)
+    audit_id, ordinary_id = audit.id, ordinary.id
+
+    seed.trash(asset if purge == "the asset" else project)
+    counts = ct.PurgeCounts()
+    if purge == "the asset":
+        ct._purge_asset(seed.db, asset.id, counts)
+    else:
+        ct._purge_project(seed.db, project.id, counts)
+    seed.db.flush()
+
+    kept = seed.db.query(Row).filter(Row.id == audit_id).one()
+    assert kept.payload["via"] == "superadmin"
+    assert kept.asset_id is None
+    assert kept.payload["purged_asset_id"] == str(asset.id)
+    if purge != "the asset":
+        assert kept.project_id is None
+        assert kept.payload["purged_project_id"] == str(project.id)
+    assert seed.db.query(Row).filter(Row.id == ordinary_id).count() == 0
 
 
 @pytest.mark.parametrize(
