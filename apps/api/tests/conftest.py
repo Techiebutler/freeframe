@@ -226,10 +226,22 @@ class MediaSeed:
         self.db.flush()
         return m
 
-    def asset(self, project, owner, name="clip", deleted=False):
+    def folder(self, project, owner, name="shots", parent=None, deleted=False):
+        from apps.api.models.folder import Folder
+        f = Folder(
+            project_id=project.id, name=name, created_by=owner.id,
+            parent_id=parent.id if parent else None,
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        self.db.add(f)
+        self.db.flush()
+        return f
+
+    def asset(self, project, owner, name="clip", deleted=False, folder=None):
         from apps.api.models.asset import Asset, AssetType
         a = Asset(
             project_id=project.id, name=name, asset_type=AssetType.video, created_by=owner.id,
+            folder_id=folder.id if folder else None,
             deleted_at=datetime.now(timezone.utc) if deleted else None,
         )
         self.db.add(a)
@@ -269,13 +281,13 @@ class MediaSeed:
 
     def media(
         self, project, owner, name="clip", versions=1, original=1_000,
-        derived: int | None = 0, s3_keys=True,
+        derived: int | None = 0, s3_keys=True, folder=None, status=None,
     ):
         """An asset holding `versions` ready versions of the given size each."""
-        a = self.asset(project, owner, name=name)
+        a = self.asset(project, owner, name=name, folder=folder)
         for n in range(1, versions + 1):
             self.version(a, owner, number=n, original=original, derived=derived,
-                         filename=f"{name}-v{n}.mp4", s3_keys=s3_keys)
+                         filename=f"{name}-v{n}.mp4", s3_keys=s3_keys, status=status)
         return a
 
     def versions_of(self, asset):

@@ -17,6 +17,7 @@ from apps.api.models.activity import ActivityLog
 from apps.api.models.asset import Asset
 from apps.api.models.project import Project, ProjectRole
 from apps.api.services import admin_panel
+from apps.api.tasks import cleanup_tasks
 
 RETENTION = settings.soft_delete_retention_days
 
@@ -292,6 +293,54 @@ def test_a_live_row_is_skipped_and_a_child_of_a_trashed_parent_is_blocked(
     assert blocked[f"restored_{level}s"] == 0
     assert blocked["blocked_by_parent"] == [str(row.id)]
     assert blocked["skipped"] == []
+    seed.db.refresh(row)
+    assert row.deleted_at is not None
+
+
+def test_a_restored_asset_leaves_the_folder_that_is_still_in_the_trash(
+    seed, as_user, admin, s3,
+):
+    """`DELETE /folders/{id}` stamps the folder's assets, so they appear in the trash as
+    ordinary rows. Clearing `deleted_at` alone left the asset naming a trashed folder: a
+    live row nobody could reach, which the collector then hard-deleted with the folder.
+    One rule for both doors moves it to the project's root instead."""
+    owner = seed.user()
+    project = seed.project(owner)
+    folder = seed.folder(project, owner, name="dailies")
+    asset = seed.media(project, owner, name="in a folder", folder=folder, original=1_000)
+    assert as_user(owner).delete(f"/folders/{folder.id}").status_code == 204
+
+    assert _restore(as_user(admin), asset_ids=[str(asset.id)]).json()["restored_assets"] == 1
+    seed.db.refresh(asset)
+    assert asset.deleted_at is None
+    assert asset.folder_id is None, "at the root, where the grid lists it"
+
+    # Age the folder past the window and run the collector that cascaded it away.
+    folder.deleted_at = datetime.now(timezone.utc) - timedelta(days=RETENTION + 1)
+    seed.db.flush()
+    cleanup_tasks._purge_soft_deleted(seed.db, cleanup_tasks.PurgeCounts())
+    seed.db.flush()
+    assert seed.db.query(Asset).filter(Asset.id == asset.id).first() is not None
+    assert s3["delete_object"] == [], "its objects are not the folder's to reclaim"
+
+
+@pytest.mark.parametrize("level", ["asset", "version"])
+def test_an_upload_that_was_never_usable_work_is_not_restored(seed, as_user, admin, level):
+    """`_dispose_version_files` deletes the objects before it stamps the row, so there is
+    nothing behind an `uploading` version in the trash. Restoring it would bring back a
+    card that cannot be opened, which is the same refusal `POST /assets/{id}/restore`
+    gives."""
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.media(project, owner, original=1_000, status=ProcessingStatus.uploading)
+    version = seed.versions_of(asset)[0]
+    row = {"asset": asset, "version": version}[level]
+    seed.trash(row)
+    body = _restore(as_user(admin), **{f"{level}_ids": [str(row.id)]}).json()
+    assert body[f"restored_{level}s"] == 0
+    assert body["skipped"] == [str(row.id)]
     seed.db.refresh(row)
     assert row.deleted_at is not None
 

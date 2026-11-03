@@ -21,6 +21,7 @@ from ..models.project import Project
 from ..models.user import User
 from . import storage as storage_service
 from .activity_service import log_activity
+from .restore_rules import restore_asset_row, restore_version_row
 
 log = logging.getLogger(__name__)
 
@@ -478,9 +479,12 @@ def _trash_root_bytes(db: Session) -> tuple[dict, dict, dict]:
 def trash_rows(db: Session) -> dict:
     """What is in the trash, how long it has left, and what it still costs.
 
-    `days_left` counts down the collector's own window; 0 means the next pass
-    takes it, and it is never negative because a row awaiting a pass is still
-    restorable. `total_bytes` is what purging that one row frees, and None when
+    `days_left` counts down the collector's own window and is never negative;
+    0 means the window is over, so the next pass takes the row and a restore
+    answers 409. An asset or version that was never usable work is listed too,
+    because it still has a row to remove, but the restore rule leaves it where
+    it is (see `services/restore_rules`). `total_bytes` is what purging that one
+    row frees, and None when
     a parent is trashed too: those bytes are the parent's figure, and a second
     number for the same bytes is how a list stops adding up.
     """
@@ -636,10 +640,17 @@ def restore(
     project back in front of its members is as much an administrative reach as
     taking it away.
 
-    Only what came back is reported and logged. An id never in the trash is
-    `skipped` and gets no log line: a record of an administrative reach has to
-    record something that happened, or a project's history claims it was
+    Only what came back is reported and logged. An id the rule left in the
+    trash is `skipped` and gets no log line: a record of an administrative reach
+    has to record something that happened, or a project's history claims it was
     restored on a day nobody touched it.
+
+    How a row comes back is not decided here. That is `services/restore_rules`,
+    shared with `POST /assets/{id}/restore`: an asset whose folder is in the
+    trash comes back at the project's root, and an upload that was never usable
+    work does not come back at all. Two doors onto the same rows with two rules
+    is how this panel restored an asset into a trashed folder, where nobody
+    could reach it and the collector hard-deleted it.
     """
     version_ids = list(version_ids or [])
     stale = _outside_retention(db, list(project_ids), list(asset_ids), version_ids)
@@ -668,12 +679,18 @@ def restore(
 
     blocked: list = []
 
-    def restore_children(model, ids, parent_query, parent_fields) -> tuple[int, list]:
-        """Clear `deleted_at` row by row, skipping any whose parent is trashed.
+    def restore_children(ids, parent_query, parent_fields, write) -> tuple[int, list]:
+        """Restore row by row, skipping any whose parent is trashed.
 
         Restoring into a deleted parent would report success and then be
         hard-deleted with it, which is the same refusal the single-row restore
         endpoints already give.
+
+        The write itself is `services/restore_rules`, the one rule those
+        endpoints use: an asset whose folder is in the trash comes back at the
+        project's root, and an upload that was never usable work does not come
+        back at all. A row the rule leaves in the trash is not counted as
+        restored, so the response cannot claim one.
         """
         done_count, done_ids = 0, []
         for row_id in ids:
@@ -683,18 +700,14 @@ def restore(
             if any(getattr(row, f) is not None for f in parent_fields):
                 blocked.append(row_id)
                 continue
-            done = db.query(model).filter(
-                model.id == row_id, model.deleted_at.isnot(None)
-            ).update({"deleted_at": None}, synchronize_session="fetch")
-            done_count += done
-            if done:
+            if write(db, row_id):
+                done_count += 1
                 done_ids.append(row_id)
         if ids:
             db.flush()
         return done_count, done_ids
 
     restored_assets, restored_asset_ids = restore_children(
-        Asset,
         asset_ids,
         lambda aid: (
             db.query(Asset.id, Project.deleted_at.label("project_deleted_at"))
@@ -702,9 +715,9 @@ def restore(
             .filter(Asset.id == aid, Asset.deleted_at.isnot(None))
         ),
         ("project_deleted_at",),
+        restore_asset_row,
     )
     restored_versions, restored_version_ids = restore_children(
-        AssetVersion,
         version_ids,
         lambda vid: (
             db.query(
@@ -717,6 +730,7 @@ def restore(
             .filter(AssetVersion.id == vid, AssetVersion.deleted_at.isnot(None))
         ),
         ("asset_deleted_at", "project_deleted_at"),
+        restore_version_row,
     )
 
     # Asked for, not in the trash, not blocked by a parent either: nothing to do

@@ -180,9 +180,12 @@ class AdminRestoreResponse(BaseModel):
     #: Items whose project or asset is still deleted. They stay in the trash;
     #: restoring the thing above them first brings them within reach.
     blocked_by_parent: list[str]
-    #: Ids that were not in the trash, so there was nothing to restore. They are
-    #: reported rather than silently counted as done, and they leave no entry in
-    #: the activity history, because nothing happened to them.
+    #: Ids the restore rule left where they were, so there was nothing to
+    #: report: not in the trash at all, or an upload that was never usable work,
+    #: whose objects were deleted before the row was stamped (the same rule
+    #: `POST /assets/{id}/restore` applies, in `services/restore_rules`). They
+    #: are reported rather than silently counted as done, and they leave no
+    #: entry in the activity history, because nothing happened to them.
     skipped: list[str] = Field(default_factory=list)
 
 
