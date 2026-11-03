@@ -136,8 +136,13 @@ def _record_derived_size(db, media_file, output_prefix: str) -> None:
     Once per job, so the storage overview is a grouped SUM over existing rows
     instead of a bucket listing on every page view. The listing is the only
     thing that can fail here, and failing it must not fail a transcode that
-    already produced its output: the column stays NULL, the overview reports
-    the file as unmeasured, and `backfill_media_derived_size` picks it up.
+    already produced its output: the column stays NULL and the overview reports
+    the file as unmeasured.
+
+    **Nothing re-measures it on its own.** The row stays unmeasured until
+    somebody runs `backfill_media_derived_size` (`POST /admin/storage/backfill`,
+    or the command in the upgrade notes); no schedule and no screen picks it up,
+    and `unmeasured_files` in `GET /admin/storage` is where it shows.
 
     A re-transcode of the same version overwrites the value, which is correct —
     the old objects were replaced under the same prefix.
