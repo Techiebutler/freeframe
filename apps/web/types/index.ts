@@ -185,6 +185,7 @@ export interface AdminPurgeResponse {
   purged_versions: number;
   freed_bytes: number;
   s3_deletes: number;
+  s3_failures: number;
 }
 
 export interface Team {

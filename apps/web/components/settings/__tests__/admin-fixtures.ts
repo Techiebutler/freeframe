@@ -64,11 +64,12 @@ export function trash(partial: Partial<TrashOverview> = {}): TrashOverview {
 }
 
 /**
- * A trash holding one root project, one asset blocked by it, and one asset
- * whose project is live, which is every case a row can be in.
+ * A trash holding one root project, one asset blocked by it, one asset whose
+ * project is live and one version of a live file, which is every case a row
+ * can be in.
  */
 export const FULL_BIN = trash({
-  total_bytes: 2 * GB,
+  total_bytes: 2.5 * GB,
   projects: [
     { project_id: 'p-gone', name: 'Last Year Reel', deleted_at: null, days_left: 28, total_bytes: 1.5 * GB },
   ],
@@ -80,6 +81,10 @@ export const FULL_BIN = trash({
       project_name: 'Big Campaign', deleted_at: null, days_left: 12,
       blocked_by_project: false, total_bytes: 0.5 * GB },
   ],
-  versions: [],
+  versions: [
+    { version_id: 'v-gone', version_number: 2, asset_id: 'a-1',
+      asset_name: 'Hero Cut.mov', project_id: 'p-big', project_name: 'Big Campaign',
+      deleted_at: null, days_left: 30, blocked_by_parent: false, total_bytes: 0.5 * GB },
+  ],
 })
 

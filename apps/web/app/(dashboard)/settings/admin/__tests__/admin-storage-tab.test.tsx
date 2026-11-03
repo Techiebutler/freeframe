@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { cleanup, render, screen, fireEvent } from '@testing-library/react'
 
 // The Storage panel sits where the other instance-wide admin surfaces sit: a
 // sub-tab of the Admin dashboard, reachable by deep link like the others.
@@ -36,9 +36,12 @@ describe('the Admin dashboard Storage tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Storage' }))
     expect(screen.getByTestId('storage-tab')).toBeInTheDocument()
 
+    // Unmounted first: with the clicked render still on screen the deep-link
+    // assertion below could not fail, whatever the second render did.
+    cleanup()
     window.history.replaceState({}, '', '/settings/admin?tab=storage')
     render(<AdminPage />)
-    expect(screen.getAllByTestId('storage-tab').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('storage-tab')).toBeInTheDocument()
   })
 
   it('offers it to no one else, and ignores a tab name it does not have', () => {
