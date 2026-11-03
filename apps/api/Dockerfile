@@ -4,7 +4,6 @@ WORKDIR /workspace
 
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    imagemagick \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

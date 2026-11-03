@@ -65,6 +65,24 @@ export interface InstanceSettings {
   upload_part_size_bytes?: number;
   /** Admins only. Whether people outside a project may download originals. */
   allow_original_downloads?: boolean;
+  /**
+   * Admins only. How hard review streams are compressed, 1 (highest quality) to
+   * 5 (smallest files). Absent when nobody has chosen one, in which case the
+   * server is following its TRANSCODER_CRF_OFFSET environment variable.
+   */
+  compression_level?: number | null;
+  /**
+   * Admins only. The CRF offset the next transcode will actually use, whether
+   * it comes from the level above or from the environment.
+   */
+  compression_crf_offset?: number;
+  /**
+   * Admins only. Which step of the scale that effective offset is, resolved by
+   * the server from the one scale (COMPRESSION_LEVELS in
+   * packages/transcoder/base.py). Absent when no step names the offset, and
+   * the UI then says so.
+   */
+  compression_level_effective?: number;
 }
 
 // ─── The admin Storage tab ────────────────────────────────────────────────────
