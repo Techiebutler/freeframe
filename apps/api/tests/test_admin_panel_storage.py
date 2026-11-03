@@ -729,6 +729,45 @@ def test_the_objects_go_only_after_the_rows_are_committed(seed, as_user, admin, 
     assert pending["s3_deletes"] > 0 and pending["s3_failures"] == 0
 
 
+def test_the_endpoint_commits_the_rows_before_it_reclaims_the_objects(
+    seed, as_user, admin, panel, s3, monkeypatch,
+):
+    """The test above pins the service halves in isolation; this pins the order the
+    endpoint calls them in, which is the whole safety property. Swapping `db.commit()`
+    and `reclaim_objects` in `routers/admin.py` leaves every other purge test green,
+    because the end state is identical -- only a crash between the two tells them
+    apart. So watch the calls rather than the result: the commit has to be what
+    immediately precedes the reclaim."""
+    owner = seed.user()
+    _trashed_project(seed, owner)
+    client = as_user(admin)
+    confirmation = panel.trash_counts(client)
+
+    calls = []
+    # The `live_db` fixture already shadows `commit` on the instance (it flushes, so
+    # endpoint writes stay inside the test's transaction), so the spy has to wrap that
+    # instance attribute; patching the class would never be reached.
+    real_commit, real_reclaim = seed.db.commit, admin_panel.reclaim_objects
+
+    def spy_commit(*args, **kwargs):
+        calls.append("commit")
+        return real_commit(*args, **kwargs)
+
+    def spy_reclaim(db, pending):
+        calls.append("reclaim")
+        return real_reclaim(db, pending)
+
+    monkeypatch.setattr(seed.db, "commit", spy_commit)
+    monkeypatch.setattr(admin_panel, "reclaim_objects", spy_reclaim)
+
+    assert _purge(client, everything=True, **confirmation).status_code == 200
+
+    assert calls.count("reclaim") == 1, "the endpoint reclaims exactly once"
+    at = calls.index("reclaim")
+    assert at > 0 and calls[at - 1] == "commit", \
+        f"the rows must be committed before the objects go, got {calls}"
+
+
 def test_a_project_restore_is_recorded_as_a_reach_into_the_project(seed, as_user, admin):
     """A superadmin who is not a member can do this, so the project's own history has to
     say it happened; the panel's bulk restore logged it and this door did not."""
