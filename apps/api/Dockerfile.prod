@@ -43,7 +43,7 @@ COPY packages/transcoder /workspace/packages/transcoder
 COPY apps/api /workspace/apps/api
 
 # Create non-root user
-RUN adduser --disabled-password --no-create-home appuser
+RUN adduser --disabled-password appuser
 
 WORKDIR /workspace
 

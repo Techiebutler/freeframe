@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Compare's comment panels no longer re-render on every playback frame, and annotation and timecode buttons pause playback again.** Comment updates and pane-local seeking remain live. (#170, #582 by @WhyTan00)
+- **The production API container no longer logs `Control server error: [Errno 13] Permission denied: '/home/appuser'` on every start.** Its runtime user was created without a home directory while `HOME` still pointed at one, so gunicorn's arbiter could not create its control socket under `$HOME/.gunicorn`; runtime control of a production container (`gunicornc -c 'show workers'`) works now. (#605, #NNN by @jeremy-pixelated)
 
 ## [1.22.0] - 2026-10-29
 
