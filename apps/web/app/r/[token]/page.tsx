@@ -41,7 +41,9 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
   const assets = review?.assets || []
   const hasSubmission = (view?.assets.length || 0) > 0
   const batchOpen = uploading || jobs.some(j => j.phase === 'error')
-  const showUpload = !complete && (uploadMode || uploading || jobs.some(j => j.phase === 'error') || (!hasSubmission && !jobs.some(j => j.phase === 'submitted')))
+  // A finished request stays open for more files: the first one to land reopens it on the server.
+  const showUpload = uploadMode || batchOpen || (!complete && !hasSubmission && !jobs.some(j => j.phase === 'submitted'))
+  const finished = complete && !showUpload
   React.useEffect(() => { window.scrollTo?.({ top: 0 }) }, [showUpload, complete])
   React.useEffect(() => {
     if (!uploading) return
@@ -89,6 +91,9 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
           },
         })
       })
+      // The landed file reopened a finished request. Forget the closed state and the review that led to it, even if the re-read below fails.
+      setCompletedAt(undefined); finishAttempt.current = ''
+      await Promise.allSettled([refreshView(v => v && { ...v, completed_at: null }, { revalidate: false }), refreshReview(undefined, { revalidate: false })])
       // Read the server first: the review still holds this file as `uploading` until then.
       await refresh()
       update(job.id, { phase: 'submitted', progress: 1, assetId: result.asset_id })
@@ -96,7 +101,6 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
     } catch (e) { update(job.id, { phase: 'error', error: e instanceof Error ? e.message : 'Upload stopped. Try again.' }) }
   }
   const onFiles = (files: File[]) => {
-    if (complete) return
     if (files.some(file => !file.type.startsWith('video/') && !/\.(mp4|mov|webm|m4v)$/i.test(file.name))) { setError('Choose a video file for this review.'); return }
     onActivity?.()
     const chosen = revision ? files.slice(0, 1) : files
@@ -111,14 +115,18 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
   </form>
   const jobCard = (job: Job) => <div key={job.id} className="mt-3"><UploadCard file={job.file} name={job.file.name} size={job.file.size} phase={job.phase} progress={job.progress} error={job.error} onRetry={() => upload(job)} onRemove={job.phase === 'error' ? () => setJobs(js => js.filter(j => j.id !== job.id)) : undefined} />{job.phase === 'uploaded' && <p className="mt-2 text-xs text-text-secondary">{waitingIdentity ? 'Waiting for your details. Not handed in yet: add your name and email below, then press Submit my files.' : 'Submitting your file…'}</p>}</div>
   return <div data-system-appearance className="owner-workspace handin-workspace min-h-screen bg-bg-primary text-text-primary">
-    <header className={`relative mx-auto flex h-20 max-w-[1120px] items-center border-b border-border px-5 sm:px-8 ${complete ? 'justify-center' : 'justify-between'}`}>{view?.logo_url ? /* eslint-disable-next-line @next/next/no-img-element */ <img src={view.logo_url} alt={view.brand} className="h-8 max-w-40 object-contain" /> : <span className="text-lg font-semibold tracking-tight">{view?.brand || 'File request'}</span>}<span className={`text-xs text-text-tertiary ${complete ? 'absolute right-5 sm:right-8' : ''}`}>{complete ? 'Completed' : showUpload ? 'Editor upload' : 'Editor review'}</span></header>
+    <header className={`relative mx-auto flex h-20 max-w-[1120px] items-center border-b border-border px-5 sm:px-8 ${finished ? 'justify-center' : 'justify-between'}`}>{view?.logo_url ? /* eslint-disable-next-line @next/next/no-img-element */ <img src={view.logo_url} alt={view.brand} className="h-8 max-w-40 object-contain" /> : <span className="text-lg font-semibold tracking-tight">{view?.brand || 'File request'}</span>}<span className={`text-xs text-text-tertiary ${finished ? 'absolute right-5 sm:right-8' : ''}`}>{finished ? 'Completed' : showUpload ? 'Editor upload' : 'Editor review'}</span></header>
     <main className={`mx-auto px-5 pb-16 pt-8 sm:px-8 sm:pt-10 ${showUpload ? 'max-w-3xl' : 'max-w-[1120px]'}`}>
       {viewError && (!view || [401, 403, 404, 410].includes(viewError.status)) ? <div className="py-20 text-center"><h1 className="text-2xl font-semibold">{viewError.status === 410 ? 'This link is closed' : 'This link could not be opened'}</h1><p className="mt-3 text-text-secondary">{viewError.message}</p></div> : !view ? <p role="status">Opening your project…</p> : <>
-      <div className={`mb-7 ${complete ? 'text-center' : ''}`}><p className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-text-tertiary">{revision && showUpload ? `Next version · v${revision.version + 1}` : complete ? 'Handed in. Nicely done.' : 'Your project'}</p><h1 className="text-balance text-3xl font-semibold tracking-tight">{view.title}</h1></div>
+      <div className={`mb-7 ${finished ? 'text-center' : ''}`}><p className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-text-tertiary">{revision && showUpload ? `Next version · v${revision.version + 1}` : finished ? 'Handed in. Nicely done.' : 'Your project'}</p><h1 className="text-balance text-3xl font-semibold tracking-tight">{view.title}</h1></div>
       {error && <div role="alert" className="mb-5 rounded-xl border border-border p-4 text-sm text-status-error">{error}{readyToFinish && !complete && <button className="ml-3 min-h-11 underline" onClick={() => { finishAttempt.current = ''; refresh() }}>Try again</button>}</div>}
-      {complete ? <SubmissionSuccess token={token} brand={view.brand} /> : <>
+      {finished ? <>
+        <SubmissionSuccess token={token} brand={view.brand} />
+        <button className="mx-auto mt-5 flex min-h-11 items-center rounded-full border border-border px-5 text-sm font-medium" onClick={() => { setRevision(null); setUploadMode(true) }}>Add more files</button>
+      </> : <>
       {showUpload ? <>
-        {hasSubmission && !uploading && <button className="mb-4 flex min-h-11 items-center gap-2 text-sm text-text-secondary" onClick={() => { setUploadMode(false); setRevision(null) }}><ArrowLeft size={16} /> Back to {revision ? `v${revision.version} ` : ''}feedback</button>}
+        {hasSubmission && !uploading && <button className="mb-4 flex min-h-11 items-center gap-2 text-sm text-text-secondary" onClick={() => { setUploadMode(false); setRevision(null) }}><ArrowLeft size={16} /> {complete ? 'Back' : `Back to ${revision ? `v${revision.version} ` : ''}feedback`}</button>}
+        {complete && <p className="mb-4 text-sm text-text-secondary">Files already handed in keep their result. A new file gets its own review, then this hand-in finishes again.</p>}
         <DropZone onFiles={onFiles} multiple={!revision} accept="video/*" disabled={uploading && !!revision} title={revision ? `Drop ${revision.name} · v${revision.version + 1}` : hasSubmission || batchOpen ? 'Drop more files to add them' : 'Drop your files to begin'} hint={revision ? 'New filename? No problem. This replaces the selected cut.' : 'Video files · or choose files'} />{jobs.filter(j => j.phase !== 'submitted' || batchOpen).map(jobCard)}{uploaderDetails}
       </> : <>
         <RequestWorkspace statusUnavailable={!!reviewError} token={token} brand={view.brand} assets={assets} activeId={activeId} onSelect={setActiveId} onRefresh={refresh} onRevise={asset => { setRevision(asset); setUploadMode(true) }} onDiscard={async asset => { try { await discardUpload(token, { asset_id: asset.asset_id, version_id: asset.version_id! }); setActiveId(undefined); await refresh() } catch (e) { setError(e instanceof Error ? e.message : 'That file could not be removed. Try again.'); await refresh() } }} onObject={async (asset, comment, text) => { const result = await objectToNote(token, { asset_id: asset.asset_id, version_id: asset.version_id, comment_id: comment.id, body: comment.body, text, name: who.name }); refresh(); return result }} />

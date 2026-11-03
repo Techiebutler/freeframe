@@ -9,7 +9,7 @@ def test_whop_migrations_follow_live_n8n_head_without_branching():
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).parents[1] / "alembic"))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["d1a2b3c4e5f6"]
+    assert scripts.get_heads() == ["a7c2e4f6b8d0"]
     assert scripts.get_revision("d1a2b3c4e5f6").down_revision == "c9e1a2b3d4f5"
     assert scripts.get_revision("c9e1a2b3d4f5").down_revision == "b8d8a10b2026"
     assert set(scripts.get_revision("b8d8a10b2026").down_revision) == {"a8d8a10b2026", "f1d8a10b2026"}
@@ -17,6 +17,7 @@ def test_whop_migrations_follow_live_n8n_head_without_branching():
     assert scripts.get_revision("f1d8a10b2026").down_revision == "e1d8a10b2026"
     assert scripts.get_revision("e1d8a10b2026").down_revision == "d5d7e10b2026"
     assert set(scripts.get_revision("d5d7e10b2026").down_revision) == {"c4d7e10b2026", "91ac7de48b20"}
+    assert scripts.get_revision("a7c2e4f6b8d0").down_revision == "d1a2b3c4e5f6"
     assert set(scripts.get_revision("c4d7e10b2026").down_revision) == {"a1c7e10b2026", "a7b2c3d4e5f6"}
     assert scripts.get_revision("a7b2c3d4e5f6").down_revision == "e4f5a6b7c8d9"
     assert scripts.get_revision("a1c7e10b2026").down_revision == "e4f5a6b7c8d9"

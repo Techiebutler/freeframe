@@ -54,6 +54,17 @@ def attest_request_timing(db, request_id, project_id, share_token, *, apply=Fals
         attested_at=(req.timing_natural_intent or {}).get('attested_at'), **identity)
 
 
+def reopen_request(req):
+    """A new file landed on a finished request: the normal review and finish flow runs again. Files already
+    finished keep their result, it hangs on their version. `first_completed_at` survives, so a later finish
+    is not reported as a second one. Called under U lock."""
+    if req.completed_at is None:
+        return
+    req.first_completed_at = req.first_completed_at or req.completed_at
+    req.completed_at = None
+    req.completion_versions = None
+
+
 def adopt_signed_in_upload(db, req, asset_id, version):
     """A version a signed-in user uploaded into this request's folder, on the guest route's terms: the
     RequestUpload row `_review_assets` reads as proof of the transfer. Called under U lock. Idempotent."""
