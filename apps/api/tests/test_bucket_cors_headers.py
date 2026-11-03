@@ -14,9 +14,6 @@ def test_allowed_headers_are_lowercase(monkeypatch):
     client = MagicMock()
     monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: client)
     monkeypatch.setattr(s3_service, "_is_aws_s3", lambda: False)
-    monkeypatch.setattr(
-        s3_service.settings, "cors_allow_origins", "http://localhost:3000"
-    )
 
     s3_service.ensure_bucket_exists()
 
@@ -24,10 +21,12 @@ def test_allowed_headers_are_lowercase(monkeypatch):
     assert call is not None, "ensure_bucket_exists did not set bucket CORS"
     rules = call.kwargs["CORSConfiguration"]["CORSRules"]
     assert rules, "no CORS rules were written"
+    expected = [
+        "content-type",
+        "content-md5",
+        "x-amz-content-sha256",
+        "x-amz-date",
+        "x-amz-decoded-content-length",
+    ]
     for rule in rules:
-        for header in rule["AllowedHeaders"]:
-            assert header == header.lower(), (
-                f"AllowedHeaders entry {header!r} is not lowercase; Garage "
-                "rejects the preflight for it"
-            )
-    assert "content-type" in rules[0]["AllowedHeaders"]
+        assert rule["AllowedHeaders"] == expected
