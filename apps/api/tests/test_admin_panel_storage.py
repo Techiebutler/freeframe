@@ -373,6 +373,41 @@ def test_each_trash_root_carries_what_purging_it_would_free(seed, as_user, admin
     )
     assert roots == body["total_bytes"], "the roots are the whole trash, counted once"
 
+
+def test_a_trashed_child_is_priced_on_its_parent_and_nowhere_else(seed):
+    """Only roots carry a figure: a trashed thing whose parent is also trashed is
+    already counted on the parent, and a second claim on the same bytes is a double
+    count. Pinned on `_trash_root_bytes` rather than through `/admin/trash`, because
+    the endpoint blanks a blocked row's figure on the way out and would therefore stay
+    green with the parent filters gone; the promise that each byte is claimed once
+    lives in the query, and the next caller that reads the figure instead of the mask
+    inherits whatever is wrong with it."""
+    owner = seed.user()
+    binned_project = seed.project(owner, name="binned project")
+    child = seed.media(binned_project, owner, name="child", original=900, derived=0)
+    # Live asset in the trashed project, holding a trashed version: its version is
+    # not a root either, because the project above it is in the trash.
+    live_child = seed.media(binned_project, owner, name="live child", original=700, derived=0)
+    live = seed.project(owner, name="live")
+    binned_asset = seed.media(live, owner, name="binned asset", original=3_000, derived=1_000)
+    # Trashed asset in a live project, holding a trashed version: the version is the
+    # asset's bytes, the asset is the root.
+    both = seed.media(live, owner, name="both", original=300, derived=0)
+    multi = seed.media(live, owner, name="multi", versions=2, original=500, derived=100)
+    seed.trash(
+        binned_project, child, binned_asset, both,
+        seed.versions_of(live_child)[0], seed.versions_of(both)[0],
+        seed.versions_of(multi)[0],
+    )
+
+    project_bytes, asset_bytes, version_bytes = admin_panel._trash_root_bytes(seed.db)
+
+    assert project_bytes == {binned_project.id: 1_600}, "its own bytes and its children's"
+    assert asset_bytes == {binned_asset.id: 4_000, both.id: 300}, \
+        "the child inside the trashed project is the project's bytes"
+    assert version_bytes == {seed.versions_of(multi)[0].id: 600}, \
+        "a version under a trashed asset or project is the parent's bytes"
+
 # ── emptying the trash for good ───────────────────────────────────────────────
 
 def _purge(client, **body):
