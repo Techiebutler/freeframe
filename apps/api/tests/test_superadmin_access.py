@@ -6,9 +6,9 @@ Pinned here: every tier passes for an admin with no membership and the stand-in
 membership is never persisted; the ordinary 403s are untouched; every tier taken
 past one's own membership lands in the activity log, read tiers and the asset
 path included, whether the client reads one asset or a batch of ids, one row per
-request and project, and the row outlives a purge of what it names; a read of a
-**public** project is not logged, because the role allowed nothing there, while a
-write on one is; `can_access_asset`, the event
+request and project, and the row outlives a purge of what it names; what a **public**
+project already opens to every signed-in account is not logged, a read and a posted
+comment included, while a write that needs a project role is; `can_access_asset`, the event
 stream and share links agree with the role gate; and over HTTP reading, listing
 with `scope=all`, deleting, uploading, moderating someone else's comment and
 reading one project's file list from the Storage tab all reach a project the
@@ -210,23 +210,26 @@ def test_an_asset_read_is_logged_whichever_endpoint_the_client_calls(
 
 
 @pytest.mark.parametrize("public", [True, False], ids=["public", "private"])
-def test_a_public_project_logs_the_admins_writes_and_not_their_reads(
+def test_a_public_project_logs_only_what_the_admin_role_itself_allowed(
     seed, as_user, admin, public,
 ):
-    """What the Admin role was actually needed for is logged; nothing else is.
+    """Pinned, for a non-member admin: on a public project four reads and a posted comment
+    write no row and a rename writes one; on a private project all six write one each.
 
-    Every signed-in account may read a public project, so the role allowed nothing there
-    and there is no administrative access to record: `require_project_visible` takes the
-    admin branch only for a non-member on a *private* project, and `asset_access_reason`
-    answers "public" before it considers the flag. A write is a different matter, because
-    visibility makes a project readable and never writable: the owner tier goes through
-    `require_project_role`, which does not consult `is_public`, so a rename on a public
-    project leaves its row like one on a private project does.
+    A public project is readable by every signed-in account and its comment routes are open
+    to every signed-in account too, so the Admin role allowed nothing in either case and
+    there is no administrative access to record. `require_project_visible` takes the admin
+    branch only for a non-member on a *private* project, and `asset_access_reason` answers
+    "public" before it considers the flag, which is what `require_asset_access` and the
+    comment routes behind it go through. The other write gate is a different matter:
+    `require_project_role` never consults `is_public`, so the rename leaves its row on a
+    public project as well. The five further role writes the PR measures (settings, members,
+    upload, share link, delete) take that same branch and are not repeated here.
 
-    A project of its own per read, because the audit dedupes to one row per request *and
+    A project of its own per case, because the audit dedupes to one row per request *and
     project*: on a shared one an endpoint that stopped logging would hide behind the row
     another one left. Pinned so the decision cannot flip unnoticed in either direction,
-    which is what the CHANGELOG's upgrade note and `docs/architecture.md` now say out loud.
+    which is what the CHANGELOG's upgrade note and `docs/architecture.md` say out loud.
     """
     owner = seed.user()
     client = as_user(admin)
@@ -243,6 +246,16 @@ def test_a_public_project_logs_the_admins_writes_and_not_their_reads(
         assert client.get(path).status_code == 200, read
         seed.db.flush()
         assert len(admin_log(seed.db, project.id)) == (0 if public else 1), read
+    discussed = seed.project(owner, public=public)
+    asset = seed.media(discussed, owner)
+    version = seed.versions_of(asset)[0]
+    posted = client.post(
+        f"/assets/{asset.id}/comments",
+        json={"version_id": str(version.id), "body": "a note from the admin"},
+    )
+    assert posted.status_code == 201
+    seed.db.flush()
+    assert len(admin_log(seed.db, discussed.id)) == (0 if public else 1), "a comment"
     theirs = seed.project(owner, name="old name", public=public)
     renamed = client.patch(f"/projects/{theirs.id}", json={"name": "new name"})
     assert renamed.status_code == 200

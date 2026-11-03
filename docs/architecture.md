@@ -218,13 +218,16 @@ scope is a tier. `scope` is a role tier for the project gate, `"asset"` for the 
 comment and attachment path (`GET /assets/batch` included, so one batch read logs what the
 per-asset reads it replaces would have), and `"events"` for the live stream at connect.
 
-A **read of a public project** is therefore not logged, and that is the rule working rather than
-a gap: a public project is readable by every signed-in account, so the Admin role allowed nothing
-there and there is no administrative access to record. `require_project_visible` takes the admin
-branch only for a non-member on a private project, and `asset_access_reason` answers `"public"`
-before it considers the flag. A **write** on a public project is logged like any other, because
-the owner and editor tiers go through `require_project_role`, which does not consult
-`is_public`: visibility makes a project readable, never writable.
+What a **public project** already opens to every signed-in account is therefore not logged, and
+that is the rule working rather than a gap: the Admin role allowed nothing there, so there is no
+administrative access to record. That covers reading the project and, behind the asset gate, the
+comment actions a public project opens to any signed-in account (posting a comment, replying,
+resolving, reacting, adding an attachment). `require_project_visible` takes the admin branch only
+for a non-member on a private project, and `asset_access_reason` answers `"public"` before it
+considers the flag, so `require_asset_access` writes nothing there either. The other write gate
+does log on a public project: `require_project_role` never consults `is_public`, so a rename, a
+settings save, a membership change, an upload, a share link and a delete each leave their row
+whether the project is public or private.
 
 The instance-wide lists are **not** logged: `GET /projects?scope=all`, the Storage overview
 (`GET /admin/storage`) and the admin trash. They list projects rather than open one, and a row
