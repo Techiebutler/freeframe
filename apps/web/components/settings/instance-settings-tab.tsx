@@ -235,6 +235,13 @@ export function InstanceSettingsTab() {
         });
         if (seq !== compressionSeq.current) return false;
         mutate("/instance/settings", updated, { revalidate: false });
+        // The round trip the ref exists for is over: what came back is what
+        // `stored` reads from here on. Keeping it any longer lets it go stale
+        // against another tab or another admin -- that one sets 2, this tab
+        // revalidates on focus and shows 2, and dragging back to 5 would
+        // compare equal to the ref, send nothing, and snap the thumb back to 2
+        // with no error.
+        compressionSent.current = undefined;
         // Only once the gesture has ended. A drag that pauses longer than the
         // debounce has its save sent mid-drag, and clearing the draft then
         // snaps the thumb back under the finger.
@@ -268,9 +275,10 @@ export function InstanceSettingsTab() {
       // round trip it is stale. Saved 3, drag to 5 and release, drag back to 3
       // and release before the answer: 3 equalled the stale 3, nothing went
       // out, and the instance ended on 5 although the admin let go on 3.
-      // `stored` is null where no level is stored at all, where every step the
-      // admin releases on is a change -- which is how "Custom (env)" can be
-      // left for Balanced in one gesture.
+      // `stored` is null only where no step names the offset in force, i.e.
+      // "Custom (env)": with no stored level and no offset the API still
+      // resolves to 3. Null makes every step the admin releases on a change,
+      // which is how "Custom (env)" can be left for Balanced in one gesture.
       const base = compressionSent.current === undefined ? stored : compressionSent.current;
       if (target !== null && target !== base) void saveCompression(target);
       else setDraftCompression(null);

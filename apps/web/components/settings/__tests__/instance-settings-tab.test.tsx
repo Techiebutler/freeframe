@@ -428,6 +428,31 @@ describe('InstanceSettingsTab', () => {
       await waitFor(() => expect(settingsPuts()).toHaveLength(2))
     })
 
+    // The other half of that ref: it only has to live for the round trip. Kept
+    // after the answer it goes stale against another tab or another admin --
+    // the API says 2, the admin drags back to 5, and the save is dropped as
+    // already sent, with no error and the thumb snapping back to 2.
+    it('saves a level again once the API has moved off it', async () => {
+      const view = render(<InstanceSettingsTab />)
+
+      fireEvent.change(compressionSlider(), { target: { value: '5' } })
+      fireEvent.pointerUp(compressionSlider())
+      await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+
+      // Another admin has put the instance on 2 and this tab has revalidated.
+      h.data = { ...h.DEFAULT, compression_level: 2, compression_level_effective: 2 }
+      view.rerender(<InstanceSettingsTab />)
+      expect(compressionSlider()).toHaveValue('2')
+
+      fireEvent.change(compressionSlider(), { target: { value: '5' } })
+      fireEvent.pointerUp(compressionSlider())
+
+      expect(settingsPuts()).toEqual([
+        ['/instance/settings', { compression_level: 5 }],
+        ['/instance/settings', { compression_level: 5 }],
+      ])
+    })
+
     // An environment offset no step names means the instance is on no step at
     // all, so the middle of the track is a position and not a saved value: the
     // note says moving the slider overrides the variable, and 3 to 4 to 3 in
