@@ -10,8 +10,9 @@ uvicorn[standard]==0.54.0
 # ASGI app through uvicorn's worker class. It used to be installed there with an
 # unpinned `pip install gunicorn`, so two builds of the same commit could ship
 # different versions. Declared here so it is pinned like everything else and is
-# covered by the pip entry in .github/dependabot.yml, which watches this file
-# only. The dev image gets it too through requirements-dev.txt; that is harmless.
+# covered by the pip entry in .github/dependabot.yml, which reads the
+# requirements files in apps/api and not the Dockerfiles. The dev image gets it
+# too through requirements-dev.txt; that is harmless.
 gunicorn==26.2.0
 sqlalchemy==2.1.6
 alembic==1.20.1
