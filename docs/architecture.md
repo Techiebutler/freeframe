@@ -176,9 +176,10 @@ Share Link (unauthenticated access, by token)
 └── view     ── read-only
 ```
 
-`User.is_superadmin` is a separate, instance-level flag covering user administration only:
-invite, deactivate, role change, first-run setup. It grants **no** content access and is not
-consulted when resolving asset permissions.
+`User.is_superadmin` is a separate, instance-level flag. It covers user administration (invite,
+deactivate, role change, first-run setup) and the admin panel's Storage tab, where it lists every
+project's files by name and size, moves them to the trash, restores them and deletes them
+permanently. It is not consulted when resolving asset permissions, so it does not open media.
 
 **Asset access** is resolved by `can_access_asset` in `apps/api/services/permissions.py`, which
 returns true on the first of these that matches:
@@ -252,7 +253,8 @@ review workflow.
 `Notification` and `ActivityLog`. Nothing filters the column automatically — every query does
 it by hand. Soft deletion is also not permanent: `tasks/cleanup_tasks.py` hard-deletes
 soft-deleted rows and reclaims their S3 objects after `SOFT_DELETE_RETENTION_DAYS`
-(default 30).
+(default 30), and an admin can do the same earlier for chosen items from the trash
+(`POST /admin/trash/purge`).
 
 Key entity relationships:
 
@@ -283,3 +285,97 @@ migrated database. They are created by the initial migration and were never drop
 have no ORM model and no route behind them. Ignore them.
 
 **ORM:** SQLAlchemy 2.0 with Alembic for migrations.
+
+## Storage Accounting
+
+Two columns on `media_files` hold everything the storage figures are built from, so no code
+path has to list the object store to answer "how big is this":
+
+| Column | Holds | Written by |
+|---|---|---|
+| `file_size_bytes` | the uploaded original | `POST /upload/initiate`, reconciled at `/upload/complete` |
+| `derived_size_bytes` | everything the transcode produced for that version | the transcode job |
+
+`derived_size_bytes` is measured once, when a job finishes, with a single listing of its own
+output prefix (`processed/{project_id}/{asset_id}/{version_id}`). That prefix covers the HLS
+renditions, the single-file MP4/MP3/WebP, the poster thumbnail and the audio waveform, which is
+why it is measured as a prefix rather than key by key.
+
+**NULL means "not measured", never "nothing derived."** Every row written before the column
+existed is NULL until `backfill_media_derived_size` (`apps/api/tasks/storage_tasks.py`,
+maintenance queue, idempotent and resumable) has summed its prefix. Reports count those rows
+and say how many there are instead of summing NULL as zero, which would claim a total the
+bucket does not hold. A prefix that holds nothing is recorded as `0`, so a later run does not
+list it again.
+
+**Nothing runs the backfill on its own.** There is no beat entry and no button in this change:
+a measurement raises the figure the cap is enforced against, so it happens when an administrator
+asks for it (`POST /admin/storage/backfill`, or the command in the upgrade notes), not on a timer
+behind their back. New uploads need none of it, because the transcode measures its own output.
+A transcode whose bookkeeping listing failed therefore stays unmeasured until a backfill is run;
+`unmeasured_files` is how that shows.
+
+The backfill selects exactly the rows the figures count (`committed_media` with the NULL filter
+on it), the trash included, so after a complete run `unmeasured_files` really is zero and a
+restored asset does not come back unmeasured. It works in keyset batches of `BATCH_SIZE`, so an
+instance with a hundred thousand unmeasured files costs the worker the same memory as one with
+two hundred, and the keyset carries `(created_at, id)` because a row whose listing failed stays
+NULL and paging on the NULL filter alone would hand it out forever. Each write is conditional
+(`UPDATE ... WHERE derived_size_bytes IS NULL`), so a transcode that finishes inside a batch
+keeps its own figure and a row purged mid-batch is a no-op. It takes a Postgres advisory lock on
+a connection of its own, so a second call to `POST /admin/storage/backfill` returns instead of
+paying for the same listings again and the per-batch commits cannot move the lock to another
+backend. Listings use a bounded S3 client, and `MAX_CONSECUTIVE_LISTING_FAILURES` failures in a
+row end the run rather than spending one request per remaining row on a store that is down. It
+pauses between batches to leave S3 request budget for the people working on the instance.
+
+`derived_size_bytes` is measured for a *version's* output prefix but stored per media file, and
+`uq_media_files_version_id` holds the one row per version that makes those two the same thing. A
+version that has to carry several files is then a decision, with the total moving to
+`asset_versions`, rather than a silently doubled figure.
+
+**What "used storage" means** is defined once, in `apps/api/services/storage.py`
+(`committed_media` with `_USED_SUM` on it): every byte the bucket still holds for a media file
+whose version is in `processing` or `ready` — the original (`file_size_bytes`) plus whatever the
+transcode wrote for it (`derived_size_bytes`). An `uploading` or `failed` version is not counted,
+because its bytes are not (reliably) in the bucket. **The trash is counted**, because deleting is
+not freeing: a soft-deleted project, asset or version keeps its objects until the retention
+collector removes them, or until an admin deletes it permanently from the trash
+(`POST /admin/trash/purge`). The admin overview, the member indicator on `GET /instance/settings`,
+the per-project figures and the upload guard are all that one sum, so no surface can report
+space as free that the next upload is refused for.
+
+Two scoped views refine it with a single filter each, `live_media` and `trashed_media`, so no
+second query can drift from it. The per-project rows, the asset tree and a project's own figure
+are `live_media`: those are lists of things somebody can still open. `trash_bytes` in the
+overview is `trashed_media`, the part of used that emptying the trash would free, which is why
+it reads "of which" and not "plus" — the live rows plus that figure add up to used.
+
+**The overview returns a bounded list.** `GET /admin/storage` answers with the largest
+`limit` projects (default 200, maximum 1000) and `project_count` for how many there are; the
+byte totals in the summary are always instance-wide, so a truncated list says so rather than
+looking complete.
+
+**The storage cap is enforced against that same figure** (`instance_storage_used_bytes`, which
+is `instance_storage_totals()["used_bytes"]`, read by `storage_cap_error`). Derived bytes are in
+it because the bucket holds them: a cap that ignored the renditions would be a cap on a fraction
+of the storage it is set against, and a header that counted them while the cap did not reported
+"0 B free" over an upload that still went through. The price is that an instance which has only
+just measured its renditions reads fuller than it did the day before on an unchanged bucket;
+`derived_size_bytes IS NULL` is "not measured yet" and counts as nothing until it is measured,
+`unmeasured_files` says how many of those are left, and the upgrade note tells an administrator
+to re-check the cap once the backfill has finished.
+
+**Not counted anywhere**, because no row records their size: project posters, instance branding
+logos, user avatars, the `watermarked/` renders `apply_watermark` writes, and any object in the
+bucket that no live row points at (the orphan sweep's job). Comment attachments are the one
+exception that does record a size (`comment_attachments.file_size_bytes`) and is
+still left out on purpose: this figure is media, and pulling a second table into it would make
+the one definition two. Objects whose rows are in the trash **are** counted, as above; what is
+missing is only what no row owns. The figure is therefore the media the database knows the size
+of, not the bucket's total, and should not be read as one.
+
+**The cap is soft by exactly one transcode.** `storage_cap_error` is given the incoming original
+only (`services/storage.py`), because the renditions that upload will produce do not exist yet.
+An instance can therefore finish an upload a little over its cap, after which the next upload is
+refused.

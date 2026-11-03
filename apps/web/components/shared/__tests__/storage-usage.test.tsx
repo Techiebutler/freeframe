@@ -1,6 +1,32 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { StorageUsage, StorageRing } from '../storage-usage'
+import { StorageBar, StorageUsage, StorageRing } from '../storage-usage'
+
+function width(container: HTMLElement) {
+  return (container.querySelector('[data-testid="storage-meter"] > div') as HTMLElement).style.width
+}
+
+describe('StorageBar', () => {
+  // A 2 KB file next to a 90 GB master would otherwise have no bar at all,
+  // which reads as "no storage" rather than "very little"; and a share that
+  // overshoots is clamped rather than drawn outside its track.
+  it.each([
+    [25, '25%'],
+    [0.01, '1%'],
+    [0, '0%'],
+    [140, '100%'],
+  ])('draws %s%% of its track as %s', (pct, expected) => {
+    expect(width(render(<StorageBar pct={pct} />).container)).toBe(expected)
+  })
+
+  it('is a labelled progressbar for assistive tech', () => {
+    render(<StorageBar pct={40} label="Hero cut: 4 GB of 10 GB" />)
+    const bar = screen.getByRole('progressbar', { name: 'Hero cut: 4 GB of 10 GB' })
+    expect(bar).toHaveAttribute('aria-valuenow', '40')
+    expect(bar).toHaveAttribute('aria-valuemin', '0')
+    expect(bar).toHaveAttribute('aria-valuemax', '100')
+  })
+})
 
 describe('StorageUsage', () => {
   it('shows used-only, no meter, when unlimited (limit 0)', () => {
