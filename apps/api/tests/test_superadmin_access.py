@@ -7,8 +7,9 @@ membership is never persisted; the ordinary 403s are untouched; every tier taken
 past one's own membership lands in the activity log, read tiers and the asset
 path included, one row per request and project; `can_access_asset`, the event
 stream and share links agree with the role gate; and over HTTP reading, listing
-with `scope=all`, deleting, uploading and moderating someone else's comment all
-reach a project the admin is not in.
+with `scope=all`, deleting, uploading, moderating someone else's comment and
+reading one project's file list from the Storage tab all reach a project the
+admin is not in.
 """
 import uuid
 
@@ -380,6 +381,51 @@ def test_the_overview_endpoints_keep_a_narrow_contract(seed, as_user):
     # Newest first, and only the newest carries the flag the delete gate reads.
     assert [v["version_number"] for v in multi["versions"]] == [3, 2, 1]
     assert [v["is_latest"] for v in multi["versions"]] == [True, False, False]
+
+
+@pytest.mark.parametrize(
+    ("caller", "logged"),
+    [("an outsider with the flag", True), ("a member with the flag", False)],
+    ids=["uninvited", "their own membership covers it"],
+)
+def test_the_storage_tab_detail_is_logged_like_every_other_reach_into_one_project(
+    seed, as_user, caller, logged,
+):
+    """`GET /admin/storage/projects/{id}` is the only endpoint on the admin router that
+    reveals what is inside one project, the names of its files and their versions. It
+    stopped at the superadmin check and wrote nothing, so the same administrator reading
+    the same project was logged when they opened it in the app and not when they read its
+    file list from the Storage tab, while the upgrade note promises that every reach past
+    an admin's own membership is recorded. It now goes through `require_project_role` at
+    the viewer tier with the project it already loaded, so the row, its payload and the
+    one-per-request rule are the same ones every other reach gets.
+
+    The instance-wide tabs are deliberately not routed through it: `/admin/storage`,
+    `/admin/projects`, `/admin/shares/internal`, `/admin/shares/external` and
+    `/admin/trash` answer what the instance holds, a name, a size and a count per
+    project, and a row per listed project on every tab open is the flood the dedupe in
+    the gate exists to prevent.
+    """
+    owner = seed.user()
+    project = seed.project(owner, name="theirs")
+    seed.media(project, owner, name="their clip")
+    admin = seed.user(superadmin=True)
+    if not logged:
+        seed.member(project, admin, ProjectRole.viewer)
+    resp = as_user(admin).get(f"/admin/storage/projects/{project.id}")
+    seed.db.flush()
+    assert resp.status_code == 200
+    assert [a["name"] for a in resp.json()["assets"]] == ["their clip"]
+    rows = admin_log(seed.db, project.id)
+    if not logged:
+        assert rows == [], "a member reading their own project is no administrative reach"
+        return
+    [row] = rows
+    assert row.user_id == admin.id
+    assert row.payload == {
+        "via": "superadmin", "membership": "none",
+        "scope": "viewer", "required_role": "viewer",
+    }
 
 # ── deleting through the app's own trash ──────────────────────────────────────
 
