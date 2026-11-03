@@ -6,6 +6,10 @@ import { acquireUploadSlot, uploadParts } from '@/lib/upload-parts'
 
 const HISTORY_PAGE_SIZE = 20
 
+function throwIfAborted(signal: AbortSignal) {
+  if (signal.aborted) throw new DOMException('Upload cancelled', 'AbortError')
+}
+
 export type UploadStatus = 'pending' | 'uploading' | 'processing' | 'complete' | 'failed' | 'cancelled'
 
 export interface UploadFile {
@@ -190,6 +194,8 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           onProgress: (fraction) => updateFile(id, { progress: Math.round(fraction * 95) }),
         })
 
+        // Cancel must win: never finalise (and never report 'processing') once the user cancelled.
+        throwIfAborted(controller.signal)
         await api.post('/upload/complete', {
           s3_key,
           upload_id,
@@ -201,7 +207,10 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
         // Upload done — backend now processes (transcode/convert).
         // For non-processable types (or if SSE isn't wired), mark complete directly.
         const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
-        if (isMedia) {
+        if (controller.signal.aborted) {
+          // Cancelled while /upload/complete was in flight: keep 'cancelled' so callers do not submit.
+          updateFile(id, { status: 'cancelled' })
+        } else if (isMedia) {
           updateFile(id, { progress: 100, status: 'processing', processingProgress: 0 })
         } else {
           updateFile(id, { progress: 100, status: 'complete' })
@@ -281,9 +290,12 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           onProgress: (fraction) => updateFile(id, { progress: Math.round(fraction * 95) }),
         })
 
+        // Cancel must win: never finalise (and never report 'processing') once the user cancelled.
+        throwIfAborted(controller.signal)
         await api.post('/upload/complete', { s3_key, upload_id, asset_id: assetId, version_id, parts })
         const isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/')
-        updateFile(id, { progress: 100, status: isMedia ? 'processing' : 'complete', processingProgress: 0 })
+        if (controller.signal.aborted) updateFile(id, { status: 'cancelled' })
+        else updateFile(id, { progress: 100, status: isMedia ? 'processing' : 'complete', processingProgress: 0 })
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           updateFile(id, { status: 'cancelled', progress: 0 })

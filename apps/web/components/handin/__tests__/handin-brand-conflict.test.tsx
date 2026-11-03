@@ -42,7 +42,7 @@ it('preserves upload fallback when optional preparation is unavailable', async (
   })
   fireEvent.click(screen.getByRole('button', { name: 'Hand in' }))
   await waitFor(() => expect(startUpload).toHaveBeenCalledOnce())
-  const preflight = vi.mocked(api.post).mock.calls.findIndex(([path]) => path === '/folders/old-folder/editor-request')
+  const preflight = vi.mocked(api.post).mock.calls.findIndex(([path]) => path === '/folders/old-folder/editor-request?adopt=false')
   expect(preflight).toBeGreaterThanOrEqual(0)
   expect(vi.mocked(api.post).mock.invocationCallOrder[preflight]).toBeLessThan(startUpload.mock.invocationCallOrder[0])
   expect(await screen.findByText('Checklist unavailable. You can still upload.')).toBeVisible()

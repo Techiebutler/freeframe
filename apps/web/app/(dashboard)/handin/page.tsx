@@ -403,18 +403,39 @@ function CompleteHandinPage({ onStarted }: { onStarted?: () => void } = {}) {
         }));
 
       // Verify the assignment before any file side effect, including checklist outages.
-      await api.post(`/folders/${folder.id}/editor-request`, {});
+      // adopt=false: verifying must never submit files already sitting in a reused folder.
+      await api.post(`/folders/${folder.id}/editor-request?adopt=false`, {});
 
       // 3. Every video goes INTO that one folder. They upload together; the
       //    reviewer picks up each asset on its own as it finishes transcoding,
       //    so all of them get reviewed, not just the first.
       setStep(files.length > 1 ? `Uploading ${files.length} videos` : "Uploading");
-      const uploaded = await Promise.all(
-        files.map(async (f) => {
-          const uploadId = startUpload(f, projectId, f.name, projectName, folder.id);
-          return { id: await waitForUpload(uploadId), name: f.name };
-        }),
-      );
+      const uploadIds = files.map((f) => startUpload(f, projectId, f.name, projectName, folder.id));
+      let uploaded: { id: string; name: string }[];
+      try {
+        uploaded = await Promise.all(
+          uploadIds.map(async (uploadId, i) => ({ id: await waitForUpload(uploadId), name: files[i].name })),
+        );
+      } catch (uploadError) {
+        // One file failed or was cancelled: stop the whole hand-in. Cancel the siblings still on the way and
+        // do NOT ask for the review link. A sibling that already arrived was handed in by /upload/complete
+        // and stays on the card, so say so rather than claim nothing was submitted.
+        const { files: current, cancelUpload } = useUploadStore.getState();
+        const hasArrived = (uid: string) => {
+          const status = current.find((f) => f.id === uid)?.status;
+          return status === "processing" || status === "complete";
+        };
+        uploadIds.filter((uid) => !hasArrived(uid)).forEach((uid) => cancelUpload(uid));
+        const arrived = uploadIds.filter(hasArrived).length;
+        const outcome = arrived
+          ? `${arrived} ${arrived === 1 ? "file had" : "files had"} already arrived and ${arrived === 1 ? "stays" : "stay"} on this card - add the rest and hand in again.`
+          : "Nothing was submitted - add all your files and hand in again.";
+        throw new Error(
+          uploadError instanceof Error && uploadError.message === "Upload cancelled"
+            ? `Hand-in cancelled. ${outcome}`
+            : `${uploadError instanceof Error ? uploadError.message : "Upload failed"}. ${outcome}`,
+        );
+      }
 
       // The API binds the existing folder and versions to the native editor.
       // Canonical origins are server-owned: Whop's iframe origin is not a share URL.
@@ -480,7 +501,12 @@ function CompleteHandinPage({ onStarted }: { onStarted?: () => void } = {}) {
     <div className="mx-auto max-w-2xl p-8">
       <h1 className="text-lg font-medium text-text-primary">Hand in</h1>
       <p className="mt-1 text-sm text-text-tertiary">
-        Upload your cut - or all the cuts for this card at once. Open each review in the video player,
+        Upload your cut - or all the cuts for this card at once.{" "}
+        <strong className="text-text-secondary">
+          Every file you add here goes in one submission, so add all your versions and hooks before you
+          hand in.
+        </strong>{" "}
+        Open each review in the video player,
         and once nothing mandatory is open it&apos;s delivered to your Trello card automatically - one
         link posted there with your name, the card marked done. If a note is wrong, reply to it and it
         gets checked.
