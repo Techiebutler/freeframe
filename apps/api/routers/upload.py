@@ -23,7 +23,9 @@ from ..schemas.upload import (
 )
 from ..services.storage import upload_guard_error
 
-from ..services.iteration_requests import require_unmanaged, require_unmanaged_destination
+from ..services.iteration_requests import components, require_unmanaged, require_unmanaged_destination
+from ..services.review_timing import adopt_signed_in_upload
+from ..models.upload_request import UploadRequest
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -158,6 +160,17 @@ def presign_part(
     return PresignPartResponse(presigned_url=url, part_number=body.part_number)
 
 
+def _record_handin_submission(db: Session, asset, version) -> None:
+    """A signed-in upload into a hand-in folder is that hand-in's submission. Without the row the guest
+    route writes, /r/<token> reads the file as unproven and says "Review unavailable" for good."""
+    if getattr(asset, 'folder_id', None) is None:
+        return
+    req = db.query(UploadRequest).filter(UploadRequest.folder_id == asset.folder_id,
+        UploadRequest.revoked_at.is_(None)).populate_existing().with_for_update().first()
+    if req is not None and not components(req):
+        adopt_signed_in_upload(db, req, asset.id, version)
+
+
 @router.post("/complete", response_model=CompleteUploadResponse)
 def complete_upload(
     body: CompleteUploadRequest,
@@ -187,10 +200,11 @@ def complete_upload(
     complete_multipart_upload(body.s3_key, body.upload_id, [p.model_dump() for p in body.parts])
 
     version.processing_status = ProcessingStatus.processing
+    completed_asset = db.get(Asset, body.asset_id)
+    _record_handin_submission(db, completed_asset, version)
     db.commit()
 
     from ..services import hub_events, workflow_events
-    completed_asset = db.get(Asset, body.asset_id)
     hub_events.announce_revision_submitted(db, completed_asset, body.version_id)
     workflow_events.announce_handin_uploaded(db, None, completed_asset, version)
 

@@ -46,7 +46,7 @@ from ..models.checklist_binding import ChecklistBinding
 from ..services.checklists import reserve_binding, binding_out, dispatch_binding
 from ..services import review_bridge
 from ..services.briefing import docx_text, MAX_DOCUMENT_BASE64, validate_briefing_text
-from ..services.review_timing import freeze_submission_timing
+from ..services.review_timing import adopt_signed_in_upload, freeze_submission_timing
 from ..services.iteration_requests import request_fields, components, upload_slot, bind_upload, revision_target, stored_upload
 from ..services.permissions import effective_project_role, require_project_role
 from ..services.s3_service import (
@@ -307,15 +307,7 @@ def folder_editor_request(folder_id: uuid.UUID, db: Session = Depends(get_db),
             versions = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id,
                 AssetVersion.deleted_at.is_(None)).all()
             for version in versions:
-                record = db.query(RequestUpload).filter(RequestUpload.request_id == req.id,
-                    RequestUpload.asset_id == asset.id, RequestUpload.version_number == version.version_number).first()
-                if not record:
-                    author = db.get(User, version.created_by)
-                    record = RequestUpload(request_id=req.id, asset_id=asset.id, version_number=version.version_number,
-                        uploader_name=author.name, uploader_email=author.email)
-                    db.add(record)
-                if record.submitted_at is None and version.processing_status in (ProcessingStatus.processing, ProcessingStatus.ready):
-                    freeze_submission_timing(db, req, record, version, adopted=True)
+                adopt_signed_in_upload(db, req, asset.id, version)
                 if req.completion_versions and req.completion_versions.get(str(asset.id)) != str(version.id) and version == max(versions, key=lambda v: v.version_number):
                     req.completed_at = None
                     req.completion_versions = None
