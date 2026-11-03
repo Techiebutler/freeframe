@@ -121,7 +121,7 @@ def log_admin_project_access(
     **One row per request and project, not one per object.** A listing checks
     every asset it returns, and `GET /events` re-checks for as long as the
     stream stays open; a row per check would turn one open tab into unbounded
-    rows in a table that is never pruned. The first access in a request writes
+    rows in a table nothing prunes on a schedule. The first access in a request writes
     the row, a later heavier one rewrites it in place (it is still pending, or
     at worst dirty, in the same session), and anything lighter is dropped.
 
@@ -483,6 +483,29 @@ def can_access_asset(db: Session, asset: Asset, user: User) -> bool:
     return asset_access_reason(db, asset, user) is not None
 
 
+def can_access_asset_audited(db: Session, asset: Asset, user: User) -> bool:
+    """`can_access_asset`, and log an access the instance-admin flag alone allowed.
+
+    For a caller that is handed asset ids and answers with the ones the user may
+    reach, rather than refusing the request: `GET /assets/batch`, which is one
+    request in place of a `GET /assets/{id}` per id. Those would each log, so the
+    batch form has to log as well, or whether an administrator's read is recorded
+    depends on which endpoint the client happened to call.
+
+    Deduped like every other path, so one request writes one row per project
+    however many ids it carries. Not for filtering a list the user did not name
+    (who a mention resolves to, who sees a comment): that is `can_access_asset`.
+    """
+    reason = asset_access_reason(db, asset, user)
+    if reason is None:
+        return False
+    if reason == ASSET_ACCESS_VIA_SUPERADMIN:
+        log_admin_project_access(
+            db, asset.project_id, user.id, AUDIT_SCOPE_ASSET, asset_id=asset.id,
+        )
+    return True
+
+
 def require_asset_access(db: Session, asset: Asset, user: User) -> None:
     """403 unless the user may reach the asset.
 
@@ -490,13 +513,8 @@ def require_asset_access(db: Session, asset: Asset, user: User) -> None:
     and therefore where an administrator's reach past membership into the asset
     path is logged: `can_access_asset` has no business writing rows, this does.
     """
-    reason = asset_access_reason(db, asset, user)
-    if reason is None:
+    if not can_access_asset_audited(db, asset, user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    if reason == ASSET_ACCESS_VIA_SUPERADMIN:
-        log_admin_project_access(
-            db, asset.project_id, user.id, AUDIT_SCOPE_ASSET, asset_id=asset.id,
-        )
 
 
 def get_asset_share_permission(db: Session, asset: Asset, user: User) -> SharePermission:
