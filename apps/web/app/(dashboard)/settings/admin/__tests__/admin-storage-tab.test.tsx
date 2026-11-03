@@ -44,7 +44,7 @@ describe('the Admin dashboard Storage tab', () => {
     expect(screen.getByTestId('storage-tab')).toBeInTheDocument()
   })
 
-  it('offers it to no non-admin, and ignores a tab name it does not have', () => {
+  it('offers it to no one else, and ignores a tab name it does not have', () => {
     window.history.replaceState({}, '', '/settings/admin?tab=nonsense')
     render(<AdminPage />)
     // Falls back to Users rather than rendering a blank panel.

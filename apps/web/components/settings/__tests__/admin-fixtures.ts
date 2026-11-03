@@ -1,8 +1,9 @@
 /**
- * Fixture builders for the admin panel tests.
+ * Fixture builders for the admin Storage tab tests.
  *
- * The `vi.mock` of the API client stays in each test file, since it has to be
- * hoisted there.
+ * Shared because the tab and its trash read the same shapes; two copies of
+ * these drifted apart once already. The `vi.mock` of the API client stays in
+ * each test file, since it has to be hoisted there.
  */
 import type {
   StorageOverview,
@@ -13,7 +14,6 @@ import type {
 export const MB = 1024 * 1024
 export const GB = 1024 * MB
 export const HOUR_AGO = new Date(Date.now() - 3600_000).toISOString()
-export const IN_A_WEEK = new Date(Date.now() + 7 * 86_400_000).toISOString()
 
 export function summary(
   partial: Partial<StorageOverview['summary']> = {},
@@ -87,3 +87,4 @@ export const FULL_BIN = trash({
       deleted_at: null, days_left: 30, blocked_by_parent: false, total_bytes: 0.5 * GB },
   ],
 })
+

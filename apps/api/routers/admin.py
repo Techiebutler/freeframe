@@ -228,11 +228,11 @@ def storage_project_files(
     rule about it, that a member reading their own project's files is not an
     administrative reach and is not logged.
 
-    The instance-wide tabs beside this one are deliberately not audited: they
-    answer what the instance holds, with a name, a size and a count per project
-    and nothing from inside any of them, and the audit's unit is one project
-    reached, so a list of every project would write a row per listed project
-    every time an administrator opened the tab.
+    The instance-wide lists beside it are deliberately not audited: the storage
+    overview and the trash answer what the instance holds, with a name, a size
+    and a count per project and nothing from inside any of them, and the audit's
+    unit is one project reached, so a list of every project would write a row
+    per listed project every time an administrator opened the tab.
     """
     project = db.query(Project).filter(
         Project.id == project_id, Project.deleted_at.is_(None),

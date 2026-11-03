@@ -478,11 +478,10 @@ def test_the_storage_tab_detail_is_logged_like_every_other_reach_into_one_projec
     the viewer tier with the project it already loaded, so the row, its payload and the
     one-per-request rule are the same ones every other reach gets.
 
-    The instance-wide tabs are deliberately not routed through it: `/admin/storage`,
-    `/admin/projects`, `/admin/shares/internal`, `/admin/shares/external` and
-    `/admin/trash` answer what the instance holds, a name, a size and a count per
-    project, and a row per listed project on every tab open is the flood the dedupe in
-    the gate exists to prevent.
+    The instance-wide lists are deliberately not routed through it: `/admin/storage`,
+    `/admin/trash` and `GET /projects?scope=all` answer what the instance holds, a name,
+    a size and a count per project, and a row per listed project on every page open is
+    the flood the dedupe in the gate exists to prevent.
     """
     owner = seed.user()
     project = seed.project(owner, name="theirs")

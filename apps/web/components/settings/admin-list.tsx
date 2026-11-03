@@ -8,9 +8,12 @@ import { EmptyState } from "@/components/shared/empty-state";
 import type { LucideIcon } from "lucide-react";
 
 /**
- * The parts the admin panel's Storage tab is built from.
+ * The parts an admin tab is built from.
  *
- * A list, at most four fields wide, and at most one button.
+ * A tab is a list, at most four fields wide, with at most one button.
+ * Factoring that out is not tidiness, it is the only way further tabs stay the
+ * same shape a year from now; a tab with its own hand-written table drifts
+ * within a release.
  *
  * Nothing new is introduced here. The row is a `<tr>`, the button is `Button`,
  * the confirmation is `ConfirmDialog`, the empty state is `EmptyState` and the
@@ -18,7 +21,7 @@ import type { LucideIcon } from "lucide-react";
  * palette.
  */
 
-/** Cell padding, shared so the columns line up. */
+/** Cell padding, shared so columns line up between tabs. */
 export const TD = "px-4 py-2.5";
 
 export function Checkbox({

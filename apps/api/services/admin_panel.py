@@ -1,10 +1,8 @@
-"""Data and actions behind the four admin panel tabs.
+"""Data and actions behind the admin panel's Storage tab.
 
-One question per tab: what takes up space, what projects exist, who inside can
-reach which project, what is reachable from outside.
-
-Every figure is one number (originals plus measured derived output) and comes
-from `services/storage.py`, so the header, the rows and the upload limit cannot
+One question: what takes up space, and what to clear out. Every figure is one
+number (originals plus measured derived output) and comes from
+`services/storage.py`, so the header, the rows and the upload limit cannot
 disagree. Nothing here hard-deletes except `purge_from_trash`:
 `bulk_soft_delete` sets `deleted_at`, the same trash the rest of the app uses,
 and the retention collector reclaims the bytes.
@@ -18,17 +16,13 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models.activity import ActivityLog
 from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus
-from ..models.folder import Folder
-from ..models.project import Project, ProjectMember
-from ..models.share import ShareLink
+from ..models.project import Project
 from ..models.user import User
 from . import storage as storage_service
 from .versions import UNVIEWABLE_STATUSES
 from .activity_service import log_activity
 from .restore_rules import restore_asset_row, restore_version_row
-from .s3_service import generate_presigned_get_url
 
 log = logging.getLogger(__name__)
 

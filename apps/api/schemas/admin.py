@@ -84,7 +84,7 @@ class StorageProjectFilesResponse(BaseModel):
     assets: list[StorageAssetRow]
 
 
-# ── Projects ──────────────────────────────────────────────────────────────────
+# ── Delete, trash, restore ────────────────────────────────────────────────────
 
 
 class AdminDeleteRequest(BaseModel):
