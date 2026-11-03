@@ -1,10 +1,10 @@
-"""Every published bucket-CORS `AllowedHeaders` list is lowercase.
+"""Every published bucket-CORS `AllowedHeaders` list is the same lowercase list.
 
 Browsers lowercase every name in `Access-Control-Request-Headers` (Fetch
 spec), and Garage compares `AllowedHeaders` by plain string equality, so an
 entry spelled `Content-Type` never matches the `content-type` a presigned-PUT
-preflight asks for: the upload fails CORS. AWS S3 and MinIO match
-case-insensitively, so lowercase names behave identically there.
+preflight asks for: the upload fails CORS. A lowercase name matches what
+browsers send whether a store compares exactly or ignoring case.
 
 The list is published in three places that must not drift apart: the rule the
 app writes at startup, the JSON people paste into their own bucket in
@@ -23,9 +23,18 @@ from apps.api.services import s3_service
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# The two names that are not already lowercase in the wire protocol's own
-# spelling, i.e. the ones a mixed-case list gets wrong.
-CASE_SENSITIVE_NAMES = ("content-type", "content-md5")
+# The complete list, lowercase: every copy must name exactly these, so a copy
+# that spells one with capitals or drops one fails. Order does not matter to
+# any S3 implementation, so it is not pinned.
+EXPECTED_HEADERS = sorted(
+    (
+        "content-type",
+        "content-md5",
+        "x-amz-content-sha256",
+        "x-amz-date",
+        "x-amz-decoded-content-length",
+    )
+)
 
 
 def _headers_written_at_startup() -> list[list[str]]:
@@ -84,10 +93,8 @@ def _headers_in_deploy_script() -> list[list[str]]:
     ],
     ids=["startup_rule", "deployment_docs", "deploy_script"],
 )
-def test_allowed_headers_are_lowercase(collect):
+def test_allowed_headers_are_the_lowercase_list(collect):
     header_lists = collect()
     assert header_lists, "no AllowedHeaders list found"
     for headers in header_lists:
-        assert headers == [name.lower() for name in headers], headers
-        for name in CASE_SENSITIVE_NAMES:
-            assert name in headers, (name, headers)
+        assert sorted(headers) == EXPECTED_HEADERS, headers
