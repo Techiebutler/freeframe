@@ -289,8 +289,11 @@ def ensure_folder_assignment(db: Session, folder: Folder, project: Project, acto
 
 @router.post('/folders/{folder_id}/editor-request')
 def folder_editor_request(folder_id: uuid.UUID, db: Session = Depends(get_db),
-                          current_user: User = Depends(get_current_user)):
-    """Give a staff hand-in its native editor without moving files or widening a share."""
+                          current_user: User = Depends(get_current_user), adopt: bool = Query(True)):
+    """Give a staff hand-in its native editor without moving files or widening a share.
+
+    ``adopt=false`` only verifies the assignment: it must not submit files that are already in the
+    folder (e.g. a Hook1 left behind by a cancelled hand-in), otherwise a restart submits them."""
     if getattr(current_user, 'is_staff', False) is not True:
         raise HTTPException(403, 'Internal hand-in is available to staff.')
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.deleted_at.is_(None)).with_for_update().first()
@@ -301,7 +304,7 @@ def folder_editor_request(folder_id: uuid.UUID, db: Session = Depends(get_db),
     if not CARD_URL.fullmatch((folder.description or '').strip()):
         raise HTTPException(409, 'This folder is not an internal card hand-in.')
     req, binding = ensure_folder_assignment(db, folder, project, current_user.id)
-    if not components(req):
+    if adopt and not components(req):
         req = locked_request(db, req.id)
         for asset in _submitted_assets(db, req):
             versions = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id,
