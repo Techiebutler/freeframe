@@ -102,15 +102,24 @@ function ReviewAnalysis({ mediaUrl, thumbnailUrl, unavailable, onRefresh, proces
     {!unavailable && <button aria-label={paused ? 'Resume animation' : 'Pause animation'} title={paused ? 'Resume animation' : 'Pause animation'} className="request-motion absolute right-2 top-2 grid h-11 w-11 place-items-center rounded-full text-text-tertiary hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent" onClick={() => setPaused(v => !v)}>{paused ? <Play size={12} /> : <Pause size={12} />}</button>}
   </div>
 }
+function UploadNotFinished({ onUploadAgain, onRemove }: { onUploadAgain?: () => void; onRemove?: () => void | Promise<void> }) {
+  const [removing, setRemoving] = React.useState(false)
+  return <div className="mx-auto mt-5 max-w-sm rounded-3xl border border-border bg-bg-secondary px-6 py-7 text-center">
+    <h3 className="text-lg font-semibold">Upload not finished</h3>
+    <p role="status" className="mx-auto mt-2 max-w-xs text-base leading-relaxed text-text-secondary">This file did not finish uploading, so it was not handed in and is not being reviewed. If it is still uploading in another tab, keep that tab open. Otherwise upload it again.</p>
+    {onUploadAgain && <button className="mt-5 min-h-11 w-full rounded-full bg-accent px-4 text-sm font-semibold text-text-inverse" onClick={onUploadAgain}>Upload it again</button>}
+    {onRemove && <button disabled={removing} className="mt-2 min-h-11 w-full text-sm font-medium text-text-secondary disabled:opacity-50" onClick={async () => { setRemoving(true); try { await onRemove() } finally { setRemoving(false) } }}>Remove this file</button>}
+  </div>
+}
 const unavailableAction = async () => { throw new Error('This action is unavailable on a request link.') }
 
-export function RequestWorkspace({ token, brand, assets, activeId, onSelect, onRevise, onObject, onRefresh, processingText, statusUnavailable }: {
+export function RequestWorkspace({ token, brand, assets, activeId, onSelect, onRevise, onDiscard, onObject, onRefresh, processingText, statusUnavailable }: {
   token: string; brand?: string; assets: RequestAsset[]; activeId?: string; onSelect: (id: string) => void
-  onRevise?: (asset: RequestAsset) => void; onRefresh: () => void | Promise<void>
+  onRevise?: (asset: RequestAsset) => void; onDiscard?: (asset: RequestAsset) => void | Promise<void>; onRefresh: () => void | Promise<void>
   onObject?: (asset: RequestAsset, comment: ReviewComment, text: string) => Promise<{ withdrawn: boolean; why: string }>
   processingText?: string; statusUnavailable?: boolean
 }) {
-  const latest = assets.find(a => a.asset_id === activeId) || assets.find(a => a.review_state === 'held') || assets[0]
+  const latest = assets.find(a => a.asset_id === activeId) || assets.find(a => a.review_state === 'held') || assets.find(a => a.review_state === 'upload_incomplete') || assets[0]
   const [historyId, setHistoryId] = React.useState('')
   React.useEffect(() => { setHistoryId(''); useReviewStore.getState().reset() }, [latest?.asset_id])
   const { data: history, error: historyError } = useSWR(latest && historyId && historyId !== latest.version_id ? ['request-version', token, latest.asset_id, historyId] : null, () => requestVersion(token, latest.asset_id, historyId), { refreshInterval: 60000 })
@@ -127,11 +136,11 @@ export function RequestWorkspace({ token, brand, assets, activeId, onSelect, onR
   const unavailable = asset && (!asset.review_state || asset.review_state === 'unavailable')
   return <section className={`request-workspace ${pending ? 'mx-auto max-w-lg' : ''}`}>
     <div className="flex min-h-16 flex-wrap items-center gap-3 rounded-2xl border border-border bg-bg-secondary px-4 py-2"><button aria-label="Refresh video" title="Refresh video" className="grid h-11 w-11 shrink-0 place-items-center rounded-full hover:bg-bg-hover" onClick={refreshMedia}><RotateCcw size={16} /></button>
-      {assets.length > 1 ? <select aria-label="Video to review" value={latest?.asset_id || ''} onChange={e => onSelect(e.target.value)} className="min-h-11 min-w-0 flex-1 bg-transparent text-sm font-medium">{assets.map(a => <option key={a.asset_id} value={a.asset_id}>{a.name}{a.review_state === 'held' ? ' · Needs changes' : ''}</option>)}</select> : <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{latest?.name || 'Your submission'}</h2>}
+      {assets.length > 1 ? <select aria-label="Video to review" value={latest?.asset_id || ''} onChange={e => onSelect(e.target.value)} className="min-h-11 min-w-0 flex-1 bg-transparent text-sm font-medium">{assets.map(a => <option key={a.asset_id} value={a.asset_id}>{a.name}{a.review_state === 'held' ? ' · Needs changes' : a.review_state === 'upload_incomplete' ? ' · Not uploaded' : ''}</option>)}</select> : <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{latest?.name || 'Your submission'}</h2>}
       {latest?.versions && latest.versions.length > 1 ? <select aria-label="Review version" value={historyId || latest.version_id} onChange={e => { useReviewStore.getState().reset(); setHistoryId(e.target.value) }} className="min-h-11 rounded-lg border border-border bg-bg-primary px-3 text-sm">{latest.versions.map(v => <option key={v.id} value={v.id}>v{v.version_number}{v.id === latest.version_id ? ' · Latest' : ' · History'}</option>)}</select> : latest && <span className="rounded-full bg-bg-hover px-3 py-1 text-xs">v{latest.version}</span>}
     </div>
     {onRevise && !historic && latest?.processing === 'failed' && <button onClick={() => onRevise(latest)} className="mt-4 min-h-11 w-full rounded-full bg-accent px-4 text-sm font-semibold text-text-inverse">Upload a replacement v{latest.version + 1}</button>}
-    {pending ? <ReviewAnalysis key={`${asset?.asset_id}-${asset?.version_id}-${historyId}`} mediaUrl={source.current?.key === sourceKey ? source.current.url : undefined} thumbnailUrl={asset?.thumbnail_url} unavailable={unavailable || !!historyError || statusUnavailable} onRefresh={refreshMedia} processingText={processingText} progress={asset?.review_progress} processing={asset?.processing} /> : <div className="request-review-grid mt-4 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_320px]">
+    {asset?.review_state === 'upload_incomplete' ? <UploadNotFinished onUploadAgain={onRevise && !historic ? () => onRevise(latest) : undefined} onRemove={onDiscard && !historic ? () => onDiscard(latest) : undefined} /> : pending ? <ReviewAnalysis key={`${asset?.asset_id}-${asset?.version_id}-${historyId}`} mediaUrl={source.current?.key === sourceKey ? source.current.url : undefined} thumbnailUrl={asset?.thumbnail_url} unavailable={unavailable || !!historyError || statusUnavailable} onRefresh={refreshMedia} processingText={processingText} progress={asset?.review_progress} processing={asset?.processing} /> : <div className="request-review-grid mt-4 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_320px]">
       <div className="request-media flex min-w-0 items-center justify-center overflow-hidden rounded-2xl bg-black/95">
         {asset?.media_url ? asset.asset_type === 'image' ? /* eslint-disable-next-line @next/next/no-img-element */ <img src={source.current?.url} alt={asset.name} className="max-h-[65vh] max-w-full object-contain" /> : <VideoPlayer key={`${asset.asset_id}-${asset.version_id}-${historyId}`} assetId={latest.asset_id} initialStreamUrl={source.current?.url} onRetry={refreshMedia} comments={native} className="request-player h-full w-full" /> : <div className="p-8 text-center text-sm text-white/70">{historyError ? 'This version could not be loaded.' : historic ? 'Loading this version…' : 'Your video is being prepared.'}<button className="mx-auto mt-3 block min-h-11 underline" onClick={onRefresh}>Refresh video</button></div>}
       </div>

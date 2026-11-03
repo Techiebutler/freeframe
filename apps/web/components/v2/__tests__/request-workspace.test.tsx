@@ -164,3 +164,20 @@ it('stops motion when offline or failed while retaining the source frame',()=>{
  expect(screen.getByText('Review unavailable')).toBeVisible()
  expect(screen.queryByRole('progressbar')).toBeNull()
 })
+
+it('shows a dead version as not uploaded even with nothing to offer, never as a review', () => {
+  const dead = { id: 'v1', version_number: 1, processing: 'uploading' }
+  const asset: RequestAsset = { asset_id: 'a', name: 'Cut', version: 1, version_id: 'v1', processing: 'uploading', review_state: 'upload_incomplete', comments: [], versions: [dead] }
+  render(<RequestWorkspace token="t" assets={[asset]} onSelect={vi.fn()} onRefresh={vi.fn()} />)
+  expect(screen.getByRole('heading', { name: 'Upload not finished' })).toBeVisible()
+  expect(screen.queryByText('Review in progress')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Upload it again' })).toBeNull()
+})
+
+it('opens on the file that needs the editor when several are listed', () => {
+  const ok: RequestAsset = { asset_id: 'ok', name: 'Fine', version: 1, version_id: 'v1', processing: 'processing', review_state: 'reviewing', comments: [] }
+  const dead: RequestAsset = { asset_id: 'dead', name: 'Hook 2', version: 1, version_id: 'v2', processing: 'uploading', review_state: 'upload_incomplete', comments: [] }
+  render(<RequestWorkspace token="t" assets={[ok, dead]} onSelect={vi.fn()} onRefresh={vi.fn()} onRevise={vi.fn()} />)
+  expect(screen.getByRole('heading', { name: 'Upload not finished' })).toBeVisible()
+  expect(screen.getByRole('option', { name: 'Hook 2 · Not uploaded' })).toBeInTheDocument()
+})

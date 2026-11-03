@@ -93,9 +93,9 @@ def _request_gate(assets: list[dict], bridge: Optional[dict]) -> dict:
         state = 'held'
     elif not assets:
         state = 'reviewing'
-    elif not valid or bridge['status'] == 'unavailable' or any(st not in ('clear', 'reviewing') for st in states):
+    elif not valid or bridge['status'] == 'unavailable' or any(st not in ('clear', 'reviewing', 'upload_incomplete') for st in states):
         state = 'unavailable'
-    elif 'reviewing' in states or bridge['status'] == 'reviewing':
+    elif 'reviewing' in states or 'upload_incomplete' in states or bridge['status'] == 'reviewing':
         state = 'reviewing'
     else:
         state = 'clear'
@@ -710,6 +710,12 @@ def guest_abort(token: str, body: GuestPart, db: Session = Depends(get_db)):
     except ClientError as error:
         if error.response.get('Error', {}).get('Code') != 'NoSuchUpload':
             raise
+    _drop_unfinished_version(db, req, version)
+    db.commit()
+
+
+def _drop_unfinished_version(db, req, version):
+    """Hide a version that never completed; a file with no other version goes with it. Does not commit."""
     version.processing_status = ProcessingStatus.failed
     version.deleted_at = datetime.now(timezone.utc)
     db.flush()
@@ -722,11 +728,36 @@ def guest_abort(token: str, body: GuestPart, db: Session = Depends(get_db)):
         record=db.query(RequestUpload).filter(RequestUpload.request_id==req.id,
             RequestUpload.asset_id==version.asset_id,RequestUpload.version_number==previous.version_number).first() if previous else None
         aborted_upload(req,version,previous,bool(record and record.submitted_at))
+
+
+class GuestDiscard(BaseModel):
+    asset_id: uuid.UUID
+    version_id: uuid.UUID
+
+
+@router.post("/r/{token}/upload/discard", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(rate_limit("request_upload", 60, 600))])
+def guest_discard(token: str, body: GuestDiscard, db: Session = Depends(get_db)):
+    """Remove a transfer the page can no longer finish. Unlike /upload/abort this needs no upload id: only the
+    tab that started a transfer holds it. The reaper aborts the leftover multipart upload."""
+    req = locked_request(db, _live_request(db, token, recovery=True).id)
+    version = db.query(AssetVersion).join(Asset, Asset.id == AssetVersion.asset_id).filter(
+        AssetVersion.id == body.version_id, AssetVersion.asset_id == body.asset_id, AssetVersion.deleted_at.is_(None),
+        Asset.folder_id == req.folder_id, Asset.project_id == req.project_id, Asset.deleted_at.is_(None),
+    ).populate_existing().with_for_update(of=AssetVersion).first()
+    if not version:
+        raise HTTPException(404, 'File not found in this request.')
+    if version.processing_status != ProcessingStatus.uploading:
+        raise HTTPException(409, 'This file already arrived and cannot be removed here.')
+    _drop_unfinished_version(db, req, version)
     db.commit()
 
 
 def editor_review_state(version, evidence):
     """Only a verdict for these exact bytes may clear the editor's work."""
+    # `uploading` proves no running transfer: only /upload/complete ends it, and only the tab that holds the
+    # File can call that. The reaper keeps request versions, so this state never resolves by waiting.
+    if version and version.processing_status == ProcessingStatus.uploading:
+        return 'upload_incomplete'
     if not version or version.processing_status != ProcessingStatus.ready:
         return 'unavailable' if version and version.processing_status == ProcessingStatus.failed else 'reviewing'
     if not isinstance(evidence, dict):
@@ -781,7 +812,7 @@ def _version_review(db, req, asset, version, reviewer, evidence, include_media=T
         media_url = s3_service.generate_presigned_get_url(media.s3_key_raw if asset.asset_type == AssetType.video else media.s3_key_processed or media.s3_key_raw)
         if media.s3_key_thumbnail and asset.asset_type != AssetType.audio:
             thumbnail_url = s3_service.generate_presigned_get_url(media.s3_key_thumbnail)
-    progress = dict(evidence['progress']) if isinstance(evidence, dict) and isinstance(evidence.get('progress'), dict) else {}
+    progress = dict(evidence['progress']) if state != 'upload_incomplete' and isinstance(evidence, dict) and isinstance(evidence.get('progress'), dict) else {}
     if progress and ((progress.get('stage') in ('reading', 'failed', 'skipped') and progress.get('version_id') != (str(version.id) if version else None)) or progress.get('version_id') not in (None, str(version.id) if version else None)):
         progress = {'stage': 'waiting'} if evidence.get('watching') is True else {}
     if progress and not progress.get('estimate') and media and media.duration_seconds and evidence.get('estimates'):
