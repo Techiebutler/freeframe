@@ -212,6 +212,42 @@ def _purge_share_link(db, share_link_id, counts: PurgeCounts) -> None:
     db.flush()
 
 
+# The audit actions that outlive what they audit. A purge takes a row's own
+# history with it, which is right for "uploaded", "commented" or "approved":
+# nothing is left to read it against. It is wrong for the admin audit, whose
+# whole job is to say that somebody reached or destroyed something, and a read
+# followed by a trash and a purge would otherwise leave no record of the read.
+#
+# Those rows stay. The foreign key is cleared, because the row it names is
+# gone, and the id moves into `payload` as `purged_project_id` or
+# `purged_asset_id`, so the audit still says what it was about.
+# `activity_logs.project_id` and `.asset_id` are both nullable.
+_AUDIT_ACTIONS_KEPT = (
+    "admin_project_access",  # services/permissions.py
+    "admin_bulk_delete",     # services/admin_panel.py
+    "admin_restore",
+    "admin_trash_purge",
+)
+
+
+def _purge_activity_logs(db, column, value) -> None:
+    """Delete a purged row's activity log, keeping and detaching the admin audit.
+
+    `column` is `ActivityLog.project_id` or `ActivityLog.asset_id`. Flushes, so
+    the detached rows no longer name the row the caller deletes next.
+    """
+    db.query(ActivityLog).filter(
+        column == value,
+        ActivityLog.action.notin_(_AUDIT_ACTIONS_KEPT),
+    ).delete(synchronize_session=False)
+    for row in db.query(ActivityLog).filter(column == value).all():
+        payload = dict(row.payload or {})
+        payload[f"purged_{column.key}"] = str(value)
+        row.payload = payload
+        setattr(row, column.key, None)
+    db.flush()
+
+
 def _purge_asset(db, asset_id, counts: PurgeCounts) -> None:
     """Hard-delete an asset and everything hanging off it."""
     a = db.query(Asset).filter(Asset.id == asset_id).first()
@@ -230,7 +266,7 @@ def _purge_asset(db, asset_id, counts: PurgeCounts) -> None:
     # share-link items in OTHER (multi-asset) links that reference this asset
     db.query(ShareLinkItem).filter(ShareLinkItem.asset_id == asset_id).delete(synchronize_session=False)
     db.query(AssetShare).filter(AssetShare.asset_id == asset_id).delete(synchronize_session=False)
-    db.query(ActivityLog).filter(ActivityLog.asset_id == asset_id).delete(synchronize_session=False)
+    _purge_activity_logs(db, ActivityLog.asset_id, asset_id)
     db.query(Notification).filter(Notification.asset_id == asset_id).delete(synchronize_session=False)
     db.query(Asset).filter(Asset.id == asset_id).delete(synchronize_session=False)
     counts.assets += 1
@@ -297,7 +333,7 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
         db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).delete(synchronize_session=False)
     db.query(WatermarkSettings).filter(WatermarkSettings.project_id == project_id).delete(synchronize_session=False)
     db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(synchronize_session=False)
-    db.query(ActivityLog).filter(ActivityLog.project_id == project_id).delete(synchronize_session=False)
+    _purge_activity_logs(db, ActivityLog.project_id, project_id)
     if p.poster_s3_key:
         _safe(delete_object, p.poster_s3_key)
         counts.s3_deletes += 1
