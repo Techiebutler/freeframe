@@ -429,8 +429,16 @@ def admin_purge_trash(
     except admin_panel.PurgeGate as gate:
         raise HTTPException(status_code=gate.status_code, detail=gate.detail)
 
+    # Rows first, objects second. The cascade only collected the keys; a process
+    # that dies before this commit leaves rows that are still in the trash and
+    # still have their media, where the other order left a restorable row whose
+    # objects were already gone. `reclaim_objects` then deletes them and amends
+    # the audit row with what the store really did.
     db.commit()
-    return AdminPurgeResponse(**result)
+    admin_panel.reclaim_objects(db, result)
+    return AdminPurgeResponse(
+        **{k: v for k, v in result.items() if not k.startswith("_")}
+    )
 
 
 @router.post(

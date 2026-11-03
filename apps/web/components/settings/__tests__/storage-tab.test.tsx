@@ -28,7 +28,11 @@ import type { StorageOverview, StorageProjectFiles, TrashOverview } from '@/type
 /** A fresh SWR cache per test, so one test's overview is not another's. */
 function render(ui: React.ReactElement) {
   return rtlRender(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>{ui}</SWRConfig>,
+    <SWRConfig
+      value={{ provider: () => new Map(), dedupingInterval: 0, focusThrottleInterval: 0 }}
+    >
+      {ui}
+    </SWRConfig>,
   )
 }
 
@@ -106,6 +110,17 @@ describe('the header line', () => {
       expect(screen.queryByText(gone)).not.toBeInTheDocument()
     }
     expect(screen.queryByRole('button', { name: /measure now/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/not measured yet/)).not.toBeInTheDocument()
+  })
+
+  it('says the figure is low while files are still unmeasured', async () => {
+    // Until the backfill has run the sum is a floor, and a floor presented as a
+    // total is the one number on this page nobody can act on.
+    serve({ storage: overview({ summary: summary({ unmeasured_files: 12 }) }) })
+    render(<StorageTab />)
+    expect(
+      await screen.findByText('12 files not measured yet, so this figure is low.'),
+    ).toBeInTheDocument()
   })
 })
 
@@ -241,6 +256,64 @@ describe('the delete gate', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
+  it('asks for the phrase when the server does, and keeps the dialog open', async () => {
+    // The dialog can only mirror the project figures it has; a file over 10 GB
+    // is priced inside a response this list does not carry. The 428 used to
+    // ask for a word typed in a field that was not there.
+    serve()
+    render(<StorageTab />)
+    fireEvent.click(await screen.findByRole('button', { expanded: false, name: /Big Campaign/ }))
+    await pick('Hero Cut.mov')
+    fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
+    expect(screen.queryByLabelText(/type DELETE/i)).not.toBeInTheDocument()
+
+    post.mockRejectedValueOnce(
+      Object.assign(new Error('This deletes 1 items. Type DELETE to confirm.'), { status: 428 }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    expect(await screen.findByLabelText(/type DELETE/i)).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('This deletes 1 items. Type DELETE to confirm.')).toBeInTheDocument()
+
+    await type('DELETE')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() =>
+      expect(post).toHaveBeenLastCalledWith(
+        '/admin/delete',
+        expect.objectContaining({ asset_ids: ['a-1'], confirm_text: 'DELETE' }),
+      ),
+    )
+  })
+
+  it('does not promise a trash of zero days when the window is switched off', async () => {
+    serve({ storage: overview({ summary: summary({ retention_days: 0 }) }) })
+    render(<StorageTab />)
+    await pick('Big Campaign')
+    fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/kept until somebody empties it/)).toBeInTheDocument()
+    expect(within(dialog).queryByText(/0 days/)).toBeNull()
+  })
+
+  it('clears the selection and refetches the open project after a delete', async () => {
+    // The row of a deleted file used to stay, with a live checkbox, because
+    // only the overview was revalidated; ticking it again answered 409.
+    serve()
+    render(<StorageTab />)
+    fireEvent.click(await screen.findByRole('button', { expanded: false, name: /Big Campaign/ }))
+    const box = await screen.findByRole('checkbox', { name: 'Select Hero Cut.mov' })
+    fireEvent.click(box)
+    fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
+    const before = get.mock.calls.filter((c) => c[0] === '/admin/storage/projects/p-big').length
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() =>
+      expect(
+        get.mock.calls.filter((c) => c[0] === '/admin/storage/projects/p-big').length,
+      ).toBeGreaterThan(before),
+    )
+    await waitFor(() => expect(box).not.toBeChecked())
+  })
+
   it('sends an older version on its own, and holds the newest shut until its file is picked', async () => {
     // Taking the current cut off a storage list would quietly demote the file
     // to an older one, so the box is disabled rather than failing at the server.
@@ -274,7 +347,7 @@ describe('the trash', () => {
   beforeEach(() => {
     serve({
       bin: FULL_BIN,
-      storage: overview({ summary: summary({ trash_bytes: 2 * GB }) }),
+      storage: overview({ summary: summary({ trash_bytes: 2.5 * GB }) }),
     })
   })
 
@@ -288,7 +361,14 @@ describe('the trash', () => {
     expect(within(reel).getByText('28 days left')).toBeInTheDocument()
     const master = screen.getByText('Old Master.mov').closest('tr')!
     expect(within(master).getByText('12 days left')).toBeInTheDocument()
-    fireEvent.click(within(reel).getByRole('button', { name: 'Restore' }))
+    // A trashed version of a live file is a row of its own.
+    const version = screen.getByText('Hero Cut.mov · version 2').closest('tr')!
+    expect(within(version).getByText('30 days left')).toBeInTheDocument()
+    // Restoring a project is not the same thing as restoring its files.
+    expect(
+      screen.getByText(/share links and its public setting back/),
+    ).toBeInTheDocument()
+    fireEvent.click(within(reel).getByRole('button', { name: 'Restore Last Year Reel' }))
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/admin/trash/restore', { project_ids: ['p-gone'] }),
     )
@@ -308,19 +388,40 @@ describe('the trash', () => {
     await openTrash()
     const row = (await screen.findByText('Stuck.mov')).closest('tr')!
     expect(within(row).getByText(/Restore the project above it first/)).toBeInTheDocument()
-    expect(within(row).getByRole('button', { name: 'Restore' })).toBeDisabled()
-    expect(within(row).queryByRole('button', { name: 'Delete permanently' })).toBeNull()
+    expect(within(row).getByRole('button', { name: 'Restore Stuck.mov' })).toBeDisabled()
+    expect(within(row).queryByRole('button', { name: /^Delete/ })).toBeNull()
+  })
+
+  it('offers no restore on a row whose window is over', async () => {
+    // `days_left` 0 means the next cleanup pass takes it, and the restore
+    // endpoint answers 409, so the button would only ever produce an error.
+    serve({
+      bin: trash({
+        total_bytes: GB,
+        projects: [{
+          project_id: 'p-old', name: 'Expired Reel', deleted_at: null,
+          days_left: 0, total_bytes: GB,
+        }],
+      }),
+      storage: overview({ summary: summary({ trash_bytes: GB }) }),
+    })
+    render(<StorageTab />)
+    await openTrash()
+    const row = (await screen.findByTitle('Expired Reel')).closest('tr')!
+    expect(within(row).getByRole('button', { name: 'Restore Expired Reel' })).toBeDisabled()
+    expect(within(row).getByText(/next cleanup pass removes it/)).toBeInTheDocument()
   })
 
   it.each([
-    { what: 'a project', find: () => screen.findByTitle('Last Year Reel'), size: '1.5 GB', sent: { project_ids: ['p-gone'], confirm_bytes: 1.5 * GB } },
-    { what: 'an asset', find: () => screen.findByText('Old Master.mov'), size: '512 MB', sent: { asset_ids: ['a-gone'], confirm_bytes: 0.5 * GB } },
-  ])('offers $what its own permanent delete, with its own size', async ({ find, size, sent }) => {
+    { what: 'a project', find: () => screen.findByTitle('Last Year Reel'), label: 'Delete Last Year Reel permanently', size: '1.5 GB', sent: { project_ids: ['p-gone'], confirm_bytes: 1.5 * GB } },
+    { what: 'an asset', find: () => screen.findByText('Old Master.mov'), label: 'Delete Old Master.mov permanently', size: '512 MB', sent: { asset_ids: ['a-gone'], confirm_bytes: 0.5 * GB } },
+    { what: 'a version', find: () => screen.findByText('Hero Cut.mov · version 2'), label: 'Delete Hero Cut.mov · version 2 permanently', size: '512 MB', sent: { version_ids: ['v-gone'], confirm_bytes: 0.5 * GB } },
+  ])('offers $what its own permanent delete, with its own size', async ({ find, label, size, sent }) => {
     render(<StorageTab />)
     await openTrash()
     const row = (await find()).closest('tr')!
     expect(within(row).getByText(size)).toBeInTheDocument()
-    fireEvent.click(within(row).getByRole('button', { name: 'Delete permanently' }))
+    fireEvent.click(within(row).getByRole('button', { name: label }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText(/cannot be undone/)).toBeInTheDocument()
     const confirm = within(dialog).getByRole('button', { name: 'Delete permanently' })
@@ -344,7 +445,7 @@ describe('the trash', () => {
     // the dialog a promise rather than a decoration.
     render(<StorageTab />)
     await openTrash()
-    fireEvent.click(await screen.findByRole('button', { name: /Empty trash \(2 GB\)/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Empty trash \(2.5 GB\)/ }))
     expect(await screen.findByText(/cannot be undone/)).toBeInTheDocument()
     const confirm = screen.getByRole('button', { name: 'Delete permanently' })
     expect(confirm).toBeDisabled()
@@ -354,10 +455,71 @@ describe('the trash', () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/admin/trash/purge', {
         everything: true,
-        confirm_count: 3,
-        confirm_bytes: 2 * GB,
+        confirm_count: 4,
+        confirm_bytes: 2.5 * GB,
         confirm_text: 'DELETE',
       }),
     )
+  })
+
+  it('sends the figures the dialog opened with, and shows the refusal if they have moved', async () => {
+    // `revalidateOnFocus` is on, so the list behind an open dialog can change
+    // under it. Echoing whatever has arrived since would let the server's check
+    // pass on figures nobody read; the snapshot is what makes the 409 happen.
+    render(<StorageTab />)
+    await openTrash()
+    fireEvent.click(await screen.findByRole('button', { name: /Empty trash \(2.5 GB\)/ }))
+    await screen.findByText(/cannot be undone/)
+
+    serve({
+      bin: trash({
+        total_bytes: 400 * GB,
+        projects: [
+          ...FULL_BIN.projects,
+          { project_id: 'p-new', name: 'Just Trashed', deleted_at: null, days_left: 30, total_bytes: 398 * GB },
+        ],
+        assets: FULL_BIN.assets,
+        versions: FULL_BIN.versions,
+      }),
+      storage: overview({ summary: summary({ trash_bytes: 400 * GB }) }),
+    })
+    post.mockRejectedValue(
+      new Error('Confirmation is for 4 items but 5 are in the trash. Reload and try again.'),
+    )
+    fireEvent.focus(window)
+    expect(await screen.findByTitle('Just Trashed')).toBeInTheDocument()
+
+    await type('DELETE')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/admin/trash/purge', {
+        everything: true,
+        confirm_count: 4,
+        confirm_bytes: 2.5 * GB,
+        confirm_text: 'DELETE',
+      }),
+    )
+    expect(
+      await screen.findByText('Confirmation is for 4 items but 5 are in the trash. Reload and try again.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it.each([
+    { what: 'the whole trash', open: async () => fireEvent.click(await screen.findByRole('button', { name: /Empty trash/ })) },
+    { what: 'one row', open: async () => fireEvent.click(await screen.findByRole('button', { name: 'Delete Old Master.mov permanently' })) },
+  ])('shows the server refusal and keeps the dialog open: $what', async ({ open }) => {
+    // A refused purge used to look like a button that did nothing: the 409s and
+    // "A cleanup pass is already running" went nowhere at all.
+    post.mockRejectedValue(new Error('A cleanup pass is already running. Try again in a moment.'))
+    render(<StorageTab />)
+    await openTrash()
+    await open()
+    await type('DELETE')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
+    expect(
+      await screen.findByText('A cleanup pass is already running. Try again in a moment.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 })

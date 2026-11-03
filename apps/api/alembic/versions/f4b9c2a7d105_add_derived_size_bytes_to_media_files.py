@@ -58,7 +58,13 @@ def upgrade() -> None:
             "media_files holds more than one row for these versions, so the "
             "derived-bytes figure cannot be attributed to one of them: "
             + ", ".join(f"{v} ({n} rows)" for v, n in duplicates)
-            + ". Resolve the duplicates, then run the migration again."
+            + ". Keep the row the version's asset is actually served from — the "
+            "one whose s3_key_raw and s3_key_processed match the objects in the "
+            "bucket, which on an upload that was retried is the newest row by "
+            "created_at — and delete the others. This upgrade has changed "
+            "nothing: it runs in one transaction, so the new column is rolled "
+            "back with it and your database is exactly as it was. Run the "
+            "migration again once the duplicates are gone."
         )
     op.create_unique_constraint('uq_media_files_version_id', 'media_files', ['version_id'])
 

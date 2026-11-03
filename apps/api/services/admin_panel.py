@@ -19,13 +19,15 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models.activity import ActivityLog
-from ..models.asset import Asset, AssetVersion, MediaFile
+from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus
 from ..models.folder import Folder
 from ..models.project import Project, ProjectMember
 from ..models.share import ShareLink
 from ..models.user import User
 from . import storage as storage_service
+from .versions import UNVIEWABLE_STATUSES
 from .activity_service import log_activity
+from .restore_rules import restore_asset_row, restore_version_row
 from .s3_service import generate_presigned_get_url
 
 log = logging.getLogger(__name__)
@@ -36,12 +38,15 @@ log = logging.getLogger(__name__)
 CONFIRM_ABOVE_PROJECTS = 1
 CONFIRM_ABOVE_BYTES = 10 * 1024**3
 
-#: Exactly this word. The count used to be accepted too, which cleared a gate
-#: whose own dialog says to type DELETE, and a gate that quietly accepts
-#: something its text does not ask for is a gate people stop reading.
+#: Exactly this word, case included, which is the comparison the dialog makes
+#: before it enables its button. The count used to be accepted too, and so did
+#: the lowercase word, which cleared a gate whose own text asks for DELETE; a
+#: gate that quietly accepts something its text does not ask for is a gate
+#: people stop reading, and one the browser and the server disagree about is
+#: worse than either.
 CONFIRM_WORD = "DELETE"
 
-_ACCEPTED = {CONFIRM_WORD, CONFIRM_WORD.lower()}
+_ACCEPTED = {CONFIRM_WORD}
 
 
 class PanelGate(Exception):
@@ -72,13 +77,18 @@ class PurgeGate(PanelGate):
 
 
 def retention_days() -> int:
-    """The window a deleted thing stays restorable, as configured.
+    """The window a deleted thing stays restorable, as the collector reads it.
 
-    Read from the existing setting rather than written down again here, so the
-    API response and the collector that frees the bytes can never disagree
-    about the number of days.
+    Delegated to the collector's own `_retention_days` rather than read from
+    the setting again here, so the API response and the pass that frees the
+    bytes can never disagree about the number of days, including the clamp an
+    absurd configured value gets. Imported lazily, as everything that reaches
+    into `tasks` from this module is, to keep Celery out of the import path of
+    a plain request.
     """
-    return settings.soft_delete_retention_days
+    from ..tasks.cleanup_tasks import _retention_days
+
+    return _retention_days()
 
 
 def _sum_bytes(query) -> int:
@@ -87,11 +97,10 @@ def _sum_bytes(query) -> int:
     return int(row.original_bytes) + int(row.derived_bytes)
 
 
-def _byte_columns():
-    return (
-        func.coalesce(func.sum(MediaFile.file_size_bytes), 0).label("original_bytes"),
-        func.coalesce(func.sum(MediaFile.derived_size_bytes), 0).label("derived_bytes"),
-    )
+#: The two sums, from `services/storage.py` rather than spelled out again here:
+#: a second spelling of either one is a second definition of used storage, which
+#: is the bug this whole change exists to close.
+_byte_columns = storage_service.byte_columns
 
 
 def _scoped_bytes(db: Session, scope, project_ids: list, asset_ids: list, version_ids: list) -> int:
@@ -505,12 +514,25 @@ def selection_bytes(db: Session, project_ids: list, asset_ids: list, version_ids
 
 
 def latest_version_ids(db: Session, asset_ids: list) -> dict:
-    """The newest live version of each of these assets, by version number."""
+    """The newest *showable* live version of each of these assets, by number.
+
+    Same rule as `_display_version` in `routers/assets`: a `failed` or
+    `uploading` version is the newest by number but not the one anybody sees,
+    so with v1 ready, v2 ready and v3 failed the version this protects is v2.
+    Counting v3 let a hand-made request take v2 on its own and quietly demote
+    the file to v1, which is the whole harm the gate is about. Those two
+    statuses are also outside `committed_media`, so the tab never lists them
+    and the browser and the server read the same list.
+    """
     if not asset_ids:
         return {}
     rows = (
         db.query(AssetVersion.asset_id, AssetVersion.id, AssetVersion.version_number)
-        .filter(AssetVersion.asset_id.in_(asset_ids), AssetVersion.deleted_at.is_(None))
+        .filter(
+            AssetVersion.asset_id.in_(asset_ids),
+            AssetVersion.deleted_at.is_(None),
+            AssetVersion.processing_status.notin_(UNVIEWABLE_STATUSES),
+        )
         .all()
     )
     newest: dict = {}
@@ -669,9 +691,12 @@ def _trash_root_bytes(db: Session) -> tuple[dict, dict, dict]:
 def trash_rows(db: Session) -> dict:
     """What is in the trash, how long it has left, and what it still costs.
 
-    `days_left` counts down the collector's own window; 0 means the next pass
-    takes it, and it is never negative because a row awaiting a pass is still
-    restorable. `total_bytes` is what purging that one row frees, and None when
+    `days_left` counts down the collector's own window and is never negative;
+    0 means the window is over, so the next pass takes the row and a restore
+    answers 409. An asset or version that was never usable work is listed too,
+    because it still has a row to remove, but the restore rule leaves it where
+    it is (see `services/restore_rules`). `total_bytes` is what purging that one
+    row frees, and None when
     a parent is trashed too: those bytes are the parent's figure, and a second
     number for the same bytes is how a list stops adding up.
     """
@@ -827,10 +852,17 @@ def restore(
     project back in front of its members is as much an administrative reach as
     taking it away.
 
-    Only what came back is reported and logged. An id never in the trash is
-    `skipped` and gets no log line: a record of an administrative reach has to
-    record something that happened, or a project's history claims it was
+    Only what came back is reported and logged. An id the rule left in the
+    trash is `skipped` and gets no log line: a record of an administrative reach
+    has to record something that happened, or a project's history claims it was
     restored on a day nobody touched it.
+
+    How a row comes back is not decided here. That is `services/restore_rules`,
+    shared with `POST /assets/{id}/restore`: an asset whose folder is in the
+    trash comes back at the project's root, and an upload that was never usable
+    work does not come back at all. Two doors onto the same rows with two rules
+    is how this panel restored an asset into a trashed folder, where nobody
+    could reach it and the collector hard-deleted it.
     """
     version_ids = list(version_ids or [])
     stale = _outside_retention(db, list(project_ids), list(asset_ids), version_ids)
@@ -859,12 +891,18 @@ def restore(
 
     blocked: list = []
 
-    def restore_children(model, ids, parent_query, parent_fields) -> tuple[int, list]:
-        """Clear `deleted_at` row by row, skipping any whose parent is trashed.
+    def restore_children(ids, parent_query, parent_fields, write) -> tuple[int, list]:
+        """Restore row by row, skipping any whose parent is trashed.
 
         Restoring into a deleted parent would report success and then be
         hard-deleted with it, which is the same refusal the single-row restore
         endpoints already give.
+
+        The write itself is `services/restore_rules`, the one rule those
+        endpoints use: an asset whose folder is in the trash comes back at the
+        project's root, and an upload that was never usable work does not come
+        back at all. A row the rule leaves in the trash is not counted as
+        restored, so the response cannot claim one.
         """
         done_count, done_ids = 0, []
         for row_id in ids:
@@ -874,18 +912,14 @@ def restore(
             if any(getattr(row, f) is not None for f in parent_fields):
                 blocked.append(row_id)
                 continue
-            done = db.query(model).filter(
-                model.id == row_id, model.deleted_at.isnot(None)
-            ).update({"deleted_at": None}, synchronize_session="fetch")
-            done_count += done
-            if done:
+            if write(db, row_id):
+                done_count += 1
                 done_ids.append(row_id)
         if ids:
             db.flush()
         return done_count, done_ids
 
     restored_assets, restored_asset_ids = restore_children(
-        Asset,
         asset_ids,
         lambda aid: (
             db.query(Asset.id, Project.deleted_at.label("project_deleted_at"))
@@ -893,9 +927,9 @@ def restore(
             .filter(Asset.id == aid, Asset.deleted_at.isnot(None))
         ),
         ("project_deleted_at",),
+        restore_asset_row,
     )
     restored_versions, restored_version_ids = restore_children(
-        AssetVersion,
         version_ids,
         lambda vid: (
             db.query(
@@ -908,6 +942,7 @@ def restore(
             .filter(AssetVersion.id == vid, AssetVersion.deleted_at.isnot(None))
         ),
         ("asset_deleted_at", "project_deleted_at"),
+        restore_version_row,
     )
 
     # Asked for, not in the trash, not blocked by a parent either: nothing to do
@@ -967,6 +1002,42 @@ def restore(
 # trash first and this endpoint second.
 
 
+def _still_being_written(db: Session, project_ids: list, asset_ids: list, version_ids: list) -> list:
+    """Names of versions under this selection that a worker is still writing.
+
+    The retention window used to keep the cascade away from running jobs: a
+    version cannot be a month old and in flight. This endpoint removed the
+    window, so a `processing` version can be reached while the transcoder is
+    still writing under its prefix, which both loses the job and leaves the
+    output it writes after the purge behind as orphans.
+
+    Only `processing` counts. An `uploading` version in the trash is an upload
+    that was discarded or reclaimed, which is most of what an upgraded
+    instance's trash holds; refusing those would make Empty trash impossible
+    there for good. `_purge_version` aborts its multipart instead, so nothing
+    is left open.
+    """
+    if not project_ids and not asset_ids and not version_ids:
+        return []
+    scopes = []
+    if project_ids:
+        scopes.append(Asset.project_id.in_(project_ids))
+    if asset_ids:
+        scopes.append(Asset.id.in_(asset_ids))
+    if version_ids:
+        scopes.append(AssetVersion.id.in_(version_ids))
+    rows = (
+        db.query(Asset.name, AssetVersion.version_number)
+        .join(Asset, AssetVersion.asset_id == Asset.id)
+        .filter(
+            or_(*scopes),
+            AssetVersion.processing_status == ProcessingStatus.processing,
+        )
+        .all()
+    )
+    return sorted({f"{name} version {number}" for name, number in rows})
+
+
 def trash_purge_targets(
     db: Session,
     project_ids: list[uuid.UUID],
@@ -989,13 +1060,16 @@ def trash_purge_targets(
         )
 
     targets = _resolve(db, list(project_ids), list(asset_ids), list(version_ids), trashed=True)
+    resolved_projects = [p["id"] for p in targets["projects"]]
+    resolved_assets = [a["id"] for a in targets["assets"]]
+    resolved_versions = [v["id"] for v in targets["versions"]]
     # Measured now, before anything is removed: afterwards the rows the figure
     # is made of are gone and it could not be recomputed.
     targets["bytes"] = trash_selection_bytes(
-        db,
-        [p["id"] for p in targets["projects"]],
-        [a["id"] for a in targets["assets"]],
-        [v["id"] for v in targets["versions"]],
+        db, resolved_projects, resolved_assets, resolved_versions,
+    )
+    targets["in_flight"] = _still_being_written(
+        db, resolved_projects, resolved_assets, resolved_versions,
     )
     return targets
 
@@ -1024,13 +1098,22 @@ def check_purge_gate(
     let a selection change size in bytes without tripping anything), the phrase
     is required at **every** size, and anything named that is not in the trash
     is a refusal rather than a skip, which is what keeps a purge off a live
-    project.
+    project. A version a worker is still writing is refused too; the retention
+    window used to make that impossible.
     """
     if targets["missing"]:
         raise PurgeGate(
             409,
             f"{len(targets['missing'])} of the selected items are not in the trash. "
             "Only things already deleted can be removed for good. Reload and try again.",
+        )
+
+    in_flight = targets.get("in_flight") or []
+    if in_flight:
+        raise PurgeGate(
+            409,
+            f"{', '.join(in_flight)} is still being processed. "
+            "Wait for the job to finish, then try again.",
         )
 
     resolved = len(targets["projects"]) + len(targets["assets"]) + len(targets["versions"])
@@ -1060,16 +1143,39 @@ def purge_from_trash(db: Session, targets: dict, actor: User) -> dict:
     """Hard-delete a confirmed selection of trashed things, right now.
 
     Runs the collector's own cascade per root, which removes the object-store
-    keys as well as the rows. Each root is re-checked and locked immediately
-    before cascading with a cutoff of `now`, so a restore committing after the
-    resolve above is skipped rather than destroyed on a stale reading. The pass
-    holds the collector's advisory lock, so a scheduled purge waits instead of
-    cascading the same subtree twice. Mutates `db`; the caller commits.
+    keys as well as the rows. Three passes, in this order and for these reasons:
+
+    1. Every root is re-read `FOR UPDATE` with a cutoff of `now`, so a restore
+       committing after the resolve above is skipped rather than destroyed on a
+       stale reading. Locking all of them first means what follows describes
+       exactly what will cascade.
+    2. The locked set is priced in one query, before anything is removed: a
+       parent and its child are one `or_` branch and count once, and afterwards
+       the rows the figure is made of are gone.
+    3. Only then does the cascade run, and its object-store work is **collected,
+       not done** (`PurgeCounts.deferred`): the caller commits the rows and then
+       calls `reclaim_objects`. Deleting first meant a process dying partway
+       left rows that `/admin/trash/restore` would bring back with their media
+       already gone.
+
+    A root that was restored in between is skipped, so it is neither priced nor
+    logged; the figures are what happened, not what was asked for.
+
+    Trashed **folders** are not roots here. The trash view does not list them,
+    their own bytes are zero, and a trashed folder's assets are listed and
+    purged in their own right; the empty folder rows are left for the retention
+    collector, which has them in its own root list.
+
+    The pass holds the collector's advisory lock, so a scheduled purge waits
+    instead of cascading the same subtree twice. Mutates `db`; the caller
+    commits.
     """
     from ..tasks import cleanup_tasks
 
     now = datetime.now(timezone.utc)
-    counts = cleanup_tasks.PurgeCounts(retention_days=retention_days())
+    # deferred=[] makes the cascade collect its object-store work instead of
+    # doing it inside this request's transaction.
+    counts = cleanup_tasks.PurgeCounts(retention_days=retention_days(), deferred=[])
 
     got_lock = db.execute(
         text("SELECT pg_try_advisory_xact_lock(:k)"),
@@ -1081,48 +1187,102 @@ def purge_from_trash(db: Session, targets: dict, actor: User) -> dict:
     # Top down, matching `_purge_soft_deleted`: a project's cascade removes its
     # own assets and versions, so a later pass finds nothing left to do for them
     # rather than walking rows that are already gone.
-    for model, cascade, roots in (
-        (Project, cleanup_tasks._purge_project, targets["projects"]),
-        (Asset, cleanup_tasks._purge_asset, targets["assets"]),
-        (AssetVersion, cleanup_tasks._purge_version, targets["versions"]),
-    ):
-        for root in roots:
+    levels = (
+        ("projects", Project, cleanup_tasks._purge_project),
+        ("assets", Asset, cleanup_tasks._purge_asset),
+        ("versions", AssetVersion, cleanup_tasks._purge_version),
+    )
+    cascading: dict = {key: [] for key, _, _ in levels}
+    for key, model, _cascade in levels:
+        for root in targets[key]:
             if cleanup_tasks._lock_if_still_purgeable(db, model, root["id"], now) is None:
                 continue
+            cascading[key].append(root)
+
+    freed = trash_selection_bytes(
+        db,
+        [p["id"] for p in cascading["projects"]],
+        [a["id"] for a in cascading["assets"]],
+        [v["id"] for v in cascading["versions"]],
+    )
+
+    for key, _model, cascade in levels:
+        for root in cascading[key]:
             cascade(db, root["id"], counts)
     db.flush()
 
     # project_id is left null on purpose. `_purge_project` deletes the activity
     # log of the project it removes, so an entry pinned to one of these projects
-    # would be destroyed by the very action it records.
-    log_activity(
+    # would be destroyed by the very action it records. The names are in the
+    # payload because the rows that carry them are gone afterwards, and an id on
+    # its own tells whoever reads this history nothing about what was destroyed.
+    audit = log_activity(
         db,
         "admin_trash_purge",
         user_id=actor.id,
         payload={
             "via": "admin_panel",
-            "projects": [str(p["id"]) for p in targets["projects"]],
-            "assets": [str(a["id"]) for a in targets["assets"]],
-            "versions": [str(v["id"]) for v in targets["versions"]],
-            "count": len(targets["projects"]) + len(targets["assets"]) + len(targets["versions"]),
-            "bytes": targets["bytes"],
-            "s3_deletes": counts.s3_deletes,
+            "projects": [{"id": str(p["id"]), "name": p["name"]} for p in cascading["projects"]],
+            "assets": [{"id": str(a["id"]), "name": a["name"]} for a in cascading["assets"]],
+            "versions": [
+                {
+                    "id": str(v["id"]),
+                    "name": f"{v['asset_name']} version {v['version_number']}",
+                }
+                for v in cascading["versions"]
+            ],
+            "count": sum(len(cascading[key]) for key, _, _ in levels),
+            "bytes": freed,
+            # Filled in by `reclaim_objects`, once the store has answered.
+            "s3_queued": len(counts.deferred or []),
             "at": now.isoformat(),
         },
-    )
-    # WARNING, like the collector's own line: this is the only record of an
-    # irreversible reclaim, and it has to survive a quiet log level.
-    log.warning(
-        "admin trash purge by user %s: %d project(s), %d asset(s), %d version(s), "
-        "%d bytes, %d object-store delete(s)",
-        actor.id, counts.projects, counts.assets, counts.versions,
-        targets["bytes"], counts.s3_deletes,
     )
 
     return {
         "purged_projects": counts.projects,
         "purged_assets": counts.assets,
         "purged_versions": counts.versions,
-        "freed_bytes": targets["bytes"],
-        "s3_deletes": counts.s3_deletes,
+        "freed_bytes": freed,
+        # Both are 0 until the objects are really gone; nothing has been sent to
+        # the store at this point.
+        "s3_deletes": 0,
+        "s3_failures": 0,
+        "_counts": counts,
+        "_audit": audit,
+        "_actor_id": actor.id,
     }
+
+
+def reclaim_objects(db: Session, pending: dict) -> dict:
+    """Delete the objects a committed purge collected, and record what happened.
+
+    Called by the endpoint **after** it has committed the row deletes, which is
+    what makes a crash leak objects rather than strand restorable rows. The audit
+    row is then amended with what the store actually did, so the one record of
+    an irreversible reclaim says whether the bytes came back.
+    """
+    from ..tasks import cleanup_tasks
+
+    counts = pending["_counts"]
+    cleanup_tasks.run_deferred(counts)
+    pending["s3_deletes"] = counts.s3_deletes
+    pending["s3_failures"] = counts.s3_failures
+
+    audit = pending["_audit"]
+    payload = dict(audit.payload or {})
+    payload.pop("s3_queued", None)
+    payload["s3_deletes"] = counts.s3_deletes
+    payload["s3_failures"] = counts.s3_failures
+    audit.payload = payload
+    db.commit()
+
+    # WARNING, like the collector's own line: this is the only record of an
+    # irreversible reclaim, and it has to survive a quiet log level.
+    log.warning(
+        "admin trash purge by user %s: %d project(s), %d asset(s), %d version(s), "
+        "%d bytes, %d object-store reclaim(s), %d failed",
+        pending["_actor_id"], counts.projects, counts.assets, counts.versions,
+        pending["freed_bytes"], counts.s3_deletes, counts.s3_failures,
+    )
+    return pending

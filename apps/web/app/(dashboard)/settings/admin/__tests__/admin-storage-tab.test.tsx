@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { cleanup, render, screen, fireEvent } from '@testing-library/react'
 
 // The four panel surfaces sit where the other instance-wide admin surfaces sit:
 // sub-tabs of the Admin dashboard, each reachable by deep link like the others.
@@ -49,9 +49,12 @@ describe('the Admin dashboard panel tabs', () => {
     fireEvent.click(screen.getByRole('button', { name: label }))
     expect(screen.getByTestId(testId)).toBeInTheDocument()
 
+    // Unmounted first: with the clicked render still on screen the deep-link
+    // assertion below could not fail, whatever the second render did.
+    cleanup()
     window.history.replaceState({}, '', `/settings/admin?tab=${slug}`)
     render(<AdminPage />)
-    expect(screen.getAllByTestId(testId).length).toBeGreaterThan(0)
+    expect(screen.getByTestId(testId)).toBeInTheDocument()
   })
 
   it('offers none of them to a non-admin, and ignores a tab name it does not have', () => {

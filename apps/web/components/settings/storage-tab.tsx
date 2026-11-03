@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { ChevronRight, HardDrive, Trash2 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -74,9 +74,33 @@ function reason(err: unknown, fallback: string): string {
 }
 
 /**
+ * The HTTP status of a failed request, where the client reported one.
+ *
+ * Read by duck typing rather than from `ApiError`, so the component keeps
+ * working behind any client that reports a status, and a thrown `Error`
+ * without one simply reads as undefined.
+ */
+function statusOf(err: unknown): number | undefined {
+  return typeof err === "object" && err !== null && "status" in err
+    ? (err as { status?: number }).status
+    : undefined;
+}
+
+/** The figure above which the server asks for the typed phrase. */
+const CONFIRM_ABOVE_BYTES = 10 * 1024 ** 3;
+
+/** Days left of zero: the next cleanup pass takes the row, so it is past restoring. */
+function expired(daysLeft: number | null): boolean {
+  return daysLeft === 0;
+}
+
+/**
  * One line in the trash, whichever level it came from. `bytes` is null when a
  * parent is trashed too: those bytes are counted on the parent's row, and such
  * an entry has no restore and no permanent delete of its own either.
+ *
+ * `holder` is what has to come back first for a blocked entry, named per level:
+ * "the project above it" is wrong for a version whose file is what is trashed.
  */
 type TrashEntry = {
   key: string;
@@ -84,9 +108,24 @@ type TrashEntry = {
   where: string;
   daysLeft: number | null;
   blocked: boolean;
+  holder: string;
   bytes: number | null;
   payload: Record<string, string[]>;
 };
+
+/**
+ * What the one permanent-delete dialog is open for.
+ *
+ * "all" carries the count and the byte figure read when it opened, not live SWR
+ * data. `revalidateOnFocus` is on, so switching window and back while a
+ * colleague trashes a project moved both the text and the echo together, and
+ * the server's check passed on figures nobody had read. The snapshot is what
+ * makes that 409 happen.
+ */
+type PurgeTarget =
+  | { kind: "one"; entry: TrashEntry }
+  | { kind: "all"; count: number; bytes: number };
+
 
 // ── the expanded levels ───────────────────────────────────────────────────────
 
@@ -242,10 +281,14 @@ function TrashList({
     (key: string) => api.get<TrashOverview>(key),
   );
   // One dialog for both permanent deletes: `null` closed, an entry for that one
-  // row, "all" for the whole bin. Two dialogs meant two copies of the same
+  // row, a snapshot for the whole bin. Two dialogs meant two copies of the same
   // gate, which is how the two drift apart.
-  const [purging, setPurging] = React.useState<TrashEntry | "all" | null>(null);
+  const [purging, setPurging] = React.useState<PurgeTarget | null>(null);
+  // Two places a refusal can belong: restore has no dialog, so its reason goes
+  // above the list; a purge refusal belongs in the dialog that is still open,
+  // and printing it in both put the same sentence on screen twice.
   const [failure, setFailure] = React.useState<string | null>(null);
+  const [purgeFailure, setPurgeFailure] = React.useState<string | null>(null);
 
   const entries = React.useMemo<TrashEntry[]>(() => {
     if (!data) return [];
@@ -256,6 +299,7 @@ function TrashList({
         where: "Project",
         daysLeft: p.days_left,
         blocked: false,
+        holder: "",
         bytes: p.total_bytes,
         payload: { project_ids: [p.project_id] },
       })),
@@ -265,6 +309,7 @@ function TrashList({
         where: a.project_name,
         daysLeft: a.days_left,
         blocked: a.blocked_by_project,
+        holder: "project",
         bytes: a.total_bytes,
         payload: { asset_ids: [a.asset_id] },
       })),
@@ -274,6 +319,10 @@ function TrashList({
         where: v.project_name,
         daysLeft: v.days_left,
         blocked: v.blocked_by_parent,
+        // Either the file or the project can be the one in the trash, and the
+        // response does not say which, so the row names both rather than the
+        // wrong one.
+        holder: "file or project",
         bytes: v.total_bytes,
         payload: { version_ids: [v.version_id] },
       })),
@@ -291,38 +340,40 @@ function TrashList({
     }
   };
 
-  const emptyAll = async () => {
-    // Both figures go back exactly as they were read, and the server refuses if
-    // either has moved since. That is what makes the number in the dialog a
-    // promise rather than a decoration.
-    await api.post<AdminPurgeResponse>("/admin/trash/purge", {
-      everything: true,
-      confirm_count: entries.length,
-      confirm_bytes: data?.total_bytes ?? 0,
-      confirm_text: "DELETE",
-    });
-    await mutate();
-    onChanged();
-  };
-
-  /** One entry, for good: the same endpoint and gate as Empty trash with one
-   * id, because a second permanent delete would be a second set of rules. */
-  const purgeOne = async (entry: TrashEntry) => {
-    setFailure(null);
+  /**
+   * The one permanent delete, for a single row and for the whole bin alike.
+   *
+   * Both figures go back exactly as they were read, and the server refuses if
+   * either has moved since. That is what makes the number in the dialog a
+   * promise rather than a decoration, and it only works if a refusal is shown:
+   * the 409s and "A cleanup pass is already running" used to look like a button
+   * that did nothing. The list is refetched either way, so a page the server
+   * called stale is a page that has caught up by the time it is read.
+   */
+  const purge = async (
+    payload: Record<string, unknown>,
+    count: number,
+    bytes: number,
+    fallback: string,
+  ) => {
+    setPurgeFailure(null);
     try {
       await api.post<AdminPurgeResponse>("/admin/trash/purge", {
-        ...entry.payload,
-        confirm_count: 1,
-        confirm_bytes: entry.bytes ?? 0,
+        ...payload,
+        confirm_count: count,
+        confirm_bytes: bytes,
         confirm_text: "DELETE",
       });
     } catch (err: unknown) {
-      setFailure(reason(err, "Could not delete that for good"));
+      setPurgeFailure(reason(err, fallback));
+      await mutate();
+      // Rethrown so the dialog stays open carrying the server's own reason.
       throw err;
     }
     await mutate();
     onChanged();
   };
+
 
   return (
     <section className="space-y-3">
@@ -335,7 +386,18 @@ function TrashList({
           ← Back to storage
         </button>
         {entries.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => setPurging("all")}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setPurgeFailure(null);
+              setPurging({
+                kind: "all",
+                count: entries.length,
+                bytes: data?.total_bytes ?? 0,
+              });
+            }}
+          >
             <Trash2 className="h-3.5 w-3.5" />
             Empty trash ({formatBytes(data?.total_bytes ?? 0)})
           </Button>
@@ -343,6 +405,14 @@ function TrashList({
       </div>
 
       {failure && <p className="text-sm text-status-error">{failure}</p>}
+
+      {/* Said here because the delete dialog told the owner the share links
+          stop working, which is true until the project comes back. */}
+      {data && data.projects.length > 0 && (
+        <p className="text-xs text-text-tertiary">
+          Restoring a project brings its share links and its public setting back as they were.
+        </p>
+      )}
 
       <ListState
         isLoading={isLoading}
@@ -370,7 +440,12 @@ function TrashList({
                       glance. It belongs in the row. */}
                   {e.blocked && (
                     <span className="block text-2xs text-status-warning">
-                      Restore the project above it first
+                      Restore the {e.holder} above it first
+                    </span>
+                  )}
+                  {!e.blocked && expired(e.daysLeft) && (
+                    <span className="block text-2xs text-status-warning">
+                      Past the window: the next cleanup pass removes it
                     </span>
                   )}
                 </td>
@@ -387,12 +462,17 @@ function TrashList({
                 </td>
                 <td className={TD}>
                   {/* One row, right aligned: stacked buttons made every entry
-                      twice as tall and the column ragged. */}
+                      twice as tall and the column ragged. Each button names its
+                      own row, or a screen reader hears the same two words all
+                      the way down the list. */}
                   <div className="flex items-center justify-end gap-1">
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={e.blocked}
+                      aria-label={`Restore ${e.what}`}
+                      // Days left of zero answers 409: the window is over and
+                      // the row is the collector's now.
+                      disabled={e.blocked || expired(e.daysLeft)}
                       onClick={() => restore(e.payload)}
                     >
                       Restore
@@ -401,9 +481,10 @@ function TrashList({
                       <Button
                         variant="ghost"
                         size="sm"
+                        aria-label={`Delete ${e.what} permanently`}
                         onClick={() => {
-                          setFailure(null);
-                          setPurging(e);
+                          setPurgeFailure(null);
+                          setPurging({ kind: "one", entry: e });
                         }}
                       >
                         Delete permanently
@@ -422,23 +503,24 @@ function TrashList({
         onOpenChange={(open) => {
           if (!open) {
             setPurging(null);
-            setFailure(null);
+            setPurgeFailure(null);
           }
         }}
         title={
-          purging === "all"
-            ? `Permanently delete ${count(entries.length, "item")}?`
-            : `Permanently delete ${purging?.what ?? ""}?`
+          purging?.kind === "all"
+            ? `Permanently delete ${count(purging.count, "item")}?`
+            : `Permanently delete ${purging?.entry.what ?? ""}?`
         }
         description={
+          // The figures the dialog opened with, not whatever has arrived since.
           `This frees ${formatBytes(
-            (purging === "all" ? data?.total_bytes : purging?.bytes) ?? 0,
+            (purging?.kind === "all" ? purging.bytes : purging?.entry.bytes) ?? 0,
           )} right away and cannot be undone. ` +
-          (purging === "all"
+          (purging?.kind === "all"
             ? "Everything in the trash is removed from the database and from storage, "
             : "It is removed from the database and from storage, ") +
           "originals and transcoded versions alike. " +
-          (purging === "all"
+          (purging?.kind === "all"
             ? "There is no way back afterwards."
             : "Everything else in the trash stays.")
         }
@@ -447,10 +529,23 @@ function TrashList({
         requiredText="DELETE"
         prompt="Type DELETE to confirm:"
         confirmLabel="Delete permanently"
-        error={failure}
+        error={purgeFailure}
         onConfirm={async () => {
-          if (purging === "all") await emptyAll();
-          else if (purging) await purgeOne(purging);
+          if (purging?.kind === "all") {
+            await purge(
+              { everything: true },
+              purging.count,
+              purging.bytes,
+              "Could not empty the trash",
+            );
+          } else if (purging) {
+            await purge(
+              purging.entry.payload,
+              1,
+              purging.entry.bytes ?? 0,
+              "Could not delete that for good",
+            );
+          }
           setPurging(null);
         }}
       />
@@ -469,16 +564,23 @@ export function StorageTab() {
     "/admin/trash",
     (key: string) => api.get<TrashOverview>(key),
   );
+  const { mutate: revalidate } = useSWRConfig();
 
   const [showTrash, setShowTrash] = React.useState(false);
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const [selection, setSelection] = React.useState<Selection>(EMPTY);
   const [confirming, setConfirming] = React.useState(false);
   const [failure, setFailure] = React.useState<string | null>(null);
+  // Set when the server answers 428. The thresholds below are a courtesy, and
+  // this is what keeps the server the only authority: a selection the dialog
+  // thought was small enough gets the field and stays open, rather than asking
+  // for a word typed somewhere that does not exist.
+  const [phraseRequired, setPhraseRequired] = React.useState(false);
 
   const projects = React.useMemo(() => data?.projects ?? [], [data]);
   const largest = projects[0]?.total_bytes ?? 0;
   const summary = data?.summary;
+  const retentionDays = summary?.retention_days ?? 30;
   const chosen = selectionSize(selection);
   const trashCount =
     (trash?.projects.length ?? 0) + (trash?.assets.length ?? 0) + (trash?.versions.length ?? 0);
@@ -495,12 +597,23 @@ export function StorageTab() {
   const toggle = (level: keyof Selection, id: string) =>
     setSelection((s) => ({ ...s, [level]: toggleIn(s[level], id) }));
 
-  // The threshold the server applies, mirrored so the dialog can ask first.
+  // The thresholds the server applies, mirrored so the dialog can ask first,
+  // plus whatever the server has already refused for. Files and versions are
+  // priced inside a response this list does not carry, so their size cannot be
+  // mirrored at all: a 428 is what asks for the phrase there.
   const needsPhrase =
-    selection.projects.size > 1 || (onlyProjects && projectBytes > 10 * 1024 ** 3);
+    phraseRequired ||
+    selection.projects.size > 1 ||
+    (onlyProjects && projectBytes > CONFIRM_ABOVE_BYTES);
 
   const refresh = async () => {
-    await Promise.all([mutate(), mutateTrash()]);
+    await Promise.all([
+      mutate(),
+      mutateTrash(),
+      // The open project lists too, or a file deleted from an expanded project
+      // keeps its row and its live checkbox, and ticking it again gets a 409.
+      ...[...expanded].map((id) => revalidate(`/admin/storage/projects/${id}`)),
+    ]);
   };
 
   const handleDelete = async () => {
@@ -516,10 +629,12 @@ export function StorageTab() {
     } catch (err: unknown) {
       // Rethrown so the dialog stays open carrying the server's own reason,
       // which is the only place the refusal is explained.
+      if (statusOf(err) === 428) setPhraseRequired(true);
       setFailure(reason(err, "Could not delete that selection"));
       throw err;
     }
     setSelection(EMPTY);
+    setPhraseRequired(false);
     await refresh();
   };
 
@@ -581,7 +696,17 @@ export function StorageTab() {
               >
                 {summary.trash_bytes > 0 ? "trash" : "Trash"}
               </button>
-              {summary.trash_bytes > 0 && `, gone for good after ${summary.retention_days} days.`}
+              {summary.trash_bytes > 0 &&
+                (retentionDays > 0
+                  ? `, gone for good after ${retentionDays} days.`
+                  : `, kept until somebody empties it.`)}
+            </p>
+          )}
+          {/* The figure is a floor until the backfill has run, and saying so is
+              the difference between an incomplete number and a wrong one. */}
+          {summary.unmeasured_files > 0 && (
+            <p className="text-xs text-text-tertiary">
+              {count(summary.unmeasured_files, "file")} not measured yet, so this figure is low.
             </p>
           )}
         </div>
@@ -689,15 +814,22 @@ export function StorageTab() {
         open={confirming}
         onOpenChange={(open) => {
           setConfirming(open);
-          if (!open) setFailure(null);
+          if (!open) {
+            setFailure(null);
+            setPhraseRequired(false);
+          }
         }}
         title={`Delete ${count(chosen, "item")}?`}
         description={
           (onlyProjects && projectBytes > 0
             ? `That is ${formatBytes(projectBytes)}. `
             : "") +
-          `They go to the trash for ${summary?.retention_days ?? 30} days and are removed ` +
-          `for good after that. Everyone in them loses access right away.`
+          // With the window switched off there is no number of days to name,
+          // and "for 0 days" read as if the trash were pointless.
+          (retentionDays > 0
+            ? `They go to the trash for ${retentionDays} days and are removed for good after that. `
+            : "They go to the trash, which is kept until somebody empties it. ") +
+          `Everyone in them loses access right away.`
         }
         requiredText={needsPhrase ? "DELETE" : null}
         // Names the threshold that actually tripped. One sentence for both read
@@ -706,7 +838,9 @@ export function StorageTab() {
         prompt={
           selection.projects.size > 1
             ? "More than one project: type DELETE to confirm."
-            : "More than 10 GB: type DELETE to confirm."
+            : onlyProjects && projectBytes > CONFIRM_ABOVE_BYTES
+              ? "More than 10 GB: type DELETE to confirm."
+              : "Type DELETE to confirm."
         }
         confirmLabel="Delete"
         error={failure}

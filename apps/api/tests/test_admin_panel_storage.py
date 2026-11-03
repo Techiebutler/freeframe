@@ -17,6 +17,7 @@ from apps.api.models.activity import ActivityLog
 from apps.api.models.asset import Asset
 from apps.api.models.project import Project, ProjectRole
 from apps.api.services import admin_panel
+from apps.api.tasks import cleanup_tasks
 
 RETENTION = settings.soft_delete_retention_days
 
@@ -117,12 +118,13 @@ def test_the_typed_phrase_is_required_above_either_threshold(
 
 
 @pytest.mark.parametrize(
-    "typed", [None, "", "2", "delete please", "DELETED"],
-    ids=["nothing", "blank", "the count", "a sentence", "nearly"],
+    "typed", [None, "", "2", "delete", "delete please", "DELETED"],
+    ids=["nothing", "blank", "the count", "the lowercase word", "a sentence", "nearly"],
 )
 def test_the_typed_phrase_is_the_word_and_nothing_else(seed, as_user, admin, typed):
-    """The count used to be accepted too, clearing a gate whose dialog says to type
-    DELETE. A gate that accepts what its text never asked for stops being read."""
+    """The count used to be accepted too, and so did the lowercase word, clearing a gate
+    whose dialog says to type DELETE and whose button compares case. A gate that accepts
+    what its text never asked for stops being read."""
     owner = seed.user()
     one, two = seed.project(owner, name="one"), seed.project(owner, name="two")
     resp = _delete(
@@ -292,6 +294,54 @@ def test_a_live_row_is_skipped_and_a_child_of_a_trashed_parent_is_blocked(
     assert blocked[f"restored_{level}s"] == 0
     assert blocked["blocked_by_parent"] == [str(row.id)]
     assert blocked["skipped"] == []
+    seed.db.refresh(row)
+    assert row.deleted_at is not None
+
+
+def test_a_restored_asset_leaves_the_folder_that_is_still_in_the_trash(
+    seed, as_user, admin, s3,
+):
+    """`DELETE /folders/{id}` stamps the folder's assets, so they appear in the trash as
+    ordinary rows. Clearing `deleted_at` alone left the asset naming a trashed folder: a
+    live row nobody could reach, which the collector then hard-deleted with the folder.
+    One rule for both doors moves it to the project's root instead."""
+    owner = seed.user()
+    project = seed.project(owner)
+    folder = seed.folder(project, owner, name="dailies")
+    asset = seed.media(project, owner, name="in a folder", folder=folder, original=1_000)
+    assert as_user(owner).delete(f"/folders/{folder.id}").status_code == 204
+
+    assert _restore(as_user(admin), asset_ids=[str(asset.id)]).json()["restored_assets"] == 1
+    seed.db.refresh(asset)
+    assert asset.deleted_at is None
+    assert asset.folder_id is None, "at the root, where the grid lists it"
+
+    # Age the folder past the window and run the collector that cascaded it away.
+    folder.deleted_at = datetime.now(timezone.utc) - timedelta(days=RETENTION + 1)
+    seed.db.flush()
+    cleanup_tasks._purge_soft_deleted(seed.db, cleanup_tasks.PurgeCounts())
+    seed.db.flush()
+    assert seed.db.query(Asset).filter(Asset.id == asset.id).first() is not None
+    assert s3["delete_object"] == [], "its objects are not the folder's to reclaim"
+
+
+@pytest.mark.parametrize("level", ["asset", "version"])
+def test_an_upload_that_was_never_usable_work_is_not_restored(seed, as_user, admin, level):
+    """`_dispose_version_files` deletes the objects before it stamps the row, so there is
+    nothing behind an `uploading` version in the trash. Restoring it would bring back a
+    card that cannot be opened, which is the same refusal `POST /assets/{id}/restore`
+    gives."""
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.media(project, owner, original=1_000, status=ProcessingStatus.uploading)
+    version = seed.versions_of(asset)[0]
+    row = {"asset": asset, "version": version}[level]
+    seed.trash(row)
+    body = _restore(as_user(admin), **{f"{level}_ids": [str(row.id)]}).json()
+    assert body[f"restored_{level}s"] == 0
+    assert body["skipped"] == [str(row.id)]
     seed.db.refresh(row)
     assert row.deleted_at is not None
 
@@ -565,3 +615,129 @@ def test_a_restore_that_lands_between_resolving_and_purging_is_skipped(seed, as_
     result = admin_panel.purge_from_trash(seed.db, targets, admin)
     assert result["purged_projects"] == 0
     assert seed.db.query(Project).filter(Project.id == project.id).first() is not None
+
+
+def test_the_newest_version_gate_reads_the_one_people_see(seed, as_user, admin):
+    """With v3 failed, the version people see is v2, so v2 is what may not be deleted
+    alone: the gate used to read the newest by number and let a request quietly demote
+    the file to v1. Same rule as `_display_version`."""
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    asset = seed.media(seed.project(owner), owner, name="master", versions=2,
+                       original=1_000, derived=0)
+    v1, v2 = seed.versions_of(asset)
+    v3, _ = seed.version(asset, owner, number=3, original=1_000, derived=0,
+                         status=ProcessingStatus.failed)
+    client = as_user(admin)
+    refused = _delete(client, version_ids=[str(v2.id)], confirm_count=1)
+    assert refused.status_code == 409
+    assert "master" in refused.json()["detail"]
+    # The failed one is not what anybody opens, so it goes on its own.
+    assert _delete(client, version_ids=[str(v3.id)], confirm_count=1).status_code == 200
+    for v in (v1, v2):
+        seed.db.refresh(v)
+    assert (v1.deleted_at, v2.deleted_at) == (None, None)
+
+
+def test_a_purge_is_refused_while_a_worker_is_still_writing(seed, as_user, admin, s3):
+    """The retention window used to make this impossible: a month-old version is not in
+    flight. Purging one that is loses the job and orphans whatever it writes next."""
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.asset(project, owner, name="in the oven")
+    version, _ = seed.version(asset, owner, original=1_000, derived=0,
+                              status=ProcessingStatus.processing, s3_keys=True)
+    seed.trash(asset)
+    client = as_user(admin)
+    resp = _purge(client, asset_ids=[str(asset.id)], confirm_count=1, confirm_bytes=1_000)
+    assert resp.status_code == 409
+    assert "still being processed" in resp.json()["detail"]
+    assert seed.db.query(Asset).filter(Asset.id == asset.id).first() is not None
+    assert s3["delete_object"] == []
+    # Finished, and the same request goes through.
+    version.processing_status = ProcessingStatus.ready
+    seed.db.flush()
+    assert _purge(
+        client, asset_ids=[str(asset.id)], confirm_count=1, confirm_bytes=1_000,
+    ).status_code == 200
+
+
+def test_a_purge_prices_logs_and_counts_only_what_really_happened(
+    seed, as_user, admin, monkeypatch,
+):
+    """`freed_bytes`, the audit row and `s3_deletes` used to describe what was resolved: a
+    root restored between the resolve and the lock was skipped but still priced and
+    logged, and a store that refused every delete still reported those bytes as
+    reclaimed. Driven through the service, because the stale-echo gate refuses the
+    request long before this over HTTP, and the race is below that gate."""
+    import apps.api.tasks.cleanup_tasks as ct
+
+    owner = seed.user()
+    kept, _ = _trashed_project(seed, owner, name="restored in between")
+    doomed = seed.project(owner, name="really going")
+    seed.media(doomed, owner, original=2_000, derived=0)
+    seed.trash(doomed)
+    targets = admin_panel.trash_purge_targets(seed.db, [], [], [], everything=True)
+    assert len(targets["projects"]) == 2
+
+    def refuse(_key):
+        raise RuntimeError("the store is down")
+
+    monkeypatch.setattr(ct, "delete_object", refuse)
+    monkeypatch.setattr(ct, "delete_prefix", refuse)
+    # The restore lands after the resolve above, before the locks below.
+    kept.deleted_at = None
+    seed.db.flush()
+
+    result = admin_panel.reclaim_objects(
+        seed.db, admin_panel.purge_from_trash(seed.db, targets, admin),
+    )
+    assert result["purged_projects"] == 1
+    assert result["freed_bytes"] == 2_000, "only the root that cascaded is priced"
+    assert result["s3_deletes"] == 0, "nothing was really reclaimed"
+    assert result["s3_failures"] > 0
+    [row] = seed.db.query(ActivityLog).filter(
+        ActivityLog.action == "admin_trash_purge",
+    ).all()
+    assert [p["name"] for p in row.payload["projects"]] == ["really going"]
+    assert (row.payload["count"], row.payload["bytes"]) == (1, 2_000)
+    assert (row.payload["s3_deletes"], row.payload["s3_failures"]) == (0, result["s3_failures"])
+    assert seed.db.query(Project).filter(Project.id == kept.id).first() is not None
+
+
+def test_the_objects_go_only_after_the_rows_are_committed(seed, as_user, admin, s3):
+    """The cascade used to delete the objects inside the request's transaction, so a
+    process dying partway left the rows rolled back, still inside the window, and
+    `/admin/trash/restore` would bring them back with their media already gone. Now the
+    keys are collected, the caller commits, and `reclaim_objects` sends them."""
+    owner = seed.user()
+    project, asset = _trashed_project(seed, owner)
+    version = seed.versions_of(asset)[0]
+    targets = admin_panel.trash_purge_targets(seed.db, [], [], [], everything=True)
+
+    pending = admin_panel.purge_from_trash(seed.db, targets, admin)
+    assert seed.db.query(Project).filter(Project.id == project.id).first() is None
+    assert (s3["delete_object"], s3["delete_prefix"]) == ([], []), "not sent before the commit"
+    assert (pending["s3_deletes"], pending["s3_failures"]) == (0, 0)
+
+    admin_panel.reclaim_objects(seed.db, pending)
+    assert f"raw/{version.id}" in s3["delete_object"]
+    assert f"processed/{version.id}/" in s3["delete_prefix"]
+    assert pending["s3_deletes"] > 0 and pending["s3_failures"] == 0
+
+
+def test_a_project_restore_is_recorded_as_a_reach_into_the_project(seed, as_user, admin):
+    """A superadmin who is not a member can do this, so the project's own history has to
+    say it happened; the panel's bulk restore logged it and this door did not."""
+    owner = seed.user()
+    project = seed.project(owner, deleted=True)
+    assert as_user(admin).post(f"/projects/{project.id}/restore").status_code == 200
+    rows = seed.db.query(ActivityLog).filter(
+        ActivityLog.action == "project_restored",
+    ).all()
+    assert len(rows) == 1
+    assert (rows[0].project_id, rows[0].user_id) == (project.id, admin.id)
+    assert rows[0].payload["by_superadmin"] is True

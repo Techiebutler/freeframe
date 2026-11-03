@@ -239,9 +239,12 @@ class AdminRestoreResponse(BaseModel):
     #: Items whose project or asset is still deleted. They stay in the trash;
     #: restoring the thing above them first brings them within reach.
     blocked_by_parent: list[str]
-    #: Ids that were not in the trash, so there was nothing to restore. They are
-    #: reported rather than silently counted as done, and they leave no entry in
-    #: the activity history, because nothing happened to them.
+    #: Ids the restore rule left where they were, so there was nothing to
+    #: report: not in the trash at all, or an upload that was never usable work,
+    #: whose objects were deleted before the row was stamped (the same rule
+    #: `POST /assets/{id}/restore` applies, in `services/restore_rules`). They
+    #: are reported rather than silently counted as done, and they leave no
+    #: entry in the activity history, because nothing happened to them.
     skipped: list[str] = Field(default_factory=list)
 
 
@@ -281,9 +284,15 @@ class AdminPurgeResponse(BaseModel):
     purged_projects: int
     purged_assets: int
     purged_versions: int
-    #: Bytes the storage figures drop by, measured before the rows were removed.
+    #: Bytes the storage figures drop by, measured before the rows were removed
+    #: and only for the roots that really cascaded. A root restored between the
+    #: resolve and the lock is skipped, and it is not priced here either.
     freed_bytes: int
-    #: How many object-store deletes the cascade issued, originals, renditions
-    #: and thumbnails alike. Reported because a reclaim that logged failures
-    #: still removed the rows, and the two numbers are how that shows up.
+    #: Object-store reclaims that **succeeded**, originals, renditions,
+    #: thumbnails and aborted multipart uploads alike, counted from what the
+    #: store answered rather than from what was attempted.
     s3_deletes: int
+    #: Reclaims that failed and were logged. The rows are gone either way, so a
+    #: non-zero figure here means bytes the bucket is still holding and the
+    #: orphan sweep has to find.
+    s3_failures: int
