@@ -210,13 +210,21 @@ What this deliberately does **not** change:
   signed-in user, so the flag cannot change which links resolve or what a guest sees.
 - **A deleted project.** Still 404 for everyone, superadmin included.
 
-**Auditing.** Every path into a project the superadmin is not a member of, or whose tier its own
-role does not cover, is logged, reads included: an `ActivityLog` row with
+**Auditing.** Every path that the Admin role **alone** allowed is logged, reads included: an
+`ActivityLog` row with
 `action="admin_project_access"` and a payload naming `via: "superadmin"`, the role they actually
 held (`membership`, or `"none"`), the `scope` that let them in and the `required_role` where the
 scope is a tier. `scope` is a role tier for the project gate, `"asset"` for the asset, version,
 comment and attachment path (`GET /assets/batch` included, so one batch read logs what the
 per-asset reads it replaces would have), and `"events"` for the live stream at connect.
+
+A **read of a public project** is therefore not logged, and that is the rule working rather than
+a gap: a public project is readable by every signed-in account, so the Admin role allowed nothing
+there and there is no administrative access to record. `require_project_visible` takes the admin
+branch only for a non-member on a private project, and `asset_access_reason` answers `"public"`
+before it considers the flag. A **write** on a public project is logged like any other, because
+the owner and editor tiers go through `require_project_role`, which does not consult
+`is_public`: visibility makes a project readable, never writable.
 
 The instance-wide lists are **not** logged: `GET /projects?scope=all`, the Storage overview
 (`GET /admin/storage`) and the admin trash. They list projects rather than open one, and a row

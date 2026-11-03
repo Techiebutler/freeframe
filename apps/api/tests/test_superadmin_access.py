@@ -6,8 +6,9 @@ Pinned here: every tier passes for an admin with no membership and the stand-in
 membership is never persisted; the ordinary 403s are untouched; every tier taken
 past one's own membership lands in the activity log, read tiers and the asset
 path included, whether the client reads one asset or a batch of ids, one row per
-request and project, and the row outlives a purge of what it names;
-`can_access_asset`, the event
+request and project, and the row outlives a purge of what it names; a read of a
+**public** project is not logged, because the role allowed nothing there, while a
+write on one is; `can_access_asset`, the event
 stream and share links agree with the role gate; and over HTTP reading, listing
 with `scope=all`, deleting, uploading, moderating someone else's comment and
 reading one project's file list from the Storage tab all reach a project the
@@ -205,6 +206,50 @@ def test_an_asset_read_is_logged_whichever_endpoint_the_client_calls(
     [logged] = admin_log(seed.db, project.id)
     assert logged.user_id == admin.id
     assert logged.payload["scope"] == "asset"
+    assert logged.payload["membership"] == "none"
+
+
+@pytest.mark.parametrize("public", [True, False], ids=["public", "private"])
+def test_a_public_project_logs_the_admins_writes_and_not_their_reads(
+    seed, as_user, admin, public,
+):
+    """What the Admin role was actually needed for is logged; nothing else is.
+
+    Every signed-in account may read a public project, so the role allowed nothing there
+    and there is no administrative access to record: `require_project_visible` takes the
+    admin branch only for a non-member on a *private* project, and `asset_access_reason`
+    answers "public" before it considers the flag. A write is a different matter, because
+    visibility makes a project readable and never writable: the owner tier goes through
+    `require_project_role`, which does not consult `is_public`, so a rename on a public
+    project leaves its row like one on a private project does.
+
+    A project of its own per read, because the audit dedupes to one row per request *and
+    project*: on a shared one an endpoint that stopped logging would hide behind the row
+    another one left. Pinned so the decision cannot flip unnoticed in either direction,
+    which is what the CHANGELOG's upgrade note and `docs/architecture.md` now say out loud.
+    """
+    owner = seed.user()
+    client = as_user(admin)
+    for read in ("the project", "its asset list", "one asset", "a batch of ids"):
+        project = seed.project(owner, public=public)
+        one = seed.media(project, owner)
+        two = seed.media(project, owner, name="second clip")
+        path = {
+            "the project": f"/projects/{project.id}",
+            "its asset list": f"/projects/{project.id}/assets",
+            "one asset": f"/assets/{one.id}",
+            "a batch of ids": f"/assets/batch?ids={one.id}&ids={two.id}",
+        }[read]
+        assert client.get(path).status_code == 200, read
+        seed.db.flush()
+        assert len(admin_log(seed.db, project.id)) == (0 if public else 1), read
+    theirs = seed.project(owner, name="old name", public=public)
+    renamed = client.patch(f"/projects/{theirs.id}", json={"name": "new name"})
+    assert renamed.status_code == 200
+    seed.db.flush()
+    [logged] = admin_log(seed.db, theirs.id)
+    assert logged.user_id == admin.id
+    assert logged.payload["scope"] == "owner"
     assert logged.payload["membership"] == "none"
 
 
