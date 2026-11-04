@@ -30,10 +30,18 @@ def _project(db: Session, project_id: uuid.UUID) -> Project:
     return project
 
 
+def _manager(db: Session, project_id: uuid.UUID, user: User) -> None:
+    # ponytail: an agent only gets editor rights, so any editor may connect, list or revoke one;
+    # agents themselves never manage agents. agents_may_approve stays owner-only (projects router).
+    if getattr(user, "kind", "human") == "agent":
+        raise HTTPException(403, "agents_cannot_manage_agents")
+    require_project_role(db, project_id, user, ProjectRole.editor)
+
+
 @router.post("/projects/{project_id}/agent-pairing-codes", status_code=status.HTTP_201_CREATED)
 def create_pairing_code(project_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _project(db, project_id)
-    require_project_role(db, project_id, current_user, ProjectRole.owner)
+    _manager(db, project_id, current_user)
     code, expires = agent_service.create_pairing_code(db, project_id, current_user)
     return {"code": code, "expires_at": expires.isoformat()}
 
@@ -41,7 +49,7 @@ def create_pairing_code(project_id: uuid.UUID, db: Session = Depends(get_db), cu
 @router.get("/projects/{project_id}/agents")
 def list_agents(project_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _project(db, project_id)
-    require_project_role(db, project_id, current_user, ProjectRole.owner)
+    _manager(db, project_id, current_user)
     keys = db.query(AgentKey, User).join(User, User.id == AgentKey.user_id) \
         .filter(AgentKey.project_id == project_id).order_by(AgentKey.created_at).all()
     return [{"user_id": str(k.user_id), "name": u.name, "program": k.program, "agent_name": k.agent_name,
@@ -53,7 +61,7 @@ def list_agents(project_id: uuid.UUID, db: Session = Depends(get_db), current_us
 @router.delete("/projects/{project_id}/agents/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_agent(project_id: uuid.UUID, user_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _project(db, project_id)
-    require_project_role(db, project_id, current_user, ProjectRole.owner)
+    _manager(db, project_id, current_user)
     keys = db.query(AgentKey).filter(AgentKey.project_id == project_id, AgentKey.user_id == user_id).all()
     if not keys:
         raise HTTPException(404, "not_found")

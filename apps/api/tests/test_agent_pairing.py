@@ -179,3 +179,17 @@ def test_revoking_removes_the_agent_from_the_project_and_pairing_restores_it(env
     _pair(env, _code(env))
     with env.Session() as db:
         assert db.query(ProjectMember).filter_by(user_id=paired["user_id"]).one().deleted_at is None
+
+
+def test_a_project_editor_manages_agents_but_an_agent_cannot(env):
+    from apps.api.models.project import ProjectMember, ProjectRole
+    editor = env.user("Editor")
+    with env.Session() as db:
+        db.add(ProjectMember(project_id=env.project_a.id, user_id=editor.id, role=ProjectRole.editor))
+        db.commit()
+    code = _code(env, headers=env.headers(editor))
+    paired = _pair(env, code).json()
+    assert env.client.get(f"/projects/{env.project_a.id}/agents", headers=env.headers(editor)).status_code == 200
+    agent = {"Authorization": f"Bearer {paired['agent_key']}"}
+    assert env.client.post(f"/projects/{env.project_a.id}/agent-pairing-codes", headers=agent).status_code in (401, 403)
+    assert env.client.delete(f"/projects/{env.project_a.id}/agents/{paired['user_id']}", headers=env.headers(editor)).status_code == 204
