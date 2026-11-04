@@ -442,6 +442,8 @@ def test_gc_covers_all_inbound_fks_to_purged_tables():
         # -> asset_versions.id
         ("media_files", "version_id"), ("carousel_items", "version_id"),
         ("comments", "version_id"), ("approvals", "version_id"),
+        # ON DELETE SET NULL: purging the version set as current falls back to the newest
+        ("assets", "current_version_id"),
         # -> media_files.id
         ("carousel_items", "media_file_id"),
         # -> comments.id

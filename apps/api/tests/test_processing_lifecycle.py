@@ -170,7 +170,7 @@ def test_a_version_whose_output_already_exists_is_marked_ready_not_re_transcoded
     would redo hours of work to produce the same bytes."""
     from apps.api.tasks import cleanup_tasks
 
-    stuck = SimpleNamespace(id=uuid.uuid4(), asset_id=uuid.uuid4(),
+    stuck = SimpleNamespace(id=uuid.uuid4(), asset_id=uuid.uuid4(), version_number=2, deleted_at=None,
                             processing_status=ProcessingStatus.processing)
     db = MagicMock()
     db.query.return_value = db

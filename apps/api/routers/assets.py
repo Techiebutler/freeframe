@@ -13,7 +13,7 @@ from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.share import AssetShare
 from ..models.activity import Mention, Notification, NotificationType
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
-from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetVersionChangeResponse, DeletedVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
+from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetVersionChangeResponse, CurrentVersionUpdate, DeletedVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_project_visible, require_asset_access, can_access_asset
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
@@ -27,7 +27,7 @@ from ..schemas.upload import (
     ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
 from ..services.storage import choose_part_size, upload_guard_error
-from ..services.versions import next_version_number
+from ..services.versions import current_version, next_version_number
 from ..services.s3_service import create_multipart_upload
 from .upload import storage_initiate_error
 
@@ -48,22 +48,20 @@ _UNVIEWABLE_STATUSES = (ProcessingStatus.uploading, ProcessingStatus.failed)
 _KEPT_STATUSES = (ProcessingStatus.processing, ProcessingStatus.ready)
 
 
-def _pick_version(db: Session, asset_id: uuid.UUID, preferred) -> AssetVersion | None:
-    """Newest version matching `preferred`, falling back to the newest overall.
+def _pick_version(
+    db: Session, asset_id: uuid.UUID, preferred, follow_pin: bool = True,
+) -> AssetVersion | None:
+    """The current version matching `preferred`, falling back to the newest overall.
 
-    The fallback is what keeps a brand new asset honest: with nothing preferable to
-    show it still reports the version that is uploading, rather than reporting
-    nothing at all.
+    Current is the version an editor set as current, else the newest (see
+    `current_version`). The fallback is what keeps a brand new asset honest:
+    with nothing preferable to show it still reports the version that is
+    uploading, rather than reporting nothing at all.
     """
-    base = (AssetVersion.asset_id == asset_id, AssetVersion.deleted_at.is_(None))
-    hit = db.query(AssetVersion).filter(*base, preferred).order_by(
-        AssetVersion.version_number.desc()
-    ).first()
-    if hit:
-        return hit
-    return db.query(AssetVersion).filter(*base).order_by(
-        AssetVersion.version_number.desc()
-    ).first()
+    return (
+        current_version(db, asset_id, preferred, follow_pin=follow_pin)
+        or current_version(db, asset_id, follow_pin=follow_pin)
+    )
 
 
 def _display_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
@@ -75,6 +73,14 @@ def _display_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
     """
     return _pick_version(
         db, asset_id, AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES)
+    )
+
+
+def _display_version_by_default(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
+    """`_display_version` as it would be with no version set as current."""
+    return _pick_version(
+        db, asset_id, AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES),
+        follow_pin=False,
     )
 
 
@@ -180,6 +186,14 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
     version_by_asset = {v.asset_id: v for v in _max_version_rows(viewable_only=False)}
     # Viewable wins where one exists; the fallback above covers assets with none.
     version_by_asset.update({v.asset_id: v for v in _max_version_rows(viewable_only=True)})
+    # And a version set as current wins over both, while it is live and viewable.
+    pinned = [a.current_version_id for a in assets if a.current_version_id]
+    if pinned:
+        version_by_asset.update({v.asset_id: v for v in db.query(AssetVersion).filter(
+            AssetVersion.id.in_(pinned),
+            AssetVersion.deleted_at.is_(None),
+            AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES),
+        ).all()})
     latest_versions = list(version_by_asset.values())
 
     # Bulk load media files for all those versions
@@ -369,9 +383,10 @@ def delete_asset_version(
 
     Answers with the asset's latest version afterwards, because deleting the
     newest one quietly makes the previous one current, share links set to show
-    the latest included.
+    the latest included. Deleting the version set as current ends that
+    setting, and a restore does not bring it back.
     """
-    _lock_live_asset(db, asset_id, current_user)
+    asset = _lock_live_asset(db, asset_id, current_user)
     version = db.query(AssetVersion).filter(
         AssetVersion.id == version_id,
         AssetVersion.asset_id == asset_id,
@@ -401,6 +416,8 @@ def delete_asset_version(
             detail="No other version of this asset is ready or processing. Delete the asset instead.",
         )
     version.deleted_at = datetime.now(timezone.utc)
+    if asset.current_version_id == version.id:
+        asset.current_version_id = None
     db.flush()
     latest = _version_response(db, _display_version(db, asset_id))
     db.commit()
@@ -471,11 +488,52 @@ def list_asset_versions(
     for f in all_files:
         files_by_version.setdefault(f.version_id, []).append(f)
 
+    # The version a share link or the player opens with.
+    current = current_version(db, asset_id, AssetVersion.processing_status == ProcessingStatus.ready)
     for v in versions:
         vr = AssetVersionResponse.model_validate(v)
         vr.files = [MediaFileResponse.model_validate(f) for f in files_by_version.get(v.id, [])]
+        vr.is_current = current is not None and v.id == current.id
         result.append(vr)
     return result
+
+
+@router.put("/assets/{asset_id}/current-version", response_model=AssetVersionChangeResponse)
+def set_current_version(
+    asset_id: uuid.UUID,
+    body: CurrentVersionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set the version that stands for the asset in place of the newest one.
+
+    It then is the version everything else resolves as the latest: the grid's
+    thumbnail and comment count, the version the review page opens with,
+    share links that show the latest only, downloads and the comment export
+    when no version is named. Only a ready version can be set. Setting the
+    version that is current by default anyway clears the setting, so there is
+    never one that changes nothing. It ends when that version is deleted, and
+    when a newer version becomes ready.
+    """
+    asset = _lock_live_asset(db, asset_id, current_user)
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == body.version_id,
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if version.processing_status != ProcessingStatus.ready:
+        raise HTTPException(
+            status_code=409,
+            detail="Only a version that is ready can be the current version.",
+        )
+    default = _display_version_by_default(db, asset_id)
+    asset.current_version_id = None if default is not None and default.id == version.id else version.id
+    db.flush()
+    latest = _version_response(db, _display_version(db, asset_id))
+    db.commit()
+    return AssetVersionChangeResponse(latest_version=latest)
 
 
 @router.get("/assets/{asset_id}/deleted-versions", response_model=list[DeletedVersionResponse])
@@ -532,7 +590,8 @@ def _ready_media_file(
             AssetVersion.deleted_at.is_(None),
         ).first()
     else:
-        # With no version asked for, serve the newest one that can actually play.
+        # With no version asked for, serve the current one that can actually play:
+        # the one set as current, else the newest.
         # Picking the highest-numbered version regardless meant an upload in flight,
         # or one that died, made every earlier version unplayable: the newest was
         # selected and then rejected as not ready, with no way to reach v1 short of

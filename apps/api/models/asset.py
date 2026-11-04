@@ -52,6 +52,19 @@ class Asset(Base):
     # or a share URL names one cut for the life of the asset. Only
     # `services.versions.next_version_number` writes it.
     last_version_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # The version an editor set as current (PUT /assets/{id}/current-version),
+    # or NULL for the default: the newest one. Everything that resolves "the
+    # latest version" goes through `services.versions.current_version`, which
+    # reads this. Only ever a version of this asset that was ready when set.
+    # Cleared when that version is deleted, and when a newer version becomes
+    # ready, so a new upload takes over (`services.versions.newer_version_ready`).
+    # `use_alter`: the two tables point at each other.
+    current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("asset_versions.id", ondelete="SET NULL", use_alter=True,
+                   name="fk_assets_current_version_id"),
+        nullable=True,
+    )
 
     __table_args__ = (
         Index("ix_assets_project_folder_deleted", "project_id", "folder_id", "deleted_at"),
