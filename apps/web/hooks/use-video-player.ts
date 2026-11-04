@@ -118,6 +118,45 @@ export function useVideoPlayer(
     }
   }, [setPlayheadTime, detached])
 
+  // Follow the picture frame by frame while playing. `timeupdate` alone fires
+  // only every 250-330 ms in Chrome (7-8 frames at 25 fps), so the timecode
+  // moved in steps and jumped when the final update on pause caught up.
+  // requestVideoFrameCallback reports each presented frame; requestAnimationFrame
+  // is the fallback where it is missing.
+  useEffect(() => {
+    if (!isPlaying) return
+    const video = videoRef.current as (HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number
+      cancelVideoFrameCallback?: (handle: number) => void
+    }) | null
+    if (!video) return
+    let stopped = false
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      let handle = 0
+      const onFrame = (_now: number, meta: { mediaTime: number }) => {
+        if (stopped) return
+        setCurrentTime(meta.mediaTime)
+        handle = video.requestVideoFrameCallback!(onFrame)
+      }
+      handle = video.requestVideoFrameCallback(onFrame)
+      return () => {
+        stopped = true
+        video.cancelVideoFrameCallback?.(handle)
+      }
+    }
+    let raf = 0
+    const tick = () => {
+      if (stopped) return
+      setCurrentTime(video.currentTime)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => {
+      stopped = true
+      cancelAnimationFrame(raf)
+    }
+  }, [isPlaying])
+
   // React to external seek requests (e.g. clicking comment timecode)
   useEffect(() => {
     if (detached) return
@@ -203,7 +242,14 @@ export function useVideoPlayer(
     }
 
     const onPlay = () => { setIsPlaying(true); if (!detached) setActiveAnnotation(null) }
-    const onPause = () => setIsPlaying(false)
+    // Settle on the frame the picture stopped on, in the display AND the store,
+    // so a comment written now is anchored to the frame on screen. The
+    // player's own store sync is throttled and can drop this last value.
+    const onPause = () => {
+      setIsPlaying(false)
+      setCurrentTime(video.currentTime)
+      if (!detached) setPlayheadTime(video.currentTime)
+    }
     const onWaiting = () => setIsLoading(true)
     const onCanPlay = () => setIsLoading(false)
     const onVolumeChange = () => {
