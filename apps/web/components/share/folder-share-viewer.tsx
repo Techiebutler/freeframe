@@ -25,7 +25,7 @@ import { useReview, type CreateCommentPayload } from '@/components/review/review
 import { useReviewStore } from '@/stores/review-store'
 import { FlowView } from '@/components/review/flow-view'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
-import { approveSharedAsset, guestDictate, nextFileId } from '@/lib/share-flow'
+import { approveSharedAsset, guestDictate, nextFileId, undoApproveSharedAsset } from '@/lib/share-flow'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -587,6 +587,7 @@ interface AssetViewerProps {
   onSelectFile?: (id: string) => void
   approvedIds?: Set<string>
   onApproved?: (id: string) => void
+  onUnapproved?: (id: string) => void
 }
 
 function HlsVideo({ src, className }: { src: string; className?: string }) {
@@ -619,7 +620,7 @@ function HlsVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={videoRef} controls className={className} />
 }
 
-function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved }: AssetViewerProps) {
+function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved }: AssetViewerProps) {
   // Use the same ReviewProvider as the project review page, but with shareToken
   // This gives us the same video player, image viewer, comment panel, etc.
   return (
@@ -637,6 +638,7 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, sh
         onSelectFile={onSelectFile}
         approvedIds={approvedIds}
         onApproved={onApproved}
+        onUnapproved={onUnapproved}
       />
     </div>
   )
@@ -644,10 +646,10 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, sh
 
 /** Lazy-imported review components to avoid circular deps */
 function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved,
 }: {
   token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; onBack: () => void
-  files?: { id: string; name: string }[]; onSelectFile?: (id: string) => void; approvedIds?: Set<string>; onApproved?: (id: string) => void
+  files?: { id: string; name: string }[]; onSelectFile?: (id: string) => void; approvedIds?: Set<string>; onApproved?: (id: string) => void; onUnapproved?: (id: string) => void
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
   const [VideoPlayer, setVideoPlayer] = React.useState<any>(null)
@@ -698,6 +700,7 @@ function ShareReviewScreen({
         onSelectFile={onSelectFile}
         approvedIds={approvedIds}
         onApproved={onApproved}
+        onUnapproved={onUnapproved}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
         AudioPlayer={AudioPlayer}
@@ -710,13 +713,15 @@ function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved,
+  token, shareSession, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, seekTo } = useReviewStore()
   const isNarrow = useIsNarrow()
   const [phoneView, setPhoneView] = React.useState(false)
+  const [authed, setAuthed] = React.useState(false)
+  React.useEffect(() => { void getUsableAccessToken().then((t) => setAuthed(t !== null)).catch(() => {}) }, [])
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
@@ -776,12 +781,6 @@ function ShareReviewInner({
 
   const flow = (isNarrow || phoneView) && asset.asset_type === 'video' && versionReady && !!VideoPlayer
   if (flow) {
-    const sendNotes = async (notes: { text: string; t: number; annotation: Record<string, unknown> | null }[]) => {
-      const hasAuth = (await getUsableAccessToken()) !== null
-      const hasGuest = !!localStorage.getItem('ff_guest_identity')
-      if (!hasAuth && !hasGuest) { setShowGuestPrompt(true); throw new Error('identity') }
-      for (const n of notes) await submitComment(n.text, n.t, undefined, n.annotation ?? undefined)
-    }
     const approveAsset = async () => {
       const hasAuth = (await getUsableAccessToken()) !== null
       let identity: { name: string; email: string } | null = null
@@ -789,21 +788,25 @@ function ShareReviewInner({
       if (!hasAuth && !identity) { setShowGuestPrompt(true); throw new Error('identity') }
       await approveSharedAsset(token, asset.id, { identity: hasAuth ? null : identity, shareSession, versionId: currentVersion?.id })
       onApproved?.(asset.id)
-      // Show "Approved" for a moment, then on to the next file in the briefing
-      const next = nextFileId(files ?? [], asset.id)
-      if (next) setTimeout(() => onSelectFile?.(next), 700)
     }
+    const undoApproveAsset = async () => {
+      const t = await getUsableAccessToken()
+      await undoApproveSharedAsset(token, asset.id, { shareSession, versionId: currentVersion?.id, headers: t ? { Authorization: `Bearer ${t}` } : undefined })
+      onUnapproved?.(asset.id)
+    }
+    const next = nextFileId(files ?? [], asset.id)
     return (
       <div className="flex flex-col h-dvh bg-bg-primary text-text-primary">
         <div className="flex min-h-0 flex-1 justify-center">
           <div className="h-full w-full max-w-[430px] md:border-x md:border-border">
             <FlowView
-              renderMedia={(ink) => (
+              renderMedia={(ink, extra) => (
                 <VideoPlayer
                   assetId={asset.id}
                   comments={comments}
                   className="flex-1 min-h-0"
                   compact
+                  markers={extra.markers}
                   initialStreamUrl={(asset as any).stream_url}
                   overlay={<>{AnnotationOverlay && <AnnotationOverlay key={focusedCommentId ?? 'none'} />}{ink}</>}
                 />
@@ -816,8 +819,14 @@ function ShareReviewInner({
               onSeek={(t: number) => seekTo(t, true)}
               canComment={canComment}
               canApprove={permission === 'approve'}
-              onSendNotes={sendNotes}
+              notePayload={(n) => ({ kind: 'share', token, assetId: asset.id, versionId: currentVersion?.id, identity: guestIdentity, shareSession, ...n })}
+              canSave={authed || !!guestIdentity}
+              onNeedSave={() => setShowGuestPrompt(true)}
               onApprove={approveAsset}
+              onUndoApprove={undoApproveAsset}
+              hasNext={!!next}
+              onNext={() => next && onSelectFile?.(next)}
+              sessionKey={token}
               approved={!!approvedIds?.has(asset.id)}
               dictate={(audio) => guestDictate(token, audio, shareSession)}
               onExit={isNarrow ? onBack : () => setPhoneView(false)}
@@ -1254,6 +1263,7 @@ export function FolderShareViewer({
         onSelectFile={(id) => { const next = assets.find((a) => a.id === id); if (next) setViewingAsset(next) }}
         approvedIds={approvedIds}
         onApproved={(id) => setApprovedIds((prev) => new Set(prev).add(id))}
+        onUnapproved={(id) => setApprovedIds((prev) => { const n = new Set(prev); n.delete(id); return n })}
       />
     )
   }

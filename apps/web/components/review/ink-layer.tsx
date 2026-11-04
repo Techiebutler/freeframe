@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { CONTOUR_WIDTH, DOT_PX, classifyMark, normalizePoint, smoothPath, taperChunks, thinPoints, type InkMark } from '@/lib/ink'
+import { CONTOUR_WIDTH, DOT_PX, classifyMark, normalizePoint, replayDuration, smoothPath, taperChunks, thinPoints, visibleMarks, type InkMark } from '@/lib/ink'
 
 type Ink = { id: number; k: 'stroke' | 'dot'; points: [number, number][] }
 
@@ -27,7 +27,7 @@ export const Strokes = ({ list, live, fading }: { list: Ink[]; live?: boolean; f
   </>
 )
 
-export interface InkReplay { key: number; marks: Pick<InkMark, 'k' | 'points'>[] }
+export interface InkReplay { key: number; marks: (Pick<InkMark, 'k' | 'points'> & Partial<Pick<InkMark, 'times' | 'offset_ms'>>)[] }
 
 /**
  * The drawing surface over the picture, mounted inside the video frame (so 0..1 is the picture, never the letterbox).
@@ -40,20 +40,35 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
   /** Video is playing: ink stays while it is paused and fades out once it runs again. */
   playing?: boolean
   onStart: () => void
-  onMark: (k: 'stroke' | 'dot', points: [number, number][]) => void
+  onMark: (k: 'stroke' | 'dot', points: [number, number][], times: number[]) => void
   replay?: InkReplay | null
 }) {
   const root = React.useRef<HTMLDivElement>(null)
   const [cur, setCur] = React.useState<[number, number][] | null>(null)
   const [trail, setTrail] = React.useState<Ink[]>([])
-  const g = React.useRef<{ pid: number; pts: [number, number][]; x0: number; y0: number; far: number } | null>(null)
+  const g = React.useRef<{ pid: number; pts: [number, number][]; times: number[]; t0: number; x0: number; y0: number; far: number } | null>(null)
   const seq = React.useRef(0)
   const gone = React.useRef(false)
   React.useEffect(() => { gone.current = false; return () => { gone.current = true } }, [])
   React.useEffect(() => { if (!active) { g.current = null; setCur(null) } }, [active])
   const [replayShown, setReplayShown] = React.useState<InkReplay | null>(null)
   const [fading, setFading] = React.useState(false)
-  React.useEffect(() => { if (replay) { setReplayShown(replay); setFading(false) } }, [replay])
+  // A replay draws at the speed it was drawn (times are stored per point); reduced motion shows it at once.
+  const [replayMs, setReplayMs] = React.useState(Infinity)
+  React.useEffect(() => {
+    if (!replay) return
+    setReplayShown(replay); setFading(false)
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    const total = replayDuration(replay.marks)
+    if (reduced || total === 0) { setReplayMs(Infinity); return }
+    const t0 = Date.now()
+    setReplayMs(0)
+    const id = setInterval(() => {
+      const el = Date.now() - t0
+      if (el >= total) { setReplayMs(Infinity); clearInterval(id) } else setReplayMs(el)
+    }, 16)
+    return () => clearInterval(id)
+  }, [replay])
   // Playback resumed (paused -> playing): let everything on screen fade, then clear it. While paused nothing is removed.
   const wasPlaying = React.useRef(playing)
   const shownRef = React.useRef({ trail, replayShown })
@@ -74,7 +89,8 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
     e.preventDefault()
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* pointer already gone */ }
     const p = at(e)
-    g.current = { pid: e.pointerId, pts: [p], x0: e.clientX, y0: e.clientY, far: 0 }
+    const t0 = Date.now()
+    g.current = { pid: e.pointerId, pts: [p], times: [0], t0, x0: e.clientX, y0: e.clientY, far: 0 }
     setCur([p])
     onStart()
   }
@@ -86,6 +102,7 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
     const last = s.pts[s.pts.length - 1]
     if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 0.004) return
     s.pts.push(p)
+    s.times.push(Math.round(Date.now() - s.t0))
     setCur([...s.pts])
   }
   const up = (e: React.PointerEvent) => {
@@ -95,11 +112,11 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
     setCur(null)
     const k = classifyMark(s.far)
     const points = k === 'dot' ? [s.pts[0]] : s.pts
-    onMark(k, points)
+    onMark(k, points, k === 'dot' ? [0] : s.times)
     const id = ++seq.current
     setTrail(l => [...l, { id, k, points }])
   }
-  const shown: Ink[] = replayShown ? replayShown.marks.map((m, i) => ({ id: replayShown.key * 100 + i, k: m.k, points: m.points })) : []
+  const shown: Ink[] = replayShown ? (replayMs === Infinity ? replayShown.marks : visibleMarks(replayShown.marks, replayMs)).map((m, i) => ({ id: replayShown.key * 100 + i, k: m.k, points: m.points })) : []
   return (
     <div ref={root} className="ink-layer" data-testid="ink-layer" data-on={active ? '' : undefined}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}

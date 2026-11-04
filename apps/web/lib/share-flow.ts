@@ -69,3 +69,17 @@ export function nextFileId(files: { id: string }[], currentId: string): string |
   const i = files.findIndex(f => f.id === currentId)
   return i >= 0 && i < files.length - 1 ? files[i + 1].id : null
 }
+
+/** Takes an approval back: DELETE /share/{token}/assets/{asset_id}/approve (idempotent, 204). */
+export async function undoApproveSharedAsset(
+  token: string,
+  assetId: string,
+  opts: { shareSession?: string | null; versionId?: string; headers?: Record<string, string> } = {},
+): Promise<void> {
+  const q = new URLSearchParams()
+  if (opts.versionId) q.set('version_id', opts.versionId)
+  if (opts.shareSession) q.set('share_session', opts.shareSession)
+  const qs = q.toString()
+  const res = await fetch(`${API_URL()}/share/${token}/assets/${assetId}/approve${qs ? `?${qs}` : ''}`, { method: 'DELETE', headers: opts.headers })
+  if (!res.ok) await fail(res, 'Failed to undo')
+}

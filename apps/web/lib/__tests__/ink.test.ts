@@ -88,3 +88,42 @@ describe('smoothing', () => {
     expect(taperChunks([[0, 0], [0.01, 0]])).toEqual([{ points: [[0, 0], [0.01, 0]], width: STROKE_WIDTHS[0], trimStart: false, trimEnd: false }])
   })
 })
+
+import { markDuration, visibleMarks, splitDeictic } from '../ink'
+
+describe('timed replay', () => {
+  const stroke = { k: 'stroke' as const, points: [[0, 0], [0.2, 0.2], [0.4, 0.4], [0.6, 0.6]] as [number, number][], t: 3, offset_ms: 1000, times: [0, 100, 300, 600] }
+  it('knows how long a stroke took to draw', () => {
+    expect(markDuration(stroke)).toBe(600)
+    expect(markDuration({ ...stroke, times: undefined })).toBe(0)
+  })
+  it('reveals points at their original timing', () => {
+    expect(visibleMarks([stroke], 0)).toEqual([])
+    expect(visibleMarks([stroke], 150)[0].points).toHaveLength(2)
+    expect(visibleMarks([stroke], 350)[0].points).toHaveLength(3)
+    expect(visibleMarks([stroke], 5000)[0].points).toHaveLength(4)
+  })
+  it('later marks start after the gap they had in the recording', () => {
+    const second = { ...stroke, offset_ms: 1500 }
+    expect(visibleMarks([stroke, second], 300)).toHaveLength(1)
+    expect(visibleMarks([stroke, second], 700)).toHaveLength(2)
+  })
+  it('a mark without times is simply there', () => {
+    expect(visibleMarks([{ ...stroke, times: undefined }], 0)).toHaveLength(1)
+  })
+})
+
+describe('splitDeictic', () => {
+  it('marks pointing words in English and German, keeping the text intact', () => {
+    const parts = splitDeictic('Cut this part, hier ist das zu lang. Thanks.')
+    expect(parts.map(p => p.text).join('')).toBe('Cut this part, hier ist das zu lang. Thanks.')
+    expect(parts.filter(p => p.deictic).map(p => p.text)).toEqual(['this', 'hier', 'das'])
+  })
+  it('does not match inside other words', () => {
+    expect(splitDeictic('Thatcher said thisle hereditary').some(p => p.deictic)).toBe(false)
+  })
+  it('is case-insensitive and handles empty text', () => {
+    expect(splitDeictic('Here!').filter(p => p.deictic).map(p => p.text)).toEqual(['Here'])
+    expect(splitDeictic('')).toEqual([])
+  })
+})

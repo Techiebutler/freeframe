@@ -1,12 +1,12 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
-from ..models.asset import Asset
+from ..models.asset import Asset, AssetVersion
 from ..models.approval import Approval, ApprovalStatus
 from ..models.activity import ActivityLog, ActivityAction, Notification, NotificationType
 from ..models.project import ProjectRole
@@ -95,6 +95,32 @@ def approve_asset(
     db.commit()
 
     return approval
+
+
+@router.delete("/assets/{asset_id}/approve", status_code=status.HTTP_204_NO_CONTENT)
+def unapprove_asset(
+    asset_id: uuid.UUID,
+    version_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Take back this user's approval of one version (the latest when none is named). Idempotent."""
+    asset = _get_asset(db, asset_id)
+    require_project_role(db, asset.project_id, current_user, ProjectRole.reviewer)
+    remove_approval(db, asset, current_user.id, version_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def remove_approval(db: Session, asset: Asset, user_id: uuid.UUID, version_id: uuid.UUID | None) -> None:
+    if version_id is None:
+        latest = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None)) \
+            .order_by(AssetVersion.version_number.desc()).first()
+        version_id = latest.id if latest else None
+    if version_id is not None:
+        # Deleted outright: a soft-deleted row would still hold the (version, user) unique slot.
+        db.query(Approval).filter(Approval.asset_id == asset.id, Approval.version_id == version_id,
+                                  Approval.user_id == user_id).delete(synchronize_session=False)
+    db.commit()
 
 
 @router.post("/assets/{asset_id}/reject", response_model=ApprovalResponse)

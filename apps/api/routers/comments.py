@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
@@ -319,6 +319,31 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
+IDEMPOTENCY_WINDOW = timedelta(hours=24)
+
+
+def _idem_key(header, scope: str) -> Optional[str]:
+    """The stored form of a client Idempotency-Key: scoped to its author so keys never cross people.
+    Anything that is not a plain header string (a direct call without the dependency) means no key."""
+    key = header.strip() if isinstance(header, str) else ""
+    return f"{scope}:{key[:100]}" if key else None
+
+
+def _idem_replay(db: Session, key: Optional[str]) -> Optional[Comment]:
+    """The comment this key already created within 24 h, if any."""
+    if not key:
+        return None
+    prior = db.query(Comment).filter(Comment.idempotency_key == key, Comment.deleted_at.is_(None)).first()
+    if prior is not None and prior.created_at and datetime.now(timezone.utc) - prior.created_at < IDEMPOTENCY_WINDOW:
+        return prior
+    return None
+
+
+def _idem_store_key(db: Session, key: Optional[str]) -> Optional[str]:
+    """Key to store on a NEW comment: None when an expired comment still holds it (the index is unique)."""
+    return key if key and not db.query(Comment.id).filter(Comment.idempotency_key == key).first() else None
+
+
 @router.get("/assets/{asset_id}/comments", response_model=list[CommentResponse])
 def list_comments(
     asset_id: uuid.UUID,
@@ -350,6 +375,8 @@ def create_comment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     background_tasks: BackgroundTasks = None,
+    idempotency_header: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
@@ -361,7 +388,15 @@ def create_comment(
     if not version:
         raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
 
+    idem = _idem_key(idempotency_header, f"u:{current_user.id}")
+    replay = _idem_replay(db, idem)
+    if replay is not None:
+        if isinstance(response, Response):
+            response.status_code = status.HTTP_200_OK
+        return _build_comment_response(replay, db, current_user_id=current_user.id)
+
     comment = Comment(
+        idempotency_key=_idem_store_key(db, idem),
         asset_id=asset_id,
         version_id=body.version_id,
         parent_id=body.parent_id,
@@ -985,6 +1020,8 @@ def guest_comment(
     current_user: Optional[User] = Depends(get_optional_user),
     authorization: Optional[str] = Header(default=None),
     background_tasks: BackgroundTasks = None,
+    idempotency_header: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
@@ -1029,6 +1066,14 @@ def guest_comment(
         if prior:
             return _build_comment_response(prior, db)
 
+    # A retried tap with the same Idempotency-Key returns the comment it already made.
+    idem = _idem_key(idempotency_header, f"u:{current_user.id}" if current_user else f"g:{(body.guest_email or '').lower()}")
+    replay = _idem_replay(db, idem)
+    if replay is not None:
+        if isinstance(response, Response):
+            response.status_code = status.HTTP_200_OK
+        return _build_comment_response(replay, db)
+
     # Determine author: logged-in user or guest
     author_id = None
     guest_author_id = None
@@ -1051,6 +1096,7 @@ def guest_comment(
     visibility = _guest_comment_visibility(guest_author_id, body.guest_email)
 
     comment = Comment(
+        idempotency_key=_idem_store_key(db, idem),
         asset_id=asset.id,
         version_id=version_id,
         parent_id=body.parent_id,

@@ -22,6 +22,8 @@ export type NoteAction =
   | { type: 'done'; id: string; text: string }
   | { type: 'failed'; id: string }
   | { type: 'edit'; id: string; text: string }
+  /** A typed note (nothing was transcribed) is done being typed: it may now be saved. */
+  | { type: 'commit'; id: string }
   | { type: 'marks'; id: string; marks: InkMark[] }
   | { type: 'split'; id: string; parts: { id: string; t: number; text: string; marks: InkMark[] }[] }
   | { type: 'remove'; id: string }
@@ -38,8 +40,9 @@ export function notesReducer(state: FlowNote[], a: NoteAction): FlowNote[] {
     case 'failed':
       return state.map(n => (n.id === a.id ? { ...n, status: 'failed' } : n))
     case 'edit':
-      // Typing over a failed transcription makes the note sendable without the audio.
-      return state.map(n => (n.id === a.id ? { ...n, text: a.text, status: n.status === 'failed' && a.text.trim() ? 'ready' : n.status } : n))
+      return state.map(n => (n.id === a.id ? { ...n, text: a.text } : n))
+    case 'commit':
+      return state.map(n => (n.id === a.id && n.status === 'failed' && n.text.trim() ? { ...n, status: 'ready' } : n))
     case 'marks':
       return state.map(n => (n.id === a.id ? { ...n, marks: a.marks } : n))
     case 'split': {

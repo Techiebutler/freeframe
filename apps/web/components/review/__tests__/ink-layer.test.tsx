@@ -78,3 +78,39 @@ describe('InkLayer persistence', () => {
     expect(container.querySelector('.ink-line')?.getAttribute('d')).toMatch(/Q/)
   })
 })
+
+describe('InkLayer timed replay', () => {
+  const marks = [{ k: 'stroke' as const, points: [[0, 0], [0.2, 0.2], [0.4, 0.4], [0.6, 0.6]] as [number, number][], times: [0, 100, 300, 600], offset_ms: 0 }]
+  const pointsOf = (c: HTMLElement) => (c.querySelector('.ink-line')?.getAttribute('d') ?? '')
+
+  it('draws the replayed stroke at its original speed, then leaves it complete', () => {
+    vi.useFakeTimers()
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener() {}, removeEventListener() {} }) as never
+    const { container } = render(<InkLayer active={false} playing={false} replay={{ key: 1, marks }} onStart={() => {}} onMark={() => {}} />)
+    expect(container.querySelector('.ink-line')).toBeNull()
+    act(() => { vi.advanceTimersByTime(150) })
+    const early = pointsOf(container)
+    expect(early).toBeTruthy()
+    act(() => { vi.advanceTimersByTime(250) })
+    const mid = pointsOf(container)
+    expect(mid.length).toBeGreaterThan(early.length)
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(pointsOf(container).length).toBeGreaterThanOrEqual(mid.length)
+    expect(container.querySelectorAll('.ink-stroke')).toHaveLength(1)
+  })
+
+  it('shows the whole stroke at once under reduced motion', () => {
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener() {}, removeEventListener() {} }) as never
+    const { container } = render(<InkLayer active={false} playing={false} replay={{ key: 2, marks }} onStart={() => {}} onMark={() => {}} />)
+    expect(container.querySelector('.ink-line')).not.toBeNull()
+  })
+
+  it('records a time for every point while drawing', () => {
+    const onMark = vi.fn()
+    const { getByTestId } = render(<InkLayer active playing={false} onStart={() => {}} onMark={onMark} />)
+    draw(getByTestId('ink-layer'))
+    const [, points, times] = onMark.mock.calls[0]
+    expect(times).toHaveLength(points.length)
+    expect(times[0]).toBe(0)
+  })
+})

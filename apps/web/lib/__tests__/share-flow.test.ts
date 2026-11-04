@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { approveSharedAsset, guestDictate, nextFileId, postGuestNote, ShareFlowError } from '../share-flow'
+import { undoApproveSharedAsset, approveSharedAsset, guestDictate, nextFileId, postGuestNote, ShareFlowError } from '../share-flow'
 
 afterEach(() => vi.unstubAllGlobals())
 const ok = (b: unknown = {}, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } })
@@ -59,5 +59,19 @@ describe('nextFileId', () => {
     expect(nextFileId(files, 'a')).toBe('b')
     expect(nextFileId(files, 'c')).toBeNull()
     expect(nextFileId(files, 'zzz')).toBeNull()
+  })
+})
+
+describe('undoApproveSharedAsset', () => {
+  it('sends DELETE to the approve endpoint with version and session', async () => {
+    const f = vi.fn().mockResolvedValue(new Response(null, { status: 204 })); vi.stubGlobal('fetch', f)
+    await undoApproveSharedAsset('tok', 'a1', { versionId: 'v2', shareSession: 's1' })
+    const [url, init] = f.mock.calls[0]
+    expect(url).toMatch(/\/share\/tok\/assets\/a1\/approve\?version_id=v2&share_session=s1$/)
+    expect(init.method).toBe('DELETE')
+  })
+  it('throws the server detail', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok({ detail: 'nope' }, 403)))
+    await expect(undoApproveSharedAsset('tok', 'a1')).rejects.toMatchObject({ status: 403 })
   })
 })

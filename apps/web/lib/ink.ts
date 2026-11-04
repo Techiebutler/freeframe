@@ -4,7 +4,16 @@
 export const INK_MS = 1200
 export const DOT_PX = 8
 export type MarkKind = 'stroke' | 'dot'
-export interface InkMark { k: MarkKind; points: [number, number][]; /** video seconds, ms precision */ t: number; /** ms since the recording started */ offset_ms: number }
+export interface InkMark {
+  k: MarkKind
+  points: [number, number][]
+  /** video seconds, ms precision */
+  t: number
+  /** ms since the recording started */
+  offset_ms: number
+  /** ms since the stroke began, one per point: lets a replay draw at the original speed (additive to ink.v1) */
+  times?: number[]
+}
 
 export const clamp01 = (n: number) => Math.min(1, Math.max(0, n))
 export const normalizePoint = (r: { left: number; top: number; width: number; height: number }, x: number, y: number): [number, number] =>
@@ -85,4 +94,52 @@ export function taperChunks(points: [number, number][]): InkChunk[] {
     const last = i === k - 1
     return { width, points: points.slice(a, last ? b + 1 : b + 2), trimStart: !first, trimEnd: !last }
   })
+}
+
+// ── Timed replay ──────────────────────────────────────────────────────────────
+
+/** ms the stroke took to draw (0 when its point times were not stored). */
+export const markDuration = (m: Pick<InkMark, 'times'>): number => (m.times?.length ? m.times[m.times.length - 1] : 0)
+
+type Timed = Pick<InkMark, 'k' | 'points'> & Partial<Pick<InkMark, 'times' | 'offset_ms'>>
+
+/** What is on screen `elapsedMs` into a replay: each stroke grows at the speed it was drawn, later strokes start after their original gap. */
+export function visibleMarks(marks: Timed[], elapsedMs: number): { k: MarkKind; points: [number, number][] }[] {
+  const base = marks.length ? (marks[0].offset_ms ?? 0) : 0
+  const out: { k: MarkKind; points: [number, number][] }[] = []
+  for (const m of marks) {
+    if (!m.times?.length) { out.push({ k: m.k, points: m.points }); continue }
+    const local = elapsedMs - ((m.offset_ms ?? base) - base)
+    if (local < 0) continue
+    let n = 0
+    while (n < m.points.length && m.times[n] <= local) n++
+    if (n === 0 || (m.k === 'stroke' && n < 2)) continue
+    out.push({ k: m.k, points: m.k === 'dot' ? m.points : m.points.slice(0, n) })
+  }
+  return out
+}
+
+/** Total time a replay of these marks takes. */
+export const replayDuration = (marks: Timed[]): number => {
+  const base = marks.length ? (marks[0].offset_ms ?? 0) : 0
+  return marks.reduce((max, m) => Math.max(max, ((m.offset_ms ?? base) - base) + (m.times?.length ? m.times[m.times.length - 1] : 0)), 0)
+}
+
+// ── Pointing words ────────────────────────────────────────────────────────────
+
+const DEICTIC = new Set(['this', 'here', 'that', 'da', 'hier', 'das', 'dieser', 'diese'])
+/** Splits a note into plain and pointing words (this, here, hier, das ...), which link to the moment and its drawing. */
+export function splitDeictic(text: string): { text: string; deictic: boolean }[] {
+  const out: { text: string; deictic: boolean }[] = []
+  const word = /[A-Za-z0-9\u00C0-\u024F]+/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = word.exec(text))) {
+    if (!DEICTIC.has(m[0].toLowerCase())) continue
+    if (m.index > last) out.push({ text: text.slice(last, m.index), deictic: false })
+    out.push({ text: m[0], deictic: true })
+    last = m.index + m[0].length
+  }
+  if (last < text.length) out.push({ text: text.slice(last), deictic: false })
+  return out
 }

@@ -27,7 +27,7 @@ import { GuestCommentInput, IdentityForm, loadIdentity, type GuestIdentity } fro
 import { FlowView } from '@/components/review/flow-view'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
-import { guestDictate, postGuestNote } from '@/lib/share-flow'
+import { guestDictate, undoApproveSharedAsset } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
 
@@ -936,11 +936,6 @@ function ShareViewer({
   const canComment = permission === 'comment' || permission === 'approve'
   const flow = (isNarrow || phoneView) && asset.asset_type === 'video'
   const flowVideo = () => videoRef.current
-  const flowSendNotes = async (notes: { text: string; t: number; annotation: Record<string, unknown> | null }[]) => {
-    if (!identity) { setAskIdentity(true); throw new Error('identity') }
-    for (const n of notes) await postGuestNote(token, n, { identity, assetId: asset.id })
-    setCommentKey((k) => k + 1)
-  }
   const flowApprove = async () => {
     const res = await fetch(`${API_URL}/share/${token}/approve`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: asset.id }),
@@ -973,8 +968,12 @@ function ShareViewer({
               onSeek={(t) => { const v = flowVideo(); if (v) { v.currentTime = t; v.pause() } }}
               canComment={canComment}
               canApprove={permission === 'approve'}
-              onSendNotes={flowSendNotes}
+              notePayload={(n) => ({ kind: 'share', token, assetId: asset.id, identity, ...n })}
+              canSave={!!identity}
+              onNeedSave={() => setAskIdentity(true)}
               onApprove={flowApprove}
+              onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id); setFlowApproved(false) }}
+              sessionKey={token}
               approved={flowApproved}
               dictate={(audio) => guestDictate(token, audio)}
               onExit={isNarrow ? undefined : () => setPhoneView(false)}
@@ -986,7 +985,7 @@ function ShareViewer({
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center">
             <div className="w-full max-w-sm overflow-hidden rounded-t-2xl bg-bg-primary sm:rounded-2xl" role="dialog" aria-label="Who are you?">
               <IdentityForm onIdentified={(id) => { setIdentity(id); setAskIdentity(false) }} />
-              <p className="px-4 pb-4 text-xs text-text-tertiary">Your notes are kept. Tap Send again after this.</p>
+              <p className="px-4 pb-4 text-xs text-text-tertiary">Your notes are kept and saved as soon as you continue.</p>
             </div>
           </div>
         )}

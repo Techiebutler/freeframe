@@ -26,6 +26,7 @@ import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { canCompare } from '@/lib/compare-time'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { FlowView } from '@/components/review/flow-view'
+import { closeRound } from '@/lib/agents'
 import { SendToAgent, useAgentRequest, useRequestHeartbeat } from '@/components/agents/send-to-agent'
 import {
   ArrowLeft,
@@ -203,6 +204,18 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     }
   }
 
+  // Flow view: approve stays on this file for 5 s (Undo), then the view itself moves on
+  const approveOnly = async () => {
+    if (!asset || !currentVersion || approved) return
+    await api.post(`/assets/${asset.id}/approve`, { version_id: currentVersion.id })
+    await mutateApprovals()
+  }
+  const undoApprove = async () => {
+    if (!asset || !currentVersion) return
+    await api.delete(`/assets/${asset.id}/approve?version_id=${encodeURIComponent(currentVersion.id)}`)
+    await mutateApprovals()
+  }
+
   const navigateAsset = (assetId: string) => {
     router.push(`/projects/${projectId}/assets/${assetId}`)
   }
@@ -268,7 +281,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     currentVersion?.processing_status === 'processing' ||
     currentVersion?.processing_status === 'uploading'
 
-  const renderMediaViewer = (inkOverlay?: React.ReactNode) => {
+  const renderMediaViewer = (inkOverlay?: React.ReactNode, markers?: { t: number; label: string }[]) => {
     if (!currentVersion || !versionReady) {
       return (
         <div className="flex-1 flex items-center justify-center">
@@ -323,6 +336,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             comments={comments}
             className="flex-1 min-h-0"
             compact={!!inkOverlay}
+            markers={markers}
             overlay={
               <>
                 <AnnotationOverlay key={focusedCommentId ?? 'none'} />
@@ -371,7 +385,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 
   const flowView = (
     <FlowView
-      renderMedia={(ink) => renderMediaViewer(ink)}
+      renderMedia={(ink, extra) => renderMediaViewer(ink, extra.markers)}
       files={(allAssets ?? [asset]).map((a) => ({ id: a.id, name: a.name }))}
       currentFileId={asset.id}
       onSelectFile={navigateAsset}
@@ -379,11 +393,13 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       onPause={() => seekTo(useReviewStore.getState().playheadTime, true)}
       onSeek={(t) => seekTo(t, true)}
       canComment={canComment}
-      onSendNotes={async (notes) => {
-        for (const n of notes) await createComment(n.text, n.t, undefined, n.annotation || undefined)
-        refetchComments()
-      }}
-      onApprove={approve}
+      notePayload={(n) => ({ kind: 'project', assetId: asset.id, versionId: currentVersion?.id ?? '', ...n })}
+      onFinishRound={isOwner && agentRequest && requestAgents.length > 0 ? async () => { await closeRound(agentRequest.id) } : undefined}
+      onApprove={approveOnly}
+      onUndoApprove={undoApprove}
+      hasNext={!!nextAsset}
+      onNext={() => nextAsset && navigateAsset(nextAsset.id)}
+      sessionKey={projectId}
       approved={approved}
       onExit={isNarrow ? () => router.push(`/projects/${projectId}`) : () => setPhoneView(false)}
       exitLabel={isNarrow ? 'Back' : 'Desktop view'}

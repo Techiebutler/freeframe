@@ -35,6 +35,8 @@ interface VideoPlayerProps {
   className?: string;
   /** Phone Flow view: only play/pause, scrubber and time; loop, speed and volume sit behind one "more" button. */
   compact?: boolean;
+  /** One dot per note under the scrubber; a tap jumps there. */
+  markers?: { t: number; label: string }[];
   /** Pre-fetched stream URL (for share mode — skips authenticated API call) */
   initialStreamUrl?: string | null;
 }
@@ -136,7 +138,7 @@ export function VideoPlayer({
   comments = [],
   overlay,
   className,
-  initialStreamUrl, onRetry, compact = false,
+  initialStreamUrl, onRetry, compact = false, markers,
 }: VideoPlayerProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -373,6 +375,17 @@ export function VideoPlayer({
           streamUrl={streamUrl}
           onSeek={seek}
         />
+        {markers && markers.length > 0 && duration > 0 && (
+          <div className="relative mx-[26px] -mt-2 h-8" data-testid="note-markers">
+            {markers.map((m, i) => (
+              <button key={i} type="button" onClick={() => seek(m.t)} aria-label={`Note at ${m.label}`}
+                style={{ left: `${Math.min(100, Math.max(0, (m.t / duration) * 100))}%` }}
+                className="absolute top-0 grid h-8 w-8 -translate-x-1/2 place-items-center">
+                <span className="h-2.5 w-2.5 rounded-full bg-text-primary ring-2 ring-bg-primary" />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Bottom transport bar (matches audio player style) */}

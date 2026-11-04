@@ -1,13 +1,17 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Loader2, Mic, Pencil, RotateCcw, Send, Square, X } from 'lucide-react'
+import { Check, Clock, Loader2, Mic, RotateCcw, Send, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
 import { notesFromDictation, notesReducer, sendBlocked, sendable, type FlowNote } from '@/lib/flow-notes'
-import { buildDrawingData, type InkMark } from '@/lib/ink'
+import { buildDrawingData, splitDeictic, type InkMark } from '@/lib/ink'
+import { getNoteOutbox, useNoteOutbox, type NoteBody, type NotePayload } from '@/lib/note-outbox'
+import type { Outbox } from '@/lib/outbox'
+import { doneLine, markApproved, markFeedback, sentLine, sessionSummary, unmarkApproved } from '@/lib/flow-session'
 import { InkLayer, type InkReplay } from './ink-layer'
+import { LevelMeter } from './level-meter'
 import { trackVideo, videoTimeAt, type TimelinePoint } from '@/lib/rec-timeline'
 import { startMicRecording, type ActiveRecording, type StartRecording } from '@/lib/recorder'
 
@@ -15,7 +19,7 @@ export interface FlowFile { id: string; name: string; thumbnail_url?: string | n
 
 export interface FlowViewProps {
   /** The existing media viewer; `overlay` (the ink layer) must be mounted inside the video frame. Never cropped: it letterboxes. */
-  renderMedia: (overlay: React.ReactNode) => React.ReactNode
+  renderMedia: (overlay: React.ReactNode, extra: { markers: { t: number; label: string }[] }) => React.ReactNode
   files: FlowFile[]
   currentFileId: string
   onSelectFile: (id: string) => void
@@ -23,9 +27,23 @@ export interface FlowViewProps {
   onPause: () => void
   onSeek: (t: number) => void
   canComment: boolean
-  /** Posts every note as a comment. Rejects to keep the notes on screen. */
-  onSendNotes: (notes: { text: string; t: number; annotation: Record<string, unknown> | null }[]) => Promise<void>
+  /** What a note needs to be saved from anywhere: every note is saved in the background as soon as it exists. */
+  notePayload: (note: NoteBody) => NotePayload
+  outbox?: Outbox
+  /** False while the reviewer still has to say who they are; notes wait (nothing is lost) and onNeedSave is called. */
+  canSave?: boolean
+  onNeedSave?: () => void
+  /** Closes the feedback round (Send to agent). Without it the button reads Done: the notes are already saved. */
+  onFinishRound?: () => Promise<void>
+  finishLabel?: string
   onApprove: () => Promise<void> | void
+  /** Takes the approval back (offered for 5 s after approving). Without it Approve is final and moves on quickly. */
+  onUndoApprove?: () => Promise<void>
+  /** Another file waits after this one; onNext opens it. */
+  hasNext?: boolean
+  onNext?: () => void
+  /** Scopes the closing numbers ("7 approved, 3 with feedback") to this folder or share. */
+  sessionKey?: string
   approved: boolean
   /** Share links without approve permission: with no notes the right-hand button stays disabled. Default true. */
   canApprove?: boolean
@@ -39,6 +57,26 @@ let seq = 0
 const newId = () => `note-${Date.now()}-${seq++}`
 
 const stamp = (t: number) => `${timecode(t)}.${Math.floor((t % 1) * 10)}`
+
+/** Clock (waiting) -> spinner (sending) -> check (saved); red Retry when it failed. Never colour alone: each has its own glyph and name. */
+function NoteStatus({ status, onRetry, onDelete, label }: { status?: string; onRetry: () => void; onDelete?: () => void; label: string }) {
+  if (status === 'queued') return <span role="img" aria-label="Waiting to send" className="grid h-11 w-11 shrink-0 place-items-center text-text-tertiary"><Clock size={16} /></span>
+  if (status === 'sending') return <span role="img" aria-label="Sending" className="grid h-11 w-11 shrink-0 place-items-center text-text-secondary"><Loader2 size={16} className="animate-spin motion-reduce:animate-none" /></span>
+  if (status === 'saved') return <span role="img" aria-label="Saved" className="grid h-11 w-11 shrink-0 place-items-center text-status-success"><Check size={18} /></span>
+  if (status === 'failed') return <button type="button" onClick={onRetry} aria-label={`Retry sending note at ${label}`} className="press inline-flex h-11 shrink-0 items-center gap-1 rounded-full px-3 text-xs font-semibold text-status-error hover:bg-bg-hover"><RotateCcw size={13} />Retry</button>
+  return onDelete ? <button type="button" onClick={onDelete} aria-label={`Delete note at ${label}`} className="press grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-secondary hover:bg-bg-hover"><X size={16} /></button> : <span className="h-11 w-11 shrink-0" />
+}
+
+/** The drawing as a small picture: the strokes in the same 0..1 frame, on a 9:16 card. */
+function InkThumb({ mark }: { mark: InkMark }) {
+  return (
+    <svg viewBox="0 0 1 1" preserveAspectRatio="none" width="18" height="32" aria-hidden="true" className="shrink-0 rounded-[4px] bg-bg-tertiary ring-1 ring-border">
+      {mark.k === 'dot'
+        ? <circle cx={mark.points[0][0]} cy={mark.points[0][1]} r="0.12" fill="none" stroke="currentColor" strokeWidth="0.06" className="text-text-primary" />
+        : <polyline points={mark.points.map(q => q.join(',')).join(' ')} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" className="text-text-primary" />}
+    </svg>
+  )
+}
 
 function dictationMessage(e: unknown): string {
   const detail = (e as { detail?: string })?.detail
@@ -58,6 +96,19 @@ export function FlowView(p: FlowViewProps) {
   const [replay, setReplay] = React.useState<InkReplay | null>(null)
   const replayKey = React.useRef(0)
   const rootRef = React.useRef<HTMLDivElement>(null)
+  const levelRef = React.useRef(0)
+  const sKey = p.sessionKey ?? 'flow'
+  const [toast, setToast] = React.useState<{ secs: number } | null>(null)
+  const [moment, setMoment] = React.useState<{ title: string; sub?: string } | null>(null)
+  const advanceRef = React.useRef<() => void>(() => {})
+  const box = React.useMemo(() => p.outbox ?? getNoteOutbox(), [p.outbox])
+  const ob = useNoteOutbox(box)
+  const canSave = p.canSave ?? true
+  React.useEffect(() => {
+    for (const e of ob.entries) if (e.status === 'saved') markFeedback(sKey, (e.payload as { assetId?: string })?.assetId ?? p.currentFileId)
+  }, [ob.entries]) // eslint-disable-line react-hooks/exhaustive-deps
+  const onNeedSave = React.useRef(p.onNeedSave)
+  onNeedSave.current = p.onNeedSave
   const [playing, setPlaying] = React.useState(false)
   // Media events do not bubble, but they can be caught on the way down: follow whichever <video> the player mounts.
   React.useEffect(() => {
@@ -78,6 +129,17 @@ export function FlowView(p: FlowViewProps) {
     return () => clearInterval(id)
   }, [active])
 
+  // Optimistic save: a note goes into the outbox the moment it has its words, and the outbox does the rest in the background.
+  const payloadRef = React.useRef(p.notePayload)
+  payloadRef.current = p.notePayload
+  React.useEffect(() => {
+    for (const n of notes) {
+      if (n.status !== 'ready' || !n.text.trim() || ob.byId(n.id)) continue
+      if (!canSave) { onNeedSave.current?.(); continue }
+      void ob.enqueue(n.id, payloadRef.current({ text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []) }))
+    }
+  }, [notes, canSave, ob.entries]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const transcribe = async (n: { id: string; t: number; marks?: InkMark[] }, audio: Blob) => {
     const { id } = n
     dispatch({ type: 'transcribing', id, audio })
@@ -91,6 +153,18 @@ export function FlowView(p: FlowViewProps) {
       dispatch({ type: 'split', id, parts: parts.map((part, i) => ({ ...part, id: i === 0 ? id : newId() })) })
     }
     catch (e) { dispatch({ type: 'failed', id }); setMessages(m => ({ ...m, [id]: dictationMessage(e) })) }
+  }
+
+  /** Throws the recording away: no transcription, no note, nothing saved. */
+  const cancelRecording = () => {
+    if (!active) return
+    const { id, rec } = active
+    rec.cancel()
+    tracker.current?.stop(); tracker.current = null
+    marks.current = []
+    timelines.current.delete(id)
+    dispatch({ type: 'remove', id })
+    setActive(null)
   }
 
   const tapComment = async () => {
@@ -113,7 +187,8 @@ export function FlowView(p: FlowViewProps) {
     marks.current = []
     dispatch({ type: 'add', id, t: p.getPlayhead() })
     try {
-      const rec = await start()
+      levelRef.current = 0
+      const rec = await start(v => { levelRef.current = v })
       const startedAt = Date.now()
       tracker.current = trackVideo(rootRef.current?.querySelector('video') ?? null, startedAt)
       setActive({ id, rec, startedAt })
@@ -124,23 +199,57 @@ export function FlowView(p: FlowViewProps) {
     }
   }
 
-  const ready = sendable(notes)
-  const blocked = sendBlocked(notes)
-  const send = async () => {
+  const blocked = sendBlocked(notes) || ob.summary.pending > 0 || ob.summary.failed > 0
+  const hasNotes = notes.length > 0
+  const showDone = () => setMoment({ title: doneLine(sessionSummary(sKey)) })
+  const advance = () => { if (p.hasNext && p.onNext) p.onNext(); else showDone() }
+  advanceRef.current = advance
+
+  // After Approve: "Approved" with 5 s to undo, then on to the next file (or the closing moment).
+  React.useEffect(() => {
+    if (!toast) return
+    if (toast.secs <= 0) { setToast(null); advanceRef.current(); return }
+    const id = setTimeout(() => setToast({ secs: toast.secs - 1 }), 1000)
+    return () => clearTimeout(id)
+  }, [toast])
+
+  const finish = async () => {
     setSending(true); setError('')
     try {
-      if (!notes.length) { await p.onApprove(); return }
-      await p.onSendNotes(ready.map(n => ({ text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []) })))
+      if (!hasNotes) {
+        await p.onApprove()
+        markApproved(sKey, p.currentFileId)
+        setToast({ secs: p.onUndoApprove ? 5 : 1 })
+        return
+      }
+      const count = notes.length
+      await p.onFinishRound?.()
       dispatch({ type: 'clear' })
-    } catch { setError('Could not send. Your notes are still here. Try again.') }
+      setMoment({ title: sentLine(count, !!p.onFinishRound), sub: p.hasNext ? undefined : doneLine(sessionSummary(sKey)) })
+    } catch { setError(hasNotes ? 'Could not finish. Your notes are saved. Try again.' : 'Could not approve. Try again.') }
     finally { setSending(false) }
+  }
+  const undo = async () => {
+    setToast(null); setError('')
+    try { await p.onUndoApprove?.(); unmarkApproved(sKey, p.currentFileId) }
+    catch { setError('Could not undo. The file is still approved.') }
   }
 
   const canApprove = p.canApprove ?? true
-  const sendLabel = notes.length ? `Send ${ready.length || ''}`.trim() : !canApprove ? 'Send' : p.approved ? 'Approved' : 'Approve'
+  const sendLabel = hasNotes ? (p.finishLabel ?? (p.onFinishRound ? 'Send to agent' : 'Done')) : !canApprove ? 'Send' : p.approved ? 'Approved ✓' : 'Approve'
 
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-bg-primary" style={{ paddingTop: 'env(safe-area-inset-top)' }} data-testid="flow-view">
+    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-bg-primary" style={{ paddingTop: 'env(safe-area-inset-top)' }} data-testid="flow-view">
+      {moment && (
+        <div role="dialog" aria-label="Done" className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-bg-primary/96 px-8 text-center backdrop-blur-md">
+          <span className="grid h-16 w-16 place-items-center rounded-full bg-status-success/15 text-status-success"><Check size={32} aria-hidden="true" /></span>
+          <p className="text-xl font-semibold leading-tight text-text-primary">{moment.title}</p>
+          {moment.sub && <p className="text-sm text-text-secondary">{moment.sub}</p>}
+          {p.hasNext && p.onNext
+            ? <button type="button" onClick={() => { setMoment(null); p.onNext!() }} className="flow-comment inline-flex h-14 items-center justify-center rounded-full px-8 text-base font-semibold text-text-inverse">Next file</button>
+            : <button type="button" onClick={() => setMoment(null)} className="press inline-flex h-14 items-center justify-center rounded-full border border-border px-8 text-base font-semibold text-text-primary hover:bg-bg-hover">Close</button>}
+        </div>
+      )}
       {/* The briefing's files */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-secondary pl-2">
         <nav aria-label="Files in this briefing" className="min-w-0 flex-1">
@@ -161,56 +270,96 @@ export function FlowView(p: FlowViewProps) {
       {/* 9:16 at full height, letterboxed never cropped */}
       <div className="flex min-h-0 flex-1 flex-col" data-recording={active ? '' : undefined}>
         {p.renderMedia(
+          <>
+          {active && <div className="flow-rec-glow" data-testid="rec-glow" aria-hidden="true" />}
           <InkLayer
             active={!!active}
             playing={playing}
             onStart={p.onPause}
             replay={replay}
-            onMark={(k, points) => { if (active) marks.current.push({ k, points, t: p.getPlayhead(), offset_ms: Date.now() - active.startedAt }) }}
-          />,
+            onMark={(k, points, times) => { if (active) marks.current.push({ k, points, times, t: p.getPlayhead(), offset_ms: Date.now() - active.startedAt }) }}
+          />
+          </>,
+          { markers: notes.map(n => ({ t: n.t, label: stamp(n.t) })) },
         )}
       </div>
 
-      {notes.length > 0 && (
+      {notes.some(n => n.status !== 'recording') && (
         <ul aria-label="Your notes" className="max-h-[30dvh] shrink-0 space-y-2 overflow-y-auto border-t border-border bg-bg-secondary px-3 py-2">
-          {notes.map(n => (
-            <li key={n.id} className="flex items-start gap-2">
-              <button type="button" onClick={() => p.onSeek(n.t)} aria-label={`Go to ${timecode(n.t)}`} className="press min-h-11 shrink-0 rounded-lg bg-bg-tertiary px-2.5 font-mono text-xs tabular-nums text-text-primary">{timecode(n.t)}</button>
-              <div className="min-w-0 flex-1">
-                {n.status === 'recording' && <p role="status" className="flex min-h-11 items-center text-sm text-text-secondary">Recording. Talk and draw on the picture, then tap Stop.</p>}
-                {n.status === 'transcribing' && <p role="status" className="flex min-h-11 items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />Transcribing…</p>}
-                {(n.status === 'ready' || n.status === 'failed') && (
-                  <>
-                    <textarea aria-label={`Note at ${timecode(n.t)}`} value={n.text} rows={2} onChange={e => dispatch({ type: 'edit', id: n.id, text: e.target.value })}
-                      className="w-full resize-none rounded-lg border border-border bg-bg-primary px-3 py-2 text-base text-text-primary outline-none focus:border-text-tertiary" />
-                    {!!n.marks?.length && (
-                      <ul aria-label={`Drawings on the note at ${timecode(n.t)}`} className="mt-1 flex flex-wrap gap-1.5">
-                        {n.marks.map((m, i) => (
-                          <li key={i}>
-                            <button type="button" onClick={() => { p.onSeek(m.t); setReplay({ key: ++replayKey.current, marks: [m] }) }}
-                              aria-label={`Drawing at ${stamp(m.t)}`}
-                              className="press inline-flex min-h-11 items-center gap-1.5 rounded-full border border-border px-3 font-mono text-xs tabular-nums text-text-secondary hover:bg-bg-hover">
-                              <Pencil size={12} aria-hidden="true" />{stamp(m.t)}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {n.status === 'failed' && (
-                      <p role="alert" className="flex flex-wrap items-center gap-x-3 text-xs text-text-secondary">
-                        <span>{messages[n.id] ?? 'Could not transcribe.'}</span>
-                        {n.audio && <button type="button" onClick={() => transcribe(n, n.audio!)} className="press inline-flex min-h-11 items-center gap-1 font-semibold text-text-primary"><RotateCcw size={12} />Try again</button>}
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-              <button type="button" onClick={() => dispatch({ type: 'remove', id: n.id })} aria-label={`Delete note at ${timecode(n.t)}`} className="press grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-secondary hover:bg-bg-hover"><X size={16} /></button>
-            </li>
-          ))}
+          {notes.filter(n => n.status !== 'recording').map(n => {
+            const entry = ob.byId(n.id)
+            const replayAll = () => { p.onSeek(n.t); if (n.marks?.length) setReplay({ key: ++replayKey.current, marks: n.marks }) }
+            return (
+              <li key={n.id} data-testid="note-chip" data-state={entry?.status ?? n.status} className="flex items-start gap-2">
+                <button type="button" onClick={() => p.onSeek(n.t)} aria-label={`Go to ${timecode(n.t)}`} className="press min-h-11 shrink-0 rounded-lg bg-bg-tertiary px-2.5 font-mono text-xs tabular-nums text-text-primary">{timecode(n.t)}</button>
+                <div className="min-w-0 flex-1">
+                                    {n.status === 'transcribing' && <p role="status" className="flex min-h-11 items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />Transcribing…</p>}
+                  {(n.status === 'ready' || n.status === 'failed') && (
+                    <>
+                      {entry ? (
+                        <p className="flex min-h-11 items-center py-1 text-base text-text-primary">
+                          <span>{(n.marks?.length ? splitDeictic(n.text) : [{ text: n.text, deictic: false }]).map((part, i) => part.deictic
+                            ? <button key={i} type="button" onClick={replayAll} className="press inline underline decoration-text-secondary decoration-2 underline-offset-4">{part.text}</button>
+                            : <span key={i}>{part.text}</span>)}</span>
+                        </p>
+                      ) : (
+                        <textarea aria-label={`Note at ${timecode(n.t)}`} value={n.text} rows={2} onChange={e => dispatch({ type: 'edit', id: n.id, text: e.target.value })} onBlur={() => dispatch({ type: 'commit', id: n.id })}
+                          className="w-full resize-none rounded-lg border border-border bg-bg-primary px-3 py-2 text-base text-text-primary outline-none focus:border-text-tertiary" />
+                      )}
+                      {!!n.marks?.length && (
+                        <ul aria-label={`Drawings on the note at ${timecode(n.t)}`} className="mt-1 flex flex-wrap gap-1.5">
+                          {n.marks.map((m, i) => (
+                            <li key={i}>
+                              <button type="button" onClick={() => { p.onSeek(m.t); setReplay({ key: ++replayKey.current, marks: [m] }) }}
+                                aria-label={`Drawing at ${stamp(m.t)}`}
+                                className="press inline-flex min-h-11 items-center gap-2 rounded-full border border-border py-1 pl-1.5 pr-3 font-mono text-xs tabular-nums text-text-secondary hover:bg-bg-hover">
+                                <InkThumb mark={m} />{stamp(m.t)}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {n.status === 'failed' && !entry && (
+                        <p role="alert" className="flex flex-wrap items-center gap-x-3 text-xs text-text-secondary">
+                          <span>{messages[n.id] ?? 'Could not transcribe.'}</span>
+                          {n.audio && <button type="button" onClick={() => transcribe(n, n.audio!)} className="press inline-flex min-h-11 items-center gap-1 font-semibold text-text-primary"><RotateCcw size={12} />Try again</button>}
+                        </p>
+                      )}
+                      {entry?.status === 'failed' && (
+                        <p role="alert" className="text-xs text-status-error">{entry.error || 'Could not save.'}</p>
+                      )}
+                    </>
+                  )}
+                </div>
+                <NoteStatus status={entry?.status} onRetry={() => ob.retry(n.id)} onDelete={entry ? undefined : () => dispatch({ type: 'remove', id: n.id })} label={timecode(n.t)} />
+              </li>
+            )
+          })}
         </ul>
       )}
       {error && <p role="alert" className="shrink-0 bg-bg-secondary px-4 py-2 text-sm text-status-error">{error}</p>}
+      {ob.line && (
+        <div className="shrink-0 border-t border-border bg-bg-secondary px-4 py-1.5 text-center" aria-live="polite">
+          <p data-tone={ob.line.tone} className="text-xs font-medium tabular-nums text-text-secondary">
+            {ob.line.parts.map((part, i) => <span key={i} className={part.tone === 'error' ? 'text-status-error' : part.tone === 'ok' ? 'text-status-success' : undefined}>{part.text}</span>)}
+          </p>
+          {ob.summary.pending > 0 && <p className="text-[11px] text-text-tertiary">Unsent notes go out next time you open this.</p>}
+        </div>
+      )}
+
+      {toast && (
+        <div role="status" className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-bg-secondary pl-4 pr-1">
+          <p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>
+          {p.onUndoApprove && <button type="button" onClick={undo} className="press min-h-11 rounded-full px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover">Undo ({toast.secs} s)</button>}
+        </div>
+      )}
+      {active && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-bg-secondary pl-4 pr-1" role="status" aria-label="Recording">
+          <LevelMeter levelRef={levelRef} />
+          <span data-testid="rec-timer" className="min-w-[3.25rem] text-right font-mono text-[17px] font-semibold leading-[22px] tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
+          <button type="button" onClick={cancelRecording} aria-label="Cancel recording" className="press grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-secondary hover:bg-bg-hover"><X size={18} /></button>
+        </div>
+      )}
 
       {/* One-hand bottom controls */}
       <div className="flex shrink-0 items-center gap-2 border-t border-border bg-bg-secondary px-3 pt-2" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
@@ -218,11 +367,11 @@ export function FlowView(p: FlowViewProps) {
           <>
             <button type="button" onClick={tapComment}
               className="flow-comment inline-flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-5 text-base font-semibold text-text-inverse">
-              {active ? <><Square size={18} aria-hidden="true" />Stop · {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</> : <><Mic size={24} aria-hidden="true" />Comment</>}
+              {active ? <><Square size={18} aria-hidden="true" />Stop</> : <><Mic size={24} aria-hidden="true" />Comment</>}
             </button>
-            <button type="button" onClick={send} disabled={sending || blocked || (!notes.length && (p.approved || !canApprove))}
+            <button type="button" onClick={finish} disabled={sending || (hasNotes ? blocked : (p.approved || !canApprove))}
               className="press inline-flex h-14 shrink-0 items-center justify-center gap-1.5 rounded-full border border-border px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-50">
-              {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : notes.length ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{sendLabel}
+              {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : hasNotes ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{sendLabel}
             </button>
           </>
         ) : <p className="flex-1 py-3 text-center text-sm text-text-secondary">View-only access. Comments are disabled.</p>}

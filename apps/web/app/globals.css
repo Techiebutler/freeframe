@@ -779,3 +779,9 @@ button:not(:disabled), summary { cursor: pointer; }
   box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(0,0,0,.12), 0 1px 1px rgba(0,0,0,.25), 0 4px 10px -6px color-mix(in oklab, var(--accent) 60%, transparent);
 }
 @media (prefers-reduced-motion: reduce) { .flow-comment { transition: none; } .flow-comment:active { transform: none; } }
+
+/* Recording: the frame glows from the inside, the level runs out to the left (Flask). Static under reduced motion. */
+.flow-meter { -webkit-mask-image: linear-gradient(to right, transparent, #000 72%); mask-image: linear-gradient(to right, transparent, #000 72%); }
+.flow-rec-glow { position: absolute; inset: 0; z-index: 11; pointer-events: none; box-shadow: inset 0 0 26px 3px rgba(255, 69, 58, .55), inset 0 0 0 1.5px rgba(255, 69, 58, .6); animation: flow-rec-pulse 1.8s ease-in-out infinite; }
+@keyframes flow-rec-pulse { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .flow-rec-glow { animation: none; opacity: 1; } }

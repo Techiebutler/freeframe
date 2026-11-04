@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 from typing import Optional
-from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Float, Integer, BigInteger, func, Text, UniqueConstraint
+from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Float, Index, Integer, BigInteger, func, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 try:
@@ -16,7 +16,8 @@ class CommentVisibility(str, PyEnum):
 
 class Comment(Base):
     __tablename__ = "comments"
-    __table_args__ = (UniqueConstraint("review_publication_id", name="uq_comments_review_publication_id"),)
+    __table_args__ = (UniqueConstraint("review_publication_id", name="uq_comments_review_publication_id"),
+                      Index("uq_comments_idempotency_key", "idempotency_key", unique=True, postgresql_where=text("idempotency_key IS NOT NULL")))
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     asset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True)
     version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("asset_versions.id"), nullable=False, index=True)
@@ -29,6 +30,8 @@ class Comment(Base):
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
     visibility: Mapped[str] = mapped_column(String(20), default="public", server_default="public", nullable=False)
     review_source: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Client Idempotency-Key, scoped to the author ("u:<user id>:<key>" / "g:<email>:<key>"); a retried POST finds its comment.
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     review_publication_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     review_publication_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -26,6 +26,12 @@ describe('VideoPlayer compact (phone Flow view)', () => {
     expect(screen.getByRole('button', { name: 'Loop' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Playback speed' })).toBeInTheDocument()
   })
+  it('draws one marker per note under the scrubber and a tap seeks there', () => {
+    render(<VideoPlayer assetId="a" initialStreamUrl="x.mp4" compact markers={[{ t: 2, label: '0:02.0' }, { t: 7.5, label: '0:07.5' }]} />)
+    const row = screen.getByTestId('note-markers')
+    expect(row.querySelectorAll('button')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Note at 0:07.5' })).toBeInTheDocument()
+  })
   it('the full player still shows everything', () => {
     render(<VideoPlayer assetId="a" initialStreamUrl="x.mp4" />)
     expect(screen.getByRole('button', { name: 'Loop' })).toBeInTheDocument()

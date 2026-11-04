@@ -25,12 +25,18 @@ describe('flow notes', () => {
     s = notesReducer(s, { type: 'failed', id: 'a' })
     expect(s[0]).toMatchObject({ status: 'failed', audio: blob })
   })
-  it('typing over a failed note makes it sendable', () => {
+  it('a typed note becomes saveable only once typing is committed', () => {
     let s = notesReducer(add([], 'a', 1), { type: 'failed', id: 'a' })
     expect(sendBlocked(s)).toBe(true)
     s = notesReducer(s, { type: 'edit', id: 'a', text: 'Cut earlier' })
+    expect(sendable(s)).toHaveLength(0)
+    s = notesReducer(s, { type: 'commit', id: 'a' })
     expect(sendBlocked(s)).toBe(false)
     expect(sendable(s)).toHaveLength(1)
+  })
+  it('committing an empty note does nothing', () => {
+    const s = notesReducer(notesReducer(add([], 'a', 1), { type: 'failed', id: 'a' }), { type: 'commit', id: 'a' })
+    expect(s[0].status).toBe('failed')
   })
   it('blocks sending while recording or transcribing', () => {
     let s = add([], 'a', 1)

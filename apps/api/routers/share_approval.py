@@ -2,7 +2,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -23,12 +23,8 @@ class ShareApprove(BaseModel):
     version_id: Optional[uuid.UUID] = None
 
 
-@router.post("/share/{token}/assets/{asset_id}/approve", dependencies=[Depends(rate_limit("share_approve", 30, 600))])
-def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_session: Optional[str] = Query(None),
-                  db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
-    """A guest has no user row, so the approval is recorded for the link's creator: the person who made the
-    link `approve` is the one approving through it."""
-    from .approvals import _upsert_approval
+def _approvable_asset(db: Session, token: str, asset_id: uuid.UUID, share_session, current_user):
+    """The link and asset an approve/undo through `token` may touch; the same gates for both."""
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
     if link.permission != SharePermission.approve:
         raise HTTPException(403, "approve_not_allowed")
@@ -39,6 +35,26 @@ def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_ses
         validate_asset_in_share(db, link, asset)
     except HTTPException:
         raise HTTPException(404, "not_found")
+    return link, asset
+
+
+@router.delete("/share/{token}/assets/{asset_id}/approve", status_code=204, dependencies=[Depends(rate_limit("share_approve", 30, 600))])
+def share_unapprove(token: str, asset_id: uuid.UUID, version_id: Optional[uuid.UUID] = None, share_session: Optional[str] = Query(None),
+                    db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
+    """Take the approval back (the link creator's, as recorded by the approve). Idempotent."""
+    from .approvals import remove_approval
+    link, asset = _approvable_asset(db, token, asset_id, share_session, current_user)
+    remove_approval(db, asset, link.created_by, version_id)
+    return Response(status_code=204)
+
+
+@router.post("/share/{token}/assets/{asset_id}/approve", dependencies=[Depends(rate_limit("share_approve", 30, 600))])
+def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_session: Optional[str] = Query(None),
+                  db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
+    """A guest has no user row, so the approval is recorded for the link's creator: the person who made the
+    link `approve` is the one approving through it."""
+    from .approvals import _upsert_approval
+    link, asset = _approvable_asset(db, token, asset_id, share_session, current_user)
     versions = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None))
     version = (versions.filter(AssetVersion.id == body.version_id).first() if body.version_id
                else versions.order_by(AssetVersion.version_number.desc()).first())
