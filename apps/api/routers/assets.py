@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, literal, select
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from ..database import get_db
 from ..middleware.auth import get_current_user
@@ -13,7 +13,7 @@ from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.share import AssetShare
 from ..models.activity import Mention, Notification, NotificationType
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
-from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetVersionChangeResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
+from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetVersionChangeResponse, DeletedVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_project_visible, require_asset_access, can_access_asset
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
@@ -475,6 +475,43 @@ def list_asset_versions(
         vr = AssetVersionResponse.model_validate(v)
         vr.files = [MediaFileResponse.model_validate(f) for f in files_by_version.get(v.id, [])]
         result.append(vr)
+    return result
+
+
+@router.get("/assets/{asset_id}/deleted-versions", response_model=list[DeletedVersionResponse])
+def list_deleted_versions(
+    asset_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The asset's versions deleted on their own that can still be restored, newest first.
+
+    Its own route rather than a flag on `GET .../versions`: that list feeds the
+    player, compare and every viewer, and must never carry a deleted version.
+    This one answers only the role that may restore (editor and above), and
+    lists only what `restore_asset_version` would take back: a version that
+    ran (processing or ready), not yet purged. A discarded upload or a failed
+    version, which the reaper also soft-deletes on its own, never appears.
+    """
+    from ..tasks.cleanup_tasks import _retention_days
+
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
+
+    versions = db.query(AssetVersion).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.isnot(None),
+        AssetVersion.processing_status.in_(_KEPT_STATUSES),
+    ).order_by(AssetVersion.version_number.desc()).all()
+    days = _retention_days()
+    result = []
+    for v in versions:
+        item = DeletedVersionResponse.model_validate(v)
+        if days > 0:
+            item.restorable_until = v.deleted_at + timedelta(days=days)
+        result.append(item)
     return result
 
 

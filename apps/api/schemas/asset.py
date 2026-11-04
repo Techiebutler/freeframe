@@ -35,6 +35,21 @@ class AssetVersionResponse(BaseModel):
     files: list[MediaFileResponse] = []
     model_config = {"from_attributes": True}
 
+class DeletedVersionResponse(BaseModel):
+    """A version deleted on its own that `POST .../restore` can still bring back."""
+    id: uuid.UUID
+    asset_id: uuid.UUID
+    version_number: int
+    processing_status: ProcessingStatus
+    created_by: uuid.UUID
+    created_at: datetime
+    deleted_at: datetime
+    # When the retention purge may take it: `deleted_at` plus
+    # SOFT_DELETE_RETENTION_DAYS. None while the purge is switched off. A time
+    # already past means the next purge run removes it; until then it restores.
+    restorable_until: Optional[datetime] = None
+    model_config = {"from_attributes": True}
+
 class AssetVersionChangeResponse(BaseModel):
     """What deleting or restoring one version answers with.
 
