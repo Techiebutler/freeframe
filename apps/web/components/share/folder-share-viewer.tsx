@@ -25,6 +25,7 @@ import { useReview, type CreateCommentPayload } from '@/components/review/review
 import { useReviewStore } from '@/stores/review-store'
 import { FlowView } from '@/components/review/flow-view'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
+import { usePhoneView } from '@/hooks/use-phone-view'
 import { approveSharedAsset, guestDictate, nextFileId, undoApproveSharedAsset } from '@/lib/share-flow'
 import type {
   SharePermission,
@@ -719,7 +720,7 @@ function ShareReviewInner({
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, seekTo } = useReviewStore()
   const isNarrow = useIsNarrow()
-  const [phoneView, setPhoneView] = React.useState(false)
+  const [phoneView, setPhoneView] = usePhoneView()
   const [authed, setAuthed] = React.useState(false)
   React.useEffect(() => { void getUsableAccessToken().then((t) => setAuthed(t !== null)).catch(() => {}) }, [])
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)

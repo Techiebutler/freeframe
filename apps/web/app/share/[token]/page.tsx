@@ -27,6 +27,7 @@ import { GuestCommentInput, IdentityForm, loadIdentity, type GuestIdentity } fro
 import { FlowView } from '@/components/review/flow-view'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
+import { usePhoneView } from '@/hooks/use-phone-view'
 import { guestDictate, undoApproveSharedAsset } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
@@ -884,7 +885,7 @@ function ShareViewer({
   const [streamLoading, setStreamLoading] = React.useState(false)
   const [commentKey, setCommentKey] = React.useState(0)
   const isNarrow = useIsNarrow()
-  const [phoneView, setPhoneView] = React.useState(false)
+  const [phoneView, setPhoneView] = usePhoneView()
   const videoRef = React.useRef<HTMLVideoElement>(null)
   const [identity, setIdentity] = React.useState<GuestIdentity | null>(null)
   const [askIdentity, setAskIdentity] = React.useState(false)

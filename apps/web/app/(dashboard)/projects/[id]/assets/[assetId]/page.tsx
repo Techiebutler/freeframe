@@ -25,6 +25,7 @@ import { api } from '@/lib/api'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { canCompare } from '@/lib/compare-time'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
+import { usePhoneView } from '@/hooks/use-phone-view'
 import { FlowView } from '@/components/review/flow-view'
 import { closeRound } from '@/lib/agents'
 import { SendToAgent, useAgentRequest, useRequestHeartbeat } from '@/components/agents/send-to-agent'
@@ -59,7 +60,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const deepLinkApplied = useRef(false)
   const isNarrow = useIsNarrow()
-  const [phoneView, setPhoneView] = useState(false)
+  const [phoneView, setPhoneView] = usePhoneView()
   const flow = isNarrow || phoneView
 
   // Fetch folder tree to build the folder path for the breadcrumb

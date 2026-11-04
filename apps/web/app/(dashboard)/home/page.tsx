@@ -99,7 +99,14 @@ export default function HomePage() {
               <FolderArt size={88} /><span className="text-[1.25rem] font-semibold">Request your first files</span><span className="text-[0.9375rem] text-text-secondary">One link for your editor. Everything comes back here.</span>
             </button>
           ) : filtered.length ? (
-            <ProjectKanban requests={filtered} paused={motionPaused} onShare={setSharing} onDone={async done => { await Promise.all(done.map(r => api.delete(`/requests/${r.id}`))); void mutate() }} focusReady={filter === 'Ready'} />
+            <ProjectKanban requests={filtered} paused={motionPaused} onShare={setSharing} onDone={done => {
+              // Optimistic: the cards leave the board at once, the server catches up
+              const ids = new Set(done.map(r => r.id))
+              void mutate(Promise.all(done.map(r => api.delete(`/requests/${r.id}`))).then(() => listRequests()), {
+                optimisticData: (cur?: FileRequest[]) => (cur || []).map(r => ids.has(r.id) ? { ...r, state: 'revoked' as const } : r),
+                rollbackOnError: true, revalidate: false,
+              })
+            }} focusReady={filter === 'Ready'} />
           ) : !error && <div className="mt-5 rounded-2xl border border-border p-8 text-center"><p className="text-[0.9375rem] text-text-secondary">No matching requests</p><button onClick={() => { setQuery(''); setFilter('All') }} className="mt-2 min-h-11 text-[0.875rem] font-medium text-accent">Clear filters</button></div>}
           {user?.is_staff === false && !requests?.length && !isLoading && !error && <Link href="/start" className="mt-3 inline-flex min-h-11 items-center text-sm text-accent">Set up your brand and first briefing <ArrowRight size={16} className="ml-2" /></Link>}
 
