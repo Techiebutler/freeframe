@@ -250,6 +250,12 @@ class Settings(BaseSettings):
     # real account, not a bypass. Restricted to GET, so it can never write.
     # Unset (the default) disables the mechanism entirely.
     service_api_key: str | None = None
+    # Mobile feedback (agent-review platform). Each is optional and its feature is a no-op / 503 without it:
+    # GROQ_API_KEY dictation, TELEGRAM_BOT_TOKEN pushes, TELEGRAM_BOT_USERNAME the link, TELEGRAM_WEBHOOK_SECRET the inbound hook.
+    groq_api_key: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_bot_username: str | None = None
+    telegram_webhook_secret: str | None = None
     service_api_key_email: str | None = None
 
     # Directory-backed sign-in. With DIRECTORY_LOOKUP_URL set, the central-gate

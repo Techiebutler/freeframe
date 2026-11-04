@@ -57,3 +57,13 @@ describe('VersionSwitcher trigger status indicator (#118)', () => {
     expect(screen.queryByTestId('version-status-indicator')).toBeNull()
   })
 })
+
+describe('VersionSwitcher pill', () => {
+  it('is neutral so Approve stays the only accent', () => {
+    useReviewStore.getState().reset()
+    render(<VersionSwitcher versions={[makeVersion({ version_number: 3 })]} />)
+    const pill = screen.getByRole('button', { name: /v3/ })
+    expect(pill.className).not.toMatch(/bg-accent/)
+    expect(pill.className).toMatch(/border-border/)
+  })
+})

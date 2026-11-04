@@ -44,6 +44,9 @@ export interface EditorStats {
   first_try_rate: number | null
   avg_versions: number | null
   open_must_fixes: number
+  /** 'agent' for paired AI agents; absent on older API builds. */
+  kind?: 'human' | 'agent'
+  program?: string | null
 }
 export interface EditorInsights { editors: EditorStats[]; reviewed: boolean }
 export const getEditors = () => api.get<EditorInsights>('/insights/editors')

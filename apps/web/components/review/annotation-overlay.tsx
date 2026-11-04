@@ -2,6 +2,8 @@
 
 import React, { useEffect, useRef } from 'react'
 import { useReviewStore } from '@/stores/review-store'
+import { isInk } from '@/lib/ink'
+import { InkLayer } from './ink-layer'
 
 interface AnnotationOverlayProps {
   /**
@@ -21,8 +23,11 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
+  const ink = isInk(active)
+  const replay = React.useMemo(() => (isInk(active) ? { key: 1, marks: active.marks } : null), [active])
+
   useEffect(() => {
-    if (!active || !canvasRef.current || !containerRef.current) return
+    if (ink || !active || !canvasRef.current || !containerRef.current) return
 
     let disposed = false
     let fabricCanvas: any = null
@@ -92,9 +97,10 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
         try { fabricCanvas.dispose() } catch { /* ignore */ }
       }
     }
-  }, [active])
+  }, [active, ink])
 
   if (!active) return null
+  if (ink) return <InkLayer active={false} onStart={() => {}} onMark={() => {}} replay={replay} />
 
   return (
     <div

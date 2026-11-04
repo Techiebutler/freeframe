@@ -1,5 +1,6 @@
 'use client'
 
+import * as React from 'react'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
@@ -23,6 +24,9 @@ import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { canCompare } from '@/lib/compare-time'
+import { useIsNarrow } from '@/hooks/use-is-narrow'
+import { FlowView } from '@/components/review/flow-view'
+import { SendToAgent, useAgentRequest, useRequestHeartbeat } from '@/components/agents/send-to-agent'
 import {
   ArrowLeft,
   ChevronLeft,
@@ -32,6 +36,7 @@ import {
   Columns2,
   GitCompareArrows,
   Check,
+  Smartphone,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
@@ -52,6 +57,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const deepLinkApplied = useRef(false)
+  const isNarrow = useIsNarrow()
+  const [phoneView, setPhoneView] = useState(false)
+  const flow = isNarrow || phoneView
 
   // Fetch folder tree to build the folder path for the breadcrumb
   const { data: folderTree } = useSWR<FolderTreeNode[]>(
@@ -116,6 +124,11 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     folderKey ? `/projects/${projectId}/assets?folder_id=${folderKey}` : null,
     (url: string) => api.get<AssetResponse[]>(url),
   )
+
+  // Agents: the owner can hand this folder's comments to the agents paired with its request
+  const isOwner = currentRole === 'owner'
+  const { request: agentRequest, agents: requestAgents } = useAgentRequest(asset?.folder_id, isOwner)
+  useRequestHeartbeat(isOwner ? agentRequest?.id : null)
 
   // Approve = this version is accepted; the server is the authority, the button just mirrors it
   const { data: approvals, mutate: mutateApprovals } = useSWR<{ version_id: string; status: string }[]>(
@@ -255,7 +268,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     currentVersion?.processing_status === 'processing' ||
     currentVersion?.processing_status === 'uploading'
 
-  const renderMediaViewer = () => {
+  const renderMediaViewer = (inkOverlay?: React.ReactNode) => {
     if (!currentVersion || !versionReady) {
       return (
         <div className="flex-1 flex items-center justify-center">
@@ -312,11 +325,11 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             overlay={
               <>
                 <AnnotationOverlay key={focusedCommentId ?? 'none'} />
-                {isDrawingMode && (
+                {inkOverlay ?? (isDrawingMode && (
                   <AnnotationCanvas
                     onSave={(data) => setAnnotationData(data)}
                   />
-                )}
+                ))}
               </>
             }
           />
@@ -353,6 +366,31 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       default:
         return null
     }
+  }
+
+  const flowView = (
+    <FlowView
+      renderMedia={(ink) => renderMediaViewer(ink)}
+      files={(allAssets ?? [asset]).map((a) => ({ id: a.id, name: a.name }))}
+      currentFileId={asset.id}
+      onSelectFile={navigateAsset}
+      getPlayhead={() => useReviewStore.getState().playheadTime}
+      onPause={() => seekTo(useReviewStore.getState().playheadTime, true)}
+      onSeek={(t) => seekTo(t, true)}
+      canComment={canComment}
+      onSendNotes={async (notes) => {
+        for (const n of notes) await createComment(n.text, n.t, undefined, n.annotation || undefined)
+        refetchComments()
+      }}
+      onApprove={approve}
+      approved={approved}
+      onExit={isNarrow ? () => router.push(`/projects/${projectId}`) : () => setPhoneView(false)}
+      exitLabel={isNarrow ? 'Back' : 'Desktop view'}
+    />
+  )
+
+  if (isNarrow) {
+    return <div className="absolute inset-0 overflow-hidden">{flowView}</div>
   }
 
   return (
@@ -425,6 +463,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             </button>
           )}
           <ShareDialog assetId={asset.id} assetName={asset.name} projectId={projectId} asset={asset} />
+          {isOwner && agentRequest && requestAgents.length > 0 && (
+            <SendToAgent requestId={agentRequest.id} agents={requestAgents} />
+          )}
           {canComment && (
             <button
               onClick={approve}
@@ -442,6 +483,17 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               {approved ? 'Approved' : 'Approve'}
             </button>
           )}
+          <button
+            onClick={() => setPhoneView((p) => !p)}
+            aria-pressed={phoneView}
+            className={cn(
+              'inline-flex h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors',
+              phoneView ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover',
+            )}
+          >
+            <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
+            Phone view
+          </button>
           <button
             onClick={() => setSidebarOpen((p) => !p)}
             className={cn(
@@ -463,6 +515,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       {/* ─── Main content: viewer + sidebar ────────────────────────────── */}
       {compareOpen && asset && currentVersion && canCompare(asset.asset_type, versions) ? (
         <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} />
+      ) : phoneView ? (
+        <div className="flex min-h-0 flex-1 justify-center bg-bg-secondary">
+          <div className="h-full w-full max-w-[430px] border-x border-border">{flowView}</div>
+        </div>
       ) : (
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left: viewer column */}

@@ -98,6 +98,11 @@ x-app-env: &app-env
   OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-freeframe-web}
   OIDC_SCOPE: ${OIDC_SCOPE:-}
   ADITOR_AUTH_FREEFRAME_CLIENT_SECRET: ${ADITOR_AUTH_FREEFRAME_CLIENT_SECRET:-}
+  # Agent-review platform: dictation + Telegram pushes (all optional, features no-op without them)
+  GROQ_API_KEY: ${GROQ_API_KEY:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+  TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
   # Outbound event feed to the hub - empty on a second instance.
   HUB_EVENTS_WEBHOOK_URL: ${HUB_EVENTS_WEBHOOK_URL:-}
   HUB_EVENTS_WEBHOOK_SECRET: ${HUB_EVENTS_WEBHOOK_SECRET:-}

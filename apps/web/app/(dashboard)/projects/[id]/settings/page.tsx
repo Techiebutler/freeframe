@@ -20,7 +20,9 @@ import {
   Check,
   X,
   Upload,
+  Bot,
 } from 'lucide-react'
+import { ConnectAgent } from '@/components/agents/connect-agent'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -599,6 +601,7 @@ export default function ProjectSettingsPage() {
             { value: 'branding', label: 'Branding', icon: Palette },
             { value: 'watermark', label: 'Watermark', icon: Droplets },
             { value: 'metadata', label: 'Metadata Fields', icon: List },
+            { value: 'agents', label: 'Agents', icon: Bot },
           ].map(({ value, label, icon: Icon }) => (
             <Tabs.Trigger
               key={value}
@@ -624,6 +627,9 @@ export default function ProjectSettingsPage() {
           </Tabs.Content>
           <Tabs.Content value="metadata">
             <MetadataTab projectId={projectId} />
+          </Tabs.Content>
+          <Tabs.Content value="agents">
+            <ConnectAgent projectId={projectId} />
           </Tabs.Content>
         </div>
       </Tabs.Root>

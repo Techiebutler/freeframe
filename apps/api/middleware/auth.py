@@ -110,3 +110,19 @@ def get_optional_user(
         return user
     except Exception:
         return None
+
+
+def get_agent(request: Request, db: Session = Depends(get_db)) -> "AgentContext":
+    """The paired agent behind `Authorization: Bearer ara_...`; it only ever acts inside its one project."""
+    from ..services.agents import presented_key, resolve_key
+    token = presented_key(request.headers.get("authorization"))
+    if token is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_agent_key")
+    return resolve_key(db, token)
+
+
+def get_optional_agent(request: Request, db: Session = Depends(get_db)) -> "Optional[AgentContext]":
+    """None for anyone without an ara_ key (a guest editor); a bad ara_ key still fails loudly."""
+    from ..services.agents import presented_key, resolve_key
+    token = presented_key(request.headers.get("authorization"))
+    return resolve_key(db, token) if token else None

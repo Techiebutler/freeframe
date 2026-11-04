@@ -309,6 +309,8 @@ def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: Session = Dep
         # An admin marks a project as a brand workspace (or unmarks a junk one) - this is what the
         # hand-in dropdown filters on.
         project.is_workspace = body.is_workspace
+    if body.agents_may_approve is not None:
+        project.agents_may_approve = body.agents_may_approve
     db.commit()
     db.refresh(project)
     resp = ProjectResponse.model_validate(project)

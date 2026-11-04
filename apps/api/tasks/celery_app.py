@@ -21,6 +21,8 @@ celery_app = Celery(
         "apps.api.tasks.product_feedback_tasks",
         "apps.api.tasks.checklist_tasks",
         "apps.api.tasks.iteration_tasks",
+        "apps.api.tasks.feedback_tasks",
+        "apps.api.tasks.agent_tasks",
     ],
 )
 
@@ -79,6 +81,8 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=settings.product_feedback_digest_minute_utc,
                             hour=settings.product_feedback_digest_hour_utc),
     },
+    "close-idle-feedback-rounds": {"task": "close_idle_feedback_rounds", "schedule": crontab(minute="*")},
+    "sweep-agent-handins": {"task": "sweep_agent_handins", "schedule": crontab(minute="*")},
     "advance-iteration-requests": {"task": "sweep_iteration_requests", "schedule": 30.0},
     "due-date-reminders": {
         "task": "send_due_date_reminders",

@@ -21,6 +21,9 @@ function stageOf(r: FileRequest): Stage | 'closed' {
   return r.status === 'held' ? 'corrections' : 'ready'
 }
 
+// Only failures the owner can fix; infra codes (briefing-unavailable, plan-api-unavailable, ...) stay quiet.
+const OWNER_ACTIONABLE = new Set(['source-not-authorized', 'card-unavailable', 'plan-failed', 'snapshot-identity-invalid'])
+
 type Position = { x: number; y: number; stage: string; width: number }
 
 export function ProjectKanban({ requests, paused, onShare, onDone, focusReady = false }: {
@@ -108,7 +111,7 @@ function ProjectCard({ request: r, stage, onShare, onDone }: { request: FileRequ
     <Link href={reviewHref(r)} className="kanban-title">{r.title}</Link>
     <p className="kanban-brand">{r.project_name}</p>
     <div className="kanban-card-status"><span className="kanban-status-dot" aria-hidden="true" />{label}</div>
-    {r.state === 'live' && r.checklist?.status === 'failed' && <button type="button" onClick={onShare} aria-label={`Briefing needs attention: ${r.title}`} className="press mt-2 min-h-11 text-left text-sm font-medium text-status-error underline underline-offset-4">Briefing needs attention</button>}
+    {r.state === 'live' && r.checklist?.status === 'failed' && OWNER_ACTIONABLE.has(r.checklist.error_code ?? '') && <button type="button" onClick={onShare} aria-label={`Briefing needs attention: ${r.title}`} className="press mt-2 min-h-11 text-left text-sm font-medium text-status-error underline underline-offset-4">Briefing needs attention</button>}
     {stage === 'ready' && <div className="mt-3 flex gap-2"><Link href={reviewHref(r)} aria-label={`Review ${r.title}`} className="press flex min-h-11 flex-1 items-center justify-center rounded-full border border-border text-[0.8125rem] font-medium hover:bg-bg-hover">Review</Link>{onDone && <button type="button" onClick={onDone} aria-label={`Mark ${r.title} done`} className="press flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent-muted text-[0.8125rem] font-medium text-accent"><CheckCheck size={14} />Done</button>}</div>}
     <div className="kanban-card-footer"><span className="inline-flex items-center gap-1.5"><FileVideo size={13} />{r.assets} {r.assets === 1 ? 'file' : 'files'}</span>{r.last_uploader_name && <span className="kanban-editor" title={r.last_uploader_name}><span aria-hidden="true" className="kanban-avatar">{r.last_uploader_name.charAt(0)}</span><span>{r.last_uploader_name}</span></span>}</div>
   </li>

@@ -13,6 +13,7 @@ import {
   Download,
   ArrowLeft,
   Columns2,
+  Smartphone,
   MessageSquare,
   User,
   FileText,
@@ -22,7 +23,11 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { GuestCommentInput } from '@/components/review/guest-comment-input'
+import { GuestCommentInput, IdentityForm, loadIdentity, type GuestIdentity } from '@/components/review/guest-comment-input'
+import { FlowView } from '@/components/review/flow-view'
+import { VideoFrameConstraint } from '@/components/review/video-player'
+import { useIsNarrow } from '@/hooks/use-is-narrow'
+import { guestDictate, postGuestNote } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
 
@@ -389,6 +394,8 @@ interface ShareTopBarProps {
   onToggleSidebar: () => void
   onBack?: () => void
   branding: ProjectBranding | null
+  phoneView?: boolean
+  onTogglePhoneView?: () => void
 }
 
 function ShareTopBar({
@@ -402,6 +409,8 @@ function ShareTopBar({
   onToggleSidebar,
   onBack,
   branding,
+  phoneView,
+  onTogglePhoneView,
 }: ShareTopBarProps) {
   const [downloading, setDownloading] = React.useState(false)
 
@@ -485,6 +494,20 @@ function ShareTopBar({
           </button>
         )}
 
+        {onTogglePhoneView && (
+          <button
+            onClick={onTogglePhoneView}
+            aria-pressed={!!phoneView}
+            className={cn(
+              'hidden md:inline-flex h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors',
+              phoneView ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white hover:bg-white/10',
+            )}
+          >
+            <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
+            Phone view
+          </button>
+        )}
+
         <button
           onClick={onToggleSidebar}
           className={cn(
@@ -511,10 +534,14 @@ interface ShareMediaViewerProps {
   token: string
   streamUrl: string | null
   streamLoading: boolean
+  /** Flow view: the page needs the video element, and mounts the ink layer inside the picture. */
+  videoRef?: React.RefObject<HTMLVideoElement>
+  overlay?: React.ReactNode
 }
 
-function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMediaViewerProps) {
-  const videoRef = React.useRef<HTMLVideoElement>(null)
+function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: externalVideoRef, overlay }: ShareMediaViewerProps) {
+  const ownVideoRef = React.useRef<HTMLVideoElement>(null)
+  const videoRef = externalVideoRef ?? ownVideoRef
   const audioRef = React.useRef<HTMLAudioElement>(null)
   const [fatalError, setFatalError] = React.useState<string | null>(null)
 
@@ -610,6 +637,14 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
               <p className="text-sm text-red-400">{fatalError}</p>
             </div>
           ) : streamUrl ? (
+            overlay ? (
+              <div className="relative h-full w-full">
+                <video ref={videoRef} controls className="absolute inset-0 h-full w-full object-contain" preload="metadata" playsInline>
+                  Your browser does not support video playback.
+                </video>
+                <VideoFrameConstraint videoRef={videoRef}>{overlay}</VideoFrameConstraint>
+              </div>
+            ) : (
             <video
               ref={videoRef}
               controls
@@ -619,6 +654,7 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading }: ShareMedia
             >
               Your browser does not support video playback.
             </video>
+            )
           ) : (
             <div className="flex flex-col items-center gap-2">
               <Video className="h-10 w-10 text-zinc-700" />
@@ -847,6 +883,13 @@ function ShareViewer({
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
   const [commentKey, setCommentKey] = React.useState(0)
+  const isNarrow = useIsNarrow()
+  const [phoneView, setPhoneView] = React.useState(false)
+  const videoRef = React.useRef<HTMLVideoElement>(null)
+  const [identity, setIdentity] = React.useState<GuestIdentity | null>(null)
+  const [askIdentity, setAskIdentity] = React.useState(false)
+  const [flowApproved, setFlowApproved] = React.useState(false)
+  React.useEffect(() => { setIdentity(loadIdentity()) }, [])
   const [sidebarOpen, setSidebarOpen] = React.useState(() => {
     if (SHARE_COMMENTS_COLLAPSED) return false
     return typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
@@ -890,6 +933,67 @@ function ShareViewer({
 
   const displayName = shareName || branding?.custom_title || 'FreeFrame'
 
+  const canComment = permission === 'comment' || permission === 'approve'
+  const flow = (isNarrow || phoneView) && asset.asset_type === 'video'
+  const flowVideo = () => videoRef.current
+  const flowSendNotes = async (notes: { text: string; t: number; annotation: Record<string, unknown> | null }[]) => {
+    if (!identity) { setAskIdentity(true); throw new Error('identity') }
+    for (const n of notes) await postGuestNote(token, n, { identity, assetId: asset.id })
+    setCommentKey((k) => k + 1)
+  }
+  const flowApprove = async () => {
+    const res = await fetch(`${API_URL}/share/${token}/approve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: asset.id }),
+    })
+    if (!res.ok) throw new Error('Failed to approve')
+    setFlowApproved(true)
+  }
+
+  if (flow) {
+    return (
+      <div className="absolute inset-0 flex flex-col bg-zinc-950 text-white overflow-hidden">
+        {!isNarrow && (
+          <ShareTopBar
+            shareName={displayName} assetName={asset.name} allowDownload={allowDownload} downloadUrl={streamUrl}
+            token={token} assetId={asset.id} sidebarOpen={false} onToggleSidebar={() => setPhoneView(false)}
+            onBack={onBack} branding={branding} phoneView onTogglePhoneView={() => setPhoneView(false)}
+          />
+        )}
+        <div className="flex min-h-0 flex-1 justify-center">
+          <div className="h-full w-full max-w-[430px] md:border-x md:border-white/[0.06]">
+            <FlowView
+              renderMedia={(ink) => (
+                <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} />
+              )}
+              files={[{ id: asset.id, name: asset.name }]}
+              currentFileId={asset.id}
+              onSelectFile={() => {}}
+              getPlayhead={() => flowVideo()?.currentTime ?? 0}
+              onPause={() => flowVideo()?.pause()}
+              onSeek={(t) => { const v = flowVideo(); if (v) { v.currentTime = t; v.pause() } }}
+              canComment={canComment}
+              canApprove={permission === 'approve'}
+              onSendNotes={flowSendNotes}
+              onApprove={flowApprove}
+              approved={flowApproved}
+              dictate={(audio) => guestDictate(token, audio)}
+              onExit={isNarrow ? undefined : () => setPhoneView(false)}
+              exitLabel="Desktop view"
+            />
+          </div>
+        </div>
+        {askIdentity && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center">
+            <div className="w-full max-w-sm overflow-hidden rounded-t-2xl bg-bg-primary sm:rounded-2xl" role="dialog" aria-label="Who are you?">
+              <IdentityForm onIdentified={(id) => { setIdentity(id); setAskIdentity(false) }} />
+              <p className="px-4 pb-4 text-xs text-text-tertiary">Your notes are kept. Tap Send again after this.</p>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="absolute inset-0 flex flex-col bg-zinc-950 text-white overflow-hidden">
       {/* Top bar */}
@@ -904,6 +1008,8 @@ function ShareViewer({
         onToggleSidebar={() => setSidebarOpen((p) => !p)}
         onBack={onBack}
         branding={branding}
+        phoneView={false}
+        onTogglePhoneView={asset.asset_type === 'video' ? () => setPhoneView(true) : undefined}
       />
 
       {/* Main content: viewer + sidebar */}

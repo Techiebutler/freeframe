@@ -42,7 +42,7 @@ from ..schemas.comment import (
     ReviewCommentCreate,
     public_review_source,
 )
-from ..services import brand_loop, s3_service
+from ..services import brand_loop, feedback_rounds, s3_service
 from ..services import comment_export
 from ..services.permissions import (
     require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
@@ -400,6 +400,7 @@ def create_comment(
 
     db.commit()
     db.refresh(comment)
+    feedback_rounds.on_comment(db, comment.id)
     brand_loop.queue_comment(background_tasks, db, comment, asset, author_email=current_user.email)
     # A logged-in client (non-staff account) commenting in the app routes to the responsible editor,
     # same as an anonymous share-link comment. announce_client_comment no-ops for team members.
@@ -448,6 +449,7 @@ def reply_to_comment(
 
     db.commit()
     db.refresh(reply)
+    feedback_rounds.on_comment(db, reply.id)
     brand_loop.queue_comment(background_tasks, db, reply, asset, author_email=current_user.email)
     # A logged-in client's reply is still client feedback - route it to the editor too.
     from ..services import hub_events
@@ -1106,6 +1108,7 @@ def guest_comment(
     db.add(activity)
     db.commit()
 
+    feedback_rounds.on_comment(db, comment.id)
     brand_loop.queue_comment(background_tasks, db, comment, asset, share_token=token,
                              author_email=current_user.email if current_user else guest_email)
     from ..services import hub_events

@@ -7,14 +7,14 @@ import { Button } from '@/components/ui/button'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface GuestIdentity {
+export interface GuestIdentity {
   email: string
   name: string
 }
 
 const STORAGE_KEY = 'freeframe_guest_identity'
 
-function loadIdentity(): GuestIdentity | null {
+export function loadIdentity(): GuestIdentity | null {
   if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -25,7 +25,7 @@ function loadIdentity(): GuestIdentity | null {
   }
 }
 
-function saveIdentity(identity: GuestIdentity) {
+export function saveIdentity(identity: GuestIdentity) {
   if (typeof window === 'undefined') return
   localStorage.setItem(STORAGE_KEY, JSON.stringify(identity))
 }
@@ -41,7 +41,7 @@ interface IdentityFormProps {
   onIdentified: (identity: GuestIdentity) => void
 }
 
-function IdentityForm({ onIdentified }: IdentityFormProps) {
+export function IdentityForm({ onIdentified }: IdentityFormProps) {
   const [name, setName] = React.useState('')
   const [email, setEmail] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)

@@ -38,6 +38,8 @@ class Project(Base):
     # may open. Set explicitly by a superadmin; never inferred from the name, never backfilled.
     # Deliberately NOT unique: one brand can have several workspaces (audibene has more than one).
     autoreview_brand_slug: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    # Agents may approve only when the owner says so; off by default.
+    agents_may_approve: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 

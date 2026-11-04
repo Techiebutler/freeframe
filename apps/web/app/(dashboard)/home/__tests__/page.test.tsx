@@ -109,3 +109,15 @@ it('does not fall back to an upload link when a delivery token is missing', () =
   expect(screen.getByRole('dialog')).toHaveTextContent('file-sharing link is unavailable')
   expect(screen.queryByRole('link', { name: 'Open upload page' })).not.toBeInTheDocument()
 })
+
+it('badges agents in the ranking with their program and leaves humans unbadged', () => {
+  state.editors = [
+    { email: 'agent+1@agents.autoreview.local', name: 'Hermes Box (hermes)', videos: 4, rated: 4, first_try_rate: 1, avg_versions: 1, open_must_fixes: 0, kind: 'agent', program: 'claude-code' },
+    { email: 'h@example.test', name: 'Hana', videos: 4, rated: 4, first_try_rate: 0.5, avg_versions: 1, open_must_fixes: 0, kind: 'human', program: null },
+  ]
+  render(<HomePage />)
+  const rows = within(screen.getByRole('list', { name: 'Editor accuracy ranking' })).getAllByRole('listitem')
+  expect(rows[0]).toHaveTextContent('Claude Code')
+  expect(rows[0]).not.toHaveTextContent('agents.autoreview.local')
+  expect(rows[1]).not.toHaveTextContent('Claude Code')
+})

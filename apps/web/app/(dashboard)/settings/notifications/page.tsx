@@ -4,6 +4,7 @@ import * as React from "react";
 import { Bell, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { ConnectTelegram } from "@/components/agents/connect-telegram";
 
 const commentNotifications = [
   {
@@ -113,6 +114,8 @@ export default function NotificationsPage() {
           <Loader2 className="h-4 w-4 animate-spin text-text-tertiary" />
         )}
       </div>
+
+      <ConnectTelegram connected={!!user?.preferences?.telegram_chat_id} />
 
       {/* Email Frequency */}
       <section className="space-y-4">

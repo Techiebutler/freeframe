@@ -30,6 +30,8 @@ class User(Base):
     # existed before, and every invite / directory / setup account, is staff (server default true).
     # Only a self-signed-up customer is created with False, and sees nothing but its own projects.
     is_staff: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    # human | agent. Agents are editors of exactly one project (apps/api/models/agent.py).
+    kind: Mapped[str] = mapped_column(String(10), default="human", server_default="human", nullable=False)
     suite_account_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
     suite_brand_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
     # Trusted Suite attestation; browser-editable preferences must never grant access.

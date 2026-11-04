@@ -15,6 +15,7 @@ import { FolderArt } from '@/components/v2/folder-art'
 import { Avatar } from '@/components/shared/avatar'
 import { LinkCard } from '@/components/v2/link-card'
 import { SavedChecklist } from '@/components/v2/checklist'
+import { ProgramBadge } from '@/components/agents/program-badge'
 
 type Filter = 'All' | 'Ready'
 
@@ -119,12 +120,12 @@ export default function HomePage() {
                     <summary className="leaderboard-summary">
                       <span className="text-center text-[0.75rem] tabular-nums text-text-secondary" aria-label={known ? `Rank ${i + 1}` : 'Unranked'}>{known ? i + 1 : '—'}</span>
                       <span className="relative inline-flex" aria-hidden="true"><Avatar name={editor.name || editor.email} />{known && i === 0 && <Crown size={13} className="leaderboard-crown" />}</span>
-                      <span className="min-w-0 break-words text-[0.875rem] font-medium [overflow-wrap:anywhere]">{editor.name || editor.email}{known && editor.rated < 5 && <span className="ml-1.5 text-[0.6875rem] font-normal text-text-secondary" title="Fewer than 5 reviewed videos">Small sample</span>}</span>
+                      <span className="min-w-0 break-words text-[0.875rem] font-medium [overflow-wrap:anywhere]">{editor.name || editor.email}{editor.kind === 'agent' && <span className="ml-1.5 align-middle"><ProgramBadge program={editor.program ?? 'other'} /></span>}{known && editor.rated < 5 && <span className="ml-1.5 text-[0.6875rem] font-normal text-text-secondary" title="Fewer than 5 reviewed videos">Small sample</span>}</span>
                       <span className="inline-flex items-center gap-1.5">{outlier && <span className="text-accent" title={outlier.direction === 'above' ? 'Above average' : 'Below average'}><span aria-hidden="true">{outlier.direction === 'above' ? '↑' : '↓'}</span><span className="sr-only">{outlier.direction === 'above' ? 'Above average' : 'Below average'}</span></span>}{known ? <strong className="text-base font-semibold tabular-nums">{Math.round(editor.first_try_rate! * 100)}%</strong> : <span className="text-[0.75rem] text-text-secondary" aria-label="Not reviewed yet">—<span className="sr-only">Not reviewed yet</span></span>}</span>
                       <ChevronDown size={14} className="leaderboard-chevron text-text-secondary" />
                     </summary>
                     <div className="leaderboard-detail space-y-1 text-[0.75rem] leading-relaxed text-text-secondary">
-                      {editor.name && <p className="break-words [overflow-wrap:anywhere]">{editor.email}</p>}
+                      {editor.name && editor.kind !== 'agent' && <p className="break-words [overflow-wrap:anywhere]">{editor.email}</p>}
                       <p>{editor.rated} of {editor.videos} reviewed</p>
                       <p>{editor.avg_versions === null ? 'Average versions unavailable' : `${editor.avg_versions.toFixed(1)} versions per video on average`}</p>
                       <p>{editor.open_must_fixes} open {editor.open_must_fixes === 1 ? 'must-fix' : 'must-fixes'}</p>

@@ -92,6 +92,13 @@ app.include_router(comment_history.router)
 app.include_router(portal.router)
 from .routers import iterations
 app.include_router(iterations.router)
+from .routers import agents as agents_owner, agent as agent_api
+app.include_router(agents_owner.router)
+app.include_router(agent_api.router)
+from .routers import feedback as feedback_api
+app.include_router(feedback_api.router)
+from .routers import mobile
+app.include_router(mobile.router)
 
 @app.get("/health")
 def health():

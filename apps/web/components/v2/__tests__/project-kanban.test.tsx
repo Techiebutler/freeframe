@@ -100,7 +100,7 @@ it('keeps a late briefing failure visible and opens the existing link details fo
   const pending=request('Launch', {assets:0,checklist_binding_id:'b1',checklist:{id:'b1',status:'queued',requirements:[],limitations:[]}})
   const view=render(<ProjectKanban requests={[pending]} paused={false} onShare={onShare} />)
   expect(screen.queryByRole('button',{name:'Briefing needs attention: Launch'})).not.toBeInTheDocument()
-  const failed={...pending,checklist:{...pending.checklist!,status:'failed' as const,error_code:'briefing-unavailable'}}
+  const failed={...pending,checklist:{...pending.checklist!,status:'failed' as const,error_code:'source-not-authorized'}}
   view.rerender(<ProjectKanban requests={[failed]} paused={false} onShare={onShare} />)
   fireEvent.click(screen.getByRole('button',{name:'Briefing needs attention: Launch'}))
   expect(onShare).toHaveBeenCalledWith(failed)
@@ -116,4 +116,10 @@ it('moves finished projects off the board one by one or all at once', () => {
   expect(onDone).toHaveBeenLastCalledWith([a])
   fireEvent.click(screen.getByRole('button',{name:'All done'}))
   expect(onDone).toHaveBeenLastCalledWith([a,b])
+})
+
+it.each(['briefing-unavailable','plan-api-unavailable','review-unconfigured','plan-unavailable'])('stays quiet for the infra failure %s', code => {
+  const failed=request('Launch', {assets:0,checklist_binding_id:'b1',checklist:{id:'b1',status:'failed' as const,requirements:[],limitations:[],error_code:code}})
+  render(<ProjectKanban requests={[failed]} paused={false} onShare={vi.fn()} />)
+  expect(screen.queryByRole('button',{name:'Briefing needs attention: Launch'})).not.toBeInTheDocument()
 })

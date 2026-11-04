@@ -17,11 +17,15 @@ import {
   PanelRightClose,
   PanelRightOpen,
   ArrowLeft,
+  Smartphone,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getUsableAccessToken } from '@/lib/auth'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
+import { FlowView } from '@/components/review/flow-view'
+import { useIsNarrow } from '@/hooks/use-is-narrow'
+import { guestDictate } from '@/lib/share-flow'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -696,7 +700,9 @@ function ShareReviewInner({
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
-  const { currentVersion, isDrawingMode, focusedCommentId } = useReviewStore()
+  const { currentVersion, isDrawingMode, focusedCommentId, seekTo } = useReviewStore()
+  const isNarrow = useIsNarrow()
+  const [phoneView, setPhoneView] = React.useState(false)
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
@@ -754,6 +760,55 @@ function ShareReviewInner({
     return <div className="flex items-center justify-center h-screen bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
   }
 
+  const flow = (isNarrow || phoneView) && asset.asset_type === 'video' && versionReady && !!VideoPlayer
+  if (flow) {
+    const sendNotes = async (notes: { text: string; t: number; annotation: Record<string, unknown> | null }[]) => {
+      const hasAuth = (await getUsableAccessToken()) !== null
+      const hasGuest = !!localStorage.getItem('ff_guest_identity')
+      if (!hasAuth && !hasGuest) { setShowGuestPrompt(true); throw new Error('identity') }
+      for (const n of notes) await submitComment(n.text, n.t, undefined, n.annotation ?? undefined)
+    }
+    return (
+      <div className="flex flex-col h-dvh bg-bg-primary text-text-primary">
+        <div className="flex min-h-0 flex-1 justify-center">
+          <div className="h-full w-full max-w-[430px] md:border-x md:border-border">
+            <FlowView
+              renderMedia={(ink) => (
+                <VideoPlayer
+                  assetId={asset.id}
+                  comments={comments}
+                  className="flex-1 min-h-0"
+                  initialStreamUrl={(asset as any).stream_url}
+                  overlay={<>{AnnotationOverlay && <AnnotationOverlay key={focusedCommentId ?? 'none'} />}{ink}</>}
+                />
+              )}
+              files={[{ id: asset.id, name: assetName }]}
+              currentFileId={asset.id}
+              onSelectFile={() => {}}
+              getPlayhead={() => useReviewStore.getState().playheadTime}
+              onPause={() => seekTo(useReviewStore.getState().playheadTime, true)}
+              onSeek={(t: number) => seekTo(t, true)}
+              canComment={canComment}
+              canApprove={false}
+              onSendNotes={sendNotes}
+              onApprove={async () => {}}
+              approved={false}
+              dictate={(audio) => guestDictate(token, audio, shareSession)}
+              onExit={isNarrow ? onBack : () => setPhoneView(false)}
+              exitLabel={isNarrow ? 'Files' : 'Desktop view'}
+            />
+          </div>
+        </div>
+        {showGuestPrompt && (
+          <GuestIdentityPrompt
+            onSave={handleGuestIdentitySave}
+            onCancel={() => { setShowGuestPrompt(false); pendingCommentRef.current = null }}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-dvh bg-bg-primary text-text-primary">
       {/* Top bar — same style as project review */}
@@ -771,6 +826,11 @@ function ShareReviewInner({
           {allowDownload && (
             <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
               <Download className="h-3 w-3" /> Download
+            </button>
+          )}
+          {asset.asset_type === 'video' && (
+            <button onClick={() => setPhoneView(true)} aria-pressed={false} className="hidden md:inline-flex h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
+              <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />Phone view
             </button>
           )}
           <button onClick={() => setSidebarOpen(v => !v)} aria-label={sidebarOpen ? 'Hide comments' : 'Show comments'} aria-expanded={sidebarOpen} className="flex items-center justify-center h-11 w-11 md:h-8 md:w-8 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
