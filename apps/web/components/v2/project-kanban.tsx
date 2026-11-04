@@ -23,10 +23,12 @@ function stageOf(r: FileRequest): Stage | 'closed' {
 
 type Position = { x: number; y: number; stage: string; width: number }
 
-export function ProjectKanban({ requests, paused, onShare, focusReady = false }: {
+export function ProjectKanban({ requests, paused, onShare, onDone, focusReady = false }: {
   requests: FileRequest[]
   paused: boolean
   onShare: (request: FileRequest) => void
+  /** Moves finished projects off the board into "Done". */
+  onDone?: (requests: FileRequest[]) => void
   focusReady?: boolean
 }) {
   const board = React.useRef<HTMLDivElement>(null)
@@ -77,9 +79,9 @@ export function ProjectKanban({ requests, paused, onShare, focusReady = false }:
       {STAGES.filter(stage => !focusReady || stage.id === 'ready').map(({ id, label, icon: Icon }) => {
         const items = requests.filter(r => stageOf(r) === id)
         return <section key={id} aria-label={label} className="kanban-lane" data-lane={id}>
-          <div className="kanban-lane-heading"><span className="kanban-stage-icon"><Icon size={17} /></span><h3>{label}</h3><span className="kanban-count">{items.length}</span></div>
+          <div className="kanban-lane-heading"><span className="kanban-stage-icon"><Icon size={17} /></span><h3>{label}</h3><span className="kanban-count">{items.length}</span>{id === 'ready' && onDone && items.length > 1 && <button type="button" onClick={() => onDone(items)} className="press ml-auto min-h-11 px-2 text-[0.75rem] font-medium text-text-secondary hover:text-text-primary">All done</button>}</div>
           <ul aria-label={`${label} projects`} className="kanban-cards">
-            {items.map(r => <ProjectCard key={r.id} request={r} stage={id} onShare={() => onShare(r)} />)}
+            {items.map(r => <ProjectCard key={r.id} request={r} stage={id} onShare={() => onShare(r)} onDone={onDone && (() => onDone([r]))} />)}
           </ul>
           {!items.length && <p className="kanban-empty">No projects here</p>}
         </section>
@@ -87,24 +89,27 @@ export function ProjectKanban({ requests, paused, onShare, focusReady = false }:
     </div>
     <p className="mt-3 text-sm text-text-secondary">Ready to go means the current videos passed review with no required changes. Brand approval is a separate decision in FreeFrame.</p>
     {!!closed.length && <details className="mt-4 rounded-2xl border border-border px-4">
-      <summary className="min-h-11 cursor-pointer py-3 text-[0.8125rem] text-text-secondary"><span>Closed requests</span> <span className="ml-1">{closed.length}</span></summary>
+      <summary className="min-h-11 cursor-pointer py-3 text-[0.8125rem] text-text-secondary"><span>Done</span> <span className="ml-1">{closed.length}</span></summary>
       <ul className="grid gap-3 pb-4 sm:grid-cols-2 lg:grid-cols-4">{closed.map(r => <ProjectCard key={r.id} request={r} stage="closed" onShare={() => onShare(r)} />)}</ul>
     </details>}
   </div>
 }
 
-function ProjectCard({ request: r, stage, onShare }: { request: FileRequest; stage: Stage | 'closed'; onShare: () => void }) {
+/** Opening a project goes straight to its player, never to the file manager. */
+export const reviewHref = (r: FileRequest) => `/projects/${r.project_id}/review${r.folder_id ? `?folder=${encodeURIComponent(r.folder_id)}` : ''}`
+
+function ProjectCard({ request: r, stage, onShare, onDone }: { request: FileRequest; stage: Stage | 'closed'; onShare: () => void; onDone?: () => void }) {
   const label = r.status === 'unavailable' ? 'Review unavailable' : stage === 'editor' ? 'Waiting for files' : stage === 'review' ? 'Reviewing files' : stage === 'corrections' ? r.open_must_fixes > 0 ? `${r.open_must_fixes} ${r.open_must_fixes === 1 ? 'fix' : 'fixes'} to make` : 'With editor for updates' : stage === 'ready' ? 'Ready to go' : r.state === 'revoked' ? 'Closed' : 'Expired'
   return <li className="kanban-card" data-request-id={r.id} data-stage={stage}>
     <div className="flex items-start justify-between gap-2">
-      <div className="kanban-art" aria-hidden="true"><FolderArt size={48} label="" />{stage === 'review' && <span className="kanban-scan" />}{stage === 'corrections' && <PencilLine className="kanban-pencil" size={19} />}{stage === 'ready' && <span className="kanban-check"><CheckCheck size={13} /></span>}</div>
-      {r.state === 'live' && stage !== 'ready' && <button type="button" onClick={onShare} aria-label={`Share ${r.title}`} className="press kanban-share"><Share2 size={15} /></button>}
+      <div className="kanban-art" aria-hidden="true"><FolderArt size={36} label="" />{stage === 'review' && <span className="kanban-scan" />}{stage === 'corrections' && <PencilLine className="kanban-pencil" size={19} />}{stage === 'ready' && <span className="kanban-check"><CheckCheck size={13} /></span>}</div>
+      {r.state === 'live' && <button type="button" onClick={onShare} aria-label={`Share ${r.title}`} className="press kanban-share"><Share2 size={15} /></button>}
     </div>
-    <Link href={`/projects/${r.project_id}${r.folder_id ? `?folder=${encodeURIComponent(r.folder_id)}` : ''}`} className="kanban-title">{r.title}</Link>
+    <Link href={reviewHref(r)} className="kanban-title">{r.title}</Link>
     <p className="kanban-brand">{r.project_name}</p>
     <div className="kanban-card-status"><span className="kanban-status-dot" aria-hidden="true" />{label}</div>
     {r.state === 'live' && r.checklist?.status === 'failed' && <button type="button" onClick={onShare} aria-label={`Briefing needs attention: ${r.title}`} className="press mt-2 min-h-11 text-left text-sm font-medium text-status-error underline underline-offset-4">Briefing needs attention</button>}
-    {stage === 'ready' && <div className="mt-3 flex gap-2"><Link href={`/projects/${r.project_id}${r.folder_id ? `?folder=${encodeURIComponent(r.folder_id)}` : ''}`} aria-label={`Preview ${r.title}`} className="press flex min-h-11 flex-1 items-center justify-center rounded-full border border-border text-[0.8125rem] font-medium hover:bg-bg-hover">Preview</Link><button type="button" onClick={onShare} aria-label={`Share ${r.title}`} className="press flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent-muted text-[0.8125rem] font-medium text-accent"><Share2 size={14} />Share</button></div>}
+    {stage === 'ready' && <div className="mt-3 flex gap-2"><Link href={reviewHref(r)} aria-label={`Review ${r.title}`} className="press flex min-h-11 flex-1 items-center justify-center rounded-full border border-border text-[0.8125rem] font-medium hover:bg-bg-hover">Review</Link>{onDone && <button type="button" onClick={onDone} aria-label={`Mark ${r.title} done`} className="press flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent-muted text-[0.8125rem] font-medium text-accent"><CheckCheck size={14} />Done</button>}</div>}
     <div className="kanban-card-footer"><span className="inline-flex items-center gap-1.5"><FileVideo size={13} />{r.assets} {r.assets === 1 ? 'file' : 'files'}</span>{r.last_uploader_name && <span className="kanban-editor" title={r.last_uploader_name}><span aria-hidden="true" className="kanban-avatar">{r.last_uploader_name.charAt(0)}</span><span>{r.last_uploader_name}</span></span>}</div>
   </li>
 }
