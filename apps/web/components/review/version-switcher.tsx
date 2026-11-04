@@ -3,7 +3,7 @@
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import * as Tooltip from '@radix-ui/react-tooltip'
-import { AlertCircle, Loader2, CheckCircle2, ChevronDown, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react'
+import { AlertCircle, Loader2, CheckCircle2, ChevronDown, MoreHorizontal, Pin, RotateCcw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api, ApiError } from '@/lib/api'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -37,7 +37,7 @@ export const versionStatusConfig: Record<
   },
 }
 
-/** What deleting or restoring a version answers with. */
+/** What deleting, restoring or setting the current version answers with. */
 interface VersionChangeResponse {
   latest_version: AssetVersion | null
 }
@@ -81,12 +81,18 @@ interface VersionSwitcherProps {
   versions: AssetVersion[]
   className?: string
   /**
-   * Show each version's ⋯ menu (delete, restore) and the deleted versions that
-   * can still be restored. Only for editors and above; never on a share page.
+   * Show each version's ⋯ menu (set as current, delete, restore) and the
+   * deleted versions that can still be restored. Only for editors and above;
+   * never on a share page.
    */
   canDelete?: boolean
-  /** Called once a version is deleted or restored, with what the server now reports as latest. */
+  /**
+   * Called once a version is deleted, restored or set as current, with what
+   * the server now reports as latest.
+   */
   onVersionsChanged?: (latest: AssetVersion | null) => void
+  /** Called once `version` is the current version, so the page can say so. */
+  onCurrentVersionSet?: (version: AssetVersion) => void
   /**
    * Called when the version on screen was deleted and the switcher moved to
    * `now`, so the page can say so. Nothing else ever changes the view.
@@ -102,16 +108,17 @@ const rowItemClass =
   'flex-1 flex items-center justify-between gap-3 px-2.5 py-2 rounded-lg text-sm cursor-pointer outline-none transition-colors'
 
 export function VersionSwitcher({
-  versions, className, canDelete = false, onVersionsChanged, onShownVersionDeleted,
+  versions, className, canDelete = false, onVersionsChanged, onShownVersionDeleted, onCurrentVersionSet,
 }: VersionSwitcherProps) {
   const currentVersion = useReviewStore((s) => s.currentVersion)
   const setCurrentVersion = useReviewStore((s) => s.setCurrentVersion)
   const [pendingDelete, setPendingDelete] = React.useState<AssetVersion | null>(null)
   const [deleteError, setDeleteError] = React.useState<string | null>(null)
   const [deleted, setDeleted] = React.useState<DeletedAssetVersion[]>([])
-  const [restoreError, setRestoreError] = React.useState<string | null>(null)
-  // Held here so a restore can keep the menu open until it has an answer: a
-  // refusal is shown in the menu, a success closes it.
+  const [menuError, setMenuError] = React.useState<string | null>(null)
+  // Held here so a restore or setting the current version can keep the menu
+  // open until it has an answer: a refusal is shown in the menu, a success
+  // closes it.
   const [menuOpen, setMenuOpen] = React.useState(false)
   const triggerRef = React.useRef<HTMLButtonElement>(null)
   // A pick that opens a dialog runs once the menu has closed (see useAfterClose).
@@ -153,12 +160,15 @@ export function VersionSwitcher({
       setDeleteError(err instanceof ApiError ? err.detail : 'Could not delete this version.')
       throw err
     }
-    // The deleted version cannot stay on screen. Move to the newest one left
-    // that can be watched, which is what opening the asset would pick, and to
-    // the server's latest when none of them is ready.
+    // The deleted version cannot stay on screen. Move to what opening the
+    // asset would pick: the current version if it is another one, else the
+    // newest one left that can be watched (deleting the current version ends
+    // the setting), and the server's latest when none of them is ready.
     const remaining = sorted.filter((v) => v.id !== target.id)
     const next =
-      [...remaining].reverse().find((v) => v.processing_status === 'ready') ?? latest
+      remaining.find((v) => v.is_current) ??
+      [...remaining].reverse().find((v) => v.processing_status === 'ready') ??
+      latest
     if (useReviewStore.getState().currentVersion?.id === target.id) {
       if (next) setCurrentVersion(next)
       onShownVersionDeleted?.(target, next)
@@ -167,8 +177,29 @@ export function VersionSwitcher({
     onVersionsChanged?.(latest)
   }
 
+  async function setAsCurrent(target: AssetVersion) {
+    setMenuError(null)
+    let latest: AssetVersion | null
+    try {
+      const res = await api.put<VersionChangeResponse>(
+        `/assets/${target.asset_id}/current-version`, { version_id: target.id },
+      )
+      latest = res?.latest_version ?? null
+    } catch (err) {
+      setMenuError(
+        `v${target.version_number}: ${err instanceof ApiError ? err.detail : 'Could not set the current version.'}`,
+      )
+      return
+    }
+    // The view stays where it is: what is on screen is the viewer's choice,
+    // the current version is what everyone else opens with.
+    setMenuOpen(false)
+    onVersionsChanged?.(latest)
+    onCurrentVersionSet?.(target)
+  }
+
   async function restore(target: DeletedAssetVersion) {
-    setRestoreError(null)
+    setMenuError(null)
     let latest: AssetVersion | null
     try {
       const res = await api.post<VersionChangeResponse>(
@@ -176,7 +207,7 @@ export function VersionSwitcher({
       )
       latest = res?.latest_version ?? null
     } catch (err) {
-      setRestoreError(
+      setMenuError(
         `v${target.version_number}: ${err instanceof ApiError ? err.detail : 'Could not restore this version.'}`,
       )
       refreshDeleted()
@@ -211,7 +242,7 @@ export function VersionSwitcher({
       <DropdownMenu.Root
         open={menuOpen}
         onOpenChange={(open) => {
-          if (open) setRestoreError(null)
+          if (open) setMenuError(null)
           setMenuOpen(open)
         }}
       >
@@ -280,6 +311,10 @@ export function VersionSwitcher({
                   version.processing_status === 'uploading' ||
                   version.processing_status === 'processing'
                 const blocker = canDelete ? deleteVersionBlocker(version, sorted) : null
+                // Only a ready version can be the current one, and the current
+                // one has nothing to be set to.
+                const isCurrent = row.version.is_current === true
+                const settable = version.processing_status === 'ready' && row.version.is_current === false
                 return (
                   <div key={version.id} data-testid={`version-row-v${version.version_number}`} className="flex items-center gap-0.5 mx-1">
                     <DropdownMenu.Item
@@ -293,7 +328,14 @@ export function VersionSwitcher({
                         isDisabled && 'opacity-50 cursor-not-allowed',
                       )}
                     >
-                      <span>v{version.version_number}</span>
+                      <span className="inline-flex items-center gap-1.5">
+                        v{version.version_number}
+                        {isCurrent && (
+                          <span className="rounded px-1 py-px text-[10px] font-medium leading-none bg-accent/15 text-accent">
+                            Current
+                          </span>
+                        )}
+                      </span>
                       <span
                         className={cn('inline-flex items-center gap-1 text-[11px]', statusCfg.className)}
                         title={statusCfg.label}
@@ -304,6 +346,18 @@ export function VersionSwitcher({
                     </DropdownMenu.Item>
                     {canDelete && (
                       <VersionActions version={version.version_number} unavailable={blocker}>
+                        {settable && (
+                          <DropdownMenu.Item
+                            className={menuItemClass}
+                            onSelect={(e) => {
+                              e.preventDefault()
+                              void setAsCurrent(row.version)
+                            }}
+                          >
+                            <Pin className="h-3.5 w-3.5 text-text-tertiary" />
+                            Set as current version
+                          </DropdownMenu.Item>
+                        )}
                         <DropdownMenu.Item
                           className={menuDangerItemClass}
                           onSelect={() => schedule(() => {
@@ -319,9 +373,9 @@ export function VersionSwitcher({
                   </div>
                 )
               })}
-              {restoreError && (
+              {menuError && (
                 <p role="alert" className="mx-1 px-2.5 pt-1 text-[11px] text-status-error max-w-[240px]">
-                  {restoreError}
+                  {menuError}
                 </p>
               )}
             </DropdownMenu.Content>
@@ -366,10 +420,11 @@ const actionsTriggerClass =
  * nothing, so the submenu does not spring open on the way to another row.
  *
  * `unavailable` greys it out instead, with the reason as a tooltip on hover and
- * on keyboard focus: it is set when the ⋯ has no entry to offer. Today Delete
- * is its only entry; once it holds others, it is unavailable only when none
- * of them is. It stays a focusable item rather than a disabled one, which the
- * arrow keys would skip, so the reason can be reached from the keyboard too.
+ * on keyboard focus: it is set when Delete is refused. Set as current is then
+ * never on offer either: Delete is refused for the last ready version left,
+ * and that one is the current version already. It stays
+ * a focusable item rather than a disabled one, which the arrow keys would
+ * skip, so the reason can be reached from the keyboard too.
  */
 function VersionActions({
   version, unavailable = null, children,
@@ -442,18 +497,27 @@ function deleteDescription(target: AssetVersion | null, sorted: AssetVersion[]):
   const base = target.processing_status === 'failed'
     ? `This moves v${target.version_number} to the trash, with its comments and approvals. A version that failed can be restored only while its upload is still in storage; if it is not, this cannot be undone. Its number is not used again.`
     : `This moves v${target.version_number} to the trash, with its comments and approvals. It stays in this list, where you can restore it, until it is removed for good, at the end of the retention period or earlier by an admin. Its number is not used again.`
-  // Share links that show the latest follow the newest *ready* version, so they
-  // move only when the target is that version and another ready one is left.
-  // The app's latest also counts a processing version (`_display_version`), so
-  // the two only move together when nothing newer than the next ready one plays.
+  // Share links that show the latest follow the version set as current while
+  // it is live, else the newest *ready* one: the one the server marks
+  // `is_current`. The app's latest also counts a processing version
+  // (`_display_version`), except that a version set as current wins there too.
+  // Deleting the version set as current ends the setting, so what follows is
+  // the default on both.
   const newestFirst = [...sorted].reverse()
   const isReady = (v: AssetVersion) => v.processing_status === 'ready'
   const isShowable = (v: AssetVersion) => isReady(v) || v.processing_status === 'processing'
-  if (newestFirst.find(isReady)?.id !== target.id) return base
+  const newestReady = newestFirst.find(isReady)
+  const shared = sorted.find((v) => v.is_current) ?? newestReady
+  if (shared?.id !== target.id) return base
   const nextShared = newestFirst.find((v) => v.id !== target.id && isReady(v))
   if (!nextShared) return base
   const nextLatest = newestFirst.find((v) => v.id !== target.id && isShowable(v))
-  return nextLatest?.id === nextShared.id
-    ? `${base} v${nextShared.version_number} becomes the latest version, also on share links that show the latest.`
+  if (nextLatest?.id === nextShared.id) {
+    return `${base} v${nextShared.version_number} becomes the latest version, also on share links that show the latest.`
+  }
+  // A newer version is still processing. The app's latest is on it already,
+  // unless the target is set as current and holds the app's latest too.
+  return shared.id !== newestReady?.id && nextLatest
+    ? `${base} v${nextLatest.version_number} becomes the latest version, and share links that show the latest move to v${nextShared.version_number}.`
     : `${base} Share links that show the latest version move to v${nextShared.version_number}.`
 }
