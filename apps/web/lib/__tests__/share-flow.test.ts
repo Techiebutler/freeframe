@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { guestDictate, postGuestNote, ShareFlowError } from '../share-flow'
+import { approveSharedAsset, guestDictate, nextFileId, postGuestNote, ShareFlowError } from '../share-flow'
 
 afterEach(() => vi.unstubAllGlobals())
 const ok = (b: unknown = {}, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } })
@@ -35,5 +35,29 @@ describe('guestDictate', () => {
   it('fails with a ShareFlowError when the endpoint is missing', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok({ detail: 'Not Found' }, 404)))
     await expect(guestDictate('tok', new Blob(['a']))).rejects.toBeInstanceOf(ShareFlowError)
+  })
+})
+
+describe('approveSharedAsset', () => {
+  it('posts to the asset approve endpoint of the share link with the guest identity', async () => {
+    const f = vi.fn().mockResolvedValue(ok({}, 200)); vi.stubGlobal('fetch', f)
+    await approveSharedAsset('tok', 'a1', { identity: { name: 'Ann', email: 'a@x.co' }, shareSession: 's1', versionId: 'v2' })
+    const [url, init] = f.mock.calls[0]
+    expect(url).toMatch(/\/share\/tok\/assets\/a1\/approve\?share_session=s1$/)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ version_id: 'v2', guest_name: 'Ann', guest_email: 'a@x.co' })
+  })
+  it('throws the server detail so the notes and button stay put', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok({ detail: 'This share link does not allow approving' }, 403)))
+    await expect(approveSharedAsset('tok', 'a1')).rejects.toMatchObject({ status: 403, detail: 'This share link does not allow approving' })
+  })
+})
+
+describe('nextFileId', () => {
+  const files = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+  it('moves to the next tab and stops at the end', () => {
+    expect(nextFileId(files, 'a')).toBe('b')
+    expect(nextFileId(files, 'c')).toBeNull()
+    expect(nextFileId(files, 'zzz')).toBeNull()
   })
 })

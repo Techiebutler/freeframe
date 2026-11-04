@@ -86,7 +86,8 @@ describe('FlowView', () => {
     await waitFor(() => expect(p.onSendNotes).toHaveBeenCalled())
     const sent = (p.onSendNotes as ReturnType<typeof vi.fn>).mock.calls[0][0][0]
     expect(sent.text).toBe('Hook too slow')
-    expect(sent.annotation).toMatchObject({ format: 'ink.v1', marks: [{ k: 'stroke', t: 3.2 }] })
+    expect(sent.annotation).toMatchObject({ format: 'ink.v1', marks: [{ k: 'stroke' }] })
+    expect(sent.annotation.marks[0].t).toBeGreaterThanOrEqual(3.2)
     expect(sent.annotation.marks[0].points[0]).toEqual([0.5, 0.5])
     expect(typeof sent.annotation.mark_offset_ms).toBe('number')
   })
@@ -110,6 +111,29 @@ describe('FlowView', () => {
     expect(sent.map((n: { t: number }) => n.t)).toEqual([3.2, 7.2])
     expect(sent[0].annotation?.marks).toHaveLength(1)
     expect(sent[1].annotation).toBeNull()
+  })
+
+  it('a drawing carries the video time it was drawn at, even after the video paused mid-recording', async () => {
+    let video!: HTMLVideoElement
+    const state = { currentTime: 3.2, paused: false, playbackRate: 1 }
+    const p = setup({ renderMedia: (o) => <div><video ref={(v) => { if (v) { video = v; Object.defineProperties(v, { currentTime: { get: () => state.currentTime, configurable: true }, paused: { get: () => state.paused, configurable: true }, playbackRate: { get: () => state.playbackRate, configurable: true } }) } }} />{o}</div> })
+    fireEvent.click(screen.getByRole('button', { name: /comment/i }))
+    await screen.findByRole('button', { name: /stop/i })
+    await new Promise(r => setTimeout(r, 40))
+    state.currentTime = 4; state.paused = true
+    video.dispatchEvent(new Event('pause'))
+    await new Promise(r => setTimeout(r, 40))
+    const layer = screen.getByTestId('ink-layer')
+    layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 400, right: 200, bottom: 400, x: 0, y: 0, toJSON: () => ({}) })
+    fireEvent.pointerDown(layer, { clientX: 100, clientY: 200, pointerId: 1 })
+    fireEvent.pointerMove(layer, { clientX: 150, clientY: 300, pointerId: 1 })
+    fireEvent.pointerUp(layer, { clientX: 150, clientY: 300, pointerId: 1 })
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+    await screen.findByRole('textbox')
+    // the drawing is its own time chip under the note, and tapping it seeks there and replays that stroke
+    fireEvent.click(screen.getByRole('button', { name: 'Drawing at 0:04.0' }))
+    expect(p.onSeek).toHaveBeenCalledWith(4)
+    await waitFor(() => expect(document.querySelector('.ink-line')).not.toBeNull())
   })
 
   it('the ink layer is inert when not recording', () => {

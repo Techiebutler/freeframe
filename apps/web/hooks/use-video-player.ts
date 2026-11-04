@@ -1,5 +1,6 @@
 'use client'
 
+import { pickDefaultLevel } from '@/lib/quality'
 import Hls, { type Level } from 'hls.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useReviewStore } from '@/stores/review-store'
@@ -50,6 +51,8 @@ export interface UseVideoPlayerReturn extends VideoPlayerControls, VideoPlayerSt
 export interface UseVideoPlayerOptions {
   /** Compare panes: don't touch global review-store signals (seekTarget/playheadTime/activeAnnotation). */
   detached?: boolean
+  /** Phone Flow view: start on the highest rendition up to 1080p instead of auto (which begins at the lowest). */
+  preferBestQuality?: boolean
 }
 
 export function useVideoPlayer(
@@ -57,6 +60,7 @@ export function useVideoPlayer(
   options?: UseVideoPlayerOptions,
 ): UseVideoPlayerReturn {
   const detached = options?.detached === true
+  const preferBest = options?.preferBestQuality === true
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -208,7 +212,10 @@ export function useVideoPlayer(
           label: level.height ? `${level.height}p` : `${Math.round(level.bitrate / 1000)}kbps`,
         }))
         setQualityLevels(levels)
-        setCurrentQuality(-1) // start on auto
+        // Auto starts on the lowest rendition; on a phone that is 360p. The user can still change it afterwards.
+        const start = preferBest ? pickDefaultLevel(levels) : -1
+        if (start >= 0) hls.currentLevel = start
+        setCurrentQuality(start)
         setIsLoading(false)
       })
 

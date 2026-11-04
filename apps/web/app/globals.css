@@ -756,14 +756,26 @@ button:not(:disabled), summary { cursor: pointer; }
   .campaign-preview-dismiss:hover { background: color-mix(in oklch, currentColor 10%, transparent); }
 }
 
-/* Talk + Draw ink (H70, Nachtrag 3): brand orange, dark rim and soft glow, fixed screen width, fades after 1200 ms */
+/* Talk + Draw ink (Alan, 04.11., supersedes H70 orange): a white core with a soft drop shadow and a faint blue glow, so it reads on
+   bright and dark frames. It stays while the video is paused and fades out in 250 ms once playback resumes. */
 .ink-layer { position: absolute; inset: 0; z-index: 12; overflow: hidden; pointer-events: none; }
 .ink-layer[data-on] { pointer-events: auto; touch-action: none; cursor: crosshair; -webkit-user-select: none; user-select: none; }
 .ink-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.ink-line { fill: none; stroke: var(--accent-hover); stroke-width: 6px; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke;
-  filter: drop-shadow(0 0 1px rgba(0,0,0,.85)) drop-shadow(0 0 1.5px rgba(0,0,0,.85)) drop-shadow(0 0 6px rgba(255,91,58,.6)); animation: ink-fade 1200ms var(--ease-out) forwards; }
-.ink-dot { position: absolute; width: 20px; height: 20px; translate: -50% -50%; border-radius: 50%; border: 4px solid var(--accent-hover); pointer-events: none;
-  box-shadow: 0 0 0 1.5px rgba(0,0,0,.85), inset 0 0 0 1.5px rgba(0,0,0,.85), 0 0 10px rgba(255,91,58,.6); animation: ink-fade 1200ms var(--ease-out) forwards; }
-.ink-line[data-live], .ink-dot[data-live] { animation: none; }
-@keyframes ink-fade { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .ink-line, .ink-dot { animation: none; } }
+.ink-contour { fill: none; stroke: rgba(15,23,42,.55); stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.ink-line { fill: none; stroke: #fff; stroke-width: 6px; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.ink-stroke { filter: drop-shadow(0 2px 8px rgba(0,0,0,.55)) drop-shadow(0 0 5px rgba(110,168,255,.55)); opacity: 1; }
+.ink-dot { position: absolute; width: 20px; height: 20px; translate: -50% -50%; border-radius: 50%; border: 4px solid #fff; pointer-events: none; box-shadow: 0 0 0 1.5px rgba(15,23,42,.55), inset 0 0 0 1.5px rgba(15,23,42,.55); }
+.ink-stroke[data-fading] { opacity: 0; transition: opacity 250ms var(--ease-out); }
+@media (prefers-reduced-motion: reduce) { .ink-stroke[data-fading] { transition: none; } }
+
+/* Flow view Comment: brand orange with depth - top-lit gradient, inner highlight, soft coloured shadow */
+.flow-comment {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 86%, white) 0%, var(--accent) 52%, color-mix(in oklab, var(--accent) 90%, black) 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.3), inset 0 -1px 0 rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.25), 0 10px 22px -8px color-mix(in oklab, var(--accent) 60%, transparent);
+  transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+.flow-comment:active {
+  transform: scale(0.97);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(0,0,0,.12), 0 1px 1px rgba(0,0,0,.25), 0 4px 10px -6px color-mix(in oklab, var(--accent) 60%, transparent);
+}
+@media (prefers-reduced-motion: reduce) { .flow-comment { transition: none; } .flow-comment:active { transform: none; } }

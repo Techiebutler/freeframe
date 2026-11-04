@@ -322,6 +322,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             assetId={asset.id}
             comments={comments}
             className="flex-1 min-h-0"
+            compact={!!inkOverlay}
             overlay={
               <>
                 <AnnotationOverlay key={focusedCommentId ?? 'none'} />

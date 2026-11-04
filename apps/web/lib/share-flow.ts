@@ -46,3 +46,26 @@ export async function guestDictate(token: string, audio: Blob, shareSession?: st
   const r = await res.json()
   return { text: r.text, segments: r.segments ?? [] }
 }
+
+/** Approve one asset through a folder share link: POST /share/{token}/assets/{asset_id}/approve (Lane A). */
+export async function approveSharedAsset(
+  token: string,
+  assetId: string,
+  opts: { identity?: GuestIdentity | null; shareSession?: string | null; versionId?: string; headers?: Record<string, string> } = {},
+): Promise<void> {
+  const body: Record<string, unknown> = {}
+  if (opts.versionId) body.version_id = opts.versionId
+  if (opts.identity) { body.guest_name = opts.identity.name; body.guest_email = opts.identity.email }
+  const res = await fetch(`${API_URL()}/share/${token}/assets/${assetId}/approve${sessionQuery(opts.shareSession)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await fail(res, 'Failed to approve')
+}
+
+/** The file tab after `currentId`, or null at the end of the briefing. */
+export function nextFileId(files: { id: string }[], currentId: string): string | null {
+  const i = files.findIndex(f => f.id === currentId)
+  return i >= 0 && i < files.length - 1 ? files[i + 1].id : null
+}

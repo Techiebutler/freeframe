@@ -11,6 +11,7 @@ import {
   ChevronUp,
   Check,
   Repeat,
+  MoreHorizontal,
 } from "lucide-react";
 import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -32,6 +33,8 @@ interface VideoPlayerProps {
   comments?: Comment[];
   overlay?: React.ReactNode;
   className?: string;
+  /** Phone Flow view: only play/pause, scrubber and time; loop, speed and volume sit behind one "more" button. */
+  compact?: boolean;
   /** Pre-fetched stream URL (for share mode — skips authenticated API call) */
   initialStreamUrl?: string | null;
 }
@@ -133,8 +136,9 @@ export function VideoPlayer({
   comments = [],
   overlay,
   className,
-  initialStreamUrl, onRetry,
+  initialStreamUrl, onRetry, compact = false,
 }: VideoPlayerProps) {
+  const [moreOpen, setMoreOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [loop, setLoop] = useState(false);
@@ -212,7 +216,7 @@ export function VideoPlayer({
     };
   }, [assetId, initialStreamUrl, versionId]);
 
-  const player = useVideoPlayer(streamUrl);
+  const player = useVideoPlayer(streamUrl, { preferBestQuality: compact });
 
   const {
     videoRef,
@@ -377,7 +381,7 @@ export function VideoPlayer({
         <div className="flex items-center gap-2">
           <button
             onClick={togglePlay}
-            className="flex h-7 w-7 items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors"
+            className={cn("flex items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors", compact ? "h-11 w-11" : "h-7 w-7")}
             aria-label={isPlaying ? "Pause" : "Play"}
           >
             {isPlaying ? (
@@ -387,6 +391,8 @@ export function VideoPlayer({
             )}
           </button>
 
+          {!compact && (
+            <>
           <button
             onClick={() => setLoop((p) => !p)}
             className={cn(
@@ -419,6 +425,8 @@ export function VideoPlayer({
               <Volume2 className="h-4 w-4" />
             )}
           </button>
+            </>
+          )}
         </div>
 
         {/* Center: Timecode display with format picker */}
@@ -480,7 +488,18 @@ export function VideoPlayer({
           )}
         </div>
 
-        {/* Right: Quality, Fullscreen */}
+        {compact ? (
+          <div className="relative">
+            <button onClick={() => setMoreOpen((p) => !p)} aria-expanded={moreOpen} aria-label="More playback options" className="flex h-11 w-11 items-center justify-center rounded text-text-secondary hover:bg-bg-hover transition-colors"><MoreHorizontal className="h-4 w-4" /></button>
+            {moreOpen && (
+              <div className="absolute bottom-full right-0 mb-2 z-50 flex items-center gap-1 rounded-xl border border-border bg-bg-elevated p-1 shadow-xl">
+                <button onClick={() => setLoop((p) => !p)} aria-pressed={loop} aria-label="Loop" className={cn("flex h-11 w-11 items-center justify-center rounded-lg", loop ? "bg-bg-hover text-text-primary" : "text-text-secondary hover:bg-bg-hover")}><Repeat className="h-4 w-4" /></button>
+                <button onClick={handleSpeedCycle} aria-label="Playback speed" className="flex h-11 min-w-11 items-center justify-center rounded-lg px-2 text-xs font-medium tabular-nums text-text-secondary hover:bg-bg-hover">{playbackRate}x</button>
+                <button onClick={toggleMute} aria-label={isMuted ? "Unmute" : "Mute"} className="flex h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-bg-hover">{isMuted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</button>
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="flex items-center gap-2">
           {/* Quality selector */}
           {qualityLevels.length > 0 && (
@@ -518,6 +537,7 @@ export function VideoPlayer({
             )}
           </button>
         </div>
+        )}
       </div>
     </div>
   );

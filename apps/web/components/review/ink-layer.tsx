@@ -1,19 +1,28 @@
 'use client'
 
 import * as React from 'react'
-import { DOT_PX, INK_MS, classifyMark, normalizePoint, type InkMark } from '@/lib/ink'
+import { CONTOUR_WIDTH, DOT_PX, classifyMark, normalizePoint, smoothPath, taperChunks, thinPoints, type InkMark } from '@/lib/ink'
 
 type Ink = { id: number; k: 'stroke' | 'dot'; points: [number, number][] }
 
-export const Strokes = ({ list, live }: { list: Ink[]; live?: boolean }) => (
+/** Fade-out length once playback resumes; CSS holds the same value. */
+const FADE_MS = 250
+
+export const Strokes = ({ list, live, fading }: { list: Ink[]; live?: boolean; fading?: boolean }) => (
   <>
     <svg className="ink-svg" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
       {list.filter(m => m.k === 'stroke').map(m => (
-        <polyline key={m.id} className="ink-line" data-live={live ? '' : undefined} points={m.points.map(p => p.join(',')).join(' ')} />
+        <g key={m.id} className="ink-stroke" data-live={live ? '' : undefined} data-fading={fading ? '' : undefined}>
+          {/* one continuous dark contour under every white chunk, so it never shows seams where the width steps */}
+          <path className="ink-contour" d={smoothPath(thinPoints(m.points))} style={{ strokeWidth: CONTOUR_WIDTH }} />
+          {taperChunks(thinPoints(m.points)).map((c, i) => (
+            <path key={i} className="ink-line" d={smoothPath(c.points, c)} style={{ strokeWidth: c.width }} />
+          ))}
+        </g>
       ))}
     </svg>
     {list.filter(m => m.k === 'dot').map(m => (
-      <i key={m.id} className="ink-dot" data-live={live ? '' : undefined} style={{ left: `${m.points[0][0] * 100}%`, top: `${m.points[0][1] * 100}%` }} />
+      <i key={m.id} className="ink-dot ink-stroke" data-live={live ? '' : undefined} data-fading={fading ? '' : undefined} style={{ left: `${m.points[0][0] * 100}%`, top: `${m.points[0][1] * 100}%` }} />
     ))}
   </>
 )
@@ -22,11 +31,14 @@ export interface InkReplay { key: number; marks: Pick<InkMark, 'k' | 'points'>[]
 
 /**
  * The drawing surface over the picture, mounted inside the video frame (so 0..1 is the picture, never the letterbox).
- * Only while recording does it take the pointer. Drag = stroke, tap = dot; ink fades after INK_MS but is kept.
+ * Only while recording does it take the pointer. Drag = stroke, tap = dot. Ink stays on the picture while the video is
+ * paused and fades out as soon as it plays again (it is kept in the note, only the screen is cleared).
  * The first touch pauses the video; the recording goes on. A second finger is ignored while the first draws.
  */
-export function InkLayer({ active, onStart, onMark, replay }: {
+export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
   active: boolean
+  /** Video is playing: ink stays while it is paused and fades out once it runs again. */
+  playing?: boolean
   onStart: () => void
   onMark: (k: 'stroke' | 'dot', points: [number, number][]) => void
   replay?: InkReplay | null
@@ -40,12 +52,21 @@ export function InkLayer({ active, onStart, onMark, replay }: {
   React.useEffect(() => { gone.current = false; return () => { gone.current = true } }, [])
   React.useEffect(() => { if (!active) { g.current = null; setCur(null) } }, [active])
   const [replayShown, setReplayShown] = React.useState<InkReplay | null>(null)
+  const [fading, setFading] = React.useState(false)
+  React.useEffect(() => { if (replay) { setReplayShown(replay); setFading(false) } }, [replay])
+  // Playback resumed (paused -> playing): let everything on screen fade, then clear it. While paused nothing is removed.
+  const wasPlaying = React.useRef(playing)
+  const shownRef = React.useRef({ trail, replayShown })
+  shownRef.current = { trail, replayShown }
   React.useEffect(() => {
-    if (!replay) return
-    setReplayShown(replay)
-    const id = setTimeout(() => setReplayShown(null), INK_MS + 100)
+    const resumed = playing && !wasPlaying.current
+    wasPlaying.current = playing
+    if (!resumed || (!shownRef.current.trail.length && !shownRef.current.replayShown)) return
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    setFading(true)
+    const id = setTimeout(() => { setTrail([]); setReplayShown(null); setFading(false) }, reduced ? 0 : FADE_MS + 20)
     return () => clearTimeout(id)
-  }, [replay])
+  }, [playing])
 
   const at = (e: React.PointerEvent) => normalizePoint(root.current!.getBoundingClientRect(), e.clientX, e.clientY)
   const down = (e: React.PointerEvent) => {
@@ -77,15 +98,14 @@ export function InkLayer({ active, onStart, onMark, replay }: {
     onMark(k, points)
     const id = ++seq.current
     setTrail(l => [...l, { id, k, points }])
-    setTimeout(() => { if (!gone.current) setTrail(l => l.filter(m => m.id !== id)) }, INK_MS + 100)
   }
   const shown: Ink[] = replayShown ? replayShown.marks.map((m, i) => ({ id: replayShown.key * 100 + i, k: m.k, points: m.points })) : []
   return (
     <div ref={root} className="ink-layer" data-testid="ink-layer" data-on={active ? '' : undefined}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
       onClick={e => { if (active) e.stopPropagation() }}>
-      <Strokes list={trail} />
-      {replayShown ? <Strokes key={replayShown.key} list={shown} /> : null}
+      <Strokes list={trail} fading={fading} />
+      {replayShown ? <Strokes key={replayShown.key} list={shown} fading={fading} /> : null}
       {cur ? <Strokes list={[{ id: -1, k: 'stroke', points: cur.length > 1 ? cur : [cur[0], cur[0]] }]} live /> : null}
     </div>
   )

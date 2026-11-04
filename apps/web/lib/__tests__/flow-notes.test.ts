@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { videoTimeAt, type TimelinePoint } from '../rec-timeline'
 import { notesFromDictation, notesReducer, sendable, sendBlocked, type FlowNote } from '../flow-notes'
 
 const blob = new Blob(['x'])
@@ -51,15 +52,30 @@ describe('flow notes', () => {
 
 describe('notesFromDictation', () => {
   const mk = (offset_ms: number) => ({ k: 'stroke' as const, points: [[0, 0]] as [number, number][], t: 0, offset_ms })
+  const play = (base: number) => (ms: number) => base + ms / 1000
   it('no segments: one note at the start with all ink', () => {
-    expect(notesFromDictation(5, ' Hook slow ', [], [mk(100)])).toEqual([{ t: 5, text: 'Hook slow', marks: [mk(100)] }])
+    const [n] = notesFromDictation(play(5), ' Hook slow ', [], [mk(100)])
+    expect(n).toMatchObject({ t: 5, text: 'Hook slow' })
+    expect(n.marks[0]).toMatchObject({ offset_ms: 100, t: 5.1 })
   })
-  it('one note per segment at base + start, ink goes to the sentence being said', () => {
-    const parts = notesFromDictation(10, 'x', [{ start: 0, end: 2, text: 'One.' }, { start: 3.5, end: 5, text: 'Two.' }], [mk(500), mk(3400), mk(3600), mk(9000)])
+  it('one note per segment, ink goes to the sentence being said', () => {
+    const parts = notesFromDictation(play(10), 'x', [{ start: 0, end: 2, text: 'One.' }, { start: 3.5, end: 5, text: 'Two.' }], [mk(500), mk(3400), mk(3600), mk(9000)])
     expect(parts.map(p => [p.t, p.text, p.marks.map(m => m.offset_ms)])).toEqual([[10, 'One.', [500, 3400]], [13.5, 'Two.', [3600, 9000]]])
   })
+  it('a pause mid-recording holds the video time for later sentences and ink', () => {
+    const tl: TimelinePoint[] = [{ rec_ms: 0, video_t: 10, playing: true, rate: 1 }, { rec_ms: 2000, video_t: 12, playing: false, rate: 1 }]
+    const parts = notesFromDictation(ms => videoTimeAt(tl, ms), 'x', [{ start: 0.5, end: 1.5, text: 'Early.' }, { start: 4, end: 5, text: 'Late.' }], [mk(4500)])
+    expect(parts[0].t).toBe(10.5)
+    expect(parts[1].t).toBe(12)
+    expect(parts[1].marks[0].t).toBe(12)
+  })
+  it('a seek mid-recording and a 1.5x rate are honoured', () => {
+    const tl: TimelinePoint[] = [{ rec_ms: 0, video_t: 0, playing: true, rate: 1.5 }, { rec_ms: 2000, video_t: 40, playing: true, rate: 1.5 }]
+    const parts = notesFromDictation(ms => videoTimeAt(tl, ms), 'x', [{ start: 1, end: 2, text: 'A.' }, { start: 4, end: 5, text: 'B.' }], [])
+    expect(parts.map(p => p.t)).toEqual([1.5, 43])
+  })
   it('ink before the first segment starts joins the first note; blank segments are skipped', () => {
-    const parts = notesFromDictation(0, 'x', [{ start: 1, end: 2, text: ' ' }, { start: 2, end: 3, text: 'Late.' }], [mk(100)])
+    const parts = notesFromDictation(play(0), 'x', [{ start: 1, end: 2, text: ' ' }, { start: 2, end: 3, text: 'Late.' }], [mk(100)])
     expect(parts).toHaveLength(1)
     expect(parts[0]).toMatchObject({ t: 2, text: 'Late.' })
     expect(parts[0].marks).toHaveLength(1)

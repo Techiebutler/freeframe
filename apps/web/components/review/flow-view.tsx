@@ -1,13 +1,14 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Loader2, Mic, RotateCcw, Send, Square, X } from 'lucide-react'
+import { Check, Loader2, Mic, Pencil, RotateCcw, Send, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
 import { notesFromDictation, notesReducer, sendBlocked, sendable, type FlowNote } from '@/lib/flow-notes'
 import { buildDrawingData, type InkMark } from '@/lib/ink'
 import { InkLayer, type InkReplay } from './ink-layer'
+import { trackVideo, videoTimeAt, type TimelinePoint } from '@/lib/rec-timeline'
 import { startMicRecording, type ActiveRecording, type StartRecording } from '@/lib/recorder'
 
 export interface FlowFile { id: string; name: string; thumbnail_url?: string | null; version?: number | null }
@@ -37,6 +38,8 @@ export interface FlowViewProps {
 let seq = 0
 const newId = () => `note-${Date.now()}-${seq++}`
 
+const stamp = (t: number) => `${timecode(t)}.${Math.floor((t % 1) * 10)}`
+
 function dictationMessage(e: unknown): string {
   const detail = (e as { detail?: string })?.detail
   return detail === 'dictation_unavailable' ? 'Dictation is not set up. Type your note instead.' : 'Could not transcribe. Try again or type it.'
@@ -54,6 +57,20 @@ export function FlowView(p: FlowViewProps) {
   const marks = React.useRef<InkMark[]>([])
   const [replay, setReplay] = React.useState<InkReplay | null>(null)
   const replayKey = React.useRef(0)
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const [playing, setPlaying] = React.useState(false)
+  // Media events do not bubble, but they can be caught on the way down: follow whichever <video> the player mounts.
+  React.useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const on = (e: Event) => { if (e.target instanceof HTMLVideoElement) setPlaying(!e.target.paused && !e.target.ended) }
+    const events = ['play', 'playing', 'pause', 'ended', 'seeking'] as const
+    events.forEach(ev => root.addEventListener(ev, on, true))
+    return () => events.forEach(ev => root.removeEventListener(ev, on, true))
+  }, [])
+  const tracker = React.useRef<ReturnType<typeof trackVideo> | null>(null)
+  /** What the video did during each note's recording; kept so Try again maps times the same way. */
+  const timelines = React.useRef(new Map<string, TimelinePoint[]>())
 
   React.useEffect(() => {
     if (!active) { setElapsed(0); return }
@@ -68,7 +85,9 @@ export function FlowView(p: FlowViewProps) {
     try {
       const r = await dictate(audio)
       // One note per spoken sentence, each with the ink drawn while it was said (H69)
-      const parts = notesFromDictation(n.t, r.text, r.segments ?? [], n.marks ?? [])
+      const points = timelines.current.get(id) ?? []
+      const timeAt = points.length ? (ms: number) => videoTimeAt(points, ms) : (ms: number) => Math.round((n.t + ms / 1000) * 1000) / 1000
+      const parts = notesFromDictation(timeAt, r.text, r.segments ?? [], n.marks ?? [])
       dispatch({ type: 'split', id, parts: parts.map((part, i) => ({ ...part, id: i === 0 ? id : newId() })) })
     }
     catch (e) { dispatch({ type: 'failed', id }); setMessages(m => ({ ...m, [id]: dictationMessage(e) })) }
@@ -81,6 +100,9 @@ export function FlowView(p: FlowViewProps) {
       setActive(null)
       const drawn = marks.current
       marks.current = []
+      tracker.current?.stop()
+      timelines.current.set(id, tracker.current?.points ?? [])
+      tracker.current = null
       dispatch({ type: 'marks', id, marks: drawn })
       const note = notes.find(n => n.id === id)
       await transcribe({ id, t: note?.t ?? p.getPlayhead(), marks: drawn }, await rec.stop())
@@ -90,7 +112,12 @@ export function FlowView(p: FlowViewProps) {
     const id = newId()
     marks.current = []
     dispatch({ type: 'add', id, t: p.getPlayhead() })
-    try { setActive({ id, rec: await start(), startedAt: Date.now() }) }
+    try {
+      const rec = await start()
+      const startedAt = Date.now()
+      tracker.current = trackVideo(rootRef.current?.querySelector('video') ?? null, startedAt)
+      setActive({ id, rec, startedAt })
+    }
     catch {
       dispatch({ type: 'failed', id })
       setMessages(m => ({ ...m, [id]: 'Microphone unavailable. Type your note instead.' }))
@@ -113,7 +140,7 @@ export function FlowView(p: FlowViewProps) {
   const sendLabel = notes.length ? `Send ${ready.length || ''}`.trim() : !canApprove ? 'Send' : p.approved ? 'Approved' : 'Approve'
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-primary" style={{ paddingTop: 'env(safe-area-inset-top)' }} data-testid="flow-view">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-bg-primary" style={{ paddingTop: 'env(safe-area-inset-top)' }} data-testid="flow-view">
       {/* The briefing's files */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-secondary pl-2">
         <nav aria-label="Files in this briefing" className="min-w-0 flex-1">
@@ -136,6 +163,7 @@ export function FlowView(p: FlowViewProps) {
         {p.renderMedia(
           <InkLayer
             active={!!active}
+            playing={playing}
             onStart={p.onPause}
             replay={replay}
             onMark={(k, points) => { if (active) marks.current.push({ k, points, t: p.getPlayhead(), offset_ms: Date.now() - active.startedAt }) }}
@@ -147,7 +175,7 @@ export function FlowView(p: FlowViewProps) {
         <ul aria-label="Your notes" className="max-h-[30dvh] shrink-0 space-y-2 overflow-y-auto border-t border-border bg-bg-secondary px-3 py-2">
           {notes.map(n => (
             <li key={n.id} className="flex items-start gap-2">
-              <button type="button" onClick={() => { p.onSeek(n.t); if (n.marks?.length) setReplay({ key: ++replayKey.current, marks: n.marks }) }} aria-label={`Go to ${timecode(n.t)}`} className="press min-h-11 shrink-0 rounded-lg bg-bg-tertiary px-2.5 font-mono text-xs tabular-nums text-text-primary">{timecode(n.t)}</button>
+              <button type="button" onClick={() => p.onSeek(n.t)} aria-label={`Go to ${timecode(n.t)}`} className="press min-h-11 shrink-0 rounded-lg bg-bg-tertiary px-2.5 font-mono text-xs tabular-nums text-text-primary">{timecode(n.t)}</button>
               <div className="min-w-0 flex-1">
                 {n.status === 'recording' && <p role="status" className="flex min-h-11 items-center text-sm text-text-secondary">Recording. Talk and draw on the picture, then tap Stop.</p>}
                 {n.status === 'transcribing' && <p role="status" className="flex min-h-11 items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />Transcribing…</p>}
@@ -155,6 +183,19 @@ export function FlowView(p: FlowViewProps) {
                   <>
                     <textarea aria-label={`Note at ${timecode(n.t)}`} value={n.text} rows={2} onChange={e => dispatch({ type: 'edit', id: n.id, text: e.target.value })}
                       className="w-full resize-none rounded-lg border border-border bg-bg-primary px-3 py-2 text-base text-text-primary outline-none focus:border-text-tertiary" />
+                    {!!n.marks?.length && (
+                      <ul aria-label={`Drawings on the note at ${timecode(n.t)}`} className="mt-1 flex flex-wrap gap-1.5">
+                        {n.marks.map((m, i) => (
+                          <li key={i}>
+                            <button type="button" onClick={() => { p.onSeek(m.t); setReplay({ key: ++replayKey.current, marks: [m] }) }}
+                              aria-label={`Drawing at ${stamp(m.t)}`}
+                              className="press inline-flex min-h-11 items-center gap-1.5 rounded-full border border-border px-3 font-mono text-xs tabular-nums text-text-secondary hover:bg-bg-hover">
+                              <Pencil size={12} aria-hidden="true" />{stamp(m.t)}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {n.status === 'failed' && (
                       <p role="alert" className="flex flex-wrap items-center gap-x-3 text-xs text-text-secondary">
                         <span>{messages[n.id] ?? 'Could not transcribe.'}</span>
@@ -176,8 +217,8 @@ export function FlowView(p: FlowViewProps) {
         {p.canComment ? (
           <>
             <button type="button" onClick={tapComment}
-              className="press inline-flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-accent px-5 text-base font-semibold text-text-inverse hover:bg-accent-hover">
-              {active ? <><Square size={18} aria-hidden="true" />Stop · {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</> : <><Mic size={20} aria-hidden="true" />Comment</>}
+              className="flow-comment inline-flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-5 text-base font-semibold text-text-inverse">
+              {active ? <><Square size={18} aria-hidden="true" />Stop · {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</> : <><Mic size={24} aria-hidden="true" />Comment</>}
             </button>
             <button type="button" onClick={send} disabled={sending || blocked || (!notes.length && (p.approved || !canApprove))}
               className="press inline-flex h-14 shrink-0 items-center justify-center gap-1.5 rounded-full border border-border px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-50">

@@ -60,14 +60,16 @@ export const sendBlocked = (notes: FlowNote[]) => notes.some(n => n.status === '
 export interface NotePart { t: number; text: string; marks: InkMark[] }
 
 /**
- * One note per spoken segment (H69), at the playhead the recording started on plus the segment start.
- * A mark belongs to the last segment that had started when it was drawn. No segments: one note with everything.
+ * One note per spoken segment (H69). `timeAt` maps an offset into the recording to video time (pauses, seeks and
+ * playback rate included), for the sentence's note AND for every ink mark. A mark belongs to the last segment that
+ * had started when it was drawn. No segments: one note with everything.
  */
-export function notesFromDictation(baseT: number, text: string, segments: DictationSegment[], marks: InkMark[]): NotePart[] {
+export function notesFromDictation(timeAt: (offsetMs: number) => number, text: string, segments: DictationSegment[], marks: InkMark[]): NotePart[] {
+  const timed = marks.map(m => ({ ...m, t: timeAt(m.offset_ms) }))
   const spoken = segments.filter(s => s.text.trim()).sort((a, b) => a.start - b.start)
-  if (!spoken.length) return [{ t: baseT, text: text.trim(), marks }]
-  const parts: NotePart[] = spoken.map(s => ({ t: Math.round((baseT + s.start) * 1000) / 1000, text: s.text.trim(), marks: [] }))
-  for (const m of marks) {
+  if (!spoken.length) return [{ t: timeAt(0), text: text.trim(), marks: timed }]
+  const parts: NotePart[] = spoken.map(s => ({ t: timeAt(s.start * 1000), text: s.text.trim(), marks: [] }))
+  for (const m of timed) {
     let i = 0
     spoken.forEach((s, idx) => { if (s.start * 1000 <= m.offset_ms) i = idx })
     parts[i].marks.push(m)
