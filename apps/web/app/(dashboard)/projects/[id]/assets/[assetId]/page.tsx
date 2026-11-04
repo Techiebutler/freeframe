@@ -668,9 +668,13 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             versions={versions}
             canDelete={canDeleteVersion}
             onVersionsChanged={() => {
-              // Deleting or restoring a version produces no event, so nothing else refetches.
+              // Deleting, restoring or setting the current version produces no
+              // event, so nothing else refetches.
               refetchVersions()
               refetchComments()
+            }}
+            onCurrentVersionSet={(version) => {
+              toast.info(`v${version.version_number} is now the current version`)
             }}
             onShownVersionDeleted={(deleted, now) => {
               toast.info(now

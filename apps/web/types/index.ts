@@ -164,6 +164,12 @@ export interface AssetVersion {
   /** When the upload last moved; see `mergeHistoryAssets`. */
   last_activity_at?: string | null;
   files?: MediaFile[];
+  /**
+   * Whether this is the version share links and the review page open with:
+   * the one set as current, else the newest ready one. Only
+   * `GET /assets/{id}/versions` says; elsewhere it is absent.
+   */
+  is_current?: boolean | null;
 }
 
 /** A version deleted on its own that can still be restored (`GET /assets/{id}/deleted-versions`). */

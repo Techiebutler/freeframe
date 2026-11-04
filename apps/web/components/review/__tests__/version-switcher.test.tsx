@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
-  api: { delete: vi.fn(), get: vi.fn(), post: vi.fn() },
+  api: { delete: vi.fn(), get: vi.fn(), post: vi.fn(), put: vi.fn() },
 }))
 
 import { api, ApiError } from '@/lib/api'
@@ -336,7 +336,7 @@ describe('VersionSwitcher ⋯ menu (#419)', () => {
 
     const dialog = await screen.findByRole('dialog')
     expect(dialog).toHaveTextContent('Delete v2?')
-    expect(dialog).toHaveTextContent('v1 becomes the latest version, also on share links')
+    expect(dialog).toHaveTextContent('v1 becomes the current version, also on share links')
     await user().click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(api.delete).not.toHaveBeenCalled()
@@ -419,6 +419,155 @@ describe('VersionSwitcher ⋯ menu (#419)', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(useReviewStore.getState().currentVersion?.id).toBe('v2')
     expect(onVersionsChanged).not.toHaveBeenCalled()
+  })
+})
+
+describe('VersionSwitcher set as current version', () => {
+  beforeEach(() => {
+    useReviewStore.getState().reset()
+    vi.mocked(api.put).mockReset()
+    vi.mocked(api.get).mockReset()
+    deletedList([])
+  })
+
+  /** v1 and v2 ready, v3 processing, v4 failed; v2 is the current one. */
+  function three() {
+    const v1 = makeVersion({ version_number: 1, is_current: false })
+    const v2 = makeVersion({ version_number: 2, is_current: true })
+    const v3 = makeVersion({ version_number: 3, processing_status: 'processing', is_current: false })
+    const v4 = makeVersion({ version_number: 4, processing_status: 'failed', is_current: false })
+    return [v1, v2, v3, v4]
+  }
+
+  it('labels the current version, also for someone who may not change it', async () => {
+    const versions = three()
+    useReviewStore.getState().setCurrentVersion(versions[0])
+    render(<VersionSwitcher versions={versions} />)
+
+    await openMenu()
+
+    expect(within(screen.getByTestId('version-row-v2')).getByText('Current')).toBeInTheDocument()
+    for (const n of [1, 3, 4]) {
+      expect(within(screen.getByTestId(`version-row-v${n}`)).queryByText('Current')).toBeNull()
+    }
+  })
+
+  it('offers it behind the ⋯ of a ready version that is not current, and nowhere else', async () => {
+    const versions = three()
+    useReviewStore.getState().setCurrentVersion(versions[1])
+    render(<VersionSwitcher versions={versions} canDelete />)
+    await openMenu()
+
+    const actions = await openActions(1)
+    expect(within(actions).getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
+      'Set as current version', 'Delete version'])
+    await user().keyboard('{Escape}')
+
+    for (const n of [2, 3, 4]) {
+      await openMenu()
+      const menu = await openActions(n)
+      expect(within(menu).queryByRole('menuitem', { name: 'Set as current version' })).toBeNull()
+      expect(within(menu).getByRole('menuitem', { name: 'Delete version' })).toBeInTheDocument()
+      await user().keyboard('{Escape}')
+    }
+  })
+
+  it('sets it, says so, and leaves the view where it is', async () => {
+    const versions = three()
+    const latest = { ...versions[0], is_current: true }
+    vi.mocked(api.put).mockResolvedValue({ latest_version: latest })
+    const onVersionsChanged = vi.fn()
+    const onCurrentVersionSet = vi.fn()
+    useReviewStore.getState().setCurrentVersion(versions[1])
+    render(<VersionSwitcher versions={versions} canDelete
+      onVersionsChanged={onVersionsChanged} onCurrentVersionSet={onCurrentVersionSet} />)
+
+    await openMenu()
+    const actions = await openActions(1)
+    await user().click(within(actions).getByRole('menuitem', { name: 'Set as current version' }))
+
+    await waitFor(() => expect(onCurrentVersionSet).toHaveBeenCalledWith(versions[0]))
+    expect(api.put).toHaveBeenCalledWith('/assets/asset-1/current-version', { version_id: 'v1' })
+    expect(onVersionsChanged).toHaveBeenCalledWith(latest)
+    expect(useReviewStore.getState().currentVersion?.id).toBe('v2')
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  })
+
+  it('says why when the server refuses, and keeps the menu open', async () => {
+    const versions = three()
+    vi.mocked(api.put).mockRejectedValue(
+      new ApiError(409, 'Only a version that is ready can be the current version.'))
+    const onVersionsChanged = vi.fn()
+    const onCurrentVersionSet = vi.fn()
+    useReviewStore.getState().setCurrentVersion(versions[1])
+    render(<VersionSwitcher versions={versions} canDelete
+      onVersionsChanged={onVersionsChanged} onCurrentVersionSet={onCurrentVersionSet} />)
+
+    await openMenu()
+    const actions = await openActions(1)
+    await user().click(within(actions).getByRole('menuitem', { name: 'Set as current version' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'v1: Only a version that is ready can be the current version.')
+    expect(screen.getAllByRole('menu').length).toBeGreaterThan(0)
+    expect(onVersionsChanged).not.toHaveBeenCalled()
+    expect(onCurrentVersionSet).not.toHaveBeenCalled()
+    expect(useReviewStore.getState().currentVersion?.id).toBe('v2')
+  })
+})
+
+describe('VersionSwitcher deleting around the current version', () => {
+  beforeEach(() => {
+    useReviewStore.getState().reset()
+    vi.mocked(api.delete).mockReset()
+    vi.mocked(api.get).mockReset()
+    deletedList([])
+  })
+
+  async function dialogFor(versions: AssetVersion[], n: number) {
+    render(<VersionSwitcher versions={versions} canDelete />)
+    await openMenu()
+    await user().click(within(await openActions(n)).getByRole('menuitem', { name: 'Delete version' }))
+    return screen.findByRole('dialog')
+  }
+
+  it('names the next latest when the version set as current is deleted', async () => {
+    const v1 = makeVersion({ version_number: 1, is_current: true })
+    const v2 = makeVersion({ version_number: 2, is_current: false })
+    const v3 = makeVersion({ version_number: 3, is_current: false })
+    useReviewStore.getState().setCurrentVersion(v3)
+
+    const dialog = await dialogFor([v1, v2, v3], 1)
+
+    expect(dialog).toHaveTextContent('v3 becomes the current version, also on share links')
+  })
+
+  it('promises no change on share links when the newest goes while another is current', async () => {
+    const v1 = makeVersion({ version_number: 1, is_current: true })
+    const v2 = makeVersion({ version_number: 2, is_current: false })
+    useReviewStore.getState().setCurrentVersion(v2)
+
+    const dialog = await dialogFor([v1, v2], 2)
+
+    expect(dialog).toHaveTextContent('Delete v2?')
+    expect(dialog).not.toHaveTextContent('becomes the current version')
+  })
+
+  it('moves to the version set as current when the one on screen is deleted', async () => {
+    const v1 = makeVersion({ version_number: 1, is_current: true })
+    const v2 = makeVersion({ version_number: 2, is_current: false })
+    const v3 = makeVersion({ version_number: 3, is_current: false })
+    useReviewStore.getState().setCurrentVersion(v3)
+    vi.mocked(api.delete).mockResolvedValue({ latest_version: v1 })
+    const onShownVersionDeleted = vi.fn()
+    render(<VersionSwitcher versions={[v1, v2, v3]} canDelete onShownVersionDeleted={onShownVersionDeleted} />)
+
+    await openMenu()
+    await user().click(within(await openActions(3)).getByRole('menuitem', { name: 'Delete version' }))
+    await user().click(await screen.findByRole('button', { name: 'Delete version' }))
+
+    await waitFor(() => expect(useReviewStore.getState().currentVersion?.id).toBe('v1'))
+    expect(onShownVersionDeleted).toHaveBeenCalledWith(v3, v1)
   })
 })
 
