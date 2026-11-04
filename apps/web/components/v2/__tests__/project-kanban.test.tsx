@@ -20,7 +20,7 @@ it('places every request in its actual stage and keeps closed deliveries out of 
     expect(within(screen.getByRole('region', { name: stage })).getByRole('link', { name: title })).toBeInTheDocument()
   }
   expect(within(screen.getByRole('region', { name: 'Ready to go' })).queryByText('Closed')).not.toBeInTheDocument()
-  fireEvent.click(screen.getByText('Closed requests'))
+  fireEvent.click(screen.getByText('Done', { selector: 'summary span' }))
   expect(screen.getByRole('link', { name: 'Closed' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Share Closed' })).not.toBeInTheDocument()
 })
@@ -67,14 +67,14 @@ it('keeps reduced-motion updates instantaneous', () => {
   vi.unstubAllGlobals()
 })
 
-it('puts finished deliveries first and opens their own request folder', () => {
+it('puts finished deliveries first and opens their own request in the player', () => {
   render(<ProjectKanban requests={[request('Finished', { status: 'clear', folder_id: 'delivery-3' })]} paused={false} onShare={vi.fn()} />)
   expect(screen.getAllByRole('region').map(region => region.getAttribute('aria-label'))).toEqual([
     'Ready to go', 'Corrections', 'In review', 'With editor',
   ])
-  expect(screen.getByRole('link', { name: 'Finished' })).toHaveAttribute('href', '/projects/p1?folder=delivery-3')
-  expect(screen.getByRole('link', { name: 'Preview Finished' })).toHaveAttribute('href', '/projects/p1?folder=delivery-3')
-  expect(screen.getByRole('button', { name: 'Share Finished' })).toHaveTextContent('Share')
+  expect(screen.getByRole('link', { name: 'Finished' })).toHaveAttribute('href', '/projects/p1/review?folder=delivery-3')
+  expect(screen.getByRole('link', { name: 'Review Finished' })).toHaveAttribute('href', '/projects/p1/review?folder=delivery-3')
+  expect(screen.getByRole('button', { name: 'Share Finished' })).toBeInTheDocument()
 })
 
 it('the ready shortcut shows only ready deliveries, without empty other stages', () => {
@@ -82,7 +82,7 @@ it('the ready shortcut shows only ready deliveries, without empty other stages',
   expect(screen.getAllByRole('region')).toHaveLength(1)
   expect(screen.getByRole('region', { name: 'Ready to go' })).toBeInTheDocument()
   expect(screen.queryByRole('link', { name: 'Waiting' })).not.toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Finished' })).toHaveAttribute('href', '/projects/p1')
+  expect(screen.getByRole('link', { name: 'Finished' })).toHaveAttribute('href', '/projects/p1/review')
 })
 
 
@@ -90,7 +90,7 @@ it('keeps unavailable files in review with their existing folder and share acces
   render(<ProjectKanban requests={[request('Unavailable', {status:'unavailable',folder_id:'f1'})]} paused={false} onShare={vi.fn()} />)
   expect(screen.getByRole('region', {name:'In review'})).toHaveTextContent('Review unavailable')
   expect(screen.getByRole('region', {name:'Ready to go'})).not.toHaveTextContent('Unavailable')
-  expect(screen.getByRole('link', {name:'Unavailable'})).toHaveAttribute('href','/projects/p1?folder=f1')
+  expect(screen.getByRole('link', {name:'Unavailable'})).toHaveAttribute('href','/projects/p1/review?folder=f1')
   expect(screen.getByRole('button', {name:'Share Unavailable'})).toBeVisible()
 })
 
@@ -104,6 +104,16 @@ it('keeps a late briefing failure visible and opens the existing link details fo
   view.rerender(<ProjectKanban requests={[failed]} paused={false} onShare={onShare} />)
   fireEvent.click(screen.getByRole('button',{name:'Briefing needs attention: Launch'}))
   expect(onShare).toHaveBeenCalledWith(failed)
-  expect(screen.getByRole('link',{name:'Launch'})).toHaveAttribute('href','/projects/p1')
+  expect(screen.getByRole('link',{name:'Launch'})).toHaveAttribute('href','/projects/p1/review')
   expect(screen.getByRole('button',{name:'Share Launch'})).toBeEnabled()
+})
+
+it('moves finished projects off the board one by one or all at once', () => {
+  const onDone=vi.fn()
+  const a=request('A',{status:'clear'}), b=request('B',{status:'clear'})
+  render(<ProjectKanban requests={[a,b]} paused={false} onShare={vi.fn()} onDone={onDone} />)
+  fireEvent.click(screen.getByRole('button',{name:'Mark A done'}))
+  expect(onDone).toHaveBeenLastCalledWith([a])
+  fireEvent.click(screen.getByRole('button',{name:'All done'}))
+  expect(onDone).toHaveBeenLastCalledWith([a,b])
 })

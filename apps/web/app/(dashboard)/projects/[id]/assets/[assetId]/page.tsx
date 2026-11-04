@@ -21,7 +21,6 @@ import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
 import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
-import { useUploadStore } from '@/stores/upload-store'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { canCompare } from '@/lib/compare-time'
 import {
@@ -31,20 +30,14 @@ import {
   Info,
   Loader2,
   Columns2,
-  Upload,
   GitCompareArrows,
+  Check,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePageTitle } from '@/hooks/use-page-title'
 import type { Project, AssetResponse, ProjectMember, ProjectRole, FolderTreeNode } from '@/types'
 
-const acceptByType: Record<string, string> = {
-  video: 'video/*',
-  audio: 'audio/*',
-  image: 'image/*',
-  image_carousel: 'image/*',
-}
 
 function ReviewScreenInner({ projectId }: { projectId: string }) {
   const router = useRouter()
@@ -53,13 +46,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
   const { user } = useAuthStore()
-  const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
-  const versionFileInputRef = useRef<HTMLInputElement>(null)
   const setExtraCrumbs = useBreadcrumbStore((s) => s.setExtraCrumbs)
   const setLabel = useBreadcrumbStore((s) => s.setLabel)
   usePageTitle(asset?.name ?? null)
   const [annotationData, setAnnotationData] = useState<Record<string, unknown> | null>(null)
-  const [activeTab, setActiveTab] = useState<'comments' | 'fields'>('comments')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const deepLinkApplied = useRef(false)
 
@@ -120,11 +110,19 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const currentRole = (project?.role as ProjectRole | null | undefined) ?? currentMember?.role ?? 'viewer'
   const canComment = currentRole !== 'viewer'
 
-  // Fetch all assets for navigation (1 of N)
+  // The briefing's other files (hooks, cut-downs): navigation stays inside this one folder
+  const folderKey = asset ? (asset.folder_id ?? 'root') : null
   const { data: allAssets } = useSWR<AssetResponse[]>(
-    `/projects/${projectId}/assets`,
-    () => api.get<AssetResponse[]>(`/projects/${projectId}/assets`),
+    folderKey ? `/projects/${projectId}/assets?folder_id=${folderKey}` : null,
+    (url: string) => api.get<AssetResponse[]>(url),
   )
+
+  // Approve = this version is accepted; the server is the authority, the button just mirrors it
+  const { data: approvals, mutate: mutateApprovals } = useSWR<{ version_id: string; status: string }[]>(
+    asset ? `/assets/${asset.id}/approvals` : null,
+    (url: string) => api.get<{ version_id: string; status: string }[]>(url),
+  )
+  const [approving, setApproving] = useState(false)
 
   const {
     comments,
@@ -156,7 +154,6 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     if (!target) return
     deepLinkApplied.current = true
     setFocusedCommentId(commentId)
-    setActiveTab('comments')
     if ((target as any).timecode_start !== null && (target as any).timecode_start !== undefined) {
       seekTo((target as any).timecode_start, true)
     }
@@ -179,6 +176,19 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const totalAssets = allAssets?.length ?? 0
   const prevAsset = currentIndex > 0 ? allAssets?.[currentIndex - 1] : null
   const nextAsset = currentIndex < totalAssets - 1 ? allAssets?.[currentIndex + 1] : null
+
+  const approved = !!currentVersion && !!approvals?.some((a) => a.version_id === currentVersion.id && a.status === 'approved')
+  const approve = async () => {
+    if (!asset || !currentVersion || approved) return
+    setApproving(true)
+    try {
+      await api.post(`/assets/${asset.id}/approve`, { version_id: currentVersion.id })
+      await mutateApprovals()
+      if (nextAsset) navigateAsset(nextAsset.id)
+    } finally {
+      setApproving(false)
+    }
+  }
 
   const navigateAsset = (assetId: string) => {
     router.push(`/projects/${projectId}/assets/${assetId}`)
@@ -352,8 +362,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
         {/* Left: back + breadcrumb */}
         <div className="flex items-center gap-1 min-w-0 flex-1">
           <Link
-            href={`/projects/${asset.project_id}`}
-            className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
+            href="/projects"
+            aria-label="Back to projects"
+            className="flex items-center justify-center h-11 w-11 -ml-2 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
@@ -391,23 +402,6 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 
         {/* Right: version, share, sidebar toggle */}
         <div className="flex items-center gap-2 shrink-0 flex-1 justify-end">
-          {/* Hidden file input for new version upload */}
-          <input
-            ref={versionFileInputRef}
-            type="file"
-            className="hidden"
-            accept={acceptByType[asset.asset_type] ?? '*/*'}
-            onChange={async (e) => {
-              const file = e.target.files?.[0]
-              if (!file || !asset) return
-              startVersionUpload(file, asset.id, asset.name, asset.project_id)
-              e.target.value = ''
-              // Surface the newly-created version (starts as "uploading") quickly;
-              // SSE transcode events then drive it through processing → ready (#118).
-              setTimeout(() => refetchVersions(), 800)
-              setTimeout(() => refetchVersions(), 2500)
-            }}
-          />
           <VersionSwitcher versions={versions} />
           {asset && canCompare(asset.asset_type, versions) && (
             <button
@@ -430,15 +424,24 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               Compare
             </button>
           )}
-          <button
-            onClick={() => versionFileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
-            title="Upload new version"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            New Version
-          </button>
           <ShareDialog assetId={asset.id} assetName={asset.name} projectId={projectId} asset={asset} />
+          {canComment && (
+            <button
+              onClick={approve}
+              disabled={!versionReady || approved || approving}
+              aria-live="polite"
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-md px-3 h-8 text-xs font-semibold transition-colors',
+                approved
+                  ? 'bg-status-success/15 text-status-success cursor-default'
+                  : 'bg-accent text-white hover:bg-accent/90 disabled:opacity-50',
+              )}
+              title={nextAsset ? 'Approve and open the next file' : 'Approve this version'}
+            >
+              {approving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              {approved ? 'Approved' : 'Approve'}
+            </button>
+          )}
           <button
             onClick={() => setSidebarOpen((p) => !p)}
             className={cn(
@@ -466,43 +469,42 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
         <div className="flex-1 flex flex-col bg-bg-primary overflow-hidden min-w-0">
           {/* Media viewer */}
           {renderMediaViewer()}
+
+          {/* The briefing's files: switch hooks without leaving the player */}
+          {totalAssets > 1 && (
+            <nav aria-label="Files in this briefing" className="shrink-0 border-t border-border bg-bg-secondary px-3 py-2">
+              <ul className="flex gap-2 overflow-x-auto">
+                {allAssets!.map((a) => (
+                  <li key={a.id} className="shrink-0">
+                    <button
+                      onClick={() => a.id !== asset.id && navigateAsset(a.id)}
+                      aria-current={a.id === asset.id ? 'true' : undefined}
+                      className={cn(
+                        'flex items-center gap-2 rounded-lg p-1 pr-3 min-h-11 max-w-[220px] text-left transition-colors',
+                        a.id === asset.id ? 'bg-bg-hover ring-1 ring-accent' : 'hover:bg-bg-hover',
+                      )}
+                    >
+                      <span className="h-12 w-[27px] shrink-0 overflow-hidden rounded bg-bg-tertiary">
+                        {a.thumbnail_url && <img src={a.thumbnail_url} alt="" className="h-full w-full object-cover" />}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-medium text-text-primary">{a.name}</span>
+                        {a.latest_version && <span className="block text-[11px] text-text-tertiary">v{a.latest_version.version_number}</span>}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          )}
         </div>
 
         {/* Right: comments sidebar */}
         {sidebarOpen && (
           <div className="w-[360px] flex flex-col border-l border-border bg-bg-secondary shrink-0 animate-in slide-in-from-right-2 duration-150">
-            {/* Tabs (Frame.io pill style) */}
-            <div className="px-4 pt-3 pb-2 shrink-0">
-              <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
-                <button
-                  onClick={() => setActiveTab('comments')}
-                  className={cn(
-                    'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
-                    activeTab === 'comments'
-                      ? 'bg-bg-hover text-text-primary shadow-sm'
-                      : 'text-text-tertiary hover:text-text-secondary',
-                  )}
-                >
-                  Comments
-                </button>
-                <button
-                  onClick={() => setActiveTab('fields')}
-                  className={cn(
-                    'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
-                    activeTab === 'fields'
-                      ? 'bg-bg-hover text-text-primary shadow-sm'
-                      : 'text-text-tertiary hover:text-text-secondary',
-                  )}
-                >
-                  Fields
-                </button>
-              </div>
-            </div>
-
             {/* Content */}
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-              {activeTab === 'comments' ? (
-                <>
+              <>
                   <CommentPanel
                     comments={comments as any}
                     currentUserId={user?.id}
@@ -529,41 +531,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                       </p>
                     </div>
                   )}
-                </>
-              ) : (
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-text-tertiary">Name</span>
-                      <span className="text-xs text-text-primary font-medium truncate ml-4">{asset.name}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-text-tertiary">Type</span>
-                      <span className="text-xs text-text-primary capitalize">{asset.asset_type.replace('_', ' ')}</span>
-                    </div>
-                    {currentVersion && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-text-tertiary">Version</span>
-                        <span className="text-xs text-text-primary">v{currentVersion.version_number}</span>
-                      </div>
-                    )}
-                    {currentVersion && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-text-tertiary">Processing</span>
-                        <span className={cn(
-                          'text-xs capitalize',
-                          currentVersion.processing_status === 'ready' && 'text-status-success',
-                          currentVersion.processing_status === 'processing' && 'text-status-warning',
-                          currentVersion.processing_status === 'failed' && 'text-status-error',
-                          currentVersion.processing_status === 'uploading' && 'text-text-tertiary',
-                        )}>
-                          {currentVersion.processing_status}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              </>
             </div>
           </div>
         )}

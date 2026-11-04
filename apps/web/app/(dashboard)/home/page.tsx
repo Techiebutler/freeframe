@@ -5,6 +5,7 @@ import Link from 'next/link'
 import useSWR from 'swr'
 import * as Dialog from '@radix-ui/react-dialog'
 import { ArrowUpRight, Plus, Timer, BookOpen, CheckCheck, Search, X, ArrowRight, Pause, Play, Trophy, Crown, ChevronDown } from 'lucide-react'
+import { api } from '@/lib/api'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useAuthStore } from '@/stores/auth-store'
 import { editorAccuracy, getEditors, getTimeSaved, hours, listRequests, type FileRequest, type TimeSaved } from '@/lib/platform'
@@ -97,7 +98,7 @@ export default function HomePage() {
               <FolderArt size={88} /><span className="text-[1.25rem] font-semibold">Request your first files</span><span className="text-[0.9375rem] text-text-secondary">One link for your editor. Everything comes back here.</span>
             </button>
           ) : filtered.length ? (
-            <ProjectKanban requests={filtered} paused={motionPaused} onShare={setSharing} focusReady={filter === 'Ready'} />
+            <ProjectKanban requests={filtered} paused={motionPaused} onShare={setSharing} onDone={async done => { await Promise.all(done.map(r => api.delete(`/requests/${r.id}`))); void mutate() }} focusReady={filter === 'Ready'} />
           ) : !error && <div className="mt-5 rounded-2xl border border-border p-8 text-center"><p className="text-[0.9375rem] text-text-secondary">No matching requests</p><button onClick={() => { setQuery(''); setFilter('All') }} className="mt-2 min-h-11 text-[0.875rem] font-medium text-accent">Clear filters</button></div>}
           {user?.is_staff === false && !requests?.length && !isLoading && !error && <Link href="/start" className="mt-3 inline-flex min-h-11 items-center text-sm text-accent">Set up your brand and first briefing <ArrowRight size={16} className="ml-2" /></Link>}
 

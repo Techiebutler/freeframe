@@ -72,9 +72,9 @@ interface AssetGridProps {
 
 // Grid column classes based on card size
 const gridColsMap = {
-  S: 'grid-cols-[repeat(auto-fill,minmax(min(100%,140px),1fr))]',
-  M: 'grid-cols-[repeat(auto-fill,minmax(min(100%,180px),1fr))]',
-  L: 'grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))]',
+  S: 'grid-cols-[repeat(auto-fill,minmax(min(100%,112px),1fr))]',
+  M: 'grid-cols-[repeat(auto-fill,minmax(min(100%,144px),1fr))]',
+  L: 'grid-cols-[repeat(auto-fill,minmax(min(100%,184px),1fr))]',
 }
 
 // Aspect ratio classes
