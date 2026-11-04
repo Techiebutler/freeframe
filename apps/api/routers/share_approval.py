@@ -1,0 +1,50 @@
+"""Approve from a share link: Alan reviews on his phone through a folder link and approves right there."""
+import uuid
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..middleware.auth import get_optional_user
+from ..middleware.rate_limit import rate_limit
+from ..models.activity import ActivityAction, ActivityLog
+from ..models.approval import ApprovalStatus
+from ..models.asset import Asset, AssetVersion
+from ..models.share import SharePermission
+from ..models.user import User
+from ..services.permissions import validate_asset_in_share, validate_share_link_with_session
+
+router = APIRouter(tags=["share"])
+
+
+class ShareApprove(BaseModel):
+    version_id: Optional[uuid.UUID] = None
+
+
+@router.post("/share/{token}/assets/{asset_id}/approve", dependencies=[Depends(rate_limit("share_approve", 30, 600))])
+def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_session: Optional[str] = Query(None),
+                  db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
+    """A guest has no user row, so the approval is recorded for the link's creator: the person who made the
+    link `approve` is the one approving through it."""
+    from .approvals import _upsert_approval
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+    if link.permission != SharePermission.approve:
+        raise HTTPException(403, "approve_not_allowed")
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
+    if asset is None:
+        raise HTTPException(404, "not_found")
+    try:
+        validate_asset_in_share(db, link, asset)
+    except HTTPException:
+        raise HTTPException(404, "not_found")
+    versions = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None))
+    version = (versions.filter(AssetVersion.id == body.version_id).first() if body.version_id
+               else versions.order_by(AssetVersion.version_number.desc()).first())
+    if version is None:
+        raise HTTPException(404, "not_found")
+    _upsert_approval(db, asset, version.id, db.get(User, link.created_by), ApprovalStatus.approved, None)
+    db.add(ActivityLog(user_id=link.created_by, asset_id=asset.id, action=ActivityAction.approved))
+    db.commit()
+    return {"asset_id": str(asset.id), "version_id": str(version.id), "status": "approved"}

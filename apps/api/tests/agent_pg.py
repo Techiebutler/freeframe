@@ -77,7 +77,7 @@ def env():
         body = e.client.post("/agents/pair", json={"code": code, "agent_name": name, "program": program}).json()
         with Session() as db:
             agent_user = db.get(User, uuid.UUID(body["user_id"]))
-            who = SimpleNamespace(name=agent_user.name, email=agent_user.email)
+            who = SimpleNamespace(id=agent_user.id, name=agent_user.name, email=agent_user.email)
         return SimpleNamespace(user_id=body["user_id"], key=body["agent_key"], who=who, headers={"Authorization": f"Bearer {body['agent_key']}"})
 
     def asset(req, name="Hook 1", versions=1, submitted=True, status="ready", by=None):
@@ -91,7 +91,7 @@ def env():
             db.flush()
             out = []
             for n in range(1, versions + 1):
-                v = AssetVersion(asset_id=a.id, version_number=n, processing_status=ProcessingStatus(status), created_by=req.created_by)
+                v = AssetVersion(asset_id=a.id, version_number=n, processing_status=ProcessingStatus(status), created_by=by.id if by is not None and hasattr(by, "id") else req.created_by)
                 db.add(v)
                 db.flush()
                 if submitted:

@@ -27,6 +27,8 @@ export interface FileRequest {
   folder_id?: string | null
   brief_excerpt: string | null
   last_uploader_name: string | null
+  /** Derived by the API from who uploaded the newest version; null when a human did. */
+  review_phase?: 'self_review' | 'ready_for_editor' | 'agent_stuck' | null
   assets: number
   state: 'live' | 'revoked' | 'expired'
   status: GateStatus

@@ -1,4 +1,4 @@
-"""Agent-review platform data model: one migration `ap01_agent_review` on the single head."""
+"""Agent-review platform data model: migrations ap01/ap02 on a single head."""
 from pathlib import Path
 
 from alembic.config import Config
@@ -24,7 +24,7 @@ def test_agent_tables_and_dedup_key():
     assert {"request_id", "opened_at", "closed_at", "closed_by", "last_activity_at", "acked_at", "rule_suggestions"} <= {c.name for c in FeedbackRound.__table__.c}
 
 
-def test_single_alembic_head_is_ap01():
+def test_single_alembic_head_is_ap02():
     cfg = Config()
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["ap01_agent_review"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["ap02_request_external_ref"]

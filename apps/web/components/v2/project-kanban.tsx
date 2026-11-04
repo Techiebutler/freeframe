@@ -16,6 +16,8 @@ type Stage = typeof STAGES[number]['id']
 
 function stageOf(r: FileRequest): Stage | 'closed' {
   if (r.state !== 'live') return 'closed'
+  if (r.review_phase === 'self_review') return 'review'
+  if (r.review_phase === 'agent_stuck') return 'corrections'
   if (!r.assets) return 'editor'
   if (r.status === 'reviewing' || r.status === 'unavailable') return 'review'
   return r.status === 'held' ? 'corrections' : 'ready'
@@ -102,7 +104,7 @@ export function ProjectKanban({ requests, paused, onShare, onDone, focusReady = 
 export const reviewHref = (r: FileRequest) => `/projects/${r.project_id}/review${r.folder_id ? `?folder=${encodeURIComponent(r.folder_id)}` : ''}`
 
 function ProjectCard({ request: r, stage, onShare, onDone }: { request: FileRequest; stage: Stage | 'closed'; onShare: () => void; onDone?: () => void }) {
-  const label = r.status === 'unavailable' ? 'Review unavailable' : stage === 'editor' ? 'Waiting for files' : stage === 'review' ? 'Reviewing files' : stage === 'corrections' ? r.open_must_fixes > 0 ? `${r.open_must_fixes} ${r.open_must_fixes === 1 ? 'fix' : 'fixes'} to make` : 'With editor for updates' : stage === 'ready' ? 'Ready to go' : r.state === 'revoked' ? 'Closed' : 'Expired'
+  const label = r.state === 'live' && r.review_phase === 'self_review' ? `Self-review · ${r.last_uploader_name || 'agent'}` : r.state === 'live' && r.review_phase === 'agent_stuck' ? 'Agent stuck · needs you' : r.status === 'unavailable' ? 'Review unavailable' : stage === 'editor' ? 'Waiting for files' : stage === 'review' ? 'Reviewing files' : stage === 'corrections' ? r.open_must_fixes > 0 ? `${r.open_must_fixes} ${r.open_must_fixes === 1 ? 'fix' : 'fixes'} to make` : 'With editor for updates' : stage === 'ready' ? 'Ready to go' : r.state === 'revoked' ? 'Closed' : 'Expired'
   return <li className="kanban-card" data-request-id={r.id} data-stage={stage}>
     <div className="flex items-start justify-between gap-2">
       <div className="kanban-art" aria-hidden="true"><FolderArt size={36} label="" />{stage === 'review' && <span className="kanban-scan" />}{stage === 'corrections' && <PencilLine className="kanban-pencil" size={19} />}{stage === 'ready' && <span className="kanban-check"><CheckCheck size={13} /></span>}</div>

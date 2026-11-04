@@ -5,6 +5,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -13,6 +14,7 @@ from ..models.activity import ActivityAction, ActivityLog
 from ..models.approval import ApprovalStatus
 from ..models.asset import Asset, AssetVersion
 from ..models.project import Project
+from ..models.upload_request import UploadRequest
 from ..services import agent_queue, feedback_rounds, review_bridge
 from ..services.agents import AgentContext
 
@@ -106,3 +108,36 @@ def ack(round_id: uuid.UUID, agent: AgentContext = Depends(get_agent), db: Sessi
         rnd.acked_at = datetime.now(timezone.utc)
         db.commit()
     return Response(status_code=204)
+
+
+class NewRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    external_ref: str = Field(min_length=1, max_length=200)
+
+
+def _request_reply(req: UploadRequest, created: bool) -> dict:
+    return {"request_id": str(req.id), "folder_id": str(req.folder_id), "upload_token": req.token, "review_url": agent_queue.review_url(req), "created": created}
+
+
+@router.post("/requests")
+def create_request(body: NewRequest, agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
+    """File a card for self-review: a normal request (folder, standing review link, AutoReview registration)
+    owned by the agent. The same (project, external_ref) always answers with the same request."""
+    from .requests import RequestCreate, create_request as create_normal_request
+    project = _project(db, agent)
+    ref = body.external_ref.strip()
+    found = lambda: db.query(UploadRequest).filter(UploadRequest.project_id == project.id, UploadRequest.external_ref == ref).first()  # noqa: E731
+    existing = found()
+    if existing:
+        return _request_reply(existing, False)
+    # The binding behind a normal request is idempotent on this key, so a retry after a crash finds the same request.
+    made = create_normal_request(RequestCreate(project_id=project.id, title=body.title.strip(),
+                                               idempotency_key=uuid.uuid5(project.id, f"agent-request:{ref}")), db, agent.user)
+    req = db.get(UploadRequest, uuid.UUID(made["id"]))
+    try:
+        req.external_ref = ref
+        db.commit()
+    except IntegrityError:  # a concurrent call attached the ref first
+        db.rollback()
+        return _request_reply(found(), False)
+    return _request_reply(req, True)

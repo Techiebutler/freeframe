@@ -123,3 +123,24 @@ it.each(['briefing-unavailable','plan-api-unavailable','review-unconfigured','pl
   render(<ProjectKanban requests={[failed]} paused={false} onShare={vi.fn()} />)
   expect(screen.queryByRole('button',{name:'Briefing needs attention: Launch'})).not.toBeInTheDocument()
 })
+
+it('puts a self-review card in In review with the agent name and no fix counter, even when held', () => {
+  render(<ProjectKanban requests={[request('Agent cut', { status: 'held', open_must_fixes: 4, review_phase: 'self_review', last_uploader_name: 'Hermes Box' })]} paused={false} onShare={vi.fn()} />)
+  const lane = screen.getByRole('region', { name: 'In review' })
+  expect(within(lane).getByRole('link', { name: 'Agent cut' })).toBeInTheDocument()
+  expect(within(lane).getByText('Self-review · Hermes Box')).toBeInTheDocument()
+  expect(screen.queryByText(/fixes to make/)).not.toBeInTheDocument()
+})
+
+it('puts an agent-stuck card in Corrections labelled for the owner', () => {
+  render(<ProjectKanban requests={[request('Stuck', { status: 'held', open_must_fixes: 2, review_phase: 'agent_stuck' })]} paused={false} onShare={vi.fn()} />)
+  const lane = screen.getByRole('region', { name: 'Corrections' })
+  expect(within(lane).getByText('Agent stuck · needs you')).toBeInTheDocument()
+  expect(screen.queryByText(/fixes to make/)).not.toBeInTheDocument()
+})
+
+it('leaves ready_for_editor and null phases unchanged', () => {
+  render(<ProjectKanban requests={[request('Ready', { status: 'clear', review_phase: 'ready_for_editor' }), request('Human', { status: 'held', open_must_fixes: 1, review_phase: null })]} paused={false} onShare={vi.fn()} />)
+  expect(within(screen.getByRole('region', { name: 'Ready to go' })).getByRole('link', { name: 'Ready' })).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'Corrections' })).getByText('1 fix to make')).toBeInTheDocument()
+})

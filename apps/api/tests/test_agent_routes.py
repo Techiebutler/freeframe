@@ -54,7 +54,7 @@ def test_queue_stages_follow_the_kanban(env):
         assert by["Ready"]["upload_token"] and by["Ready"]["folder_id"] and by["Ready"]["request_id"] == str(ready.id)
         asset = by["Held"]["assets"][0]
         assert asset == {"asset_id": str(a_held.id), "name": "Hook 1", "version_id": str(a_held.versions[0].id),
-                         "version_number": 1, "review_state": "held"}
+                         "version_number": 1, "review_state": "held", "processing_status": "ready", "approval": None}
         only = env.client.get("/agent/queue?state=corrections", headers=agent.headers).json()
         assert [r["title"] for r in only] == ["Held"]
     assert env.client.get("/agent/queue?state=nope", headers=agent.headers).status_code == 422

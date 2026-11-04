@@ -47,6 +47,7 @@ from ..models.checklist_binding import ChecklistBinding
 from ..services.checklists import reserve_binding, binding_out, dispatch_binding
 from ..services import review_bridge
 from ..services.agents import AgentContext
+from ..services.review_phase import phase_of_reviews
 from ..services.briefing import docx_text, MAX_DOCUMENT_BASE64, validate_briefing_text
 from ..services.review_timing import adopt_signed_in_upload, freeze_submission_timing, reopen_request
 from ..services.iteration_requests import request_fields, components, upload_slot, bind_upload, revision_target, stored_upload
@@ -160,6 +161,7 @@ def _request_out(req: UploadRequest, project: Optional[Project], st: Optional[di
         "created_at": req.created_at.isoformat() if req.created_at else None,
         "checklist_binding_id": str(binding.id) if binding else None,
         "checklist": binding_out(binding) if binding else None,
+        "review_phase": None,
         **(st or {"status": "reviewing", "open_must_fixes": 0}),
         **request_fields(req),
     }
@@ -347,9 +349,11 @@ def list_requests(project_id: Optional[uuid.UUID] = Query(None), db: Session = D
     reviewer = db.query(GuestUser).filter(GuestUser.email == REVIEWER_EMAIL).first()
     bindings = {b.request_id: b for b in db.query(ChecklistBinding).filter(
         ChecklistBinding.request_id.in_([r.id for r in reqs]), ChecklistBinding.deleted_at.is_(None)).all()}
-    out = [_request_out(r, projects.get(r.project_id),
-        _request_gate(_review_assets(db, r, assets[r.id], reviewer, stats, include_media=False), statuses.get(r.review_share_token)),
-        len(assets[r.id]), bindings.get(r.id)) for r in reqs]
+    out = []
+    for r in reqs:
+        reviews = _review_assets(db, r, assets[r.id], reviewer, stats, include_media=False)
+        gate = {**_request_gate(reviews, statuses.get(r.review_share_token)), "review_phase": phase_of_reviews(db, reviews)}
+        out.append(_request_out(r, projects.get(r.project_id), gate, len(assets[r.id]), bindings.get(r.id)))
     db.commit()  # Persist observed campaign usage after assembling the response.
     return out
 
