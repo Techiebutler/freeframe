@@ -35,6 +35,16 @@ class AssetVersionResponse(BaseModel):
     files: list[MediaFileResponse] = []
     model_config = {"from_attributes": True}
 
+class AssetVersionChangeResponse(BaseModel):
+    """What deleting or restoring one version answers with.
+
+    The latest version is the highest live number, so taking one out or putting
+    one back can change which version the asset shows, share links set to show
+    the latest included. `latest_version` is that version afterwards, as
+    `AssetResponse.latest_version` reports it.
+    """
+    latest_version: Optional[AssetVersionResponse] = None
+
 class AssetResponse(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
