@@ -106,6 +106,7 @@ def test_the_asset_list_carries_each_assets_comment_count():
         # Read by AssetResponse.model_validate before the builder sets them.
         a.latest_version = None; a.thumbnail_url = None; a.comment_count = 0
         a.verdict_summary = None
+        a.current_version_id = None
         return a
 
     def version(a):

@@ -357,6 +357,11 @@ own storage figure stops counting it at once.
 Version numbers come from a per-asset counter (`assets.last_version_number`), not from the
 surviving rows, so a purged version's number is never handed out again: "v2" in a comment export
 or a share URL names one cut for the life of the asset.
+**The current version** is the one an editor set with `PUT /assets/{asset_id}/current-version`
+(`assets.current_version_id`, ready versions only), else the newest; everything that asks for an
+asset's latest version (grid, review page, share links that show the latest, downloads, the
+comment export) resolves it through `services.versions.current_version`. Deleting that version
+or a newer version becoming ready ends the setting.
 
 Key entity relationships:
 

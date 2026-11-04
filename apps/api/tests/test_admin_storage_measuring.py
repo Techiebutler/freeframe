@@ -161,6 +161,10 @@ def test_process_asset_measures_before_it_marks_the_version_ready(monkeypatch):
 
         id: uuid.UUID
         processing_status: ProcessingStatus
+        # Read by `newer_version_ready` once the version is ready.
+        asset_id = uuid.uuid4()
+        version_number = 1
+        deleted_at = None
 
         def __init__(self):
             self.id = uuid.uuid4()

@@ -1238,7 +1238,8 @@ def test_the_task_passes_its_own_retry_count_down():
     def _flag_after(retries: int) -> bool:
         # One stand-in answers the version, asset and media-file lookups alike,
         # so it carries what all three are read for.
-        row = SimpleNamespace(id="asset-1", project_id="proj-1",
+        row = SimpleNamespace(id="asset-1", asset_id="asset-1", version_number=1, deleted_at=None,
+                              project_id="proj-1",
                               asset_type=AssetType.video,
                               s3_key_raw="raw/in.mp4", s3_key_processed=None,
                               s3_key_download=None, s3_key_thumbnail=None,
