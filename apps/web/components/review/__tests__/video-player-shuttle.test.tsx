@@ -75,6 +75,21 @@ describe('J/K/L in the video player', () => {
     expect(speed()).toBe('1x')
   })
 
+  it('leaves keys pressed in an open menu to the menu', () => {
+    render(<VideoPlayer {...props} />)
+    const menu = document.createElement('div')
+    menu.setAttribute('role', 'menu')
+    const item = document.createElement('div')
+    menu.appendChild(item)
+    document.body.appendChild(menu)
+
+    fireEvent.keyDown(item, { code: 'KeyJ' })
+    fireEvent.keyDown(item, { code: 'KeyL' })
+    expect(speed()).toBe('1x')
+    expect(player.play).not.toHaveBeenCalled()
+    menu.remove()
+  })
+
   it('J clears a comment drawing, as forward playback does', () => {
     useReviewStore.setState({ activeAnnotation: { shapes: [] } })
     render(<VideoPlayer {...props} />)
