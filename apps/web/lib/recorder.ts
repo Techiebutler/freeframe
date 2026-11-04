@@ -1,4 +1,4 @@
-import { rmsLevel } from './level-meter'
+import { dbLevel, rmsFloat } from './level-meter'
 
 export interface ActiveRecording {
   stop: () => Promise<Blob>
@@ -18,20 +18,30 @@ export const startMicRecording: StartRecording = async (onLevel) => {
   rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data) }
   rec.start()
 
-  let meter: ReturnType<typeof setInterval> | null = null
+  // The level is sampled every animation frame (no timer lag), as dB-scaled RMS of the float waveform.
+  let raf = 0
+  let stopped = false
   let ctx: AudioContext | null = null
   if (onLevel && typeof AudioContext !== 'undefined') {
     try {
       ctx = new AudioContext()
       const analyser = ctx.createAnalyser()
       analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.2
       ctx.createMediaStreamSource(stream).connect(analyser)
-      const buf = new Uint8Array(analyser.fftSize)
-      meter = setInterval(() => { analyser.getByteTimeDomainData(buf); onLevel(rmsLevel(buf)) }, 70)
+      const buf = new Float32Array(analyser.fftSize)
+      const tick = () => {
+        if (stopped) return
+        analyser.getFloatTimeDomainData(buf)
+        onLevel(dbLevel(rmsFloat(buf)))
+        raf = requestAnimationFrame(tick)
+      }
+      raf = requestAnimationFrame(tick)
     } catch { /* no meter, the recording still works */ }
   }
   const release = () => {
-    if (meter) clearInterval(meter)
+    stopped = true
+    if (raf) cancelAnimationFrame(raf)
     stream.getTracks().forEach(t => t.stop())
     void ctx?.close().catch(() => {})
   }
