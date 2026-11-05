@@ -1,5 +1,6 @@
 "use client";
 
+import { take } from '@/lib/review-prefetch'
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Maximize,
@@ -200,8 +201,7 @@ export function VideoPlayer({
     const streamPath = versionId
       ? `/assets/${assetId}/stream?version_id=${versionId}`
       : `/assets/${assetId}/stream`;
-    api
-      .get<StreamUrlResponse>(streamPath)
+    take(streamPath, () => api.get<StreamUrlResponse>(streamPath))
       .then((data) => {
         if (ignore) return;
         // HLS proxy returns relative paths — prepend API URL

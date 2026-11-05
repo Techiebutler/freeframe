@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Switching between a briefing's files is instant: the other files load in the background, and share links keep the last frame instead of a full-screen spinner.
+
 ### Changed
 - Talk + Draw on desktop: video big on the left, notes in a Feedback column on the right, a Talk / type bar under the video (no more phone-width column). "Classic comments" switches back to normal comments.
 
