@@ -38,7 +38,7 @@ import {
   Columns2,
   GitCompareArrows,
   Check,
-  Smartphone,
+  Mic,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
@@ -403,7 +403,8 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       sessionKey={projectId}
       approved={approved}
       onExit={isNarrow ? () => router.push(`/projects/${projectId}`) : () => setPhoneView(false)}
-      exitLabel={isNarrow ? 'Back' : 'Desktop view'}
+      exitLabel={isNarrow ? 'Back' : 'Classic comments'}
+      wide={!isNarrow}
     />
   )
 
@@ -509,8 +510,8 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               phoneView ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover',
             )}
           >
-            <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
-            Phone view
+            <Mic className="h-3.5 w-3.5" aria-hidden="true" />
+            Talk + Draw
           </button>
           <button
             onClick={() => setSidebarOpen((p) => !p)}
@@ -534,9 +535,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       {compareOpen && asset && currentVersion && canCompare(asset.asset_type, versions) ? (
         <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} />
       ) : phoneView ? (
-        <div className="flex min-h-0 flex-1 justify-center bg-bg-secondary">
-          <div className="h-full w-full max-w-[430px] border-x border-border">{flowView}</div>
-        </div>
+        <div className="min-h-0 flex-1">{flowView}</div>
       ) : (
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left: viewer column */}

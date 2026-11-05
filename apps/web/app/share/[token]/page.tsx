@@ -13,7 +13,7 @@ import {
   Download,
   ArrowLeft,
   Columns2,
-  Smartphone,
+  Mic,
   MessageSquare,
   User,
   FileText,
@@ -504,8 +504,8 @@ function ShareTopBar({
               phoneView ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white hover:bg-white/10',
             )}
           >
-            <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
-            Phone view
+            <Mic className="h-3.5 w-3.5" aria-hidden="true" />
+            Talk + Draw
           </button>
         )}
 
@@ -956,7 +956,7 @@ function ShareViewer({
           />
         )}
         <div className="flex min-h-0 flex-1 justify-center">
-          <div className="h-full w-full max-w-[430px] md:border-x md:border-white/[0.06]">
+          <div className={isNarrow ? 'h-full w-full max-w-[430px] md:border-x md:border-white/[0.06]' : 'h-full w-full'}>
             <FlowView
               renderMedia={(ink) => (
                 <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} />
@@ -978,7 +978,8 @@ function ShareViewer({
               approved={flowApproved}
               dictate={(audio) => guestDictate(token, audio)}
               onExit={isNarrow ? undefined : () => setPhoneView(false)}
-              exitLabel="Desktop view"
+              exitLabel="Classic comments"
+              wide={!isNarrow}
             />
           </div>
         </div>

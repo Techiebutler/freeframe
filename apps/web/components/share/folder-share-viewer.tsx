@@ -17,7 +17,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   ArrowLeft,
-  Smartphone,
+  Mic,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getUsableAccessToken } from '@/lib/auth'
@@ -799,7 +799,7 @@ function ShareReviewInner({
     return (
       <div className="flex flex-col h-dvh bg-bg-primary text-text-primary">
         <div className="flex min-h-0 flex-1 justify-center">
-          <div className="h-full w-full max-w-[430px] md:border-x md:border-border">
+          <div className={isNarrow ? 'h-full w-full max-w-[430px] md:border-x md:border-border' : 'h-full w-full'}>
             <FlowView
               renderMedia={(ink, extra) => (
                 <VideoPlayer
@@ -831,7 +831,8 @@ function ShareReviewInner({
               approved={!!approvedIds?.has(asset.id)}
               dictate={(audio) => guestDictate(token, audio, shareSession)}
               onExit={isNarrow ? onBack : () => setPhoneView(false)}
-              exitLabel={isNarrow ? 'Files' : 'Desktop view'}
+              exitLabel={isNarrow ? 'Files' : 'Classic comments'}
+              wide={!isNarrow}
             />
           </div>
         </div>
@@ -866,7 +867,7 @@ function ShareReviewInner({
           )}
           {asset.asset_type === 'video' && (
             <button onClick={() => setPhoneView(true)} aria-pressed={false} className="hidden md:inline-flex h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
-              <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />Phone view
+              <Mic className="h-3.5 w-3.5" aria-hidden="true" />Talk + Draw
             </button>
           )}
           <button onClick={() => setSidebarOpen(v => !v)} aria-label={sidebarOpen ? 'Hide comments' : 'Show comments'} aria-expanded={sidebarOpen} className="flex items-center justify-center h-11 w-11 md:h-8 md:w-8 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
