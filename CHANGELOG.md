@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Talk + Draw: a stroke ends as soon as the mouse button is up, even when the release lands on a control or the pointer capture drops. Before, the pen kept following the cursor after pausing or seeking.
 - The next video's first frame is ready before you switch: HLS manifests are cached (server memory + 10 min browser cache), and the briefing's other videos warm their first segment in the background.
 
 ### Fixed

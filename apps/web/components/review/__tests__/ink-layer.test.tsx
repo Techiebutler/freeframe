@@ -114,3 +114,31 @@ describe('InkLayer timed replay', () => {
     expect(times[0]).toBe(0)
   })
 })
+
+describe('InkLayer never keeps drawing after the button is up', () => {
+  const rect = (l: HTMLElement) => { l.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 400, right: 200, bottom: 400, x: 0, y: 0, toJSON: () => ({}) }) }
+  it('ends the stroke when the mouse moves with no button held (pointerup was missed)', () => {
+    const onMark = vi.fn()
+    const { getByTestId, container } = render(<InkLayer active playing={false} onStart={() => {}} onMark={onMark} />)
+    const l = getByTestId('ink-layer'); rect(l)
+    fireEvent.pointerDown(l, { clientX: 10, clientY: 10, pointerId: 1, pointerType: 'mouse', buttons: 1 })
+    fireEvent.pointerMove(l, { clientX: 80, clientY: 120, pointerId: 1, pointerType: 'mouse', buttons: 1 })
+    // the release happened elsewhere (pause button, timeline): the cursor now hovers back over the video
+    fireEvent.pointerMove(l, { clientX: 150, clientY: 300, pointerId: 1, pointerType: 'mouse', buttons: 0 })
+    fireEvent.pointerMove(l, { clientX: 190, clientY: 390, pointerId: 1, pointerType: 'mouse', buttons: 0 })
+    expect(onMark).toHaveBeenCalledTimes(1)
+    expect(onMark.mock.calls[0][1]).toHaveLength(2)
+    expect(container.querySelector('[data-live]')).toBeNull()
+  })
+
+  it('ends the stroke when pointer capture is lost', () => {
+    const onMark = vi.fn()
+    const { getByTestId, container } = render(<InkLayer active playing={false} onStart={() => {}} onMark={onMark} />)
+    const l = getByTestId('ink-layer'); rect(l)
+    fireEvent.pointerDown(l, { clientX: 10, clientY: 10, pointerId: 1 })
+    fireEvent.pointerMove(l, { clientX: 80, clientY: 120, pointerId: 1 })
+    fireEvent.lostPointerCapture(l, { pointerId: 1 })
+    expect(onMark).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-live]')).toBeNull()
+  })
+})

@@ -97,6 +97,8 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
   const move = (e: React.PointerEvent) => {
     const s = g.current
     if (!s || s.pid !== e.pointerId) return
+    // The release was missed (button let go over a control, capture dropped): end the stroke instead of drawing with the cursor.
+    if ((e.pointerType === 'mouse' || e.pointerType === 'pen') && e.buttons === 0) return up(e)
     s.far = Math.max(s.far, Math.hypot(e.clientX - s.x0, e.clientY - s.y0))
     const p = at(e)
     const last = s.pts[s.pts.length - 1]
@@ -119,7 +121,7 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
   const shown: Ink[] = replayShown ? (replayMs === Infinity ? replayShown.marks : visibleMarks(replayShown.marks, replayMs)).map((m, i) => ({ id: replayShown.key * 100 + i, k: m.k, points: m.points })) : []
   return (
     <div ref={root} className="ink-layer" data-testid="ink-layer" data-on={active ? '' : undefined}
-      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onLostPointerCapture={up}
       onClick={e => { if (active) e.stopPropagation() }}>
       <Strokes list={trail} fading={fading} />
       {replayShown ? <Strokes key={replayShown.key} list={shown} fading={fading} /> : null}
