@@ -34,12 +34,27 @@ export const shareJson = (url: string) => fetch(url, { headers: { ...authHeaders
 export const newestReady = (versions: AssetVersion[]) =>
   [...versions].sort((a, b) => b.version_number - a.version_number).find(v => v.processing_status === 'ready')
 
+/** HLS: master -> variant playlists -> first segment, so the next video's first frame is already in the browser cache. */
+async function warmVideo(streamUrl?: string | null) {
+  if (!streamUrl || !streamUrl.includes('.m3u8')) return
+  const lines = (txt: string) => txt.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  const master = streamUrl.startsWith('/') ? `${API_URL()}${streamUrl}` : streamUrl
+  for (const v of lines(await (await fetch(master)).text()).slice(0, 3)) {
+    const variant = new URL(v, master).href
+    const seg = lines(await (await fetch(variant)).text())[0]
+    if (seg) await fetch(new URL(seg, variant).href)
+  }
+}
+
 /** Starts loading the other files of a briefing so opening one does not wait on the network. */
 export function prefetchReviews(ids: string[], share?: { token: string; session?: string | null }) {
   for (const id of ids.slice(0, 12)) {
     if (share) {
       const ss = share.session ? `&share_session=${encodeURIComponent(share.session)}` : ''
-      for (const url of [shareStreamKey(share.token, id, ss), shareVersionsKey(share.token, id, ss)]) void warmUp(url, () => shareJson(url)).catch(() => {})
+      const streamKey = shareStreamKey(share.token, id, ss)
+      void warmUp(streamKey, () => shareJson(streamKey)).then((d: { url?: string } | null) => warmVideo(d?.url)).catch(() => {})
+      const versionsKey = shareVersionsKey(share.token, id, ss)
+      void warmUp(versionsKey, () => shareJson(versionsKey)).catch(() => {})
       continue
     }
     void warmUp(`/assets/${id}`, () => api.get(`/assets/${id}`)).catch(() => {})
@@ -47,7 +62,7 @@ export function prefetchReviews(ids: string[], share?: { token: string; session?
     void warmUp(`/assets/${id}/versions`, () => api.get<AssetVersion[]>(`/assets/${id}/versions`))
       .then(vs => {
         const v = newestReady(vs ?? [])
-        if (v) { const path = `/assets/${id}/stream?version_id=${v.id}`; void warmUp(path, () => api.get(path)).catch(() => {}) }
+        if (v) { const path = `/assets/${id}/stream?version_id=${v.id}`; void warmUp(path, () => api.get<{ url: string }>(path)).then(d => warmVideo(d?.url)).catch(() => {}) }
       })
       .catch(() => {})
   }
