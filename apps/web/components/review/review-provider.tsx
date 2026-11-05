@@ -169,8 +169,12 @@ export function ReviewProvider({
         const ready = (allVersions ?? [])
           .sort((a, b) => b.version_number - a.version_number)
           .filter((v) => v.processing_status === "ready");
+        // The version asked for in the URL, else the one the server marks as
+        // current (set as current by an editor, else the newest ready).
         const readyVersion =
-          ready.find((v) => v.id === initialVersionRef.current) ?? ready[0];
+          ready.find((v) => v.id === initialVersionRef.current) ??
+          ready.find((v) => v.is_current) ??
+          ready[0];
         if (readyVersion) {
           setCurrentVersion(readyVersion);
         } else if (data.latest_version) {
@@ -206,7 +210,10 @@ export function ReviewProvider({
             files: [],
           })) as AssetVersion[];
           setVersions(mapped);
-          if (mapped.length > 0) setCurrentVersion(mapped[0]);
+          // Open on the version the link streamed first: the current one, which
+          // is not the newest when an editor set an older one as current.
+          const first = mapped.find((v) => v.id === data.latest_version?.id) ?? mapped[0];
+          if (first) setCurrentVersion(first);
           else if (data.latest_version) setCurrentVersion(data.latest_version);
         } catch {
           if (data.latest_version) setCurrentVersion(data.latest_version);
