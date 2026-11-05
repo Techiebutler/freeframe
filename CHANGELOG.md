@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Talk + Draw on desktop: video big on the left, notes in a Feedback column on the right, a Talk / type bar under the video (no more phone-width column). "Classic comments" switches back to normal comments.
+
 ### Added
 - Comment history for the AutoReview Brand Loop backfill: `GET /internal/review/comments-export` (review bridge secret) pages through every public comment, oldest first (`after` + `after_id` cursor, `limit` up to 1000), in the row shape of feedback-agent's `scripts/brand-loop-backfill.mjs`, with the brand slug, asset, version, timecode, resolved flag and whether the author is a client. Only the author's email domain is returned; internal comments are never included.
 - Split upload: the parts of one request and its assembled ads are reviewed side by side (up to

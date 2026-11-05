@@ -51,6 +51,8 @@ export interface FlowViewProps {
   exitLabel?: string
   dictate?: (audio: Blob) => Promise<DictationResult>
   startRecording?: StartRecording
+  /** Desktop: video left, notes in a right-hand column, talk/type bar under the video (Flask). */
+  wide?: boolean
 }
 
 let seq = 0
@@ -91,6 +93,7 @@ export function FlowView(p: FlowViewProps) {
   const [elapsed, setElapsed] = React.useState(0)
   const [sending, setSending] = React.useState(false)
   const [error, setError] = React.useState('')
+  const [typed, setTyped] = React.useState('')
   const [messages, setMessages] = React.useState<Record<string, string>>({})
   const marks = React.useRef<InkMark[]>([])
   const [replay, setReplay] = React.useState<InkReplay | null>(null)
@@ -238,9 +241,17 @@ export function FlowView(p: FlowViewProps) {
   const canApprove = p.canApprove ?? true
   const sendLabel = hasNotes ? (p.finishLabel ?? (p.onFinishRound ? 'Send to agent' : 'Done')) : !canApprove ? 'Send' : p.approved ? 'Approved ✓' : 'Approve'
 
-  return (
-    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-bg-primary" style={{ paddingTop: 'env(safe-area-inset-top)' }} data-testid="flow-view">
-      {moment && (
+  const typeNote = (e: React.FormEvent) => {
+    e.preventDefault()
+    const text = typed.trim()
+    if (!text) return
+    const id = newId()
+    dispatch({ type: 'add', id, t: p.getPlayhead(), status: 'ready' })
+    dispatch({ type: 'edit', id, text })
+    setTyped('')
+  }
+
+  const doneMoment = moment && (
         <div role="dialog" aria-label="Done" className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-bg-primary/96 px-8 text-center backdrop-blur-md">
           <span className="grid h-16 w-16 place-items-center rounded-full bg-status-success/15 text-status-success"><Check size={32} aria-hidden="true" /></span>
           <p className="text-xl font-semibold leading-tight text-text-primary">{moment.title}</p>
@@ -249,7 +260,9 @@ export function FlowView(p: FlowViewProps) {
             ? <button type="button" onClick={() => { setMoment(null); p.onNext!() }} className="flow-comment inline-flex h-14 items-center justify-center rounded-full px-8 text-base font-semibold text-text-inverse">Next file</button>
             : <button type="button" onClick={() => setMoment(null)} className="press inline-flex h-14 items-center justify-center rounded-full border border-border px-8 text-base font-semibold text-text-primary hover:bg-bg-hover">Close</button>}
         </div>
-      )}
+  )
+  const filesBar = (
+    <>
       {/* The briefing's files */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-secondary pl-2">
         <nav aria-label="Files in this briefing" className="min-w-0 flex-1">
@@ -264,9 +277,13 @@ export function FlowView(p: FlowViewProps) {
             ))}
           </ul>
         </nav>
-        {p.onExit && <button type="button" onClick={p.onExit} className="press min-h-11 shrink-0 px-3 text-sm font-medium text-text-secondary hover:text-text-primary">{p.exitLabel ?? 'Exit'}</button>}
+        {p.onExit && !p.wide && <button type="button" onClick={p.onExit} className="press min-h-11 shrink-0 px-3 text-sm font-medium text-text-secondary hover:text-text-primary">{p.exitLabel ?? 'Exit'}</button>}
       </div>
 
+    </>
+  )
+  const mediaArea = (
+    <>
       {/* 9:16 at full height, letterboxed never cropped */}
       <div className="flex min-h-0 flex-1 flex-col" data-recording={active ? '' : undefined}>
         {p.renderMedia(
@@ -284,6 +301,10 @@ export function FlowView(p: FlowViewProps) {
         )}
       </div>
 
+    </>
+  )
+  const notesList = (
+    <>
       {notes.some(n => n.status !== 'recording') && (
         <ul aria-label="Your notes" className="max-h-[30dvh] shrink-0 space-y-2 overflow-y-auto border-t border-border bg-bg-secondary px-3 py-2">
           {notes.filter(n => n.status !== 'recording').map(n => {
@@ -337,6 +358,10 @@ export function FlowView(p: FlowViewProps) {
           })}
         </ul>
       )}
+    </>
+  )
+  const statusArea = (
+    <>
       {error && <p role="alert" className="shrink-0 bg-bg-secondary px-4 py-2 text-sm text-status-error">{error}</p>}
       {ob.line && (
         <div className="shrink-0 border-t border-border bg-bg-secondary px-4 py-1.5 text-center" aria-live="polite">
@@ -353,7 +378,7 @@ export function FlowView(p: FlowViewProps) {
           {p.onUndoApprove && <button type="button" onClick={undo} className="press min-h-11 rounded-full px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover">Undo ({toast.secs} s)</button>}
         </div>
       )}
-      {active && (
+      {active && !p.wide && (
         <div className="flex shrink-0 items-center gap-2 border-t border-border bg-bg-secondary pl-4 pr-1" role="status" aria-label="Recording">
           <LevelMeter levelRef={levelRef} />
           <span data-testid="rec-timer" className="min-w-[3.25rem] text-right font-mono text-[17px] font-semibold leading-[22px] tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
@@ -361,6 +386,70 @@ export function FlowView(p: FlowViewProps) {
         </div>
       )}
 
+    </>
+  )
+  const finishButton = (
+    <button type="button" onClick={finish} disabled={sending || (hasNotes ? blocked : (p.approved || !canApprove))}
+      className="press inline-flex h-14 shrink-0 items-center justify-center gap-1.5 rounded-full border border-border px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-50">
+      {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : hasNotes ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{sendLabel}
+    </button>
+  )
+
+  // Desktop (Flask): the video takes the room, notes live in a column on the right, talk / type / draw sit right under the video.
+  if (p.wide) return (
+    <div ref={rootRef} className="relative flex h-full min-h-0 bg-bg-primary" data-testid="flow-view" data-layout="wide">
+      {doneMoment}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {filesBar}
+        {mediaArea}
+        {p.canComment ? (
+          <div className="flex shrink-0 justify-center px-4 pb-4 pt-3">
+            <div className="flex w-full max-w-[560px] items-center gap-2 rounded-2xl border border-border bg-bg-secondary p-1.5 transition-colors focus-within:border-text-tertiary shadow-[0_8px_24px_-12px_rgba(0,0,0,.5)]">
+              <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Talk'} title={active ? 'Stop (saves the note)' : 'Talk and draw while it plays'}
+                className="flow-comment inline-flex h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-text-inverse">
+                {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Talk</>}
+              </button>
+              {active ? (
+                <div className="flex min-w-0 flex-1 items-center gap-2" role="status" aria-label="Recording">
+                  <LevelMeter levelRef={levelRef} />
+                  <span data-testid="rec-timer" className="min-w-[3.25rem] text-right font-mono text-sm font-semibold tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
+                  <button type="button" onClick={cancelRecording} aria-label="Cancel recording" className="press grid h-11 w-11 shrink-0 place-items-center rounded-xl text-text-secondary hover:bg-bg-hover"><X size={18} /></button>
+                </div>
+              ) : (
+                <form onSubmit={typeNote} className="flex min-w-0 flex-1 items-center gap-1">
+                  <input value={typed} onChange={e => setTyped(e.target.value)} onFocus={p.onPause} aria-label="Type a note at the current time"
+                    placeholder={`Leave feedback at ${timecode(p.getPlayhead())}…`}
+                    className="h-11 min-w-0 flex-1 bg-transparent px-2 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none" />
+                  <button type="submit" disabled={!typed.trim()} aria-label="Add note" className="press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-bg-hover text-text-primary disabled:opacity-40"><Send size={15} /></button>
+                </form>
+              )}
+            </div>
+          </div>
+        ) : <p className="shrink-0 py-3 text-center text-sm text-text-secondary">View-only access. Comments are disabled.</p>}
+      </div>
+      <aside aria-label="Feedback" className="flex w-[340px] shrink-0 flex-col border-l border-border bg-bg-secondary">
+        <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
+          <p className="text-sm font-semibold text-text-primary">Feedback{notes.length > 0 && <span className="ml-1.5 tabular-nums text-text-tertiary">{notes.length}</span>}</p>
+          {p.onExit && <button type="button" onClick={p.onExit} className="press min-h-9 rounded-md px-2 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary">{p.exitLabel ?? 'Exit'}</button>}
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col [&>ul]:max-h-none [&>ul]:flex-1 [&>ul]:border-t-0">
+          {notes.some(n => n.status !== 'recording') ? notesList : (
+            <p className="m-auto max-w-[240px] text-center text-sm leading-relaxed text-text-tertiary">Press <span className="font-semibold text-text-secondary">Talk</span> and say what to change while it plays. Draw on the video to point. Or type below the video.</p>
+          )}
+        </div>
+        {statusArea}
+        {p.canComment && <div className="flex shrink-0 border-t border-border p-3 [&>button]:flex-1">{finishButton}</div>}
+      </aside>
+    </div>
+  )
+
+  return (
+    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-bg-primary" style={{ paddingTop: 'env(safe-area-inset-top)' }} data-testid="flow-view">
+      {doneMoment}
+      {filesBar}
+      {mediaArea}
+      {notesList}
+      {statusArea}
       {/* One-hand bottom controls */}
       <div className="flex shrink-0 items-center gap-2 border-t border-border bg-bg-secondary px-3 pt-2" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
         {p.canComment ? (
@@ -369,10 +458,7 @@ export function FlowView(p: FlowViewProps) {
               className="flow-comment inline-flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-5 text-base font-semibold text-text-inverse">
               {active ? <><Square size={18} aria-hidden="true" />Stop</> : <><Mic size={24} aria-hidden="true" />Comment</>}
             </button>
-            <button type="button" onClick={finish} disabled={sending || (hasNotes ? blocked : (p.approved || !canApprove))}
-              className="press inline-flex h-14 shrink-0 items-center justify-center gap-1.5 rounded-full border border-border px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-50">
-              {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : hasNotes ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{sendLabel}
-            </button>
+            {finishButton}
           </>
         ) : <p className="flex-1 py-3 text-center text-sm text-text-secondary">View-only access. Comments are disabled.</p>}
       </div>
