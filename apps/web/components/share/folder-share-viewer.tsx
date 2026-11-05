@@ -25,6 +25,9 @@ import { getUsableAccessToken } from '@/lib/auth'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
 import { FlowView } from '@/components/review/flow-view'
+import { StaticReview, type StaticComment } from '@/components/review/static-review'
+import { byName } from '@/lib/static-pin'
+import { authHeaders } from '@/lib/auth-headers'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
 import { approveSharedAsset, guestDictate, nextFileId, undoApproveSharedAsset } from '@/lib/share-flow'
@@ -990,6 +993,84 @@ function ShareReviewInner({
   )
 }
 
+// ─── Static ads: one image at a time, arrow keys and swipes, notes per image ──────
+
+function StaticShareReview({ token, shareSession, files, startId, permission, onBack, approvedIds, onApproved, onUnapproved }: {
+  token: string; shareSession?: string | null; files: { id: string; name: string }[]; startId: string; permission: SharePermission; onBack: () => void
+  approvedIds: Set<string>; onApproved: (id: string) => void; onUnapproved: (id: string) => void
+}) {
+  const ss = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+  const [showPrompt, setShowPrompt] = React.useState(false)
+  const [refresh, setRefresh] = React.useState(0)
+  const pending = React.useRef<{ id: string; body: string; drawing: Record<string, unknown> | null } | null>(null)
+  const identity = (): { name: string; email: string } | null => {
+    try { return JSON.parse(localStorage.getItem('ff_guest_identity') || 'null') } catch { return null }
+  }
+  const post = async (id: string, body: string, drawing: Record<string, unknown> | null, who = identity()) => {
+    const t = await getUsableAccessToken()
+    if (!t && !who) { pending.current = { id, body, drawing }; setShowPrompt(true); return }
+    const res = await fetch(`${API_URL}/share/${token}/comment?_=1${ss}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(t) },
+      body: JSON.stringify({ body, asset_id: id, ...(drawing ? { annotation: { drawing_data: drawing } } : {}), ...(!t && who ? { guest_name: who.name, guest_email: who.email } : {}) }),
+    })
+    if (!res.ok) {
+      const detail = await res.json().then((d) => (typeof d?.detail === 'string' ? d.detail : null)).catch(() => null)
+      throw new Error(detail ?? 'That did not send. Try again.')
+    }
+  }
+  const approve = async (id: string) => {
+    const t = await getUsableAccessToken()
+    const who = identity()
+    if (!t && !who) { setShowPrompt(true); throw new Error('identity') }
+    await approveSharedAsset(token, id, { identity: t ? null : who, shareSession })
+    onApproved(id)
+  }
+  return (
+    <div className="fixed inset-0 z-50 bg-bg-primary">
+      <StaticReview
+        files={files}
+        startId={startId}
+        canComment={permission === 'comment' || permission === 'approve'}
+        loadImage={async (id) => {
+          const r = await fetch(`${API_URL}/share/${token}/stream/${id}?_=1${ss}`)
+          if (!r.ok) throw new Error('Failed to load image')
+          return (await r.json()).url as string
+        }}
+        loadComments={async (id): Promise<StaticComment[]> => {
+          const r = await fetch(`${API_URL}/share/${token}/comments?asset_id=${id}&latest_only=true${ss}`)
+          if (!r.ok) return []
+          const j = await r.json()
+          return Array.isArray(j) ? j : (j.comments ?? [])
+        }}
+        postComment={(id, body, drawing) => post(id, body, drawing)}
+        refreshToken={refresh}
+        onExit={onBack}
+        exitLabel="Files"
+        approvedIds={permission === 'approve' ? approvedIds : undefined}
+        onApprove={permission === 'approve' ? approve : undefined}
+        onUnapprove={permission === 'approve' ? async (id) => {
+          const t = await getUsableAccessToken()
+          await undoApproveSharedAsset(token, id, { shareSession, headers: t ? { Authorization: `Bearer ${t}` } : undefined })
+          onUnapproved(id)
+        } : undefined}
+      />
+      {showPrompt && (
+        <GuestIdentityPrompt
+          onSave={(name, email) => {
+            const who = { name, email }
+            try { localStorage.setItem('ff_guest_identity', JSON.stringify(who)) } catch { /* sent once without remembering */ }
+            setShowPrompt(false)
+            const n = pending.current; pending.current = null
+            if (n) void post(n.id, n.body, n.drawing, who).then(() => setRefresh((x) => x + 1)).catch(() => {})
+          }}
+          onCancel={() => { setShowPrompt(false); pending.current = null }}
+        />
+      )}
+    </div>
+  )
+}
+
 // ─── Guest Identity Prompt ───────────────────────────────────────────────────
 
 function GuestIdentityPrompt({ onSave, onCancel }: { onSave: (name: string, email: string) => void; onCancel: () => void }) {
@@ -1256,6 +1337,24 @@ export function FolderShareViewer({
   const currentTitle = breadcrumbs.length > 0
     ? breadcrumbs[breadcrumbs.length - 1].name
     : (title || folderName)
+
+  // Static ads: their own viewer, over the images of this folder only
+  if (viewingAsset && viewingAsset.asset_type === 'image') {
+    const statics = assets.filter((a) => a.asset_type === 'image').sort(byName)
+    return (
+      <StaticShareReview
+        token={token}
+        shareSession={shareSession}
+        files={statics.map((a) => ({ id: a.id, name: a.name }))}
+        startId={viewingAsset.id}
+        permission={permission}
+        onBack={() => setViewingAsset(null)}
+        approvedIds={approvedIds}
+        onApproved={(id) => setApprovedIds((prev) => new Set(prev).add(id))}
+        onUnapproved={(id) => setApprovedIds((prev) => { const n = new Set(prev); n.delete(id); return n })}
+      />
+    )
+  }
 
   // Asset viewer overlay
   if (viewingAsset) {

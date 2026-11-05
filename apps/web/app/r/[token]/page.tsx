@@ -101,7 +101,7 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
     } catch (e) { update(job.id, { phase: 'error', error: e instanceof Error ? e.message : 'Upload stopped. Try again.' }) }
   }
   const onFiles = (files: File[]) => {
-    if (files.some(file => !file.type.startsWith('video/') && !/\.(mp4|mov|webm|m4v)$/i.test(file.name))) { setError('Choose a video file for this review.'); return }
+    if (files.some(file => !file.type.startsWith('video/') && !/^image\/(png|jpeg|webp)$/.test(file.type) && !/\.(mp4|mov|webm|m4v|png|jpe?g|webp)$/i.test(file.name))) { setError('Choose a video or an image (PNG, JPEG, WebP).'); return }
     onActivity?.()
     const chosen = revision ? files.slice(0, 1) : files
     const fresh = chosen.map(file => ({ id: crypto.randomUUID(), file, assetId: revision?.asset_id, progress: 0, phase: 'queued' as UploadPhase }))
@@ -127,7 +127,7 @@ function CompleteRequestPage({ params: { token }, onActivity }: { params: { toke
       {showUpload ? <>
         {hasSubmission && !uploading && <button className="mb-4 flex min-h-11 items-center gap-2 text-sm text-text-secondary" onClick={() => { setUploadMode(false); setRevision(null) }}><ArrowLeft size={16} /> {complete ? 'Back' : `Back to ${revision ? `v${revision.version} ` : ''}feedback`}</button>}
         {complete && <p className="mb-4 text-sm text-text-secondary">Files already handed in keep their result. A new file gets its own review, then this hand-in finishes again.</p>}
-        <DropZone onFiles={onFiles} multiple={!revision} accept="video/*" disabled={uploading && !!revision} title={revision ? `Drop ${revision.name} · v${revision.version + 1}` : hasSubmission || batchOpen ? 'Drop more files to add them' : 'Drop your files to begin'} hint={revision ? 'New filename? No problem. This replaces the selected cut.' : 'Video files · or choose files'} />{jobs.filter(j => j.phase !== 'submitted' || batchOpen).map(jobCard)}{uploaderDetails}
+        <DropZone onFiles={onFiles} multiple={!revision} accept="video/*,image/png,image/jpeg,image/webp" disabled={uploading && !!revision} title={revision ? `Drop ${revision.name} · v${revision.version + 1}` : hasSubmission || batchOpen ? 'Drop more files to add them' : 'Drop your files to begin'} hint={revision ? 'New filename? No problem. This replaces the selected cut.' : 'Videos or images · or choose files'} />{jobs.filter(j => j.phase !== 'submitted' || batchOpen).map(jobCard)}{uploaderDetails}
       </> : <>
         <RequestWorkspace statusUnavailable={!!reviewError} token={token} brand={view.brand} assets={assets} activeId={activeId} onSelect={setActiveId} onRefresh={refresh} onRevise={asset => { setRevision(asset); setUploadMode(true) }} onDiscard={async asset => { try { await discardUpload(token, { asset_id: asset.asset_id, version_id: asset.version_id! }); setActiveId(undefined); await refresh() } catch (e) { setError(e instanceof Error ? e.message : 'That file could not be removed. Try again.'); await refresh() } }} onObject={async (asset, comment, text) => { const result = await objectToNote(token, { asset_id: asset.asset_id, version_id: asset.version_id, comment_id: comment.id, body: comment.body, text, name: who.name }); refresh(); return result }} />
         <button className="mx-auto mt-5 flex min-h-11 rounded-full border border-border px-5 text-sm font-medium items-center" onClick={() => { setRevision(null); setUploadMode(true) }}>Add more files</button>

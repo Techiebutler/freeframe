@@ -84,6 +84,14 @@ def asset_name_for(filename: str) -> str:
     return os.path.splitext(os.path.basename(filename or ""))[0].strip()[:255] or "Untitled"
 
 
+# Static ads: reviewed by a person (arrow keys through the set), not by the video reviewer.
+STATIC_MIME_TYPES = {'image/png', 'image/jpeg', 'image/webp'}
+
+
+def _is_static(entry: dict) -> bool:
+    return entry.get('asset_type') == 'image'
+
+
 def _request_gate(assets: list[dict], bridge: Optional[dict]) -> dict:
     """One verdict for owner, editor and finish; missing evidence never means Ready."""
     visible = sum(bool(c.get('must_fix') or c.get('weight') == 'must_fix') for a in assets for c in a.get('comments', []))
@@ -92,6 +100,10 @@ def _request_gate(assets: list[dict], bridge: Optional[dict]) -> dict:
     valid = type(bridge_count) is int and bridge_count >= 0 and bridge.get('status') in ('reviewing', 'held', 'clear', 'unavailable')
     count = max(visible, sum(n for n in counts if type(n) is int and n >= 0), bridge_count if valid else 0)
     states = [a.get('review_state', 'unavailable') for a in assets]
+    if assets and all(_is_static(a) for a in assets) and not count:
+        # Nothing to wait for: no automatic reviewer reads images, so the video bridge has no say.
+        state = 'clear' if all(st == 'clear' for st in states) else 'reviewing' if all(st in ('clear', 'reviewing', 'upload_incomplete') for st in states) else 'unavailable'
+        return {'status': state, 'open_must_fixes': 0}
     if count or 'held' in states or (valid and bridge['status'] == 'held'):
         state = 'held'
     elif not assets:
@@ -571,8 +583,8 @@ def guest_initiate(token: str, body: GuestInitiate, db: Session = Depends(get_db
     agent = _as_agent(req, agent, body)
     if body.mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {body.mime_type}")
-    if not body.mime_type.startswith('video/'):
-        raise HTTPException(400, 'Automatic request review currently supports videos. Choose a video file.')
+    if not (body.mime_type.startswith('video/') or body.mime_type in STATIC_MIME_TYPES):
+        raise HTTPException(400, 'Requests take videos or static images (PNG, JPEG, WebP).')
     guard = upload_guard_error(db, body.file_size_bytes)
     if guard:
         raise HTTPException(status_code=400, detail=guard)
@@ -814,6 +826,9 @@ def _version_review(db, req, asset, version, reviewer, evidence, include_media=T
                      'review_source': public_review_source(getattr(c, 'review_source', None))}
                     for c in rows if c.id not in withdrawn]
     state = editor_review_state(version, evidence)
+    if asset.asset_type == AssetType.image and state in ('reviewing', 'unavailable') and version \
+            and version.processing_status == ProcessingStatus.ready:
+        state = 'clear'  # no automatic reviewer reads images; the file is ready, a person reviews it
     if version and components(req):
         item=next((v for category in ('slots','outputs') for v in (req.iteration_state or {}).get(category,{}).values()
             if v.get('asset_id')==str(asset.id) and v.get('version_id')==str(version.id)),None)
@@ -836,7 +851,7 @@ def _version_review(db, req, asset, version, reviewer, evidence, include_media=T
     if progress and not progress.get('estimate') and media and media.duration_seconds and evidence.get('estimates'):
         bucket = 'short' if media.duration_seconds <= 60 else 'medium' if media.duration_seconds <= 120 else 'long'
         progress['estimate'] = evidence['estimates'].get(bucket)
-    review_error = None if asset.asset_type == AssetType.video else 'Automatic review supports videos. Ask the owner to move this attachment out of the request.'
+    review_error = None if asset.asset_type in (AssetType.video, AssetType.image) else 'Automatic review supports videos and images. Ask the owner to move this attachment out of the request.'
     return {'asset_id': str(asset.id), 'name': asset.name, 'asset_type': asset.asset_type.value, 'review_error': review_error,
             'version_id': str(version.id) if version else None, 'version': version.version_number if version else 0,
             'processing': version.processing_status.value if version else 'uploading',
@@ -873,7 +888,8 @@ def _review_assets(db, req, assets, reviewer, stats, include_media=True):
 
 def _editor_review(db, req):
     assets = _submitted_assets(db, req)
-    stats = review_bridge.asset_stats([str(a.id) for a in assets], request_token=req.review_share_token)
+    videos = [str(a.id) for a in assets if a.asset_type != AssetType.image]
+    stats = review_bridge.asset_stats(videos, request_token=req.review_share_token) if videos else {}
     reviewer = db.query(GuestUser).filter(GuestUser.email == REVIEWER_EMAIL).first()
     out = _review_assets(db, req, assets, reviewer, stats)
     bridge = review_bridge.request_status([req.review_share_token]).get(req.review_share_token)
