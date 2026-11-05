@@ -80,7 +80,7 @@ function InkThumb({ mark }: { mark: InkMark }) {
   )
 }
 
-function dictationMessage(e: unknown): string {
+export function dictationMessage(e: unknown): string {
   const detail = (e as { detail?: string })?.detail
   return detail === 'dictation_unavailable' ? 'Dictation is not set up. Type your note instead.' : 'Could not transcribe. Try again or type it.'
 }

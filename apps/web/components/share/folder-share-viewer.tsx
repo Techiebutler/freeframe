@@ -1045,6 +1045,7 @@ function StaticShareReview({ token, shareSession, files, startId, permission, on
         }}
         postComment={(id, body, drawing) => post(id, body, drawing)}
         refreshToken={refresh}
+        dictate={(audio) => guestDictate(token, audio, shareSession)}
         onExit={onBack}
         exitLabel="Files"
         approvedIds={permission === 'approve' ? approvedIds : undefined}

@@ -1,10 +1,14 @@
 'use client'
 
 import * as React from 'react'
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, Loader2, MapPin, Send, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, Loader2, MapPin, Mic, Send, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { containedRect } from '@/lib/ink'
 import { pinDrawing, pinOf } from '@/lib/static-pin'
+import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
+import { startMicRecording, type ActiveRecording, type StartRecording } from '@/lib/recorder'
+import { dictationMessage } from './flow-view'
+import { LevelMeter } from './level-meter'
 
 export interface StaticFile { id: string; name: string }
 export interface StaticComment {
@@ -31,6 +35,9 @@ export interface StaticReviewProps {
   onUnapprove?: (id: string) => Promise<void>
   /** Bump to re-read the comments (a note that waited for the reviewer's name was sent). */
   refreshToken?: number
+  /** Voice memo: Talk records, this turns the audio into the note's words. Defaults to the signed-in dictation. */
+  dictate?: (audio: Blob) => Promise<DictationResult>
+  startRecording?: StartRecording
 }
 
 const NEIGHBOURS = [1, -1, 2, -2]
@@ -96,7 +103,7 @@ export function StaticReview(p: StaticReviewProps) {
   const go = React.useCallback((d: number) => {
     setIndex(i => {
       const next = Math.min(total - 1, Math.max(0, i + d))
-      if (next !== i) { setPending(null); setFocused(null); setError('') }
+      if (next !== i) { if (!recRef.current) setPending(null); setFocused(null); setError('') }
       return next
     })
   }, [total])
@@ -160,6 +167,64 @@ export function StaticReview(p: StaticReviewProps) {
     finally { setApproving(false) }
   }
 
+  // ── Voice memo: Talk records; a tap on the image while recording sets the pin; the words become the note ──
+  const dictate = p.dictate ?? dictateApi
+  const start = p.startRecording ?? startMicRecording
+  const [rec, setRec] = React.useState<{ rec: ActiveRecording; startedAt: number; fileId: string } | null>(null)
+  const [elapsed, setElapsed] = React.useState(0)
+  const [transcribing, setTranscribing] = React.useState(false)
+  const [memoMsg, setMemoMsg] = React.useState('')
+  const level = React.useRef(0)
+  const pendingRef = React.useRef(pending)
+  pendingRef.current = pending
+  React.useEffect(() => {
+    if (!rec) { setElapsed(0); return }
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - rec.startedAt) / 1000)), 500)
+    return () => clearInterval(id)
+  }, [rec])
+  React.useEffect(() => () => { recRef.current?.rec.cancel() }, [])
+  const recRef = React.useRef(rec)
+  recRef.current = rec
+  const [memo, setMemo] = React.useState<{ state: 'saving' | 'saved' | 'failed'; fileId: string; words: string; pin: [number, number] | null } | null>(null)
+  /** The memo goes out on its own, to the image it was recorded on, with the pin if one was set (as on video). */
+  const saveMemo = async (m: { fileId: string; words: string; pin: [number, number] | null }) => {
+    setMemo({ ...m, state: 'saving' })
+    try {
+      await p.postComment(m.fileId, m.words, m.pin ? pinDrawing(m.pin[0], m.pin[1]) : null)
+      setMemo({ ...m, state: 'saved' })
+      setReload(n => n + 1)
+      setTimeout(() => setMemo(cur => (cur?.state === 'saved' && cur.words === m.words ? null : cur)), 3000)
+    } catch { setMemo({ ...m, state: 'failed' }) }
+  }
+  const talk = async () => {
+    setMemoMsg(''); setError(''); setMemo(null)
+    if (rec) {
+      const { rec: r, fileId } = rec
+      const pin = pendingRef.current
+      setRec(null); setTranscribing(true)
+      try {
+        const out = await dictate(await r.stop())
+        const words = out.text.trim()
+        if (!words) { setMemoMsg('Nothing was heard. Try again or type it.'); return }
+        if (fileId === currentIdRef.current) setPending(null)
+        await saveMemo({ fileId, words, pin })
+      } catch (e) { setMemoMsg(dictationMessage(e)) }
+      finally { setTranscribing(false) }
+      return
+    }
+    try {
+      level.current = 0
+      const r = await start(v => { level.current = v })
+      setRec({ rec: r, startedAt: Date.now(), fileId: file!.id })
+    } catch (e) {
+      const denied = (e as Error)?.name === 'NotAllowedError' || (e as Error)?.name === 'SecurityError'
+      setMemoMsg(denied ? 'Microphone is blocked. Allow it in the browser, or type your note.' : 'Microphone unavailable. Type your note instead.')
+    }
+  }
+  const cancelTalk = () => { rec?.rec.cancel(); setRec(null); setPending(null) }
+  const currentIdRef = React.useRef(file?.id)
+  currentIdRef.current = file?.id
+
   if (!file) return <div className="grid h-dvh place-items-center bg-bg-primary text-sm text-text-secondary">No images to review.</div>
 
   const pinned = (notes ?? []).map(c => ({ c, at: pinOf(c.annotation?.drawing_data) })).filter(x => x.at)
@@ -188,6 +253,7 @@ export function StaticReview(p: StaticReviewProps) {
             if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1)
           }}
         >
+          {rec && <div className="flow-rec-glow" data-testid="rec-glow" aria-hidden="true" />}
           {/* Padding lives on the outside: the measured box is exactly the room the picture may use. */}
           <div className="absolute inset-0 p-3 md:p-6">
           <div ref={stage} className="flex h-full w-full items-center justify-center">
@@ -221,7 +287,7 @@ export function StaticReview(p: StaticReviewProps) {
                     style={{ left: `${at![0] * 100}%`, top: `${at![1] * 100}%`, background: PIN, boxShadow: '0 3px 10px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.15)' }}
                   >{numberOf(c.id)}</button>
                 ))}
-                {pending && (
+                {pending && (!rec || rec.fileId === file.id) && (
                   <span aria-hidden="true" data-testid="pending-pin" className="pointer-events-none absolute z-10 h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white" style={{ left: `${pending[0] * 100}%`, top: `${pending[1] * 100}%`, background: `color-mix(in oklab, ${PIN} 35%, transparent)`, boxShadow: '0 3px 10px rgba(0,0,0,.45)' }} />
                 )}
               </div>
@@ -282,16 +348,40 @@ export function StaticReview(p: StaticReviewProps) {
                 <button type="button" onClick={() => setPending(null)} aria-label="Remove pin" className="press -my-2 ml-auto grid h-11 w-11 place-items-center rounded-full text-text-secondary hover:bg-bg-hover"><X size={14} /></button>
               </p>
             )}
-            <div className="flex items-end gap-2 rounded-2xl border border-border bg-bg-primary p-1.5 focus-within:border-text-tertiary">
-              <textarea value={text} onChange={e => setText(e.target.value)} rows={2} aria-label="Write a note on this image"
-                onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(e) } }}
-                placeholder={pending ? 'What should change here?' : 'Write a note, or tap the image to pin it…'}
-                className="max-h-32 min-h-11 min-w-0 flex-1 resize-none bg-transparent px-2 py-2.5 text-base text-text-primary outline-none placeholder:text-text-tertiary focus:outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none" />
-              <button type="submit" disabled={!text.trim() || sending} aria-label="Send note"
+            <div className="rounded-2xl border border-border bg-bg-primary p-1.5 focus-within:border-text-tertiary">
+              {rec ? (
+                <div className="flex h-11 min-w-0 items-center gap-2 px-1" role="status" aria-label="Recording">
+                  <LevelMeter levelRef={level} />
+                  <span data-testid="rec-timer" className="min-w-[3rem] text-right font-mono text-sm font-semibold tabular-nums">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
+                  <button type="button" onClick={cancelTalk} aria-label="Cancel recording" className="press grid h-11 w-11 shrink-0 place-items-center rounded-xl text-text-secondary hover:bg-bg-hover"><X size={18} /></button>
+                </div>
+              ) : transcribing ? (
+                <p role="status" className="flex h-11 min-w-0 items-center gap-2 px-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />Transcribing…</p>
+              ) : (
+                <textarea value={text} onChange={e => setText(e.target.value)} rows={2} aria-label="Write a note on this image"
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(e) } }}
+                  placeholder={pending ? 'What should change here?' : 'Write a note, or tap the image to pin it…'}
+                  className="max-h-32 min-h-11 block w-full min-w-0 resize-none bg-transparent px-2 py-2.5 text-base text-text-primary outline-none placeholder:text-text-tertiary focus:outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none" />
+              )}
+              <div className="flex items-center justify-between gap-2 pt-1">
+              <button type="button" onClick={talk} disabled={transcribing} aria-label={rec ? 'Stop recording' : 'Talk'} title={rec ? 'Stop (the words become your note)' : 'Talk: say what to change'}
+                className="flow-comment inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl px-3.5 text-sm font-semibold text-text-inverse disabled:opacity-40">
+                {rec ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Talk</>}
+              </button>
+              <button type="submit" disabled={!text.trim() || sending || !!rec || transcribing} aria-label="Send note"
                 className="flow-comment inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl px-4 text-sm font-semibold text-text-inverse disabled:opacity-40">
                 {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : <Send size={16} aria-hidden="true" />}Send
               </button>
+              </div>
             </div>
+            {memo && (
+              <p role={memo.state === 'failed' ? 'alert' : 'status'} data-testid="memo-status" data-state={memo.state} className={cn('mt-2 flex items-center gap-2 text-xs', memo.state === 'failed' ? 'text-status-error' : memo.state === 'saved' ? 'text-status-success' : 'text-text-secondary')}>
+                {memo.state === 'saving' && <><Loader2 size={13} className="animate-spin motion-reduce:animate-none" />Saving your memo…</>}
+                {memo.state === 'saved' && <><Check size={14} aria-hidden="true" />Memo saved</>}
+                {memo.state === 'failed' && <>Could not save your memo.<button type="button" onClick={() => void saveMemo(memo)} className="press inline-flex min-h-11 items-center font-semibold underline">Retry</button></>}
+              </p>
+            )}
+            {memoMsg && <p role="alert" className="mt-2 text-xs text-text-secondary">{memoMsg}</p>}
           </form>
         ) : <p className="shrink-0 border-t border-border py-3 text-center text-sm text-text-secondary">View-only access. Comments are disabled.</p>}
       </aside>
