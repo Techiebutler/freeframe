@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ProjectKanban } from '../project-kanban'
 import type { FileRequest } from '@/lib/platform'
@@ -108,14 +108,20 @@ it('keeps a late briefing failure visible and opens the existing link details fo
   expect(screen.getByRole('button',{name:'Share Launch'})).toBeEnabled()
 })
 
-it('moves finished projects off the board one by one or all at once', () => {
+it('celebrates, then moves finished projects off the board one by one or all at once', () => {
+  vi.useFakeTimers()
   const onDone=vi.fn()
   const a=request('A',{status:'clear'}), b=request('B',{status:'clear'})
-  render(<ProjectKanban requests={[a,b]} paused={false} onShare={vi.fn()} onDone={onDone} />)
+  const { container }=render(<ProjectKanban requests={[a,b]} paused={false} onShare={vi.fn()} onDone={onDone} />)
   fireEvent.click(screen.getByRole('button',{name:'Mark A done'}))
+  expect(container.querySelector('[data-request-id="A"]')).toHaveAttribute('data-leaving')
+  expect(onDone).not.toHaveBeenCalled()
+  act(() => { vi.advanceTimersByTime(700) })
   expect(onDone).toHaveBeenLastCalledWith([a])
   fireEvent.click(screen.getByRole('button',{name:'All done'}))
+  act(() => { vi.advanceTimersByTime(770) })
   expect(onDone).toHaveBeenLastCalledWith([a,b])
+  vi.useRealTimers()
 })
 
 it.each(['briefing-unavailable','plan-api-unavailable','review-unconfigured','plan-unavailable'])('stays quiet for the infra failure %s', code => {
