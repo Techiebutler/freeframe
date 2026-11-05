@@ -179,6 +179,8 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const canComment = currentRole !== 'viewer'
   // delete_comment lets a project owner remove anyone's comment.
   const canModerate = currentRole === 'owner'
+  // Deleting a version needs the role deleting the asset does.
+  const canDeleteVersion = currentRole === 'owner' || currentRole === 'editor'
 
   // Prev/next walks the asset's own folder in the order the project view shows
   // it, not the whole project. Same key as the project page, so the list is
@@ -300,6 +302,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     function handleKeyDown(e: KeyboardEvent) {
       if (searchParams.get('compare')) return
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      // An open menu or dialog uses the arrows itself (the version switcher's
+      // ⋯ opens and closes on Right and Left); leaving the asset under it
+      // took the menu, and the keyboard focus, with it.
+      if (e.target instanceof Element && e.target.closest('[role="dialog"], [role="menu"]')) return
       if (e.key === 'ArrowLeft' && prevAsset) {
         e.preventDefault()
         navigateAsset(prevAsset.id)
@@ -658,7 +664,20 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               // transcode events then drive it through processing → ready (#118).
             }}
           />
-          <VersionSwitcher versions={versions} />
+          <VersionSwitcher
+            versions={versions}
+            canDelete={canDeleteVersion}
+            onVersionsChanged={() => {
+              // Deleting or restoring a version produces no event, so nothing else refetches.
+              refetchVersions()
+              refetchComments()
+            }}
+            onShownVersionDeleted={(deleted, now) => {
+              toast.info(now
+                ? `v${deleted.version_number} deleted — now showing v${now.version_number}`
+                : `v${deleted.version_number} deleted`)
+            }}
+          />
           {asset && canCompare(asset.asset_type, versions) && (
             <button
               onClick={() => {

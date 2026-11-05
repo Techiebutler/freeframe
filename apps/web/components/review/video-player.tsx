@@ -362,6 +362,9 @@ export function VideoPlayer({
       ) {
         return;
       }
+      // Keys pressed in an open menu or dialog are theirs: Right and Left open
+      // and close a submenu, Space picks an item, letters jump to one.
+      if (e.target instanceof Element && e.target.closest('[role="dialog"], [role="menu"]')) return;
 
       // Shuttle keys: each press of J or L is one step faster in that
       // direction, so a held key's auto-repeat is ignored, and so is a
