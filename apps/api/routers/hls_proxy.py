@@ -8,6 +8,7 @@ This eliminates the need for a public bucket policy on processed/*.
 """
 
 import logging
+from functools import lru_cache
 import posixpath
 from datetime import datetime, timedelta, timezone
 
@@ -102,20 +103,31 @@ def hls_proxy(path: str, token: str = Query(...)):
         raise HTTPException(status_code=400, detail="Invalid path")
 
     # Fetch manifest from S3
-    s3 = get_s3_client()
     try:
-        obj = s3.get_object(Bucket=settings.s3_bucket, Key=s3_key)
-        content = obj["Body"].read().decode("utf-8")
-    except s3.exceptions.NoSuchKey:
-        raise HTTPException(status_code=404, detail="Manifest not found")
+        content = _read_manifest(s3_key)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to fetch HLS manifest %s: %s", s3_key, e)
         raise HTTPException(status_code=404, detail="Manifest not found")
 
     rewritten = _rewrite_manifest(content, s3_prefix, normalised, token)
 
+    # A processed manifest never changes and its segment links live 24 h: the browser may keep it for a
+    # few minutes, so switching between files (and the web app's prefetch) does not wait on this round trip.
     return Response(
         content=rewritten,
         media_type="application/vnd.apple.mpegurl",
-        headers={"Cache-Control": "no-cache"},
+        headers={"Cache-Control": "private, max-age=600"},
     )
+
+
+# ponytail: per-process cache of immutable processed manifests (a few KB each); add a TTL if they ever get rewritten in place.
+@lru_cache(maxsize=1024)
+def _read_manifest(s3_key: str) -> str:
+    s3 = get_s3_client()
+    try:
+        obj = s3.get_object(Bucket=settings.s3_bucket, Key=s3_key)
+    except s3.exceptions.NoSuchKey:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+    return obj["Body"].read().decode("utf-8")

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The next video's first frame is ready before you switch: HLS manifests are cached (server memory + 10 min browser cache), and the briefing's other videos warm their first segment in the background.
+
+### Fixed
 - Switching between a briefing's files is instant: the other files load in the background, and share links keep the last frame instead of a full-screen spinner.
 
 ### Changed
