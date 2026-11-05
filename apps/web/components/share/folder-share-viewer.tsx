@@ -1,5 +1,6 @@
 'use client'
 
+import { prefetchReviews } from '@/lib/review-prefetch'
 import * as React from 'react'
 import {
   Folder,
@@ -717,7 +718,11 @@ function ShareReviewInner({
   token, shareSession, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
-  const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
+  const { asset, versions, comments, refetchComments, addComment } = useReview()
+  // Switching files must be instant: load the others in the background
+  React.useEffect(() => {
+    if (files?.length && asset) prefetchReviews(files.map((f: { id: string }) => f.id).filter((id: string) => id !== asset.id), { token, session: shareSession })
+  }, [files, asset?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const { currentVersion, isDrawingMode, focusedCommentId, seekTo } = useReviewStore()
   const isNarrow = useIsNarrow()
   const [phoneView, setPhoneView] = usePhoneView()
@@ -776,7 +781,8 @@ function ShareReviewInner({
     }
   }, [submitComment])
 
-  if (isLoading || !asset) {
+  // Only the very first file shows a spinner; switching keeps the last frame until the next one is in
+  if (!asset) {
     return <div className="flex items-center justify-center h-screen bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
   }
 
@@ -801,6 +807,7 @@ function ShareReviewInner({
         <div className="flex min-h-0 flex-1 justify-center">
           <div className={isNarrow ? 'h-full w-full max-w-[430px] md:border-x md:border-border' : 'h-full w-full'}>
             <FlowView
+              key={asset.id}
               renderMedia={(ink, extra) => (
                 <VideoPlayer
                   assetId={asset.id}

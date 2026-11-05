@@ -14,6 +14,7 @@ import React, {
 import { api } from "@/lib/api";
 import { getLiveAccessToken, getUsableAccessToken } from "@/lib/auth";
 import { useReviewStore } from "@/stores/review-store";
+import { shareJson, shareStreamKey, shareVersionsKey, take } from "@/lib/review-prefetch";
 import type { AssetResponse, AssetVersion, Comment } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -97,16 +98,8 @@ export function ReviewProvider({
 
       if (shareToken) {
         // Share mode: fetch stream info to build a pseudo asset
-        const API_URL =
-          process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        const headers: Record<string, string> = {};
-        const t = getLiveAccessToken();
-        Object.assign(headers, authHeaders(t));
-        const streamRes = await fetch(
-          `${API_URL}/share/${shareToken}/stream/${assetId}?_=1${shareSessionParam}`,
-          { headers },
-        );
-        const streamData = streamRes.ok ? await streamRes.json() : null;
+        const streamUrl = shareStreamKey(shareToken, assetId, shareSessionParam);
+        const streamData: any = await take(streamUrl, () => shareJson(streamUrl));
         // Build pseudo asset from available data
         data = {
           id: assetId,
@@ -141,7 +134,7 @@ export function ReviewProvider({
         } as AssetResponse;
       } else {
         // Normal mode: authenticated API
-        data = await api.get<AssetResponse>(`/assets/${assetId}`);
+        data = await take(`/assets/${assetId}`, () => api.get<AssetResponse>(`/assets/${assetId}`));
       }
 
       if (!mountedRef.current) return;
@@ -150,9 +143,7 @@ export function ReviewProvider({
 
       if (!shareToken) {
         // Fetch all versions for the version switcher (not available in share mode)
-        const allVersions = await api.get<AssetVersion[]>(
-          `/assets/${assetId}/versions`,
-        );
+        const allVersions = await take(`/assets/${assetId}/versions`, () => api.get<AssetVersion[]>(`/assets/${assetId}/versions`));
         if (!mountedRef.current) return;
         setVersions(allVersions ?? []);
 
@@ -169,17 +160,9 @@ export function ReviewProvider({
         // versions only when the link enables "Show all versions", else just the latest).
         // The initial stream_url above already corresponds to the latest version.
         streamedVersionRef.current = data.latest_version?.id ?? null;
-        const API_URL =
-          process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        const headers: Record<string, string> = {};
-        const t = getLiveAccessToken();
-        Object.assign(headers, authHeaders(t));
         try {
-          const vres = await fetch(
-            `${API_URL}/share/${shareToken}/assets/${assetId}/versions?_=1${shareSessionParam}`,
-            { headers },
-          );
-          const vlist = vres.ok ? await vres.json() : [];
+          const versionsUrl = shareVersionsKey(shareToken, assetId, shareSessionParam);
+          const vlist = (await take(versionsUrl, () => shareJson(versionsUrl))) ?? [];
           if (!mountedRef.current) return;
           const mapped = ((vlist as any[]) ?? []).map((v) => ({
             id: v.id,
@@ -226,7 +209,7 @@ export function ReviewProvider({
           data = [];
         }
       } else {
-        data = await api.get<Comment[]>(`/assets/${assetId}/comments`);
+        data = await take(`/assets/${assetId}/comments`, () => api.get<Comment[]>(`/assets/${assetId}/comments`));
       }
       if (!mountedRef.current || reqId !== commentsReqRef.current) return;
       setComments(data ?? []);

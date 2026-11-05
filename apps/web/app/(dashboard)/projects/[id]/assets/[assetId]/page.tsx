@@ -28,6 +28,7 @@ import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
 import { FlowView } from '@/components/review/flow-view'
 import { closeRound } from '@/lib/agents'
+import { prefetchReviews } from '@/lib/review-prefetch'
 import { SendToAgent, useAgentRequest, useRequestHeartbeat } from '@/components/agents/send-to-agent'
 import {
   ArrowLeft,
@@ -126,6 +127,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     folderKey ? `/projects/${projectId}/assets?folder_id=${folderKey}` : null,
     (url: string) => api.get<AssetResponse[]>(url),
   )
+  // Switching between them must be instant: load the others in the background
+  useEffect(() => {
+    if (allAssets && asset) prefetchReviews(allAssets.filter((a) => a.id !== asset.id).map((a) => a.id))
+  }, [allAssets, asset?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Agents: the owner can hand this folder's comments to the agents paired with its request
   const isOwner = currentRole === 'owner'
