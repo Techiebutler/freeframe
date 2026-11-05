@@ -38,7 +38,8 @@ export const newestReady = (versions: AssetVersion[]) =>
 async function warmVideo(streamUrl?: string | null) {
   if (!streamUrl || !streamUrl.includes('.m3u8')) return
   const lines = (txt: string) => txt.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-  const master = streamUrl.startsWith('/') ? `${API_URL()}${streamUrl}` : streamUrl
+  // NEXT_PUBLIC_API_URL can be relative (/api): resolve against the page, or new URL() throws
+  const master = new URL(streamUrl.startsWith("/") ? `${API_URL()}${streamUrl}` : streamUrl, window.location.href).href
   for (const v of lines(await (await fetch(master)).text()).slice(0, 3)) {
     const variant = new URL(v, master).href
     const seg = lines(await (await fetch(variant)).text())[0]
