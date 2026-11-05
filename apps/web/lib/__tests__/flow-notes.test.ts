@@ -86,6 +86,14 @@ describe('notesFromDictation', () => {
     expect(parts[0]).toMatchObject({ t: 2, text: 'Late.' })
     expect(parts[0].marks).toHaveLength(1)
   })
+  it('everything said and drawn on one paused frame is ONE note, not a dot per fragment', () => {
+    const tl: TimelinePoint[] = [{ rec_ms: 0, video_t: 3.2, playing: false, rate: 1 }]
+    const segs = [{ start: 0, end: 1, text: 'und dann haben wir eine Person,' }, { start: 1.2, end: 2, text: 'also die grindet' }, { start: 2.5, end: 3, text: 'zum Beispiel.' }]
+    const parts = notesFromDictation(ms => videoTimeAt(tl, ms), 'x', segs, [mk(100), mk(1500), mk(2600)])
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ t: 3.2, text: 'und dann haben wir eine Person, also die grindet zum Beispiel.' })
+    expect(parts[0].marks).toHaveLength(3)
+  })
   it('splits a note in the reducer and keeps order', () => {
     const s = notesReducer(add([], 'a', 10), { type: 'split', id: 'a', parts: [{ id: 'a', t: 10, text: 'One.', marks: [] }, { id: 'b', t: 13.5, text: 'Two.', marks: [] }] })
     expect(s.map(n => [n.id, n.status])).toEqual([['a', 'ready'], ['b', 'ready']])

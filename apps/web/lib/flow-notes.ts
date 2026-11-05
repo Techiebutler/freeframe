@@ -63,7 +63,7 @@ export const sendBlocked = (notes: FlowNote[]) => notes.some(n => n.status === '
 export interface NotePart { t: number; text: string; marks: InkMark[] }
 
 /**
- * One note per spoken segment (H69). `timeAt` maps an offset into the recording to video time (pauses, seeks and
+ * One note per spoken segment (H69), fragments on the same frame merged. `timeAt` maps an offset into the recording to video time (pauses, seeks and
  * playback rate included), for the sentence's note AND for every ink mark. A mark belongs to the last segment that
  * had started when it was drawn. No segments: one note with everything.
  */
@@ -77,5 +77,14 @@ export function notesFromDictation(timeAt: (offsetMs: number) => number, text: s
     spoken.forEach((s, idx) => { if (s.start * 1000 <= m.offset_ms) i = idx })
     parts[i].marks.push(m)
   }
-  return parts
+  // Fragments on (nearly) the same frame are one thought: paused while drawing, they would all stack on one timestamp.
+  return parts.reduce<NotePart[]>((out, part) => {
+    const prev = out[out.length - 1]
+    if (prev && Math.abs(part.t - prev.t) < SAME_FRAME_S) { prev.text = `${prev.text} ${part.text}`; prev.marks.push(...part.marks) }
+    else out.push(part)
+    return out
+  }, [])
 }
+
+/** Fragments closer than this in video time join one note. */
+const SAME_FRAME_S = 0.5
