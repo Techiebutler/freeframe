@@ -167,6 +167,7 @@ _REAL_DB_ONLY_FILES = {
     "test_n8n_feedback_events_postgres.py",
     "test_orphan_sweep.py",
     "test_portal_delivery_folder.py",
+    "test_portal_workspace.py",
     "test_reap_stale_uploads.py",
     "test_share_link_expiry.py",
     "test_storage_usage_integration.py",

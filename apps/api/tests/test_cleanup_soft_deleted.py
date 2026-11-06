@@ -294,10 +294,17 @@ def test_purge_project_removes_everything(real_db, monkeypatch):
     real_db.add(AssetMetadata(asset_id=loose.id, field_id=field.id, value={"v": 1}))
     _share_link(real_db, owner, project=project)
     real_db.add(ActivityLog(project_id=project.id, action="created"))
+    from apps.api.models.agent import AgentKey, AgentPairingCode
+    real_db.add(AgentKey(user_id=owner.id, project_id=project.id, program="codex", agent_name="a",
+                         key_hash=uuid.uuid4().hex + uuid.uuid4().hex))
+    real_db.add(AgentPairingCode(project_id=project.id, created_by=owner.id, code_hash=uuid.uuid4().hex,
+                                 expires_at=datetime.now(timezone.utc)))
     real_db.flush()
 
     counts = ct.PurgeCounts()
     ct._purge_project(real_db, project.id, counts)
+    assert real_db.query(AgentKey).filter_by(project_id=project.id).count() == 0
+    assert real_db.query(AgentPairingCode).filter_by(project_id=project.id).count() == 0
 
     assert real_db.query(Project).filter_by(id=project.id).count() == 0
     assert real_db.query(Folder).filter_by(project_id=project.id).count() == 0
@@ -430,13 +437,14 @@ def test_gc_covers_all_inbound_fks_to_purged_tables():
     KNOWN_HANDLED = {
         ("checklist_bindings", "project_id"), ("checklist_bindings", "folder_id"),
         ("checklist_bindings", "request_id"),
-        ("request_uploads", "request_id"),
+        ("request_uploads", "request_id"), ("feedback_rounds", "request_id"),
         ("request_uploads", "asset_id"), ("upload_requests", "folder_id"), ("upload_requests", "project_id"),
         # -> projects.id
         ("assets", "project_id"), ("folders", "project_id"), ("share_links", "project_id"),
         ("project_brandings", "project_id"), ("watermark_settings", "project_id"),
         ("metadata_fields", "project_id"), ("collections", "project_id"),
         ("project_members", "project_id"), ("activity_logs", "project_id"),
+        ("agent_keys", "project_id"), ("agent_pairing_codes", "project_id"),
         # -> folders.id
         ("assets", "folder_id"), ("share_links", "folder_id"), ("share_link_items", "folder_id"),
         ("asset_shares", "folder_id"), ("folders", "parent_id"),
@@ -533,9 +541,13 @@ def test_purge_folder_removes_request_uploads_and_request(real_db):
     upload = RequestUpload(request_id=req.id, asset_id=asset.id, version_number=1,
         uploader_name='Editor', uploader_email='editor@example.test')
     real_db.add(upload); real_db.flush()
+    from apps.api.models.agent import FeedbackRound
+    round_ = FeedbackRound(request_id=req.id)
+    real_db.add(round_); real_db.flush()
     ct._purge_folder(real_db, folder.id, ct.PurgeCounts())
     assert real_db.query(UploadRequest).filter_by(id=req.id).count() == 0
     assert real_db.query(RequestUpload).filter_by(id=upload.id).count() == 0
+    assert real_db.query(FeedbackRound).filter_by(id=round_.id).count() == 0
 
 
 @pytest.mark.parametrize('scope', ['request', 'folder', 'project'])

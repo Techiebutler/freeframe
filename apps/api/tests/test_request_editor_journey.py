@@ -175,10 +175,13 @@ def test_request_rejects_media_the_automatic_reviewer_cannot_verify(monkeypatch)
     start = MagicMock()
     monkeypatch.setattr(rq, 'upload_guard_error', lambda *a: None)
     monkeypatch.setattr(rq, 'create_multipart_upload', start)
-    with pytest.raises(HTTPException) as err:
-        rq.guest_initiate('t', rq.GuestInitiate(original_filename='photo.jpg', mime_type='image/jpeg', file_size_bytes=100), MagicMock())
-    assert err.value.status_code == 400
-    assert 'video' in err.value.detail.lower()
+    # Static images (PNG/JPEG/WebP) are reviewable since the static-ad review (#130); audio and other
+    # images still are not, so they never start an upload.
+    for name, mime in (('voice.mp3', 'audio/mpeg'), ('scan.tiff', 'image/tiff')):
+        with pytest.raises(HTTPException) as err:
+            rq.guest_initiate('t', rq.GuestInitiate(original_filename=name, mime_type=mime, file_size_bytes=100), MagicMock())
+        assert err.value.status_code == 400
+        assert 'video' in err.value.detail.lower()
     start.assert_not_called()
 
 

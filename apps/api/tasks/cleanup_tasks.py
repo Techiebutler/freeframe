@@ -1,5 +1,6 @@
 from ..models.upload_request import UploadRequest, RequestUpload
 from ..models.checklist_binding import ChecklistBinding
+from ..models.agent import AgentKey, AgentPairingCode, FeedbackRound
 import json
 import logging
 import re
@@ -136,6 +137,7 @@ def _purge_share_link(db, share_link_id, counts: PurgeCounts) -> None:
 def _purge_requests(db, request_ids):
     db.query(ChecklistBinding).filter(ChecklistBinding.request_id.in_(request_ids)).delete(synchronize_session=False)
     db.query(RequestUpload).filter(RequestUpload.request_id.in_(request_ids)).delete(synchronize_session=False)
+    db.query(FeedbackRound).filter(FeedbackRound.request_id.in_(request_ids)).delete(synchronize_session=False)
     db.query(UploadRequest).filter(UploadRequest.id.in_(request_ids)).delete(synchronize_session=False)
 
 
@@ -225,6 +227,10 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
     db.query(WatermarkSettings).filter(WatermarkSettings.project_id == project_id).delete(synchronize_session=False)
     db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(synchronize_session=False)
     db.query(ActivityLog).filter(ActivityLog.project_id == project_id).delete(synchronize_session=False)
+    # A purged project's agent credentials go with it: a key or pairing code for a project that no
+    # longer exists can never be used, and its FK would otherwise block the delete below.
+    db.query(AgentKey).filter(AgentKey.project_id == project_id).delete(synchronize_session=False)
+    db.query(AgentPairingCode).filter(AgentPairingCode.project_id == project_id).delete(synchronize_session=False)
     if p.poster_s3_key:
         _safe(delete_object, p.poster_s3_key)
         counts.s3_deletes += 1

@@ -8,9 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Portal workspace endpoint: `POST /integrations/portal/workspace` `{name, board_url?}` (signed like `delivery-folder`) returns `{project_id, created}`. It links the brand's existing workspace when the name matches by the dispatcher's brand-name rules, or creates one owned by the portal service account with the standing Auto Review link. Concurrent calls for one brand never create two workspaces.
 - Send on a share link closes the feedback round at once, so a waiting agent starts right away instead of after 5 idle minutes (the idle close stays as fallback).
 
 ### Fixed
+- Retention GC no longer stalls on a project with agent keys or pairing codes, or a request with feedback rounds: those rows are purged with their project or request.
 - Talk + Draw: everything said and drawn on one paused frame becomes one note. Before, every speech fragment was its own note and up to 8 dots stacked on one timestamp.
 - Talk + Draw: a stroke ends as soon as the mouse button is up, even when the release lands on a control or the pointer capture drops. Before, the pen kept following the cursor after pausing or seeking.
 - The next video's first frame is ready before you switch: HLS manifests are cached (server memory + 10 min browser cache), and the briefing's other videos warm their first segment in the background.
