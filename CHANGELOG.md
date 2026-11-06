@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Send on a share link closes the feedback round at once, so a waiting agent starts right away instead of after 5 idle minutes (the idle close stays as fallback).
+
 ### Fixed
 - Talk + Draw: everything said and drawn on one paused frame becomes one note. Before, every speech fragment was its own note and up to 8 dots stacked on one timestamp.
 - Talk + Draw: a stroke ends as soon as the mouse button is up, even when the release lands on a control or the pointer capture drops. Before, the pen kept following the cursor after pausing or seeking.

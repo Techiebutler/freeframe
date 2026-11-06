@@ -285,3 +285,17 @@ def test_the_database_allows_one_open_round_and_a_racing_comment_joins_it(scene)
     with patch.object(feedback_rounds, "open_round", stale_then_real), e.Session() as db:
         feedback_rounds.on_comment(db, uuid.UUID(first["id"]))
     assert len(rounds(e)) == 1
+
+
+@needs_pg
+def test_send_on_a_share_link_closes_the_round_at_once(scene):
+    from .test_share_approve import link
+    e = scene
+    comment(e, e.scene.asset)
+    url = f"/share/{link(e, e.scene.req.folder_id, 'comment')}/assets/{e.scene.asset.id}/feedback-done"
+    assert e.client.post(url).status_code == 204
+    [rnd] = rounds(e)
+    assert rnd.closed_by == "button" and rnd.closed_at is not None
+    assert e.client.post(url).status_code == 204  # nothing open: still fine
+    view = f"/share/{link(e, e.scene.req.folder_id, 'view')}/assets/{e.scene.asset.id}/feedback-done"
+    assert e.client.post(view).status_code == 403

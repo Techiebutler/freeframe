@@ -30,7 +30,7 @@ import { byName } from '@/lib/static-pin'
 import { authHeaders } from '@/lib/auth-headers'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
-import { approveSharedAsset, guestDictate, nextFileId, undoApproveSharedAsset } from '@/lib/share-flow'
+import { approveSharedAsset, guestDictate, nextFileId, shareFeedbackDone, undoApproveSharedAsset } from '@/lib/share-flow'
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -835,6 +835,7 @@ function ShareReviewInner({
               onNeedSave={() => setShowGuestPrompt(true)}
               onApprove={approveAsset}
               onUndoApprove={undoApproveAsset}
+              onSent={() => shareFeedbackDone(token, asset.id, shareSession)}
               hasNext={!!next}
               onNext={() => next && onSelectFile?.(next)}
               sessionKey={token}

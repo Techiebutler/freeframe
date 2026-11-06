@@ -35,6 +35,8 @@ export interface FlowViewProps {
   onNeedSave?: () => void
   /** Closes the feedback round (Send to agent). Without it the button reads Done: the notes are already saved. */
   onFinishRound?: () => Promise<void>
+  /** Notes sent (share links): tells the server the round is done, so a waiting agent starts now. */
+  onSent?: () => void
   finishLabel?: string
   onApprove: () => Promise<void> | void
   /** Takes the approval back (offered for 5 s after approving). Without it Approve is final and moves on quickly. */
@@ -227,6 +229,7 @@ export function FlowView(p: FlowViewProps) {
       }
       const count = notes.length
       await p.onFinishRound?.()
+      p.onSent?.()
       dispatch({ type: 'clear' })
       setMoment({ title: sentLine(count, !!p.onFinishRound), sub: p.hasNext ? undefined : doneLine(sessionSummary(sKey)) })
     } catch { setError(hasNotes ? 'Could not finish. Your notes are saved. Try again.' : 'Could not approve. Try again.') }

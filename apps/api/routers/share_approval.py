@@ -64,3 +64,27 @@ def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_ses
     db.add(ActivityLog(user_id=link.created_by, asset_id=asset.id, action=ActivityAction.approved))
     db.commit()
     return {"asset_id": str(asset.id), "version_id": str(version.id), "status": "approved"}
+
+
+@router.post("/share/{token}/assets/{asset_id}/feedback-done", status_code=204, dependencies=[Depends(rate_limit("share_feedback_done", 30, 600))])
+def share_feedback_done(token: str, asset_id: uuid.UUID, share_session: Optional[str] = Query(None),
+                        db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
+    """The reviewer pressed Send: close the open feedback round now, so the agent starts at once instead of
+    after 5 idle minutes. No open round (no agent request, already closed) is fine: nothing to do."""
+    from datetime import datetime, timezone
+    from ..services import feedback_rounds
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+    if link.permission == SharePermission.view:
+        raise HTTPException(403, "comment_not_allowed")
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
+    if asset is None:
+        raise HTTPException(404, "not_found")
+    try:
+        validate_asset_in_share(db, link, asset)
+    except HTTPException:
+        raise HTTPException(404, "not_found")
+    req = feedback_rounds.request_for_asset(db, asset.id)
+    rnd = feedback_rounds.open_round(db, req.id, lock=True) if req else None
+    if rnd is not None:
+        feedback_rounds.close_round(db, rnd, "button", datetime.now(timezone.utc))
+    return Response(status_code=204)

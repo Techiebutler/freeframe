@@ -83,3 +83,9 @@ export async function undoApproveSharedAsset(
   const res = await fetch(`${API_URL()}/share/${token}/assets/${assetId}/approve${qs ? `?${qs}` : ''}`, { method: 'DELETE', headers: opts.headers })
   if (!res.ok) await fail(res, 'Failed to undo')
 }
+
+/** Send pressed: close the feedback round now so a waiting agent starts at once. Best effort: the 5-minute idle close is the fallback. */
+export function shareFeedbackDone(token: string, assetId: string, shareSession?: string | null): void {
+  const qs = shareSession ? `?share_session=${encodeURIComponent(shareSession)}` : ''
+  fetch(`${API_URL()}/share/${token}/assets/${assetId}/feedback-done${qs}`, { method: 'POST' }).catch(() => {})
+}
