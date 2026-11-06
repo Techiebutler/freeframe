@@ -149,11 +149,13 @@ describe('static review voice memo', () => {
     const r = recorder()
     const dictate = vi.fn(async () => ({ text: 'Make the logo bigger', segments: [] }))
     const { postComment } = setup({ startRecording: r.start, dictate })
-    const frame = await screen.findByTestId('static-frame')
-    frame.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200, right: 200, bottom: 200, x: 0, y: 0, toJSON() {} })
+    await screen.findByTestId('static-frame')
     fireEvent.click(screen.getByLabelText('Talk'))
     expect(await screen.findByTestId('rec-glow')).toBeInTheDocument()
-    fireEvent.click(frame, { clientX: 100, clientY: 40 })
+    const layer = screen.getByTestId('ink-layer')
+    layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200, right: 200, bottom: 200, x: 0, y: 0, toJSON() {} })
+    fireEvent.pointerDown(layer, { clientX: 100, clientY: 40, pointerId: 1 })
+    fireEvent.pointerUp(layer, { clientX: 100, clientY: 40, pointerId: 1 })
     fireEvent.click(screen.getByLabelText('Stop recording'))
     await waitFor(() => expect(postComment).toHaveBeenCalledTimes(1))
     const [id, body, drawing] = postComment.mock.calls[0] as unknown as [string, string, { marks: { points: number[][] }[] }]
@@ -161,6 +163,34 @@ describe('static review voice memo', () => {
     expect(drawing.marks[0].points[0]).toEqual([0.5, 0.2])
     await waitFor(() => expect(screen.getByTestId('memo-status')).toHaveAttribute('data-state', 'saved'))
     expect(screen.queryByTestId('pending-pin')).toBeNull()
+  })
+
+  it('one memo across ads: each sentence and drawing lands on the ad that was on screen', async () => {
+    let now = 1_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const r = recorder()
+      const dictate = vi.fn(async () => ({ text: 'x', segments: [{ start: 0.5, end: 1.5, text: 'Headline bigger.' }, { start: 5, end: 6, text: 'Swap the photo.' }] }))
+      const { postComment } = setup({ startRecording: r.start, dictate })
+      await screen.findByTestId('static-frame')
+      fireEvent.click(screen.getByLabelText('Talk'))
+      await screen.findByTestId('rec-glow')
+      now += 4000
+      fireEvent.keyDown(window, { key: 'ArrowRight' })
+      now += 1500
+      const layer = await screen.findByTestId('ink-layer')
+      layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON() {} })
+      fireEvent.pointerDown(layer, { clientX: 10, clientY: 10, pointerId: 1 })
+      fireEvent.pointerMove(layer, { clientX: 60, clientY: 60, pointerId: 1, buttons: 1 })
+      fireEvent.pointerUp(layer, { clientX: 60, clientY: 60, pointerId: 1 })
+      fireEvent.click(screen.getByLabelText('Stop recording'))
+      await waitFor(() => expect(postComment).toHaveBeenCalledTimes(2))
+      const calls = postComment.mock.calls as unknown as [string, string, { marks: { k: string }[] } | null][]
+      expect(calls.map(c => [c[0], c[1]])).toEqual([['a1', 'Headline bigger.'], ['a2', 'Swap the photo.']])
+      expect(calls[0][2]).toBeNull()
+      expect(calls[1][2]!.marks[0].k).toBe('stroke')
+      await waitFor(() => expect(screen.getByTestId('memo-status')).toHaveTextContent('Memo saved as 2 notes'))
+    } finally { clock.mockRestore() }
   })
 
   it('a memo recorded on one image is saved to that image even after moving on', async () => {

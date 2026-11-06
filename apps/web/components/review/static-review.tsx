@@ -3,12 +3,13 @@
 import * as React from 'react'
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, Loader2, MapPin, Mic, Send, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { containedRect } from '@/lib/ink'
-import { pinDrawing, pinOf } from '@/lib/static-pin'
+import { buildDrawingData, containedRect, isInk, type InkMark } from '@/lib/ink'
+import { pinDrawing, pinOf, staticNotesFromMemo, type StaticMemoNote } from '@/lib/static-pin'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
 import { startMicRecording, type ActiveRecording, type StartRecording } from '@/lib/recorder'
 import { dictationMessage } from './flow-view'
 import { LevelMeter } from './level-meter'
+import { InkLayer, Strokes } from './ink-layer'
 
 export interface StaticFile { id: string; name: string }
 export interface StaticComment {
@@ -103,7 +104,7 @@ export function StaticReview(p: StaticReviewProps) {
   const go = React.useCallback((d: number) => {
     setIndex(i => {
       const next = Math.min(total - 1, Math.max(0, i + d))
-      if (next !== i) { if (!recRef.current) setPending(null); setFocused(null); setError('') }
+      if (next !== i) { setPending(null); setFocused(null); setError('') }
       return next
     })
   }, [total])
@@ -119,6 +120,15 @@ export function StaticReview(p: StaticReviewProps) {
     return () => window.removeEventListener('keydown', on)
   }, [go, p.onExit]) // eslint-disable-line react-hooks/exhaustive-deps
   const touch = React.useRef<{ x: number; y: number } | null>(null)
+  // While talking, remember which ad was on screen when, so each sentence lands on the ad it was said about.
+  const track = React.useRef<{ views: { fileId: string; at: number }[]; marks: { fileId: string; mark: InkMark }[] }>({ views: [], marks: [] })
+  const [, setDrawn] = React.useState(0)
+  React.useEffect(() => {
+    const r = recRef.current
+    if (!r || !file) return
+    const v = track.current.views
+    if (v[v.length - 1]?.fileId !== file.id) v.push({ fileId: file.id, at: Date.now() - r.startedAt })
+  }, [file?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Fit: the picture letterboxes, never crops; pins are measured against the picture, not the stage ──
   const stage = React.useRef<HTMLDivElement>(null)
@@ -175,8 +185,6 @@ export function StaticReview(p: StaticReviewProps) {
   const [transcribing, setTranscribing] = React.useState(false)
   const [memoMsg, setMemoMsg] = React.useState('')
   const level = React.useRef(0)
-  const pendingRef = React.useRef(pending)
-  pendingRef.current = pending
   React.useEffect(() => {
     if (!rec) { setElapsed(0); return }
     const id = setInterval(() => setElapsed(Math.floor((Date.now() - rec.startedAt) / 1000)), 500)
@@ -185,29 +193,31 @@ export function StaticReview(p: StaticReviewProps) {
   React.useEffect(() => () => { recRef.current?.rec.cancel() }, [])
   const recRef = React.useRef(rec)
   recRef.current = rec
-  const [memo, setMemo] = React.useState<{ state: 'saving' | 'saved' | 'failed'; fileId: string; words: string; pin: [number, number] | null } | null>(null)
-  /** The memo goes out on its own, to the image it was recorded on, with the pin if one was set (as on video). */
-  const saveMemo = async (m: { fileId: string; words: string; pin: [number, number] | null }) => {
-    setMemo({ ...m, state: 'saving' })
-    try {
-      await p.postComment(m.fileId, m.words, m.pin ? pinDrawing(m.pin[0], m.pin[1]) : null)
-      setMemo({ ...m, state: 'saved' })
-      setReload(n => n + 1)
-      setTimeout(() => setMemo(cur => (cur?.state === 'saved' && cur.words === m.words ? null : cur)), 3000)
-    } catch { setMemo({ ...m, state: 'failed' }) }
+  const [memo, setMemo] = React.useState<{ state: 'saving' | 'saved' | 'failed'; notes: StaticMemoNote[]; count: number } | null>(null)
+  /** The memo goes out on its own, one note per ad it talked about, with what was drawn there (as on video). Failed ones stay for Retry. */
+  const saveMemo = async (notes: StaticMemoNote[]) => {
+    setMemo({ state: 'saving', notes, count: notes.length })
+    const left: StaticMemoNote[] = []
+    for (const n of notes) {
+      try { await p.postComment(n.fileId, n.text || 'See drawing', buildDrawingData(n.marks)) }
+      catch { left.push(n) }
+    }
+    setReload(x => x + 1)
+    if (left.length) { setMemo({ state: 'failed', notes: left, count: left.length }); return }
+    setMemo({ state: 'saved', notes: [], count: notes.length })
+    setTimeout(() => setMemo(cur => (cur?.state === 'saved' && cur.count === notes.length ? null : cur)), 3000)
   }
   const talk = async () => {
     setMemoMsg(''); setError(''); setMemo(null)
     if (rec) {
-      const { rec: r, fileId } = rec
-      const pin = pendingRef.current
+      const { rec: r } = rec
+      const { views, marks } = track.current
       setRec(null); setTranscribing(true)
       try {
         const out = await dictate(await r.stop())
-        const words = out.text.trim()
-        if (!words) { setMemoMsg('Nothing was heard. Try again or type it.'); return }
-        if (fileId === currentIdRef.current) setPending(null)
-        await saveMemo({ fileId, words, pin })
+        const notes = staticNotesFromMemo(views, marks, out.text, out.segments ?? [])
+        if (!notes.length) { setMemoMsg('Nothing was heard. Try again or type it.'); return }
+        await saveMemo(notes)
       } catch (e) { setMemoMsg(dictationMessage(e)) }
       finally { setTranscribing(false) }
       return
@@ -215,15 +225,15 @@ export function StaticReview(p: StaticReviewProps) {
     try {
       level.current = 0
       const r = await start(v => { level.current = v })
+      track.current = { views: [{ fileId: file!.id, at: 0 }], marks: [] }
+      setPending(null)
       setRec({ rec: r, startedAt: Date.now(), fileId: file!.id })
     } catch (e) {
       const denied = (e as Error)?.name === 'NotAllowedError' || (e as Error)?.name === 'SecurityError'
       setMemoMsg(denied ? 'Microphone is blocked. Allow it in the browser, or type your note.' : 'Microphone unavailable. Type your note instead.')
     }
   }
-  const cancelTalk = () => { rec?.rec.cancel(); setRec(null); setPending(null) }
-  const currentIdRef = React.useRef(file?.id)
-  currentIdRef.current = file?.id
+  const cancelTalk = () => { rec?.rec.cancel(); setRec(null); track.current = { views: [], marks: [] } }
 
   if (!file) return <div className="grid h-dvh place-items-center bg-bg-primary text-sm text-text-secondary">No images to review.</div>
 
@@ -277,6 +287,11 @@ export function StaticReview(p: StaticReviewProps) {
                   onLoad={e => remember(file.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
                   className="h-full w-full object-contain"
                 />
+                {/* What was drawn with each note; its first mark carries the numbered pin. */}
+                <Strokes list={(notes ?? []).flatMap(c => { const d = c.annotation?.drawing_data; return isInk(d) ? d.marks.slice(d.marks[0]?.k === 'dot' ? 1 : 0) : [] }).map((m, i) => ({ id: i, k: m.k, points: m.points }))} />
+                {rec && <Strokes list={track.current.marks.filter(m => m.fileId === file.id).map((m, i) => ({ id: i, k: m.mark.k, points: m.mark.points }))} />}
+                <InkLayer key={file.id} active={!!rec} trail={false} onStart={() => {}}
+                  onMark={(k, points, times) => { const r = recRef.current; if (!r) return; track.current.marks.push({ fileId: file.id, mark: { k, points, times, t: 0, offset_ms: Date.now() - r.startedAt } }); setDrawn(n => n + 1) }} />
                 {pinned.map(({ c, at }) => (
                   <button
                     key={c.id}
@@ -287,7 +302,7 @@ export function StaticReview(p: StaticReviewProps) {
                     style={{ left: `${at![0] * 100}%`, top: `${at![1] * 100}%`, background: PIN, boxShadow: '0 3px 10px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.15)' }}
                   >{numberOf(c.id)}</button>
                 ))}
-                {pending && (!rec || rec.fileId === file.id) && (
+                {pending && !rec && (
                   <span aria-hidden="true" data-testid="pending-pin" className="pointer-events-none absolute z-10 h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white" style={{ left: `${pending[0] * 100}%`, top: `${pending[1] * 100}%`, background: `color-mix(in oklab, ${PIN} 35%, transparent)`, boxShadow: '0 3px 10px rgba(0,0,0,.45)' }} />
                 )}
               </div>
@@ -374,11 +389,12 @@ export function StaticReview(p: StaticReviewProps) {
               </button>
               </div>
             </div>
+            {rec && <p className="mt-2 text-xs text-text-secondary">Draw on the ad while you talk · <kbd className="font-sans font-semibold">← →</kbd> next ad</p>}
             {memo && (
               <p role={memo.state === 'failed' ? 'alert' : 'status'} data-testid="memo-status" data-state={memo.state} className={cn('mt-2 flex items-center gap-2 text-xs', memo.state === 'failed' ? 'text-status-error' : memo.state === 'saved' ? 'text-status-success' : 'text-text-secondary')}>
                 {memo.state === 'saving' && <><Loader2 size={13} className="animate-spin motion-reduce:animate-none" />Saving your memo…</>}
-                {memo.state === 'saved' && <><Check size={14} aria-hidden="true" />Memo saved</>}
-                {memo.state === 'failed' && <>Could not save your memo.<button type="button" onClick={() => void saveMemo(memo)} className="press inline-flex min-h-11 items-center font-semibold underline">Retry</button></>}
+                {memo.state === 'saved' && <><Check size={14} aria-hidden="true" />{memo.count > 1 ? `Memo saved as ${memo.count} notes` : 'Memo saved'}</>}
+                {memo.state === 'failed' && <>Could not save {memo.count > 1 ? `${memo.count} notes` : 'your memo'}.<button type="button" onClick={() => void saveMemo(memo.notes)} className="press inline-flex min-h-11 items-center font-semibold underline">Retry</button></>}
               </p>
             )}
             {memoMsg && <p role="alert" className="mt-2 text-xs text-text-secondary">{memoMsg}</p>}

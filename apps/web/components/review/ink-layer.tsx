@@ -35,8 +35,10 @@ export interface InkReplay { key: number; marks: (Pick<InkMark, 'k' | 'points'> 
  * paused and fades out as soon as it plays again (it is kept in the note, only the screen is cleared).
  * The first touch pauses the video; the recording goes on. A second finger is ignored while the first draws.
  */
-export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
+export function InkLayer({ active, playing = false, onStart, onMark, replay, trail: showTrail = true }: {
   active: boolean
+  /** false: the owner draws the finished marks itself (static review keeps them per picture). */
+  trail?: boolean
   /** Video is playing: ink stays while it is paused and fades out once it runs again. */
   playing?: boolean
   onStart: () => void
@@ -123,7 +125,7 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay }: {
     <div ref={root} className="ink-layer" data-testid="ink-layer" data-on={active ? '' : undefined}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onLostPointerCapture={up}
       onClick={e => { if (active) e.stopPropagation() }}>
-      <Strokes list={trail} fading={fading} />
+      {showTrail && <Strokes list={trail} fading={fading} />}
       {replayShown ? <Strokes key={replayShown.key} list={shown} fading={fading} /> : null}
       {cur ? <Strokes list={[{ id: -1, k: 'stroke', points: cur.length > 1 ? cur : [cur[0], cur[0]] }]} live /> : null}
     </div>
