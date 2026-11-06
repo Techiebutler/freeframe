@@ -6,7 +6,7 @@ import * as Switch from '@radix-ui/react-switch'
 import { Check, Copy, Loader2, Plus } from 'lucide-react'
 import { api } from '@/lib/api'
 import {
-  MCP_URL, countdown, createPairingCode, listAgents, mcpAddCommand, pairInstruction,
+  KIT_URL, MCP_URL, countdown, createPairingCode, kitInstruction, listAgents, mcpAddCommand, pairInstruction,
   revokeAgent, setAgentsMayApprove, type PairingCode, type ProjectAgent,
 } from '@/lib/agents'
 import { ProgramBadge } from './program-badge'
@@ -41,9 +41,10 @@ function PairingCard({ projectId }: { projectId: string }) {
   }
 
   const left = pairing ? countdown(pairing.expires_at, now) : null
-  const block = pairing ? `${mcpAddCommand(MCP_URL)}\n${pairInstruction(pairing.code)}` : ''
+  const line = pairing ? kitInstruction(pairing.code) : ''
+  const mcpBlock = pairing ? `${mcpAddCommand(MCP_URL)}\n${pairInstruction(pairing.code)}` : ''
   const copy = async () => {
-    try { await navigator.clipboard.writeText(block); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+    try { await navigator.clipboard.writeText(line); setCopied(true); setTimeout(() => setCopied(false), 2000) }
     catch { setError('Copy failed. Select the text and copy it by hand.') }
   }
 
@@ -67,14 +68,19 @@ function PairingCard({ projectId }: { projectId: string }) {
             <p className="font-mono text-3xl font-semibold tracking-[0.18em] text-text-primary" aria-label={`Pairing code ${pairing.code.split('').join(' ')}`}>{pairing.code}</p>
             <p className="text-sm tabular-nums text-text-secondary" role="timer">Expires in {left!.label}</p>
           </div>
+          <p className="text-sm text-text-secondary">Tell Claude Code this line. It needs the <a href={KIT_URL} target="_blank" rel="noreferrer" className="font-medium text-text-primary underline underline-offset-2">AI Builder Starter Kit</a>.</p>
           <div className="rounded-xl border border-border bg-bg-primary p-3">
-            <pre className="whitespace-pre-wrap break-all font-mono text-[0.8125rem] leading-relaxed text-text-primary">{block}</pre>
+            <pre className="whitespace-pre-wrap break-all font-mono text-[0.9375rem] leading-relaxed text-text-primary">{line}</pre>
           </div>
           <button type="button" onClick={copy}
             className="press inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-text-inverse hover:bg-accent-hover sm:w-auto">
-            {copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Copied' : 'Copy both lines'}
+            {copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Copied' : 'Copy'}
           </button>
-          <p className="text-[0.8125rem] text-text-secondary">Run the first line in the agent&apos;s terminal, then tell the agent the second line.</p>
+          <details className="text-[0.8125rem] text-text-secondary">
+            <summary className="min-h-11 cursor-pointer content-center font-medium hover:text-text-primary">Codex, Hermes or Claude without the kit</summary>
+            <p className="mb-2">Run the first line in the agent&apos;s terminal, then tell the agent the second line.</p>
+            <pre className="whitespace-pre-wrap break-all rounded-xl border border-border bg-bg-primary p-3 font-mono leading-relaxed text-text-primary">{mcpBlock}</pre>
+          </details>
         </div>
       )}
       {error && <p role="alert" className="mt-3 text-sm text-status-error">{error}</p>}

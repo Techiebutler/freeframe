@@ -84,6 +84,9 @@ export function countdown(expiresAt: string, now: number): { label: string; expi
 
 export const mcpAddCommand = (url: string) => `claude mcp add --transport http autoreview ${url}`
 export const pairInstruction = (code: string) => `Pair with code ${code}`
+/** What a Claude Code user with the AI Builder Starter Kit types; the kit's autoreview skill does the rest. */
+export const kitInstruction = (code: string) => `Pair with AutoReview: ${code}`
+export const KIT_URL = 'https://github.com/videoaditor/aditor-kit#install'
 
 export const roundSummary = (round: FeedbackV1) => round.files.reduce((n, f) => n + f.comments.length, 0)
 export const formatSent = (agent: string, n: number) => `Sent to ${agent} · ${n} ${n === 1 ? 'comment' : 'comments'}`

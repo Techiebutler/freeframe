@@ -22,8 +22,20 @@ describe('ConnectAgent', () => {
     fireEvent.click(await screen.findByRole('button', { name: /create pairing code/i }))
     expect(await screen.findByText('ABCD2345')).toBeInTheDocument()
     expect(post).toHaveBeenCalledWith('/projects/p1/agent-pairing-codes')
-    expect(screen.getByText(/Pair with code ABCD2345/)).toBeInTheDocument()
+    expect(screen.getByText('Pair with AutoReview: ABCD2345')).toBeInTheDocument()
+    expect(screen.getByText(/Pair with code ABCD2345/)).toBeInTheDocument() // folded MCP path for Codex/Hermes
     expect(screen.getByRole('timer')).toHaveTextContent(/Expires in 1[45]:\d\d/)
+  })
+
+  it('copies the one kit line, not the MCP block', async () => {
+    mock()
+    vi.spyOn(api, 'post').mockResolvedValue({ code: 'ABCD2345', expires_at: new Date(Date.now() + 900_000).toISOString() })
+    const write = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText: write } })
+    wrap()
+    fireEvent.click(await screen.findByRole('button', { name: /create pairing code/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /^copy$/i }))
+    await waitFor(() => expect(write).toHaveBeenCalledWith('Pair with AutoReview: ABCD2345'))
   })
 
   it('lists only active agents with a program badge and revokes after confirm', async () => {

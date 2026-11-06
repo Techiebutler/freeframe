@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Connect an agent shows one line for Claude Code with the AI Builder Starter Kit ("Pair with AutoReview: CODE"); the MCP setup for Codex, Hermes or Claude without the kit is folded below.
 - Portal workspace endpoint: `POST /integrations/portal/workspace` `{name, board_url?}` (signed like `delivery-folder`) returns `{project_id, created}`. It links the brand's existing workspace when the name matches by the dispatcher's brand-name rules, or creates one owned by the portal service account with the standing Auto Review link. Concurrent calls for one brand never create two workspaces.
 - Send on a share link closes the feedback round at once, so a waiting agent starts right away instead of after 5 idle minutes (the idle close stays as fallback).
 
