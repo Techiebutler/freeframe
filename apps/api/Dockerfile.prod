@@ -29,14 +29,13 @@ RUN if [ "$ENABLE_HWACCEL" = "true" ]; then \
 
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    imagemagick \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install API dependencies
+# Install API dependencies. gunicorn is in requirements.txt, so it is pinned and
+# Dependabot sees it; this image must not install it again.
 COPY apps/api/requirements.txt /workspace/apps/api/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/apps/api/requirements.txt
-RUN pip install --no-cache-dir gunicorn
 
 # Copy transcoder package and API
 COPY packages/transcoder /workspace/packages/transcoder

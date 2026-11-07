@@ -7,12 +7,12 @@ from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
 from ..models.project import Project, ProjectMember, ProjectRole
-from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus
+from ..models.asset import Asset
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectMemberResponse, AddProjectMemberRequest, UpdateProjectMemberRequest
 from ..tasks.email_tasks import send_project_added_email
 from ..tasks.celery_app import send_task_safe
 from ..services.s3_service import put_object, generate_presigned_get_url, delete_object
-from ..services.storage import project_storage_used_bytes
+from ..services.storage import project_storage_used_bytes, project_storage_used_bytes_map
 from ..config import settings
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -87,21 +87,10 @@ def list_projects(db: Session = Depends(get_db), current_user: User = Depends(ge
         .all()
     )
 
-    # Batch: storage bytes per project (sum of file sizes)
-    storage_query = (
-        db.query(Asset.project_id, func.coalesce(func.sum(MediaFile.file_size_bytes), 0))
-        .join(AssetVersion, AssetVersion.asset_id == Asset.id)
-        .join(MediaFile, MediaFile.version_id == AssetVersion.id)
-        # Committed-only usage — matches services.storage.instance_storage_used_bytes
-        .filter(
-            Asset.project_id.in_(all_project_ids), Asset.deleted_at.is_(None),
-            AssetVersion.deleted_at.is_(None),
-            AssetVersion.processing_status.in_([ProcessingStatus.processing, ProcessingStatus.ready]),
-        )
-        .group_by(Asset.project_id)
-        .all()
-    )
-    storage_map = {pid: int(size) for pid, size in storage_query}
+    # Batch: used storage per project, the one definition in services.storage —
+    # not a second copy of the join and the filter, which is how the member
+    # indicator and the upload limit once came to count different bytes.
+    storage_map = project_storage_used_bytes_map(db, all_project_ids)
 
     # Batch: member counts per project
     member_counts = dict(

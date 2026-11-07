@@ -3965,7 +3965,7 @@ _install_summary_lines() {
     say ""
     _ff_p "Your AWS S3 bucket needs these CORS rules so browsers can upload to it (AWS does not get them set automatically). In the AWS console: the bucket, Permissions, Cross-origin resource sharing (CORS):"
     say "[{\"AllowedOrigins\":[\"$origin\"],\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"HEAD\"],"
-    say " \"AllowedHeaders\":[\"Content-Type\",\"Content-MD5\",\"x-amz-content-sha256\",\"x-amz-date\",\"x-amz-decoded-content-length\"],"
+    say " \"AllowedHeaders\":[\"content-type\",\"content-md5\",\"x-amz-content-sha256\",\"x-amz-date\",\"x-amz-decoded-content-length\"],"
     say " \"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3000}]"
   fi
   say ""

@@ -601,7 +601,7 @@ Uploads go **directly from the browser to your bucket** via presigned URLs, so t
   "CORSRules": [{
     "AllowedOrigins": ["https://your-freeframe-domain.example"],
     "AllowedMethods": ["GET", "PUT", "POST", "HEAD"],
-    "AllowedHeaders": ["Content-Type", "Content-MD5", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length"],
+    "AllowedHeaders": ["content-type", "content-md5", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3000
   }]
@@ -609,6 +609,8 @@ Uploads go **directly from the browser to your bucket** via presigned URLs, so t
 ```
 
 `DELETE` is intentionally absent — FreeFrame has no presigned-DELETE flow, and the browser never needs it against the bucket. The `AllowedHeaders` list above is exactly what browser uploads and HLS segment fetches send; `["*"]` also works on most backends, but the list is sufficient and is what FreeFrame's automatic startup config now applies.
+
+Keep the header names **lowercase**, as above. Browsers lowercase every name in `Access-Control-Request-Headers`, so on a store that compares these names exactly, a rule listing `Content-Type` rejects the preflight of every upload that signs a content type. Garage compares these names exactly; Silo, RustFS, Ceph RGW, Cloudflare R2 and AWS S3 ignore case; community MinIO does not apply bucket CORS rules at all. Lowercase works on all of them.
 
 If you allow **more than one origin**, give each origin its own rule rather than listing them all in one. Some backends (Garage) answer a multi-origin rule by joining every entry into a single comma-separated `Access-Control-Allow-Origin` header, which browsers reject — every upload and HLS segment fetch then fails CORS. FreeFrame's automatic startup config already emits one rule per origin.
 
@@ -706,6 +708,7 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `TRANSCODER_OUTPUT` | Output codec: `h264_8` (broad compatibility) or `h265_10` (HEVC 10-bit) | `h264_8` |
 | `TRANSCODER_HDR` | `convert` (tone-map HDR to SDR) or `preserve` (keep HDR tags) | `convert` |
 | `TRANSCODER_QUALITIES` | Ladder rungs to build: any of `2160p`, `1080p`, `720p`, `360p`. A rung names the source's short side, so portrait video is sized like landscape (1080x1920 under `1080p` keeps its size). Rungs above the source are dropped, and if that leaves none the smallest is built at the source's own size, so `2160p` alone gives one rendition at source size for anything up to 4K | `1080p,720p,360p` |
+| `TRANSCODER_CRF_OFFSET` | Fallback for the **Compression** slider in Admin Dashboard → Instance settings → Review streams, which sets the same thing in the app and wins once an admin has moved it, and which an admin can hand back with **Use server default**. A whole number of CRF steps from `-12` to `12`; negative is better quality and bigger files, and about six steps is a doubling of bitrate. `0` leaves the encode byte-identical to what it was. The ladder's own numbers suit ordinary review footage; graded work with large dark gradients bands visibly at the default top rung of CRF 24, and `-8` puts the default software x264 8-bit ladder on CRF 16 / 18 / 22 (the slider's *Highest quality*); measured on one 1080p dark-gradient master, its top rung went from about 0.8 to about 1.5 Mbit/s. Those numbers are the **default software x264 8-bit ladder**: a 10-bit `TRANSCODER_OUTPUT` (`h265_10`) already encodes 8 CRF steps lower, so `-8` means CRF 8 / 10 / 14 there, and the hardware backends start from their own numbers (`-global_quality` 12 / 14 / 18 on QSV and VAAPI, and NVENC shifts its constant qp). It shifts every backend by the same number of steps, whatever quality option that backend uses (CRF on libx264/libx265, `-global_quality` on QSV and VAAPI, `-qp` on NVENC); a negative value additionally switches software H.264 to `-aq-mode 3`, which biases bits toward dark areas, and no `-aq-mode` is added at `0` and above. Only new transcodes are affected; existing videos keep their renditions until a new version is uploaded. Changing it needs both the `api` and the `worker` container recreated, because each reads the environment at start. An unusable value is logged and ignored | `0` |
 | `TRANSCODER_AUDIO_BITRATE` | AAC bitrate for the audio of video review streams, as `<n>k` between `64k` and `512k` (for example `320k` for music and final-mix review). Empty leaves ffmpeg's own choice, AAC-LC at about 128 kb/s for stereo. The value is the total for all channels, and ffmpeg's default for a surround source is already higher (about 341 kb/s for 5.1 and 469 kb/s for 7.1), so a stereo-sized value such as `320k` lowers surround quality. The codec is always AAC-LC, the one every browser plays over HLS. Applies to every rendition, so storage grows by the extra bitrate times the number of rungs. A source-copied upload whose audio is already AAC keeps its own audio untouched; non-AAC audio in a copy is encoded at this bitrate, or `192k` when it is empty. An unusable value is logged and ignored | *(empty)* |
 | `TRANSCODER_SOURCE_COPY` | Package an already browser-safe source into HLS without re-encoding, where the ladder above resolves to one rendition at the source's own size | `false` |
 | `TRANSCODER_CPU_LIMIT` | Cap the CPU one transcode takes: a core count (`6`) or a share of what the process may use (`50%`). Empty = unbounded. Covers the encoders and the filter graph, not decoding, so a heavy master can run over by roughly a quarter, and a low budget can push a long master past ffmpeg's 4-hour ceiling — see `.env.example`. Per ffmpeg process, so the machine-wide ceiling is this times `TRANSCODING_CONCURRENCY` | *(empty)* |
@@ -1033,6 +1036,84 @@ Only for deployments that run the optional self-hosted storage block in `docker-
 2. Keep the service name `minio` and the `miniodata` volume. Silo opens the existing data as is, and the old image can still read it if you roll back.
 3. Silo enforces the bucket CORS rules FreeFrame writes at startup, which MinIO ignored. Make sure `FRONTEND_URL` is the exact origin people browse to, and put any other browser origin in `CORS_ALLOW_ORIGINS`. If your `.env.prod` sets `MINIO_CORS_ALLOW_ORIGIN`, move that value to `CORS_ALLOW_ORIGINS`.
 4. `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d`
+
+### Upgrading past the storage measurement ([#599](https://github.com/Techiebutler/freeframe/pull/599))
+
+Only matters if your instance has a storage limit set (**Settings → Admin → Instance settings → Storage limit (GB)**, `storage_limit_bytes`; `0` is unlimited). With no limit, nothing here can refuse an upload and you can skip to step 4.
+
+Used storage now has one definition everywhere, and it counts two things it did not count before: **the trash**, from the moment the new API starts, and **what the transcoder wrote**, once the backfill has measured it. Nothing is deleted and no object moves; the bucket was always this full. But the number the cap is enforced against goes up, and on a near-full instance the first increase arrives before you have run anything.
+
+**1. Before you upgrade, find out what the trash will add.** Trashed assets and versions were left out of the old figure and are counted from the new API's first start. A live asset inside a trashed project was already counted, so it adds nothing.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec postgres \
+  psql -U freeframe -c "
+SELECT pg_size_pretty(sum(mf.file_size_bytes))                   AS originals_counted_after_upgrade,
+       pg_size_pretty(coalesce(sum(mf.file_size_bytes) FILTER (
+           WHERE a.deleted_at IS NOT NULL
+              OR v.deleted_at IS NOT NULL), 0))                  AS added_by_the_trash
+  FROM media_files mf
+  JOIN asset_versions v ON v.id = mf.version_id
+  JOIN assets        a ON a.id = v.asset_id
+  JOIN projects      p ON p.id = a.project_id
+ WHERE v.processing_status IN ('processing', 'ready');"
+```
+
+`originals_counted_after_upgrade` is the figure the cap will be enforced against once the new API starts, and `added_by_the_trash` is how much of it is new. If that figure is close to your limit, raise the limit **before** you upgrade. Deleting something is not a remedy any more: the figure stays where it is until the retention collector reclaims the objects, 30 days after the delete by default (`SOFT_DELETE_RETENTION_DAYS`) and never with `SOFT_DELETE_RETENTION_DAYS=0`, which switches the collector off. `POST /admin/purge` uses the same cutoff.
+
+**2. Upgrade, with the maintenance worker recreated alongside the API.** The backfill is a new Celery task on the `maintenance` queue, and a worker still running the old code does not know it: the worker rejects a queued backfill and that run is lost, and recreating the worker afterwards does not bring it back. If you triggered it too early, trigger it again once the worker is recreated.
+
+```bash
+git pull origin main
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+```
+
+The migration (`f4b9c2a7d105`) adds a nullable `media_files.derived_size_bytes` and a unique constraint on `media_files.version_id`. It runs in one transaction, so if your database somehow holds two media files for one version it names them, changes nothing at all and tells you which row to keep.
+
+**3. Run the backfill once, then re-check the limit.** It does one bucket listing per unmeasured version, is idempotent, resumable and safe to run while the instance is serving, and it pauses between batches. There is no button for it in this release. On the server it needs no token:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml \
+  exec api celery -A apps.api.tasks.celery_app call backfill_media_derived_size
+docker compose --env-file .env.prod -f docker-compose.prod.yml \
+  logs -f maintenance_worker
+```
+
+The worker logs `backfill_media_derived_size: measured=... failed=... bytes=... stopped=...` when it finishes. `failed` counts listings the object store refused; those rows stay unmeasured and a later run picks them up. `stopped=listing_failures` means several listings failed in a row and it gave up, which almost always means the store is unreachable: fix that and run it again.
+
+Over the API instead, with an access token for a superadmin account (the production compose serves the API under `/api` and disables the interactive docs page):
+
+```bash
+TOKEN='<a superadmin access token>'
+curl -fsS -X POST https://your-freeframe.example/api/admin/storage/backfill \
+  -H "Authorization: Bearer $TOKEN"
+curl -fsS https://your-freeframe.example/api/admin/storage \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+A 202 means enqueued, not finished, and calling it twice does not run it twice. Read the overview again until `unmeasured_files` reaches 0. Without the API, the same three numbers from `psql`:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec postgres \
+  psql -U freeframe -c "
+SELECT pg_size_pretty(sum(mf.file_size_bytes)
+                      + coalesce(sum(mf.derived_size_bytes), 0))  AS used,
+       pg_size_pretty(coalesce(sum(mf.file_size_bytes
+                      + coalesce(mf.derived_size_bytes, 0)) FILTER (
+           WHERE p.deleted_at IS NOT NULL
+              OR a.deleted_at IS NOT NULL
+              OR v.deleted_at IS NOT NULL), 0))                   AS of_which_in_the_trash,
+       count(*) FILTER (WHERE mf.derived_size_bytes IS NULL)      AS unmeasured_files
+  FROM media_files mf
+  JOIN asset_versions v ON v.id = mf.version_id
+  JOIN assets        a ON a.id = v.asset_id
+  JOIN projects      p ON p.id = a.project_id
+ WHERE v.processing_status IN ('processing', 'ready');"
+```
+
+How much the transcode output adds depends entirely on your media. Measured on 10 second synthetic 1080p clips through the default ladder, with the top rung stored twice as `download.mp4` by design, derived output came to between 0.16x and 2.84x the original, largest for already-compressed sources because CRF output follows the picture rather than the source bitrate. Synthetic clips are not footage, so treat that as a range and not as a prediction; the figure for your own library is the one the backfill produces. Then compare `used` with your limit and raise it if the new figure is close.
+
+**4. New uploads need none of this.** Every transcode from now on measures its own output when it finishes. A transcode whose bookkeeping listing failed leaves the row unmeasured, which is what `unmeasured_files` reports; nothing re-measures it on a schedule, so run the backfill again if that count grows. The cap is soft by one transcode, because the upload guard is given the incoming original only.
 
 ### Update Checklist
 
