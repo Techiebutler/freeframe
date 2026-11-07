@@ -1043,16 +1043,15 @@ Only matters if your instance has a storage limit set (**Settings → Admin → 
 
 Used storage now has one definition everywhere, and it counts two things it did not count before: **the trash**, from the moment the new API starts, and **what the transcoder wrote**, once the backfill has measured it. Nothing is deleted and no object moves; the bucket was always this full. But the number the cap is enforced against goes up, and on a near-full instance the first increase arrives before you have run anything.
 
-**1. Before you upgrade, find out what the trash will add.** Trashed assets and versions were left out of the old figure and are counted from the new API's first start.
+**1. Before you upgrade, find out what the trash will add.** Trashed assets and versions were left out of the old figure and are counted from the new API's first start. A live asset inside a trashed project was already counted, so it adds nothing.
 
 ```bash
 docker compose --env-file .env.prod -f docker-compose.prod.yml exec postgres \
   psql -U freeframe -c "
 SELECT pg_size_pretty(sum(mf.file_size_bytes))                   AS originals_counted_after_upgrade,
        pg_size_pretty(coalesce(sum(mf.file_size_bytes) FILTER (
-           WHERE p.deleted_at IS NOT NULL
-              OR a.deleted_at IS NOT NULL
-              OR v.deleted_at IS NOT NULL), 0))                  AS of_which_in_the_trash
+           WHERE a.deleted_at IS NOT NULL
+              OR v.deleted_at IS NOT NULL), 0))                  AS added_by_the_trash
   FROM media_files mf
   JOIN asset_versions v ON v.id = mf.version_id
   JOIN assets        a ON a.id = v.asset_id
@@ -1060,9 +1059,9 @@ SELECT pg_size_pretty(sum(mf.file_size_bytes))                   AS originals_co
  WHERE v.processing_status IN ('processing', 'ready');"
 ```
 
-If `of_which_in_the_trash` is a large share of your limit, raise the limit **before** you upgrade. Deleting something is not a remedy any more: the figure stays where it is until the retention collector reclaims the objects, 30 days after the delete by default (`SOFT_DELETE_RETENTION_DAYS`) and never with `SOFT_DELETE_RETENTION_DAYS=0`, which switches the collector off. `POST /admin/purge` uses the same cutoff.
+`originals_counted_after_upgrade` is the figure the cap will be enforced against once the new API starts, and `added_by_the_trash` is how much of it is new. If that figure is close to your limit, raise the limit **before** you upgrade. Deleting something is not a remedy any more: the figure stays where it is until the retention collector reclaims the objects, 30 days after the delete by default (`SOFT_DELETE_RETENTION_DAYS`) and never with `SOFT_DELETE_RETENTION_DAYS=0`, which switches the collector off. `POST /admin/purge` uses the same cutoff.
 
-**2. Upgrade, with the maintenance worker recreated alongside the API.** The backfill is a new Celery task on the `maintenance` queue, and a worker still running the old code does not know it, so a queued backfill would wait for a consumer that never comes.
+**2. Upgrade, with the maintenance worker recreated alongside the API.** The backfill is a new Celery task on the `maintenance` queue, and a worker still running the old code does not know it: the worker rejects a queued backfill and that run is lost, and recreating the worker afterwards does not bring it back. If you triggered it too early, trigger it again once the worker is recreated.
 
 ```bash
 git pull origin main
