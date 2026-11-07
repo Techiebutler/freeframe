@@ -33,7 +33,40 @@ class AssetVersionResponse(BaseModel):
     # tell an upload still running on another device from one that stopped.
     last_activity_at: Optional[datetime] = None
     files: list[MediaFileResponse] = []
+    # Whether this is the version a share link or the player opens with: the
+    # one set as current, else the newest ready one. Only `GET
+    # /assets/{id}/versions` says; elsewhere it is None.
+    is_current: Optional[bool] = None
     model_config = {"from_attributes": True}
+
+class CurrentVersionUpdate(BaseModel):
+    """`PUT /assets/{id}/current-version`: the version to set as current."""
+    version_id: uuid.UUID
+
+class DeletedVersionResponse(BaseModel):
+    """A version deleted on its own that `POST .../restore` can still bring back."""
+    id: uuid.UUID
+    asset_id: uuid.UUID
+    version_number: int
+    processing_status: ProcessingStatus
+    created_by: uuid.UUID
+    created_at: datetime
+    deleted_at: datetime
+    # When the retention purge may take it: `deleted_at` plus
+    # SOFT_DELETE_RETENTION_DAYS. None while the purge is switched off. A time
+    # already past means the next purge run removes it; until then it restores.
+    restorable_until: Optional[datetime] = None
+    model_config = {"from_attributes": True}
+
+class AssetVersionChangeResponse(BaseModel):
+    """What deleting, restoring or setting the current version answers with.
+
+    The latest version is the one set as current, else the highest live
+    number, so each of these can change which version the asset shows, share
+    links set to show the latest included. `latest_version` is that version
+    afterwards, as `AssetResponse.latest_version` reports it.
+    """
+    latest_version: Optional[AssetVersionResponse] = None
 
 class AssetResponse(BaseModel):
     id: uuid.UUID

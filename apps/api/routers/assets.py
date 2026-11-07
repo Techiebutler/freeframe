@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, literal, select
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from ..database import get_db
 from ..middleware.auth import get_current_user
@@ -13,7 +13,7 @@ from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.share import AssetShare
 from ..models.activity import Mention, Notification, NotificationType
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
-from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
+from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetVersionChangeResponse, CurrentVersionUpdate, DeletedVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
 from ..services.permissions import require_project_role, require_project_visible, require_asset_access, can_access_asset
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
@@ -27,7 +27,7 @@ from ..schemas.upload import (
     ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
 from ..services.storage import choose_part_size, upload_guard_error
-from ..services.versions import next_version_number
+from ..services.versions import current_version, next_version_number
 from ..services.s3_service import create_multipart_upload
 from .upload import storage_initiate_error
 
@@ -39,23 +39,29 @@ router = APIRouter(tags=["assets"])
 # "latest" and "the one to show" are not the same question.
 _UNVIEWABLE_STATUSES = (ProcessingStatus.uploading, ProcessingStatus.failed)
 
+# A version in one of these ran: its upload completed and it was handed to the
+# transcoder, and its master is in storage, which nothing reclaims. It is the
+# kind of version that keeps an asset alive, and the only kind a restore brings
+# back. Not `uploading` (an open multipart upload, which a discard or the
+# reaper throws away) and not `failed` (the reaper reclaims one whose master
+# never assembled, so a failed version in the trash may have no file at all).
+_KEPT_STATUSES = (ProcessingStatus.processing, ProcessingStatus.ready)
 
-def _pick_version(db: Session, asset_id: uuid.UUID, preferred) -> AssetVersion | None:
-    """Newest version matching `preferred`, falling back to the newest overall.
 
-    The fallback is what keeps a brand new asset honest: with nothing preferable to
-    show it still reports the version that is uploading, rather than reporting
-    nothing at all.
+def _pick_version(
+    db: Session, asset_id: uuid.UUID, preferred, follow_pin: bool = True,
+) -> AssetVersion | None:
+    """The current version matching `preferred`, falling back to the newest overall.
+
+    Current is the version an editor set as current, else the newest (see
+    `current_version`). The fallback is what keeps a brand new asset honest:
+    with nothing preferable to show it still reports the version that is
+    uploading, rather than reporting nothing at all.
     """
-    base = (AssetVersion.asset_id == asset_id, AssetVersion.deleted_at.is_(None))
-    hit = db.query(AssetVersion).filter(*base, preferred).order_by(
-        AssetVersion.version_number.desc()
-    ).first()
-    if hit:
-        return hit
-    return db.query(AssetVersion).filter(*base).order_by(
-        AssetVersion.version_number.desc()
-    ).first()
+    return (
+        current_version(db, asset_id, preferred, follow_pin=follow_pin)
+        or current_version(db, asset_id, follow_pin=follow_pin)
+    )
 
 
 def _display_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
@@ -67,6 +73,14 @@ def _display_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
     """
     return _pick_version(
         db, asset_id, AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES)
+    )
+
+
+def _display_version_by_default(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
+    """`_display_version` as it would be with no version set as current."""
+    return _pick_version(
+        db, asset_id, AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES),
+        follow_pin=False,
     )
 
 
@@ -172,6 +186,14 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
     version_by_asset = {v.asset_id: v for v in _max_version_rows(viewable_only=False)}
     # Viewable wins where one exists; the fallback above covers assets with none.
     version_by_asset.update({v.asset_id: v for v in _max_version_rows(viewable_only=True)})
+    # And a version set as current wins over both, while it is live and viewable.
+    pinned = [a.current_version_id for a in assets if a.current_version_id]
+    if pinned:
+        version_by_asset.update({v.asset_id: v for v in db.query(AssetVersion).filter(
+            AssetVersion.id.in_(pinned),
+            AssetVersion.deleted_at.is_(None),
+            AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES),
+        ).all()})
     latest_versions = list(version_by_asset.values())
 
     # Bulk load media files for all those versions
@@ -317,6 +339,132 @@ def delete_asset(
     db.commit()
 
 
+def _version_response(db: Session, version: AssetVersion | None) -> AssetVersionResponse | None:
+    if version is None:
+        return None
+    response = AssetVersionResponse.model_validate(version)
+    files = db.query(MediaFile).filter(MediaFile.version_id == version.id).all()
+    response.files = [MediaFileResponse.model_validate(f) for f in files]
+    return response
+
+
+def _lock_live_asset(db: Session, asset_id: uuid.UUID, current_user: User) -> Asset:
+    """The live asset, row-locked, for a change to which of its versions are live.
+
+    The lock serialises two such changes on one asset, so two people deleting its
+    last two versions at once cannot both see the other's version as the one that
+    stays. Version numbering takes the same row lock.
+    """
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id, Asset.deleted_at.is_(None),
+    ).with_for_update().first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
+    return asset
+
+
+@router.delete("/assets/{asset_id}/versions/{version_id}", response_model=AssetVersionChangeResponse)
+def delete_asset_version(
+    asset_id: uuid.UUID,
+    version_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Soft-delete one version (#419); `POST .../restore` brings it back.
+
+    Refused for the asset's last version that is ready or processing: the
+    asset is deleted instead, never as a side effect of deleting a version.
+
+    Until the retention purge it keeps its media, comments and approvals, which
+    every read path leaves out with it; the purge then reclaims them as it does
+    for any soft-deleted version. Its number stays burned either way (see
+    `next_version_number`).
+
+    Answers with the asset's latest version afterwards, because deleting the
+    newest one quietly makes the previous one current, share links set to show
+    the latest included. Deleting the version set as current ends that
+    setting, and a restore does not bring it back.
+    """
+    asset = _lock_live_asset(db, asset_id, current_user)
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id,
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if version.processing_status == ProcessingStatus.uploading:
+        raise HTTPException(
+            status_code=409,
+            detail="This version is still uploading. Discard the upload instead.",
+        )
+    # The version that stays has to be one whose master is known to be stored.
+    # Neither an upload in flight nor a failed version is: the reaper reclaims
+    # both (a failed one when storage holds no master for it), and with them the
+    # asset (`_strip_asset_with_no_versions`), which is the accident this
+    # refusal exists to prevent.
+    other_kept = db.query(AssetVersion.id).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.id != version.id,
+        AssetVersion.deleted_at.is_(None),
+        AssetVersion.processing_status.in_(_KEPT_STATUSES),
+    ).first()
+    if other_kept is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No other version of this asset is ready or processing. Delete the asset instead.",
+        )
+    version.deleted_at = datetime.now(timezone.utc)
+    if asset.current_version_id == version.id:
+        asset.current_version_id = None
+    db.flush()
+    latest = _version_response(db, _display_version(db, asset_id))
+    db.commit()
+    return AssetVersionChangeResponse(latest_version=latest)
+
+
+@router.post("/assets/{asset_id}/versions/{version_id}/restore", response_model=AssetVersionChangeResponse)
+def restore_asset_version(
+    asset_id: uuid.UUID,
+    version_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Bring back a version deleted on its own, until the retention purge takes it.
+
+    Only a version that ran (processing or ready) comes back. An upload that was
+    discarded or reclaimed in flight has no bytes left to return to, and is not
+    found. A failed version is refused with a 409: the reaper soft-deletes a
+    failed upload whose master never assembled, so one in the trash may be an
+    empty row nobody deleted. A version of an asset in the trash comes back
+    with the asset, not here.
+    """
+    _lock_live_asset(db, asset_id, current_user)
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id,
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.isnot(None),
+        AssetVersion.processing_status != ProcessingStatus.uploading,
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Deleted version not found")
+    if version.processing_status not in _KEPT_STATUSES:
+        raise HTTPException(status_code=409, detail="A version that failed cannot be restored.")
+    # Guarded on the row still being in the trash, as restore_asset is: the
+    # retention purge may have locked and hard-deleted it since it was read.
+    restored = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id, AssetVersion.deleted_at.isnot(None),
+    ).update({"deleted_at": None}, synchronize_session="fetch")
+    if not restored:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Deleted version not found")
+    db.flush()
+    latest = _version_response(db, _display_version(db, asset_id))
+    db.commit()
+    return AssetVersionChangeResponse(latest_version=latest)
+
+
 @router.get("/assets/{asset_id}/versions", response_model=list[AssetVersionResponse])
 def list_asset_versions(
     asset_id: uuid.UUID,
@@ -340,10 +488,88 @@ def list_asset_versions(
     for f in all_files:
         files_by_version.setdefault(f.version_id, []).append(f)
 
+    # The version a share link or the player opens with.
+    current = current_version(db, asset_id, AssetVersion.processing_status == ProcessingStatus.ready)
     for v in versions:
         vr = AssetVersionResponse.model_validate(v)
         vr.files = [MediaFileResponse.model_validate(f) for f in files_by_version.get(v.id, [])]
+        vr.is_current = current is not None and v.id == current.id
         result.append(vr)
+    return result
+
+
+@router.put("/assets/{asset_id}/current-version", response_model=AssetVersionChangeResponse)
+def set_current_version(
+    asset_id: uuid.UUID,
+    body: CurrentVersionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set the version that stands for the asset in place of the newest one.
+
+    It then is the version everything else resolves as the latest: the grid's
+    thumbnail and comment count, the version the review page opens with,
+    share links that show the latest only, downloads and the comment export
+    when no version is named. Only a ready version can be set. Setting the
+    version that is current by default anyway clears the setting, so there is
+    never one that changes nothing. It ends when that version is deleted, and
+    when a newer version becomes ready.
+    """
+    asset = _lock_live_asset(db, asset_id, current_user)
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == body.version_id,
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if version.processing_status != ProcessingStatus.ready:
+        raise HTTPException(
+            status_code=409,
+            detail="Only a version that is ready can be the current version.",
+        )
+    default = _display_version_by_default(db, asset_id)
+    asset.current_version_id = None if default is not None and default.id == version.id else version.id
+    db.flush()
+    latest = _version_response(db, _display_version(db, asset_id))
+    db.commit()
+    return AssetVersionChangeResponse(latest_version=latest)
+
+
+@router.get("/assets/{asset_id}/deleted-versions", response_model=list[DeletedVersionResponse])
+def list_deleted_versions(
+    asset_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The asset's versions deleted on their own that can still be restored, newest first.
+
+    Its own route rather than a flag on `GET .../versions`: that list feeds the
+    player, compare and every viewer, and must never carry a deleted version.
+    This one answers only the role that may restore (editor and above), and
+    lists only what `restore_asset_version` would take back: a version that
+    ran (processing or ready), not yet purged. A discarded upload or a failed
+    version, which the reaper also soft-deletes on its own, never appears.
+    """
+    from ..tasks.cleanup_tasks import _retention_days
+
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
+
+    versions = db.query(AssetVersion).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.isnot(None),
+        AssetVersion.processing_status.in_(_KEPT_STATUSES),
+    ).order_by(AssetVersion.version_number.desc()).all()
+    days = _retention_days()
+    result = []
+    for v in versions:
+        item = DeletedVersionResponse.model_validate(v)
+        if days > 0:
+            item.restorable_until = v.deleted_at + timedelta(days=days)
+        result.append(item)
     return result
 
 
@@ -364,7 +590,8 @@ def _ready_media_file(
             AssetVersion.deleted_at.is_(None),
         ).first()
     else:
-        # With no version asked for, serve the newest one that can actually play.
+        # With no version asked for, serve the current one that can actually play:
+        # the one set as current, else the newest.
         # Picking the highest-numbered version regardless meant an upload in flight,
         # or one that died, made every earlier version unplayable: the newest was
         # selected and then rejected as not ready, with no way to reach v1 short of

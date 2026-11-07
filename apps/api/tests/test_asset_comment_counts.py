@@ -104,6 +104,7 @@ def test_the_asset_list_carries_each_assets_comment_count():
         a.keywords = []; a.created_by = uuid.uuid4(); a.created_at = now; a.updated_at = now
         # Read by AssetResponse.model_validate before the builder sets them.
         a.latest_version = None; a.thumbnail_url = None; a.comment_count = 0
+        a.current_version_id = None
         return a
 
     def version(a):
