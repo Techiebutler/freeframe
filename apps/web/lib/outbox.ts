@@ -157,6 +157,8 @@ export function createOutbox(opts: OutboxOptions) {
       void drain()
     },
     async retry(id: string) { await set(id, { status: 'queued', error: undefined }); void drain() },
+    /** Retry with a changed payload (same id, so the same Idempotency-Key finds the same comment). */
+    async retryWith(id: string, payload: unknown) { await set(id, { payload, status: 'queued', error: undefined }); void drain() },
     /** Entries left over from an earlier visit: half-sent ones go back to queued, then everything goes out. */
     async load() {
       const stored = (await opts.store.all().catch(() => [])).filter(e => !list.some(l => l.id === e.id))

@@ -43,3 +43,26 @@ describe('a share note with an image', () => {
     await expect(sendNotePayload({ kind: 'share', token: 'tok', assetId: 'a1', text: 'x', t: 0, annotation: null, images: [png()] }, 'k1')).rejects.toThrow(/image_put_500/)
   })
 })
+
+describe('send without the image', () => {
+  it('replays the same comment (same key) and tells the server to drop the missing images', async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(json({ id: 'c1' }, 200))
+      .mockResolvedValueOnce(json({ attachments_expected: 0, removed: 1 }))
+    vi.stubGlobal('fetch', f)
+    await sendNotePayload({ kind: 'share', token: 'tok', assetId: 'a1', text: 'x', t: 0, annotation: null,
+      identity: { name: 'Ann', email: 'a@x.co' }, images: [], dropMissingImages: true }, 'k1')
+    expect(f.mock.calls[0][1].headers['Idempotency-Key']).toBe('k1')
+    expect(f.mock.calls[1][0]).toMatch(/\/share\/tok\/comments\/c1\/send-without-missing$/)
+    expect(JSON.parse(f.mock.calls[1][1].body)).toEqual({ guest_email: 'a@x.co' })
+  })
+
+  it('a refused image fails fast with the server reason (no blind retries)', async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(json({ id: 'c1' }, 201))
+      .mockResolvedValueOnce(json({ detail: 'Images can be up to 10 MB.' }, 422))
+    vi.stubGlobal('fetch', f)
+    await expect(sendNotePayload({ kind: 'share', token: 'tok', assetId: 'a1', text: 'x', t: 0, annotation: null, images: [png()] }, 'k'))
+      .rejects.toMatchObject({ status: 422, detail: 'Images can be up to 10 MB.' })
+  })
+})

@@ -9,7 +9,7 @@ import { postGuestNote, sessionQuery, type GuestIdentity } from './share-flow'
 const API_URL = () => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 /** images: reference screenshots that belong to THIS comment (kept as Files, IndexedDB stores them as is). */
-export interface NoteBody { text: string; t: number; annotation: Record<string, unknown> | null; images?: File[] }
+export interface NoteBody { text: string; t: number; annotation: Record<string, unknown> | null; images?: File[]; dropMissingImages?: boolean }
 /** Everything a note needs to be sent later, from any screen: it must not depend on component state. */
 export type NotePayload =
   | ({ kind: 'project'; assetId: string; versionId: string } & NoteBody)
@@ -26,7 +26,8 @@ export async function sendNotePayload(p: NotePayload, idempotencyKey: string): P
     if (p.annotation) body.annotation = { drawing_data: p.annotation }
     if (images.length) body.attachments_expected = images.length
     const c = await api.post<{ id: string }>(`/assets/${p.assetId}/comments`, body, { headers })
-    if (images.length) await uploadImages({ base: `${API_URL()}/comments/${c.id}/attachments`, headers: authHeaders(token) }, images)
+    if (p.dropMissingImages) await withoutMissing(`${API_URL()}/comments/${c.id}/attachments/send-without-missing`, {}, authHeaders(token))
+    else if (images.length) await uploadImages({ base: `${API_URL()}/comments/${c.id}/attachments`, headers: authHeaders(token) }, images)
     return
   }
   const identity = token ? null : p.identity
@@ -34,10 +35,18 @@ export async function sendNotePayload(p: NotePayload, idempotencyKey: string): P
     identity, shareSession: p.shareSession, assetId: p.assetId, versionId: p.versionId,
     headers: { ...authHeaders(token), ...headers },
   })
-  if (images.length && id) {
+  if (p.dropMissingImages && id) {
+    await withoutMissing(`${API_URL()}/share/${p.token}/comments/${id}/send-without-missing${sessionQuery(p.shareSession)}`, { guest_email: identity?.email }, authHeaders(token))
+  } else if (images.length && id) {
     await uploadImages({ base: `${API_URL()}/share/${p.token}/comments/${id}/attachments`, query: sessionQuery(p.shareSession),
       headers: authHeaders(token), guestEmail: identity?.email }, images)
   }
+}
+
+/** The author chose to send the comment without the images that never arrived. */
+async function withoutMissing(url: string, body: unknown, headers: Record<string, string>) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  if (!res.ok) throw Object.assign(new Error('send_without_images_failed'), { status: res.status })
 }
 
 let singleton: Outbox | null = null
@@ -62,5 +71,5 @@ export function useNoteOutbox(outbox: Outbox = getNoteOutbox()) {
     return outbox.subscribe(() => setEntries(outbox.entries()))
   }, [outbox])
   const summary = React.useMemo(() => summarize(entries), [entries])
-  return { entries, summary, line: statusLine(summary), enqueue: outbox.enqueue, retry: outbox.retry, byId: (id: string) => entries.find(e => e.id === id) }
+  return { entries, summary, line: statusLine(summary), enqueue: outbox.enqueue, retry: outbox.retry, retryWith: outbox.retryWith, byId: (id: string) => entries.find(e => e.id === id) }
 }

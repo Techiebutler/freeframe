@@ -316,9 +316,7 @@ function InlineReplyInput({
       />
       <div className="flex items-center justify-between mt-2">
         <div className="flex items-center gap-1">
-          <button className="h-7 w-7 flex items-center justify-center rounded-md text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary transition-colors">
-            <Paperclip className="h-4 w-4" />
-          </button>
+          {/* ponytail: no paperclip on replies - it never worked; images go into a Talk+Draw comment (spec #141). */}
           <div className="relative" ref={emojiRef}>
             <button
               onClick={() => setEmojiOpen((p) => !p)}

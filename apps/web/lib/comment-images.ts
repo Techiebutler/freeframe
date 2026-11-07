@@ -29,7 +29,10 @@ export interface ImageRoute {
 
 async function postJson(url: string, body: unknown, headers?: Record<string, string>) {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
-  if (!res.ok) throw new Error(`image_${res.status}`)
+  if (!res.ok) {
+    const detail = await res.json().then(d => (typeof d?.detail === 'string' ? d.detail : null)).catch(() => null)
+    throw Object.assign(new Error(detail ?? `image_${res.status}`), { status: res.status, detail: detail ?? 'The image could not be saved.' })
+  }
   return res.json()
 }
 

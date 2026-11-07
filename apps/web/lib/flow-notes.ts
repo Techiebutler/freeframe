@@ -29,6 +29,7 @@ export type NoteAction =
   | { type: 'marks'; id: string; marks: InkMark[] }
   | { type: 'split'; id: string; parts: { id: string; t: number; text: string; marks: InkMark[] }[] }
   | { type: 'remove'; id: string }
+  | { type: 'dropImages'; id: string }
   | { type: 'clear' }
 
 export function notesReducer(state: FlowNote[], a: NoteAction): FlowNote[] {
@@ -52,6 +53,8 @@ export function notesReducer(state: FlowNote[], a: NoteAction): FlowNote[] {
       const images = state.find(n => n.id === a.id)?.images  // a spoken note's images stay with its first sentence
       return [...rest, ...a.parts.map((p, i) => ({ id: p.id, t: p.t, text: p.text, status: 'ready' as const, marks: p.marks, ...(i === 0 && images?.length ? { images } : {}) }))].sort((x, y) => x.t - y.t)
     }
+    case 'dropImages':
+      return state.map(n => (n.id === a.id ? { ...n, images: undefined } : n))
     case 'remove':
       return state.filter(n => n.id !== a.id)
     case 'clear':

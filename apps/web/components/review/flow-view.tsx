@@ -64,11 +64,17 @@ const newId = () => `note-${Date.now()}-${seq++}`
 const stamp = (t: number) => `${timecode(t)}.${Math.floor((t % 1) * 10)}`
 
 /** Clock (waiting) -> spinner (sending) -> check (saved); red Retry when it failed. Never colour alone: each has its own glyph and name. */
-function NoteStatus({ status, onRetry, onDelete, label }: { status?: string; onRetry: () => void; onDelete?: () => void; label: string }) {
+function NoteStatus({ status, onRetry, onDelete, onSendWithout, label }: { status?: string; onRetry: () => void; onDelete?: () => void; onSendWithout?: () => void; label: string }) {
   if (status === 'queued') return <span role="img" aria-label="Waiting to send" className="grid h-11 w-11 shrink-0 place-items-center text-text-tertiary"><Clock size={16} /></span>
   if (status === 'sending') return <span role="img" aria-label="Sending" className="grid h-11 w-11 shrink-0 place-items-center text-text-secondary"><Loader2 size={16} className="animate-spin motion-reduce:animate-none" /></span>
   if (status === 'saved') return <span role="img" aria-label="Saved" className="grid h-11 w-11 shrink-0 place-items-center text-status-success"><Check size={18} /></span>
-  if (status === 'failed') return <button type="button" onClick={onRetry} aria-label={`Retry sending note at ${label}`} className="press inline-flex h-11 shrink-0 items-center gap-1 rounded-full px-3 text-xs font-semibold text-status-error hover:bg-bg-hover"><RotateCcw size={13} />Retry</button>
+  if (status === 'failed') return (
+    <span className="flex shrink-0 flex-col items-end">
+      <button type="button" onClick={onRetry} aria-label={`Retry sending note at ${label}`} className="press inline-flex h-11 shrink-0 items-center gap-1 rounded-full px-3 text-xs font-semibold text-status-error hover:bg-bg-hover"><RotateCcw size={13} />Retry</button>
+      {/* An image that will not upload must never strand the comment: the author may send it without. */}
+      {onSendWithout && <button type="button" onClick={onSendWithout} aria-label={`Send note at ${label} without its images`} className="press inline-flex min-h-11 items-center rounded-full px-3 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary">Send without image</button>}
+    </span>
+  )
   return onDelete ? <button type="button" onClick={onDelete} aria-label={`Delete note at ${label}`} className="press grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-secondary hover:bg-bg-hover"><X size={16} /></button> : <span className="h-11 w-11 shrink-0" />
 }
 
@@ -378,7 +384,8 @@ export function FlowView(p: FlowViewProps) {
                     </>
                   )}
                 </div>
-                <NoteStatus status={entry?.status} onRetry={() => ob.retry(n.id)} onDelete={entry ? undefined : () => dispatch({ type: 'remove', id: n.id })} label={timecode(n.t)} />
+                <NoteStatus status={entry?.status} onRetry={() => ob.retry(n.id)} onDelete={entry ? undefined : () => dispatch({ type: 'remove', id: n.id })} label={timecode(n.t)}
+                  onSendWithout={entry?.status === 'failed' && (entry.payload as NotePayload)?.images?.length ? () => { dispatch({ type: 'dropImages', id: n.id }); void ob.retryWith(n.id, { ...(entry.payload as NotePayload), images: [], dropMissingImages: true }) } : undefined} />
               </li>
             )
           })}
