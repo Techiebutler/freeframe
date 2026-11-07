@@ -10,17 +10,22 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { api } from '@/lib/api'
 import { ConnectAgent } from '@/components/agents/connect-agent'
+import { useAuthStore } from '@/stores/auth-store'
+import { canManageWorkspace } from '@/lib/workspace-access'
 import type { Project } from '@/types'
 
-// Only the brand's owner connects an AI; editors keep joining through share links.
-const canConnect = (p: Project) => !p.role || p.role === 'owner'
+// Whoever runs the workspace connects an AI, on every brand they own or edit (the API allows editor and up;
+// Alan is "editor" on the Aditor workspace). Staff see brand workspaces only, like Brand rules. Freelance
+// editors don't run a workspace, so they see none here and keep joining through share links.
+const canConnect = (p: Project, staff: boolean) => (!p.role || p.role === 'owner' || p.role === 'editor') && (!staff || !!p.is_workspace)
 
 function Agents() {
   usePageTitle('Agents')
   const router = useRouter()
   const params = useSearchParams()
   const { data: projects, error, mutate } = useSWR<Project[]>('/projects', () => api.get<Project[]>('/projects'))
-  const brands = (projects ?? []).filter(canConnect)
+  const user = useAuthStore(st => st.user)
+  const brands = canManageWorkspace(user, projects) ? (projects ?? []).filter(p => canConnect(p, user?.is_staff !== false)).sort((a, b) => a.name.localeCompare(b.name)) : []
   const wanted = params.get('project')
   const projectId = brands.find(p => p.id === wanted)?.id ?? brands[0]?.id
 
@@ -44,7 +49,7 @@ function Agents() {
       ) : !projects ? (
         <div className="skeleton-shimmer mt-8 h-64 animate-shimmer rounded-3xl" />
       ) : !projectId ? (
-        <p className="playbook-surface mt-8 p-8 text-text-secondary">You need a brand you own before an AI can join it.</p>
+        <p className="playbook-surface mt-8 p-8 text-text-secondary">Only the workspace owner connects an AI.</p>
       ) : (
         <div className="mt-8"><ConnectAgent key={projectId} projectId={projectId} /></div>
       )}
