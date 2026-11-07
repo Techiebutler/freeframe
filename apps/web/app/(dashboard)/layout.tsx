@@ -59,7 +59,7 @@ export default function DashboardLayout({
   if (setupRoute) return <main className="owner-workspace min-h-screen bg-bg-primary"><CampaignBoundary>{content}</CampaignBoundary></main>;
 
   return (
-    <div className={cn("flex h-screen overflow-hidden bg-bg-primary", ["/home", "/rules", "/handin"].includes(pathname) && "owner-workspace")}>
+    <div className={cn("flex h-screen overflow-hidden bg-bg-primary", ["/home", "/rules", "/agents", "/handin"].includes(pathname) && "owner-workspace")}>
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((c) => !c)}

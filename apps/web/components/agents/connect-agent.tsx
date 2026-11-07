@@ -37,7 +37,7 @@ function CopyButton({ text, label, primary }: { text: string; label: string; pri
     <>
       <button type="button" onClick={copy}
         className={primary
-          ? 'press inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-text-inverse hover:bg-accent-hover sm:w-auto'
+          ? 'press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-[0.9375rem] font-semibold text-text-inverse hover:bg-accent-hover sm:w-auto'
           : 'press inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-sm font-medium text-text-primary hover:bg-bg-hover'}>
         {copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Copied' : label}
       </button>
@@ -62,11 +62,11 @@ function KeyCard({ projectId, onCreated }: { projectId: string; onCreated: () =>
   }
   const extra = made ? setupLine(made.program, made.agent_key) : null
   const radio = 'peer sr-only'
-  const pill = 'press flex min-h-11 cursor-pointer items-center rounded-full border border-border px-4 text-sm text-text-secondary hover:bg-bg-hover peer-checked:border-accent peer-checked:bg-accent/10 peer-checked:font-medium peer-checked:text-text-primary peer-focus-visible:ring-2 peer-focus-visible:ring-text-secondary'
+  const pill = 'press flex min-h-11 cursor-pointer items-center rounded-full border border-border px-4 text-sm text-text-secondary hover:bg-bg-hover peer-checked:border-transparent peer-checked:bg-accent-muted peer-checked:font-semibold peer-checked:text-accent peer-focus-visible:ring-2 peer-focus-visible:ring-text-secondary'
 
   return (
-    <section aria-labelledby="connect-ai-h" className="rounded-2xl border border-border bg-bg-secondary p-5">
-      <h2 id="connect-ai-h" className="text-base font-semibold text-text-primary">Connect your AI</h2>
+    <section aria-labelledby="connect-ai-h" className="playbook-surface p-5 sm:p-6">
+      <h2 id="connect-ai-h" className="text-[1.0625rem] font-semibold tracking-tight text-text-primary">Connect your AI</h2>
       <p className="mt-1 text-sm text-text-secondary">Your AI hands in cuts and reads your feedback on its own. You only pass on one prompt.</p>
 
       {!made ? (
@@ -88,7 +88,7 @@ function KeyCard({ projectId, onCreated }: { projectId: string; onCreated: () =>
               {SCOPES.map(s => (
                 <label key={s.value} className="block">
                   <input type="radio" name="ai-scope" value={s.value} checked={scope === s.value} onChange={() => setScope(s.value)} className={radio} />
-                  <span className="press block min-h-11 cursor-pointer rounded-xl border border-border px-4 py-3 hover:bg-bg-hover peer-checked:border-accent peer-checked:bg-accent/10 peer-focus-visible:ring-2 peer-focus-visible:ring-text-secondary">
+                  <span className="press block min-h-11 cursor-pointer rounded-xl border border-border px-4 py-3 hover:bg-bg-hover peer-checked:border-transparent peer-checked:bg-accent-muted peer-focus-visible:ring-2 peer-focus-visible:ring-text-secondary">
                     <span className="block text-sm font-medium text-text-primary">{s.label}</span>
                     <span className="mt-0.5 block text-[0.8125rem] text-text-secondary">{s.hint}</span>
                   </span>
@@ -98,7 +98,7 @@ function KeyCard({ projectId, onCreated }: { projectId: string; onCreated: () =>
           </fieldset>
           <div>
             <button type="button" onClick={create} disabled={busy}
-              className="press inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-text-inverse hover:bg-accent-hover disabled:opacity-60 sm:w-auto">
+              className="press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-[0.9375rem] font-semibold text-text-inverse hover:bg-accent-hover disabled:opacity-60 sm:w-auto">
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}Create key
             </button>
             <p className="mt-2 text-[0.8125rem] text-text-secondary">A new key for the same AI replaces its old one.</p>
@@ -110,7 +110,7 @@ function KeyCard({ projectId, onCreated }: { projectId: string; onCreated: () =>
             <span className="font-medium">Key for {PROGRAM_LABEL[made.program]} is ready.</span>{' '}
             <span className="text-text-secondary">It is shown only now. Paste this into {PROGRAM_LABEL[made.program] === 'Other' ? 'your AI' : PROGRAM_LABEL[made.program]}:</span>
           </p>
-          <div className="rounded-xl border border-border bg-bg-primary p-3">
+          <div className="rounded-2xl border border-border bg-bg-secondary p-3">
             <pre data-testid="agent-prompt" className="whitespace-pre-wrap font-mono [overflow-wrap:anywhere] text-[0.9375rem] leading-relaxed text-text-primary">{agentPrompt(made.agent_key)}</pre>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -120,7 +120,7 @@ function KeyCard({ projectId, onCreated }: { projectId: string; onCreated: () =>
           {extra && (
             <div className="pt-2">
               <p className="text-[0.8125rem] font-medium text-text-secondary">{extra.label}</p>
-              <pre className="mt-1 whitespace-pre-wrap rounded-xl [overflow-wrap:anywhere] border border-border bg-bg-primary p-3 font-mono text-[0.8125rem] leading-relaxed text-text-primary">{extra.text}</pre>
+              <pre className="mt-1 whitespace-pre-wrap rounded-2xl [overflow-wrap:anywhere] border border-border bg-bg-secondary p-3 font-mono text-[0.8125rem] leading-relaxed text-text-primary">{extra.text}</pre>
               <CopyButton text={extra.text} label="Copy" />
             </div>
           )}
@@ -160,7 +160,7 @@ function PairingCard({ projectId }: { projectId: string }) {
   }
 
   return (
-    <details className="group rounded-2xl border border-border bg-bg-secondary px-5">
+    <details className="group playbook-surface px-5 sm:px-6">
       <summary className="flex min-h-14 cursor-pointer items-center text-sm font-medium text-text-primary">Pair with a code instead</summary>
       <div className="pb-5">
       <p className="text-sm text-text-secondary">The key never shows up in a chat. The code works once, for 15 minutes.</p>
@@ -181,17 +181,17 @@ function PairingCard({ projectId }: { projectId: string }) {
             <p className="text-sm tabular-nums text-text-secondary" role="timer">Expires in {left!.label}</p>
           </div>
           <p className="text-sm text-text-secondary">Tell Claude Code this line. It needs the <a href={KIT_URL} target="_blank" rel="noreferrer" className="font-medium text-text-primary underline underline-offset-2">AI Builder Starter Kit</a>.</p>
-          <div className="rounded-xl border border-border bg-bg-primary p-3">
+          <div className="rounded-2xl border border-border bg-bg-secondary p-3">
             <pre className="whitespace-pre-wrap break-all font-mono text-[0.9375rem] leading-relaxed text-text-primary">{line}</pre>
           </div>
           <button type="button" onClick={copy}
-            className="press inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-text-inverse hover:bg-accent-hover sm:w-auto">
+            className="press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-[0.9375rem] font-semibold text-text-inverse hover:bg-accent-hover sm:w-auto">
             {copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Copied' : 'Copy'}
           </button>
           <details className="text-[0.8125rem] text-text-secondary">
             <summary className="min-h-11 cursor-pointer content-center font-medium hover:text-text-primary">Codex, Hermes or Claude without the kit</summary>
             <p className="mb-2">Run the first line in the agent&apos;s terminal, then tell the agent the second line.</p>
-            <pre className="whitespace-pre-wrap break-all rounded-xl border border-border bg-bg-primary p-3 font-mono leading-relaxed text-text-primary">{mcpBlock}</pre>
+            <pre className="whitespace-pre-wrap break-all rounded-2xl border border-border bg-bg-secondary p-3 font-mono leading-relaxed text-text-primary">{mcpBlock}</pre>
           </details>
         </div>
       )}
@@ -247,12 +247,15 @@ export function ConnectAgent({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="space-y-6">
-      <KeyCard projectId={projectId} onCreated={() => mutate()} />
-      <PairingCard projectId={projectId} />
+    <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="min-w-0 space-y-6">
+        <KeyCard projectId={projectId} onCreated={() => mutate()} />
+        <PairingCard projectId={projectId} />
+      </div>
+      <div className="min-w-0 space-y-6">
 
-      <section aria-labelledby="agents-h" className="rounded-2xl border border-border bg-bg-secondary p-5">
-        <h2 id="agents-h" className="text-base font-semibold text-text-primary">Connected AIs</h2>
+      <section aria-labelledby="agents-h" className="playbook-surface p-5 sm:p-6">
+        <h2 id="agents-h" className="text-[1.0625rem] font-semibold tracking-tight text-text-primary">Connected AIs</h2>
         {error ? <p role="alert" className="mt-3 text-sm text-text-secondary">Could not load agents. <button className="min-h-11 font-medium text-accent" onClick={() => mutate()}>Retry</button></p>
           : !agents ? <div className="skeleton-shimmer mt-3 h-16 animate-shimmer rounded-xl" />
           : active.length === 0 ? <p className="mt-3 text-sm text-text-secondary">No AI connected yet. Create a key above.</p>
@@ -260,7 +263,7 @@ export function ConnectAgent({ projectId }: { projectId: string }) {
         {revokeError && <p role="alert" className="mt-2 text-sm text-status-error">{revokeError}</p>}
       </section>
 
-      <section className="rounded-2xl border border-border bg-bg-secondary p-5">
+      <section className="playbook-surface p-5 sm:p-6">
         <div className="flex items-center justify-between gap-4">
           <div>
             <label id="may-approve-l" htmlFor="may-approve" className="text-sm font-medium text-text-primary">Agents may approve</label>
@@ -273,6 +276,7 @@ export function ConnectAgent({ projectId }: { projectId: string }) {
         </div>
         {toggleError && <p role="alert" className="mt-2 text-sm text-status-error">{toggleError}</p>}
       </section>
+      </div>
     </div>
   )
 }
