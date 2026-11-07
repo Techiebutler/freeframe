@@ -58,6 +58,7 @@ class CommentCreate(HumanCommentPayload):
     visibility: Optional[str] = "public"  # "public" or "internal"
     annotation: Optional[AnnotationData] = None
     mention_user_ids: list[uuid.UUID] = []  # Explicit mention IDs from frontend
+    attachments_expected: int = Field(default=0, ge=0, le=4)  # images that follow this comment
 
 class GuestCommentCreate(HumanCommentPayload):
     idempotency_key: Optional[str] = Field(default=None, min_length=1, max_length=128)
@@ -70,6 +71,7 @@ class GuestCommentCreate(HumanCommentPayload):
     annotation: Optional[AnnotationData] = None
     guest_email: Optional[str] = None  # Not needed if user is logged in
     guest_name: Optional[str] = None
+    attachments_expected: int = Field(default=0, ge=0, le=4)  # images that follow this comment
 
 class CommentUpdate(HumanCommentPayload):
     body: str
@@ -102,9 +104,13 @@ class AnnotationResponse(BaseModel):
 # ── Attachments ────────────────────────────────────────────────────────────────
 
 class AttachmentUploadRequest(BaseModel):
-    file_name: str
+    file_name: str = Field(min_length=1, max_length=200)
     file_size: int
     content_type: str
+    guest_email: Optional[str] = None  # share route: the guest who wrote the comment
+
+class AttachmentComplete(BaseModel):
+    guest_email: Optional[str] = None  # share route: the guest who wrote the comment
 
 class AttachmentUploadResponse(BaseModel):
     upload_url: str

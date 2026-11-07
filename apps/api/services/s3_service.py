@@ -336,6 +336,15 @@ def object_exists(s3_key: str) -> bool:
         return False
 
 
+def head_object(s3_key: str) -> tuple[int, str] | None:
+    """(size, content type) of a stored object, or None when it is not there."""
+    try:
+        r = get_s3_client().head_object(Bucket=settings.s3_bucket, Key=s3_key)
+    except ClientError:
+        return None
+    return int(r.get("ContentLength") or 0), r.get("ContentType") or ""
+
+
 def put_object(s3_key: str, body: bytes, content_type: str | None = None, cache_control: str | None = None) -> None:
     """Upload a small object directly (for processed files like thumbnails)."""
     s3 = get_s3_client()

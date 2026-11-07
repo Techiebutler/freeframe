@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models.agent import AgentKey, FeedbackRound
 from ..models.asset import Asset, AssetVersion, MediaFile
-from ..models.comment import Annotation, Comment
+from ..models.comment import Annotation, Comment, CommentAttachment
+from . import comment_attachments as images
 from ..models.project import Project
 from ..models.upload_request import RequestUpload, UploadRequest
 from ..models.user import GuestUser, User
@@ -137,6 +138,24 @@ def round_comments(db: Session, rnd: FeedbackRound, req: UploadRequest) -> list[
     return [c for c in q.order_by(Comment.created_at).all() if human_author(db, c)]
 
 
+class ImagesPending(Exception):
+    """A round must not close while a comment still waits for its images (spec: never a silent drop)."""
+    def __init__(self, comment_ids: list[str]):
+        super().__init__("images_pending")
+        self.comment_ids = comment_ids
+
+
+def _uploaded(db: Session, comment_id) -> list[CommentAttachment]:
+    return db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment_id,
+                                              CommentAttachment.uploaded_at.isnot(None)).order_by(CommentAttachment.created_at).all()
+
+
+def images_pending(db: Session, comments: list[Comment], now: datetime) -> list[str]:
+    """Comments whose announced images are not all in yet - pending or images_failed alike."""
+    return [str(c.id) for c in comments if (c.attachments_expected or 0) > 0 and images.comment_state(
+        c.attachments_expected, len(_uploaded(db, c.id)), c.created_at, now) != "ready"]
+
+
 def _ms(seconds: Optional[float]) -> Optional[float]:
     return None if seconds is None else round(seconds, 3)
 
@@ -153,6 +172,7 @@ def _frame_url(db: Session, version_id: uuid.UUID) -> Optional[str]:
 
 
 def feedback_v1(db: Session, rnd: FeedbackRound) -> dict:
+    from . import s3_service
     req = db.get(UploadRequest, rnd.request_id)
     comments = round_comments(db, rnd, req)
     files: dict[tuple, dict] = {}
@@ -168,6 +188,9 @@ def feedback_v1(db: Session, rnd: FeedbackRound) -> dict:
             "comment_id": str(c.id), "t_start": _ms(c.timecode_start), "t_end": _ms(c.timecode_end), "text": c.body,
             "drawing": {"drawing_data": note.drawing_data, "frame_url": _frame_url(db, c.version_id),
                         "mark_offset_ms": note.drawing_data.get("mark_offset_ms") if isinstance(note.drawing_data, dict) else None} if note else None,
+            "attachments": [{"attachment_id": str(a.id), "file_name": a.original_filename, "content_type": a.file_type,
+                             "url": s3_service.generate_presigned_get_url(a.s3_key, expires_in=7 * 24 * 3600)}
+                            for a in _uploaded(db, c.id)],
             "author": name, "author_kind": kind})
     return build_feedback_v1(round_id=rnd.id, request_id=rnd.request_id, project_id=req.project_id, briefing=req.title,
                              opened_at=rnd.opened_at, closed_at=rnd.closed_at, closed_by=rnd.closed_by,
@@ -177,6 +200,9 @@ def feedback_v1(db: Session, rnd: FeedbackRound) -> dict:
 def close_round(db: Session, rnd: FeedbackRound, by: str, now: datetime) -> FeedbackRound:
     if rnd.closed_at is not None:  # never re-close: keeps closed_at, closed_by and accepted flags
         return rnd
+    waiting = images_pending(db, round_comments(db, rnd, db.get(UploadRequest, rnd.request_id)), now)
+    if waiting:
+        raise ImagesPending(waiting)
     rnd.closed_at, rnd.closed_by = now, by
     db.flush()
     req = db.get(UploadRequest, rnd.request_id)
@@ -192,7 +218,10 @@ def close_idle(db: Session, now: datetime) -> int:
         req = db.get(UploadRequest, rnd.request_id)
         last = max((c.created_at for c in round_comments(db, rnd, req)), default=None)
         if is_idle(rnd.last_activity_at, last, now):
-            close_round(db, rnd, "idle", now)
+            try:
+                close_round(db, rnd, "idle", now)
+            except ImagesPending:
+                continue  # the author still has to retry, remove or send without the image
             closed += 1
     return closed
 

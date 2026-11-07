@@ -86,5 +86,8 @@ def share_feedback_done(token: str, asset_id: uuid.UUID, share_session: Optional
     req = feedback_rounds.request_for_asset(db, asset.id)
     rnd = feedback_rounds.open_round(db, req.id, lock=True) if req else None
     if rnd is not None:
-        feedback_rounds.close_round(db, rnd, "button", datetime.now(timezone.utc))
+        try:
+            feedback_rounds.close_round(db, rnd, "button", datetime.now(timezone.utc))
+        except feedback_rounds.ImagesPending as e:
+            raise HTTPException(409, {"error": "images_pending", "comment_ids": e.comment_ids})
     return Response(status_code=204)
