@@ -332,6 +332,10 @@ class Settings(BaseSettings):
     # attributed to - never a human user. Unset (the default) leaves the endpoint answering 503
     # rather than guessing an owner.
     portal_freeframe_service_email: str = ""
+    # Comma-separated emails that are superadmins. Checked on every signed-in request, so a person on the
+    # list is an admin from their next click without anyone touching the database (Alan, 2026-11-08: the
+    # only superadmin was the brand-onboarding service account). Removing an email does NOT demote.
+    superadmin_emails: str = ""
 
     @model_validator(mode="after")
     def _check_s3_endpoint_consistency(self):

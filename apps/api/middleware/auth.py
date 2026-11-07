@@ -72,12 +72,23 @@ def get_identity_user(
     return user
 
 
+def _promote_listed_superadmin(user: User, db: Session) -> None:
+    """A signed-in staff person whose email is in SUPERADMIN_EMAILS becomes a superadmin (settings.superadmin_emails)."""
+    listed = {e.strip().lower() for e in (settings.superadmin_emails or "").split(",") if e.strip()}
+    if not listed or user.is_superadmin or getattr(user, "is_staff", True) is False:
+        return
+    if (user.email or "").strip().lower() in listed:
+        user.is_superadmin = True
+        db.commit()
+
+
 def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
     user = get_identity_user(request, credentials, db)
+    _promote_listed_superadmin(user, db)
     from ..services.campaign_access import preview_expired, expired_error
     if preview_expired(user):
         raise expired_error()
