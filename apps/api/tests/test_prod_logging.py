@@ -56,6 +56,17 @@ def test_api_image_gunicorn_writes_an_access_log():
     assert '"--access-logfile", "-"' in cmd
 
 
+def test_api_image_runtime_user_gets_a_home_directory():
+    """gunicorn's arbiter puts its control socket under `$HOME/.gunicorn`, and
+    `adduser --no-create-home` leaves a passwd entry whose home does not exist,
+    so the arbiter logged `Control server error: [Errno 13] Permission denied`.
+    """
+    lines = API_DOCKERFILE.read_text().splitlines()
+    [user] = [line.split()[1] for line in lines if line.startswith("USER ")]
+    [adduser] = [line for line in lines if "adduser" in line and user in line]
+    assert "--no-create-home" not in adduser, adduser
+
+
 def _emit_like_uvicorn(path_with_query: str) -> list[str]:
     """Log one request through `uvicorn.access` exactly as uvicorn's protocols do."""
     import apps.api.main  # noqa: F401 - importing the app installs the filter
