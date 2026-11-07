@@ -16,9 +16,10 @@ import {
   User,
   ChevronsLeft,
   Bot,
+  Eye,
 } from 'lucide-react'
 import { partsEnabled } from '@/lib/iterations'
-import { canManageWorkspace } from '@/lib/workspace-access'
+import { canManageWorkspace, canManageWorkspaceReally, setViewingAsEditor, viewingAsEditor } from '@/lib/workspace-access'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import { useUploadStore } from '@/stores/upload-store'
@@ -59,6 +60,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, logout, isSuperAdmin } = useAuthStore()
   const { data: projects } = useSWR<Project[]>('/projects', () => api.get<Project[]>('/projects'))
   const manager = canManageWorkspace(user, projects)
+  // Offered only to someone who really runs a workspace; while on, it says how to go back.
+  const asEditor = viewingAsEditor()
+  const canSwitchView = asEditor || canManageWorkspaceReally(user, projects)
   const navItems: NavItem[] = manager ? [...ownerNavItems, ...(partsEnabled ? [{ href: '/parts', label: 'Reusable parts', icon: Layers }] : [])] : [
     { href: '/handin', label: 'Hand in', icon: Upload },
     { href: '/home', label: 'Submissions', icon: Home },
@@ -268,6 +272,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   Settings
                 </Link>
               </DropdownMenu.Item>
+              {canSwitchView && (
+                <DropdownMenu.Item
+                  onSelect={() => setViewingAsEditor(!asEditor)}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-text-secondary hover:bg-bg-hover hover:text-text-primary focus:outline-none"
+                >
+                  <Eye className="h-4 w-4" />
+                  {asEditor ? 'Back to owner view' : 'View as editor'}
+                </DropdownMenu.Item>
+              )}
               <DropdownMenu.Separator className="my-1 h-px bg-border" />
               <DropdownMenu.Item
                 onSelect={logout}

@@ -1,3 +1,4 @@
+import { viewingAsEditor } from '@/lib/workspace-access'
 import { create } from 'zustand'
 import { User } from '@/types'
 import { api } from '@/lib/api'
@@ -23,7 +24,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     set({
       user,
       isAuthenticated: true,
-      isSuperAdmin: user.is_superadmin,
+      isSuperAdmin: user.is_superadmin && !viewingAsEditor(),
     })
   },
 
@@ -43,7 +44,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       set({
         user,
         isAuthenticated: true,
-        isSuperAdmin: user.is_superadmin,
+        isSuperAdmin: user.is_superadmin && !viewingAsEditor(),
       })
     } catch {
       set({
