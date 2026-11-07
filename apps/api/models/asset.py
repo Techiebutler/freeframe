@@ -84,7 +84,21 @@ class FileType(str, PyEnum):
     video = "video"
 
 class MediaFile(Base):
+    """The one file a version is made of.
+
+    One row per version, enforced by `uq_media_files_version_id`. Every write
+    path has only ever created one (`routers/upload.py`, `routers/assets.py`),
+    and `derived_size_bytes` below depends on it: the bytes it holds are
+    measured for the *version's* output prefix, so a second row on the same
+    version would make the storage overview count that prefix twice. If a
+    version ever has to hold several files, that total belongs on
+    `asset_versions` first; the constraint is there to make this a decision
+    rather than a silently wrong figure.
+    """
     __tablename__ = "media_files"
+    __table_args__ = (
+        UniqueConstraint("version_id", name="uq_media_files_version_id"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("asset_versions.id"), nullable=False, index=True)
     file_type: Mapped[FileType] = mapped_column(Enum(FileType), nullable=False)
@@ -100,6 +114,17 @@ class MediaFile(Base):
     # the raw master", never as "this version has no download".
     s3_key_download: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     s3_key_thumbnail: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    # Bytes of everything the transcode produced for this version: the HLS
+    # renditions under `s3_key_processed`, the single-file MP4/MP3/WebP, the
+    # poster thumbnail and the audio waveform. Measured once, by listing the
+    # version's output prefix when the job finishes, because the alternative is
+    # a bucket listing on every page view of the storage overview.
+    #
+    # NULL means "not measured", never "nothing derived": every row written
+    # before this column existed is NULL until the backfill task
+    # (`backfill_media_derived_size`) has summed its prefix, and the overview
+    # reports those rows as unmeasured rather than as zero.
+    derived_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
