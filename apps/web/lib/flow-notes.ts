@@ -14,10 +14,12 @@ export interface FlowNote {
   audio?: Blob
   /** Ink drawn during this note's part of the recording. */
   marks?: InkMark[]
+  /** Reference images pasted, dropped or picked for this note; they go out in the same comment. */
+  images?: File[]
 }
 
 export type NoteAction =
-  | { type: 'add'; id: string; t: number; status?: NoteStatus }
+  | { type: 'add'; id: string; t: number; status?: NoteStatus; images?: File[] }
   | { type: 'transcribing'; id: string; audio: Blob }
   | { type: 'done'; id: string; text: string }
   | { type: 'failed'; id: string }
@@ -32,7 +34,7 @@ export type NoteAction =
 export function notesReducer(state: FlowNote[], a: NoteAction): FlowNote[] {
   switch (a.type) {
     case 'add':
-      return [...state, { id: a.id, t: a.t, text: '', status: a.status ?? 'recording', marks: [] }].sort((x, y) => x.t - y.t)
+      return [...state, { id: a.id, t: a.t, text: '', status: a.status ?? 'recording', marks: [], ...(a.images?.length ? { images: a.images } : {}) }].sort((x, y) => x.t - y.t)
     case 'transcribing':
       return state.map(n => (n.id === a.id ? { ...n, status: 'transcribing', audio: a.audio } : n))
     case 'done':
@@ -47,7 +49,8 @@ export function notesReducer(state: FlowNote[], a: NoteAction): FlowNote[] {
       return state.map(n => (n.id === a.id ? { ...n, marks: a.marks } : n))
     case 'split': {
       const rest = state.filter(n => n.id !== a.id)
-      return [...rest, ...a.parts.map(p => ({ id: p.id, t: p.t, text: p.text, status: 'ready' as const, marks: p.marks }))].sort((x, y) => x.t - y.t)
+      const images = state.find(n => n.id === a.id)?.images  // a spoken note's images stay with its first sentence
+      return [...rest, ...a.parts.map((p, i) => ({ id: p.id, t: p.t, text: p.text, status: 'ready' as const, marks: p.marks, ...(i === 0 && images?.length ? { images } : {}) }))].sort((x, y) => x.t - y.t)
     }
     case 'remove':
       return state.filter(n => n.id !== a.id)

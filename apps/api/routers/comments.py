@@ -602,6 +602,12 @@ def _issue_attachment(db: Session, comment: Comment, body: AttachmentUploadReque
     reason = images.check_file(body.content_type, body.file_size)
     if reason:
         raise HTTPException(status_code=422, detail=reason)
+    # A resend of the same file (outbox retry after a lost response) reuses its row: never a second image.
+    same = db.query(CommentAttachment).filter(
+        CommentAttachment.comment_id == comment.id, CommentAttachment.uploaded_at.is_(None),
+        CommentAttachment.original_filename == body.file_name, CommentAttachment.file_size_bytes == body.file_size).first()
+    if same is not None:
+        return AttachmentUploadResponse(upload_url=_put_url(same.s3_key, same.file_type), attachment_id=same.id, key=same.s3_key)
     if db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment.id).count() >= images.MAX_PER_COMMENT:
         raise HTTPException(status_code=422, detail=f"Up to {images.MAX_PER_COMMENT} images per comment.")
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", body.file_name)[-120:] or "image"

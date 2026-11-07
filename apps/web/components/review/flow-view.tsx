@@ -1,13 +1,14 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Clock, Loader2, Mic, RotateCcw, Send, Square, X } from 'lucide-react'
+import { Check, Clock, Loader2, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
 import { notesFromDictation, notesReducer, sendBlocked, sendable, type FlowNote } from '@/lib/flow-notes'
 import { buildDrawingData, splitDeictic, type InkMark } from '@/lib/ink'
 import { getNoteOutbox, useNoteOutbox, type NoteBody, type NotePayload } from '@/lib/note-outbox'
+import { imagesFrom, IMAGE_TYPES, pickImages } from '@/lib/comment-images'
 import type { Outbox } from '@/lib/outbox'
 import { doneLine, markApproved, markFeedback, sentLine, sessionSummary, unmarkApproved } from '@/lib/flow-session'
 import { InkLayer, type InkReplay } from './ink-layer'
@@ -72,6 +73,21 @@ function NoteStatus({ status, onRetry, onDelete, label }: { status?: string; onR
 }
 
 /** The drawing as a small picture: the strokes in the same 0..1 frame, on a 9:16 card. */
+/** A reference image waiting to go out with the comment (or already in a note). */
+function ImageThumb({ file, onRemove, small }: { file: File; onRemove?: () => void; small?: boolean }) {
+  const [url, setUrl] = React.useState<string>()
+  React.useEffect(() => { const u = URL.createObjectURL(file); setUrl(u); return () => URL.revokeObjectURL(u) }, [file])
+  const size = small ? 'h-10 w-10' : 'h-14 w-14'
+  return (
+    <span className={`relative inline-block shrink-0 overflow-hidden rounded-lg border border-border bg-bg-tertiary ${size}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- a local blob preview, nothing to optimise */}
+      {url && <img src={url} alt={file.name || 'Reference image'} className="h-full w-full object-cover" />}
+      {onRemove && <button type="button" onClick={onRemove} aria-label={`Remove ${file.name || 'image'}`}
+        className="press absolute right-0.5 top-0.5 grid h-6 w-6 place-items-center rounded-full bg-black/70 text-white"><X size={12} /></button>}
+    </span>
+  )
+}
+
 function InkThumb({ mark }: { mark: InkMark }) {
   return (
     <svg viewBox="0 0 1 1" preserveAspectRatio="none" width="18" height="32" aria-hidden="true" className="shrink-0 rounded-[4px] bg-bg-tertiary ring-1 ring-border">
@@ -96,6 +112,10 @@ export function FlowView(p: FlowViewProps) {
   const [sending, setSending] = React.useState(false)
   const [error, setError] = React.useState('')
   const [typed, setTyped] = React.useState('')
+  const [images, setImages] = React.useState<File[]>([])
+  const [imageNote, setImageNote] = React.useState<string | null>(null)
+  const filePick = React.useRef<HTMLInputElement>(null)
+  const addImages = (files: File[]) => { if (!files.length) return; const r = pickImages(images, files); setImages(r.images); setImageNote(r.skipped) }
   const [messages, setMessages] = React.useState<Record<string, string>>({})
   const marks = React.useRef<InkMark[]>([])
   const [replay, setReplay] = React.useState<InkReplay | null>(null)
@@ -141,7 +161,7 @@ export function FlowView(p: FlowViewProps) {
     for (const n of notes) {
       if (n.status !== 'ready' || !n.text.trim() || ob.byId(n.id)) continue
       if (!canSave) { onNeedSave.current?.(); continue }
-      void ob.enqueue(n.id, payloadRef.current({ text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []) }))
+      void ob.enqueue(n.id, payloadRef.current({ text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []), ...(n.images?.length ? { images: n.images } : {}) }))
     }
   }, [notes, canSave, ob.entries]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -190,7 +210,8 @@ export function FlowView(p: FlowViewProps) {
     // The video keeps playing: talk and draw while it runs (H69).
     const id = newId()
     marks.current = []
-    dispatch({ type: 'add', id, t: p.getPlayhead() })
+    dispatch({ type: 'add', id, t: p.getPlayhead(), images })
+    setImages([]); setImageNote(null)
     try {
       levelRef.current = 0
       const rec = await start(v => { levelRef.current = v })
@@ -249,9 +270,10 @@ export function FlowView(p: FlowViewProps) {
     const text = typed.trim()
     if (!text) return
     const id = newId()
-    dispatch({ type: 'add', id, t: p.getPlayhead(), status: 'ready' })
+    dispatch({ type: 'add', id, t: p.getPlayhead(), status: 'ready', images })
     dispatch({ type: 'edit', id, text })
     setTyped('')
+    setImages([]); setImageNote(null)
   }
 
   const doneMoment = moment && (
@@ -317,7 +339,8 @@ export function FlowView(p: FlowViewProps) {
               <li key={n.id} data-testid="note-chip" data-state={entry?.status ?? n.status} className="flex items-start gap-2">
                 <button type="button" onClick={() => p.onSeek(n.t)} aria-label={`Go to ${timecode(n.t)}`} className="press min-h-11 shrink-0 rounded-lg bg-bg-tertiary px-2.5 font-mono text-xs tabular-nums text-text-primary">{timecode(n.t)}</button>
                 <div className="min-w-0 flex-1">
-                                    {n.status === 'transcribing' && <p role="status" className="flex min-h-11 items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />Transcribing…</p>}
+                  {!!n.images?.length && <div className="mb-1 flex gap-1.5" aria-label="Images in this note">{n.images.map((f, i) => <ImageThumb key={i} file={f} small />)}</div>}
+                  {n.status === 'transcribing' && <p role="status" className="flex min-h-11 items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin motion-reduce:animate-none" />Transcribing…</p>}
                   {(n.status === 'ready' || n.status === 'failed') && (
                     <>
                       {entry ? (
@@ -406,7 +429,15 @@ export function FlowView(p: FlowViewProps) {
         {filesBar}
         {mediaArea}
         {p.canComment ? (
-          <div className="flex shrink-0 justify-center px-4 pb-4 pt-3">
+          <div className="flex shrink-0 flex-col items-center px-4 pb-4 pt-3"
+            onDragOver={e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+            onDrop={e => { const f = imagesFrom(e.dataTransfer); if (f.length) { e.preventDefault(); addImages(f) } }}>
+            {(images.length > 0 || imageNote) && (
+              <div className="mb-2 flex w-full max-w-[560px] flex-wrap items-center gap-2" aria-label="Images for this comment">
+                {images.map((f, i) => <ImageThumb key={`${f.name}-${f.size}-${i}`} file={f} onRemove={() => setImages(images.filter((_, j) => j !== i))} />)}
+                {imageNote && <p role="status" className="text-xs text-text-secondary">{imageNote}</p>}
+              </div>
+            )}
             <div className="flex w-full max-w-[560px] items-center gap-2 rounded-2xl border border-border bg-bg-secondary p-1.5 transition-colors focus-within:border-text-tertiary shadow-[0_8px_24px_-12px_rgba(0,0,0,.5)]">
               <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Talk'} title={active ? 'Stop (saves the note)' : 'Talk and draw while it plays'}
                 className="flow-comment inline-flex h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-text-inverse">
@@ -421,8 +452,12 @@ export function FlowView(p: FlowViewProps) {
               ) : (
                 <form onSubmit={typeNote} className="flex min-w-0 flex-1 items-center gap-1">
                   <input value={typed} onChange={e => setTyped(e.target.value)} onFocus={p.onPause} aria-label="Type a note at the current time"
+                    onPaste={e => { const f = imagesFrom(e.clipboardData); if (f.length) { e.preventDefault(); addImages(f) } }}
                     placeholder={`Leave feedback at ${timecode(p.getPlayhead())}…`}
                     className="h-11 min-w-0 flex-1 bg-transparent px-2 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none" />
+                  <input ref={filePick} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden onChange={e => { addImages(Array.from(e.target.files ?? [])); e.target.value = '' }} />
+                  <button type="button" onClick={() => filePick.current?.click()} aria-label="Attach an image" title="Attach an image or paste a screenshot"
+                    className="press grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-secondary hover:bg-bg-hover hover:text-text-primary"><Paperclip size={16} /></button>
                   <button type="submit" disabled={!typed.trim()} aria-label="Add note" className="press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-bg-hover text-text-primary disabled:opacity-40"><Send size={15} /></button>
                 </form>
               )}
@@ -453,10 +488,20 @@ export function FlowView(p: FlowViewProps) {
       {mediaArea}
       {notesList}
       {statusArea}
+      {p.canComment && (images.length > 0 || imageNote) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-bg-secondary px-3 pt-2" aria-label="Images for the next comment">
+          {images.map((f, i) => <ImageThumb key={`${f.name}-${f.size}-${i}`} file={f} onRemove={() => setImages(images.filter((_, j) => j !== i))} />)}
+          <p role="status" className="text-xs text-text-secondary">{imageNote ?? 'Goes with your next comment.'}</p>
+        </div>
+      )}
       {/* One-hand bottom controls */}
-      <div className="flex shrink-0 items-center gap-2 border-t border-border bg-bg-secondary px-3 pt-2" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
+      <div className="flex shrink-0 items-center gap-2 border-t border-border bg-bg-secondary px-3 pt-2" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+        onPaste={e => { const f = imagesFrom(e.clipboardData); if (f.length) { e.preventDefault(); addImages(f) } }}>
         {p.canComment ? (
           <>
+            <input ref={filePick} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden onChange={e => { addImages(Array.from(e.target.files ?? [])); e.target.value = '' }} />
+            {!active && <button type="button" onClick={() => filePick.current?.click()} aria-label="Attach an image" title="Attach an image or a screenshot"
+              className="press grid h-14 w-14 shrink-0 place-items-center rounded-full border border-border text-text-secondary hover:bg-bg-hover hover:text-text-primary"><Paperclip size={20} /></button>}
             <button type="button" onClick={tapComment}
               className="flow-comment inline-flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-5 text-base font-semibold text-text-inverse">
               {active ? <><Square size={18} aria-hidden="true" />Stop</> : <><Mic size={24} aria-hidden="true" />Comment</>}

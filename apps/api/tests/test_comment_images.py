@@ -31,8 +31,8 @@ def test_only_images_up_to_10_mb_and_4_per_comment(env):
     cid = comment(env, a)
     assert attach(env, cid, body={**PNG, "content_type": "video/mp4"}).status_code == 422
     assert attach(env, cid, body={**PNG, "file_size": 11 * 1024 * 1024}).status_code == 422
-    assert all(attach(env, cid).status_code == 201 for _ in range(4))
-    assert attach(env, cid).status_code == 422
+    assert all(attach(env, cid, body={**PNG, "file_name": f"ref {i}.png"}).status_code == 201 for i in range(4))
+    assert attach(env, cid, body={**PNG, "file_name": "ref 5.png"}).status_code == 422
 
 
 def test_an_image_exists_only_after_complete_and_complete_is_idempotent(env):
@@ -55,6 +55,7 @@ def test_retry_reuses_the_same_row(env):
     aid = attach(env, cid).json()["attachment_id"]
     again = env.client.post(f"/comments/{cid}/attachments/{aid}/retry", headers=env.headers(env.owner))
     assert again.status_code == 200 and again.json()["attachment_id"] == aid
+    assert attach(env, cid).json()["attachment_id"] == aid  # the outbox resending the same file
     with env.Session() as db:
         assert db.query(CommentAttachment).count() == 1
 
