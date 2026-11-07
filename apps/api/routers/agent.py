@@ -1,9 +1,11 @@
 """The agent's own API (`Authorization: Bearer ara_...`). An agent sees only its one project; anything else is 404."""
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -13,7 +15,7 @@ from ..middleware.auth import get_agent
 from ..models.activity import ActivityAction, ActivityLog
 from ..models.approval import ApprovalStatus
 from ..models.asset import Asset, AssetVersion
-from ..models.project import Project
+from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.upload_request import UploadRequest
 from ..services import agent_queue, feedback_rounds, review_bridge
 from ..services.agents import AgentContext
@@ -110,9 +112,58 @@ def ack(round_id: uuid.UUID, agent: AgentContext = Depends(get_agent), db: Sessi
     return Response(status_code=204)
 
 
+def normalize_brand(name: str) -> str:
+    return re.sub(r"[\s_-]+", "-", name.strip().lower())
+
+
+def _owner_brands(db: Session, agent: AgentContext) -> list[Project]:
+    """Every live project created by the owner of the key's home project, sorted by name."""
+    home = _project(db, agent)
+    return db.query(Project).filter(Project.created_by == home.created_by, Project.deleted_at.is_(None)).order_by(Project.name).all()
+
+
+def _ensure_editor(db: Session, project_id: uuid.UUID, agent: AgentContext, owner_id: uuid.UUID) -> None:
+    member = db.query(ProjectMember).filter(ProjectMember.project_id == project_id, ProjectMember.user_id == agent.user.id).first()
+    if member is None:
+        db.add(ProjectMember(project_id=project_id, user_id=agent.user.id, role=ProjectRole.editor, invited_by=owner_id))
+    elif member.deleted_at is not None:
+        member.deleted_at, member.role = None, ProjectRole.editor
+
+
+@router.get("/brands")
+def list_brands(agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
+    return {"brands": [{"brand_id": str(p.id), "name": p.name, "aliases": [p.autoreview_brand_slug] if p.autoreview_brand_slug else [],
+                        "home": p.id == agent.key.project_id} for p in _owner_brands(db, agent)]}
+
+
+class NewBrand(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    website: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/brands")
+def create_brand(body: NewBrand, response: Response, agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
+    """Find the owner's brand by normalized name or create it, with the agent as editor."""
+    key = normalize_brand(body.name)
+    if not key:
+        raise HTTPException(422, "invalid_name")
+    for p in _owner_brands(db, agent):
+        if normalize_brand(p.name) == key:
+            return {"brand_id": str(p.id), "name": p.name, "created": False}
+    owner_id = _project(db, agent).created_by
+    project = Project(name=body.name.strip(), description=(body.website or "").strip() or None, created_by=owner_id)
+    db.add(project)
+    db.flush()
+    _ensure_editor(db, project.id, agent, owner_id)
+    db.commit()
+    response.status_code = status.HTTP_201_CREATED
+    return {"brand_id": str(project.id), "name": project.name, "created": True}
+
+
 class NewRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     external_ref: str = Field(min_length=1, max_length=200)
+    brand_id: Optional[uuid.UUID] = None
 
 
 def _request_reply(req: UploadRequest, created: bool) -> dict:
@@ -125,6 +176,12 @@ def create_request(body: NewRequest, agent: AgentContext = Depends(get_agent), d
     owned by the agent. The same (project, external_ref) always answers with the same request."""
     from .requests import RequestCreate, create_request as create_normal_request
     project = _project(db, agent)
+    if body.brand_id is not None and body.brand_id != project.id:
+        project = next((p for p in _owner_brands(db, agent) if p.id == body.brand_id), None)
+        if project is None:
+            return JSONResponse(status_code=404, content={"error": "not_found", "next": "Brand is not in your workspace. Call list_brands."})
+        _ensure_editor(db, project.id, agent, project.created_by)
+        db.commit()
     ref = body.external_ref.strip()
     found = lambda: db.query(UploadRequest).filter(UploadRequest.project_id == project.id, UploadRequest.external_ref == ref).first()  # noqa: E731
     existing = found()
