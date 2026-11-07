@@ -28,6 +28,7 @@ from ..models.user import User, GuestUser
 from ..models.share import ShareLink, ShareLinkActivity, ShareActivityAction, SharePermission
 from ..schemas.comment import (
     AnnotationResponse,
+    AttachmentComplete,
     AttachmentResponse,
     AttachmentUploadRequest,
     AttachmentUploadResponse,
@@ -44,6 +45,7 @@ from ..schemas.comment import (
 )
 from ..services import brand_loop, feedback_rounds, s3_service
 from ..services import comment_export
+from ..services import comment_attachments as images
 from ..services.permissions import (
     require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
 )
@@ -122,7 +124,7 @@ def _build_comment_response(
 
     # Load attachments
     attachments_raw = db.query(CommentAttachment).filter(
-        CommentAttachment.comment_id == comment.id,
+        CommentAttachment.comment_id == comment.id, CommentAttachment.uploaded_at.isnot(None),
     ).all()
     attachments = [_build_attachment_response(a) for a in attachments_raw]
 
@@ -218,7 +220,7 @@ def _build_comment_responses_batched(
         for a in db.query(Annotation).filter(Annotation.comment_id.in_(ids)).all()
     }
     attachments_map: dict[uuid.UUID, list[CommentAttachment]] = defaultdict(list)
-    for a in db.query(CommentAttachment).filter(CommentAttachment.comment_id.in_(ids)).all():
+    for a in db.query(CommentAttachment).filter(CommentAttachment.comment_id.in_(ids), CommentAttachment.uploaded_at.isnot(None)).all():
         attachments_map[a.comment_id].append(a)
     reactions_map: dict[uuid.UUID, list[CommentReaction]] = defaultdict(list)
     for r in db.query(CommentReaction).filter(CommentReaction.comment_id.in_(ids)).all():
@@ -405,6 +407,7 @@ def create_comment(
         timecode_end=body.timecode_end,
         body=body.body,
         visibility=body.visibility or "public",
+        attachments_expected=body.attachments_expected,
     )
     db.add(comment)
     db.flush()
@@ -565,53 +568,156 @@ def resolve_comment(
 
 # ── Attachments ────────────────────────────────────────────────────────────────
 
-@router.post(
-    "/comments/{comment_id}/attachments",
-    response_model=AttachmentUploadResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_attachment(
-    comment_id: uuid.UUID,
-    body: AttachmentUploadRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+def _may_attach(db: Session, comment: Comment, asset: Asset, user: User) -> None:
+    """The comment's author, or an owner/editor of the project (same rule as deleting an attachment)."""
+    if comment.author_id == user.id:
+        return
+    from ..services.permissions import effective_project_role
+    if effective_project_role(db, asset.project_id, user) not in (ProjectRole.owner, ProjectRole.editor):
+        raise HTTPException(status_code=403, detail="Only the comment's author can attach images")
+
+
+def _guest_comment_for(db: Session, token: str, comment_id: uuid.UUID, guest_email: Optional[str],
+                       share_session: Optional[str], current_user: Optional[User]) -> Comment:
+    """A share-link commenter may attach images to their OWN comment only: signed-in by author_id,
+    a guest by the email that wrote it (the same identity guest_comment uses)."""
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+    if link.permission == SharePermission.view:
+        raise HTTPException(status_code=403, detail="This share link does not allow commenting")
     comment = _get_comment(db, comment_id)
-    asset = _get_asset(db, comment.asset_id)
-    require_asset_access(db, asset, current_user)
+    validate_asset_in_share(db, link, _get_asset(db, comment.asset_id))
+    if current_user is not None and comment.author_id == current_user.id:
+        return comment
+    guest = db.get(GuestUser, comment.guest_author_id) if comment.guest_author_id else None
+    if guest is None or not guest_email or (guest.email or "").lower() != guest_email.strip().lower():
+        raise HTTPException(status_code=403, detail="Only the comment's author can attach images")
+    return comment
 
-    # Generate S3 key
-    key = f"comment-attachments/{comment_id}/{uuid.uuid4()}/{body.file_name}"
 
-    # Generate presigned PUT URL
-    s3 = s3_service.get_s3_client()
-    upload_url = s3.generate_presigned_url(
-        "put_object",
-        Params={
-            "Bucket": settings.s3_bucket,
-            "Key": key,
-            "ContentType": body.content_type,
-        },
-        ExpiresIn=3600,
-    )
+def _put_url(key: str, content_type: str) -> str:
+    return s3_service.generate_presigned_put_url(key, content_type)  # the public host a browser can reach
 
-    # Save attachment record
-    attachment = CommentAttachment(
-        comment_id=comment_id,
-        file_type=body.content_type,
-        s3_key=key,
-        original_filename=body.file_name,
-        file_size_bytes=body.file_size,
-    )
+
+def _issue_attachment(db: Session, comment: Comment, body: AttachmentUploadRequest) -> AttachmentUploadResponse:
+    reason = images.check_file(body.content_type, body.file_size)
+    if reason:
+        raise HTTPException(status_code=422, detail=reason)
+    if db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment.id).count() >= images.MAX_PER_COMMENT:
+        raise HTTPException(status_code=422, detail=f"Up to {images.MAX_PER_COMMENT} images per comment.")
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", body.file_name)[-120:] or "image"
+    key = f"comment-attachments/{comment.id}/{uuid.uuid4()}/{name}"
+    attachment = CommentAttachment(comment_id=comment.id, file_type=body.content_type.lower(), s3_key=key,
+                                   original_filename=body.file_name, file_size_bytes=body.file_size)
     db.add(attachment)
     db.commit()
     db.refresh(attachment)
+    return AttachmentUploadResponse(upload_url=_put_url(key, attachment.file_type), attachment_id=attachment.id, key=key)
 
-    return AttachmentUploadResponse(
-        upload_url=upload_url,
-        attachment_id=attachment.id,
-        key=key,
-    )
+
+def _attachment(db: Session, comment: Comment, attachment_id: uuid.UUID) -> CommentAttachment:
+    a = db.query(CommentAttachment).filter(CommentAttachment.id == attachment_id, CommentAttachment.comment_id == comment.id).first()
+    if a is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return a
+
+
+def _complete(db: Session, comment: Comment, attachment_id: uuid.UUID) -> AttachmentResponse:
+    """Confirms the object really is in storage, as announced. Safe to call again."""
+    a = _attachment(db, comment, attachment_id)
+    if a.uploaded_at is None:
+        head = s3_service.head_object(a.s3_key)
+        if head is None:
+            raise HTTPException(status_code=409, detail="The image has not arrived yet. Upload it again.")
+        size, ctype = head
+        if size != a.file_size_bytes or (ctype or "").lower() != a.file_type:
+            raise HTTPException(status_code=409, detail="The uploaded file does not match. Upload it again.")
+        a.uploaded_at = datetime.now(timezone.utc)
+        db.commit()
+    return _build_attachment_response(a)
+
+
+def _retry(db: Session, comment: Comment, attachment_id: uuid.UUID) -> AttachmentUploadResponse:
+    """A fresh upload URL for the SAME attachment row - a retry never adds a second image."""
+    a = _attachment(db, comment, attachment_id)
+    if a.uploaded_at is not None:
+        raise HTTPException(status_code=409, detail="This image is already uploaded.")
+    return AttachmentUploadResponse(upload_url=_put_url(a.s3_key, a.file_type), attachment_id=a.id, key=a.s3_key)
+
+
+def _send_without_missing(db: Session, comment: Comment) -> dict:
+    """The author's explicit choice: drop the images that never arrived and let the comment go out."""
+    missing = db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment.id,
+                                                 CommentAttachment.uploaded_at.is_(None)).all()
+    for a in missing:
+        db.delete(a)
+    comment.attachments_expected = db.query(CommentAttachment).filter(
+        CommentAttachment.comment_id == comment.id, CommentAttachment.uploaded_at.isnot(None)).count()
+    db.commit()
+    return {"attachments_expected": comment.attachments_expected, "removed": len(missing)}
+
+
+@router.post("/comments/{comment_id}/attachments", response_model=AttachmentUploadResponse, status_code=status.HTTP_201_CREATED)
+def create_attachment(comment_id: uuid.UUID, body: AttachmentUploadRequest, db: Session = Depends(get_db),
+                      current_user: User = Depends(get_current_user)):
+    comment = _get_comment(db, comment_id)
+    asset = _get_asset(db, comment.asset_id)
+    require_asset_access(db, asset, current_user)
+    _may_attach(db, comment, asset, current_user)
+    return _issue_attachment(db, comment, body)
+
+
+@router.post("/comments/{comment_id}/attachments/{attachment_id}/complete", response_model=AttachmentResponse)
+def complete_attachment(comment_id: uuid.UUID, attachment_id: uuid.UUID, db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)):
+    comment = _get_comment(db, comment_id)
+    asset = _get_asset(db, comment.asset_id)
+    require_asset_access(db, asset, current_user)
+    _may_attach(db, comment, asset, current_user)
+    return _complete(db, comment, attachment_id)
+
+
+@router.post("/comments/{comment_id}/attachments/{attachment_id}/retry", response_model=AttachmentUploadResponse)
+def retry_attachment(comment_id: uuid.UUID, attachment_id: uuid.UUID, db: Session = Depends(get_db),
+                     current_user: User = Depends(get_current_user)):
+    comment = _get_comment(db, comment_id)
+    asset = _get_asset(db, comment.asset_id)
+    require_asset_access(db, asset, current_user)
+    _may_attach(db, comment, asset, current_user)
+    return _retry(db, comment, attachment_id)
+
+
+@router.post("/comments/{comment_id}/attachments/send-without-missing")
+def send_without_missing(comment_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    comment = _get_comment(db, comment_id)
+    asset = _get_asset(db, comment.asset_id)
+    require_asset_access(db, asset, current_user)
+    _may_attach(db, comment, asset, current_user)
+    return _send_without_missing(db, comment)
+
+
+@router.post("/share/{token}/comments/{comment_id}/attachments", response_model=AttachmentUploadResponse, status_code=status.HTTP_201_CREATED)
+def guest_create_attachment(token: str, comment_id: uuid.UUID, body: AttachmentUploadRequest,
+                            share_session: Optional[str] = Query(None), db: Session = Depends(get_db),
+                            current_user: Optional[User] = Depends(get_optional_user)):
+    comment = _guest_comment_for(db, token, comment_id, body.guest_email, share_session, current_user)
+    return _issue_attachment(db, comment, body)
+
+
+@router.post("/share/{token}/comments/{comment_id}/attachments/{attachment_id}/{action}")
+def guest_attachment_action(token: str, comment_id: uuid.UUID, attachment_id: uuid.UUID, action: str, body: AttachmentComplete,
+                            share_session: Optional[str] = Query(None), db: Session = Depends(get_db),
+                            current_user: Optional[User] = Depends(get_optional_user)):
+    if action not in ("complete", "retry"):
+        raise HTTPException(status_code=404, detail="Not found")
+    comment = _guest_comment_for(db, token, comment_id, body.guest_email, share_session, current_user)
+    return _complete(db, comment, attachment_id) if action == "complete" else _retry(db, comment, attachment_id)
+
+
+@router.post("/share/{token}/comments/{comment_id}/send-without-missing")
+def guest_send_without_missing(token: str, comment_id: uuid.UUID, body: AttachmentComplete,
+                               share_session: Optional[str] = Query(None), db: Session = Depends(get_db),
+                               current_user: Optional[User] = Depends(get_optional_user)):
+    return _send_without_missing(db, _guest_comment_for(db, token, comment_id, body.guest_email, share_session, current_user))
 
 
 @router.delete(
@@ -1106,6 +1212,7 @@ def guest_comment(
         timecode_end=body.timecode_end,
         body=body.body,
         visibility=visibility,
+        attachments_expected=body.attachments_expected,
     )
     if comment_id:
         comment.id = comment_id

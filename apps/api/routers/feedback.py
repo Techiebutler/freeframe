@@ -42,7 +42,10 @@ def close_round(request_id: uuid.UUID, body: CloseBody, db: Session = Depends(ge
     rnd = rounds.open_round(db, req.id, lock=True)
     if rnd is None:
         raise HTTPException(409, "no_open_round")
-    rounds.close_round(db, rnd, "button", datetime.now(timezone.utc))
+    try:
+        rounds.close_round(db, rnd, "button", datetime.now(timezone.utc))
+    except rounds.ImagesPending as e:
+        raise HTTPException(409, {"error": "images_pending", "comment_ids": e.comment_ids})
     return rounds.feedback_v1(db, rnd)
 
 

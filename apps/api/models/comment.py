@@ -34,6 +34,8 @@ class Comment(Base):
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     review_publication_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     review_publication_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Images the author said follow this comment; held out of feedback rounds until they are in.
+    attachments_expected: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -55,6 +57,8 @@ class CommentAttachment(Base):
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Set once the object is confirmed in storage; until then the attachment does not exist for readers.
+    uploaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class CommentReaction(Base):
     __tablename__ = "comment_reactions"
