@@ -12,7 +12,8 @@ try:
 except ImportError:
     from database import Base
 
-PROGRAMS = ("claude-code", "codex", "hermes", "grok", "other")
+PROGRAMS = ("claude-code", "codex", "chatgpt", "cursor", "hermes", "grok", "other")
+SCOPES = ("read", "deliver")  # read: queue, review, feedback. deliver: read + upload, requests, ack, rule suggestions.
 
 
 class AgentKey(Base):
@@ -25,6 +26,7 @@ class AgentKey(Base):
     program: Mapped[str] = mapped_column(String(20), nullable=False)
     agent_name: Mapped[str] = mapped_column(String(80), nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    scope: Mapped[str] = mapped_column(String(10), nullable=False, default="deliver", server_default="deliver")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

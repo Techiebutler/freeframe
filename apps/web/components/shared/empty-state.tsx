@@ -11,6 +11,11 @@ interface EmptyStateProps {
     label: string
     onClick: () => void
   }
+  /** A quieter second action; when set, `action` becomes the one prominent button. */
+  secondaryAction?: {
+    label: string
+    onClick: () => void
+  }
   className?: string
 }
 
@@ -19,6 +24,7 @@ export function EmptyState({
   title,
   description,
   action,
+  secondaryAction,
   className,
 }: EmptyStateProps) {
   return (
@@ -39,10 +45,19 @@ export function EmptyState({
           <p className="text-xs text-text-secondary max-w-xs">{description}</p>
         )}
       </div>
-      {action && (
-        <Button variant="secondary" size="sm" onClick={action.onClick}>
-          {action.label}
-        </Button>
+      {(action || secondaryAction) && (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {action && (
+            <Button variant={secondaryAction ? 'primary' : 'secondary'} size="sm" onClick={action.onClick}>
+              {action.label}
+            </Button>
+          )}
+          {secondaryAction && (
+            <Button variant="ghost" size="sm" onClick={secondaryAction.onClick}>
+              {secondaryAction.label}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   )

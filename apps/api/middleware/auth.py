@@ -113,16 +113,35 @@ def get_optional_user(
 
 
 def get_agent(request: Request, db: Session = Depends(get_db)) -> "AgentContext":
-    """The paired agent behind `Authorization: Bearer ara_...`; it only ever acts inside its one project."""
+    """The paired agent behind `Authorization: Bearer ara_...`; it only ever acts inside its one project.
+    Scope and the per-key limit are checked here, once for every agent route."""
     from ..services.agents import presented_key, resolve_key
     token = presented_key(request.headers.get("authorization"))
     if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_agent_key")
-    return resolve_key(db, token)
+    return _agent_gate(request, resolve_key(db, token))
+
+
+def _agent_gate(request: Request, agent: "AgentContext") -> "AgentContext":
+    from ..services.agents import require_scope
+    from ..services.redis_service import check_rate_limit
+    write = request.method not in ("GET", "HEAD", "OPTIONS")
+    require_scope(agent, write)
+    # ponytail: fixed 10-min windows per key; 120 reads / 30 writes (spec G). Upload parts keep their own /r/ limit.
+    allowed, retry_after = check_rate_limit(str(agent.key.id), "agent_write" if write else "agent_read", 30 if write else 120, 600)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate_limited",
+                            headers={"Retry-After": str(retry_after)})
+    return agent
 
 
 def get_optional_agent(request: Request, db: Session = Depends(get_db)) -> "Optional[AgentContext]":
     """None for anyone without an ara_ key (a guest editor); a bad ara_ key still fails loudly."""
     from ..services.agents import presented_key, resolve_key
     token = presented_key(request.headers.get("authorization"))
-    return resolve_key(db, token) if token else None
+    if not token:
+        return None
+    from ..services.agents import require_scope
+    agent = resolve_key(db, token)
+    require_scope(agent, request.method not in ("GET", "HEAD", "OPTIONS"))  # hand-in routes: a read key may not upload
+    return agent

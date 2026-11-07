@@ -2,11 +2,14 @@ import { api } from './api'
 
 // Contract: docs/superpowers/specs/2026-11-04-agent-review-platform-CONTRACT.md
 
-export type AgentProgram = 'claude-code' | 'codex' | 'hermes' | 'grok' | 'other'
+export type AgentProgram = 'claude-code' | 'codex' | 'chatgpt' | 'cursor' | 'hermes' | 'grok' | 'other'
+export type AgentScope = 'read' | 'deliver'
 
 export const PROGRAM_LABEL: Record<AgentProgram, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  chatgpt: 'ChatGPT',
+  cursor: 'Cursor',
   hermes: 'Hermes',
   grok: 'Grok',
   other: 'Other',
@@ -24,8 +27,10 @@ export interface ProjectAgent {
   agent_name: string
   created_at: string
   last_used_at: string | null
+  scope?: AgentScope
   revoked: boolean
 }
+export interface AgentKeyReply { agent_key: string; user_id: string; project_id: string; project_name: string; scope: AgentScope }
 export interface PairingCode { code: string; expires_at: string }
 export interface RequestAgent { user_id: string; name: string; program: string }
 
@@ -49,6 +54,26 @@ export interface FeedbackV1 {
 export interface RuleSuggestion { suggestion_id: string; text: string; comment_id: string }
 
 export const MCP_URL = process.env.NEXT_PUBLIC_MCP_URL || 'https://review.aditor.ai/mcp'
+export const AGENT_MD_URL = 'https://review.aditor.ai/agent.md'
+
+/** The programs the Agents page offers, in the order people ask for them. */
+export const KEY_PROGRAMS: AgentProgram[] = ['claude-code', 'codex', 'chatgpt', 'cursor', 'other']
+
+export const createAgentKey = (projectId: string, program: AgentProgram, scope: AgentScope) =>
+  api.post<AgentKeyReply>(`/projects/${projectId}/agent-keys`, { program, agent_name: PROGRAM_LABEL[program], scope })
+
+/** The one block a person pastes into any AI. The playbook at /agent.md does the explaining (spec C). */
+export const agentPrompt = (key: string) =>
+  `You now have access to AutoReview (video review). First read ${AGENT_MD_URL} and work by it.\n` +
+  `API key (Bearer; never print or store it): ${key}\nMCP server: ${MCP_URL}`
+
+/** The extra line for the chosen AI, or null when the prompt is all it needs. */
+export function setupLine(program: AgentProgram, key: string): { label: string; text: string } | null {
+  if (program === 'claude-code') return { label: 'Or add it in the terminal', text: `claude mcp add --transport http autoreview ${MCP_URL} --header "Authorization: Bearer ${key}"` }
+  if (program === 'codex') return null  // ponytail: Codex reads /agent.md and calls the API itself; add an MCP line once its remote-MCP flags settle
+  if (program === 'chatgpt' || program === 'cursor') return { label: 'Connector settings', text: `URL: ${MCP_URL}\nHeader: Authorization: Bearer ${key}` }
+  return { label: 'Own agent', text: `curl -H "Authorization: Bearer ${key}" -A "AutoReview-Agent/1.0" ${AGENT_MD_URL}` }
+}
 
 export const createPairingCode = (projectId: string) =>
   api.post<PairingCode>(`/projects/${projectId}/agent-pairing-codes`)

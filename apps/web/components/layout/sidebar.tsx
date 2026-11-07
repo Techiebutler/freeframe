@@ -15,6 +15,7 @@ import {
   LogOut,
   User,
   ChevronsLeft,
+  Bot,
 } from 'lucide-react'
 import { partsEnabled } from '@/lib/iterations'
 import { canManageWorkspace } from '@/lib/workspace-access'
@@ -43,6 +44,7 @@ interface NavItem {
 const ownerNavItems: NavItem[] = [
   { href: '/home', label: 'Overview', icon: Home },
   { href: '/rules', label: 'Brand rules', icon: BookOpen },
+  { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/insights', label: 'Time saved', icon: Timer },
   { href: '/projects', label: 'Projects', icon: Layers },
 ]

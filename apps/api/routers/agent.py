@@ -39,7 +39,11 @@ def me(agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
 @router.get("/queue")
 def queue(state: Optional[Literal["editor", "review", "corrections", "ready"]] = None,
           agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
-    return agent_queue.queue(db, _project(db, agent).id, state)
+    items = agent_queue.queue(db, _project(db, agent).id, state)
+    if agent.key.scope == "read":  # the upload token is the hand-in right; a read key never sees it
+        for item in items:
+            item.pop("upload_token", None)
+    return items
 
 
 @router.get("/assets/{asset_id}/review")

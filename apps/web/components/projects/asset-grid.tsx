@@ -43,6 +43,8 @@ interface AssetGridProps {
   selectedAssetId?: string | null
   onUpload?: () => void
   uploadLabel?: string
+  /** Agents: an empty project offers "Connect your AI" first (spec 2026-11-05 H). */
+  onConnectAgent?: () => void
   onAssetSelect?: (asset: Asset, e?: React.MouseEvent) => void
   onAssetOpen?: (asset: Asset) => void
   folders?: Folder[]
@@ -96,6 +98,7 @@ export function AssetGrid({
   selectedAssetId,
   onUpload,
   uploadLabel = 'Upload',
+  onConnectAgent,
   onAssetSelect,
   onAssetOpen,
   folders,
@@ -354,8 +357,12 @@ export function AssetGrid({
             icon={Layers}
             title="No assets"
             className={uploadLabel === 'Upload' ? undefined : '[&_button]:min-h-11'}
-            description={uploadLabel === 'Upload' ? 'Upload your first asset to get started.' : 'Request files from your editor to get started.'}
-            action={onUpload ? { label: uploadLabel, onClick: onUpload } : undefined}
+            description={onConnectAgent && assets.length === 0 ? 'Let your AI hand in the first cut, or upload it yourself.'
+              : uploadLabel === 'Upload' ? 'Upload your first asset to get started.' : 'Request files from your editor to get started.'}
+            {...(onConnectAgent && assets.length === 0
+              ? { action: { label: 'Connect your AI', onClick: onConnectAgent },
+                  secondaryAction: onUpload ? { label: uploadLabel, onClick: onUpload } : undefined }
+              : { action: onUpload ? { label: uploadLabel, onClick: onUpload } : undefined })}
           />
         </div>
       ) : layout === 'grid' && filtered.length > 0 ? (

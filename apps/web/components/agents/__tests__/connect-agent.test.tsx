@@ -69,4 +69,25 @@ describe('ConnectAgent', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not create a code/i)
     expect(screen.getByRole('button', { name: /create pairing code/i })).toBeInTheDocument()
   })
+
+  it('Agents page: creates a read key for ChatGPT, shows it once in the prompt, copies it', async () => {
+    mock()
+    const reply = { agent_key: 'ara_test_0123456789', user_id: 'u9', project_id: 'p1', project_name: 'Brand A', scope: 'read' }
+    const post = vi.spyOn(api, 'post').mockResolvedValue(reply)
+    const write = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText: write } })
+    wrap()
+    fireEvent.click(await screen.findByRole('radio', { name: 'ChatGPT' }))
+    fireEvent.click(screen.getByRole('radio', { name: /read only/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create key/i }))
+    expect(post).toHaveBeenCalledWith('/projects/p1/agent-keys', { program: 'chatgpt', agent_name: 'ChatGPT', scope: 'read' })
+    const prompt = await screen.findByTestId('agent-prompt')
+    expect(prompt).toHaveTextContent('https://review.aditor.ai/agent.md')
+    expect(prompt).toHaveTextContent('ara_test_0123456789')
+    expect(screen.getByText(/Authorization: Bearer ara_test_0123456789/)).toBeInTheDocument() // connector settings line
+    fireEvent.click(screen.getByRole('button', { name: /copy prompt/i }))
+    await waitFor(() => expect(write).toHaveBeenCalledWith(expect.stringContaining('ara_test_0123456789')))
+    fireEvent.click(screen.getByRole('button', { name: /^done$/i }))
+    expect(screen.queryByText(/ara_test_0123456789/)).not.toBeInTheDocument()
+  })
 })

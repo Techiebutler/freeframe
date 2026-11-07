@@ -55,7 +55,7 @@ def list_agents(project_id: uuid.UUID, db: Session = Depends(get_db), current_us
     return [{"user_id": str(k.user_id), "name": u.name, "program": k.program, "agent_name": k.agent_name,
              "created_at": k.created_at.isoformat() if k.created_at else None,
              "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
-             "revoked": k.revoked_at is not None} for k, u in keys]
+             "scope": k.scope, "revoked": k.revoked_at is not None} for k, u in keys]
 
 
 @router.delete("/projects/{project_id}/agents/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -73,6 +73,23 @@ def revoke_agent(project_id: uuid.UUID, user_id: uuid.UUID, db: Session = Depend
                                                  ProjectMember.deleted_at.is_(None)).all():
         member.deleted_at = now
     db.commit()
+
+
+class KeyBody(BaseModel):
+    agent_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+    program: Literal["claude-code", "codex", "chatgpt", "cursor", "hermes", "grok", "other"]
+    scope: Literal["read", "deliver"] = "deliver"
+
+
+@router.post("/projects/{project_id}/agent-keys", status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(rate_limit("agent_key_create", 20, 600))])
+def create_agent_key(project_id: uuid.UUID, body: KeyBody, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Agent Mode: the key is shown once in this reply and stored only as sha256. Same (program, name) rotates it."""
+    project = _project(db, project_id)
+    _manager(db, project_id, current_user)
+    key, row = agent_service.create_key(db, project, current_user, body.agent_name, body.program, body.scope)
+    return {"agent_key": key, "user_id": str(row.user_id), "project_id": str(project.id), "project_name": project.name,
+            "scope": row.scope}
 
 
 class PairBody(BaseModel):

@@ -733,6 +733,7 @@ export default function ProjectDetailPage() {
               selectedAssetId={selectedAsset?.id}
               onUpload={canUpload ? () => isCustomer ? setRequestOpen(true) : router.push("/handin") : undefined}
               uploadLabel={isCustomer ? "Request files" : "Upload"}
+              onConnectAgent={canManageMembers ? () => router.push(`/agents?project=${projectId}`) : undefined}
               onAssetSelect={(asset, e) => {
                 e?.stopPropagation();
                 setSelectedAsset(asset as AssetResponse);
