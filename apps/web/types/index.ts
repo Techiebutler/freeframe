@@ -100,6 +100,7 @@ export interface Project {
   storage_bytes?: number;
   member_count?: number;
   role?: string | null;
+  autoreview_brand_slug?: string | null;
 }
 
 export interface ProjectMember {

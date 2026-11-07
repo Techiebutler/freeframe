@@ -16,6 +16,7 @@ import type { Project } from '@/types'
 import { BrandLogo } from '@/components/v2/brand-logo'
 import { DropZone } from '@/components/v2/drop-zone'
 import { RuleLibrary, RuleSeverity } from '@/components/v2/rule-library'
+import { AutoreviewBrandButton } from '@/components/layout/autoreview-nav'
 
 export default function RulesPage() {
   usePageTitle('Brand rules')
@@ -29,7 +30,7 @@ export default function RulesPage() {
   return <div className="brand-playbook mx-auto w-full max-w-[1320px] px-4 pb-12 pt-6 sm:px-8 lg:px-12 lg:pt-10">
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div><h1 className="text-[2.125rem] font-semibold leading-tight tracking-[-0.035em]">Brand rules<span className="text-accent">.</span></h1></div>
-      {!!brands.length && <label className="flex min-w-0 max-w-full items-center gap-3 text-[0.8125rem] text-text-secondary"><span>Brand</span><select value={brand.id} onChange={e => setSelection(e.target.value)} className="field h-11 min-w-0 max-w-[240px]" aria-label="Brand">{brands.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
+      {!!brands.length && <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3"><AutoreviewBrandButton slug={brand.autoreview_brand_slug} name={brand.name} /><label className="flex min-w-0 max-w-full items-center gap-3 text-[0.8125rem] text-text-secondary"><span>Brand</span><select value={brand.id} onChange={e => setSelection(e.target.value)} className="field h-11 min-w-0 max-w-[240px]" aria-label="Brand">{brands.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label></div>}
     </div>
     {error ? <div role="alert" className="playbook-surface mt-8 p-5">Could not load brands. <button type="button" onClick={() => mutate()} className="min-h-11 px-2 font-medium text-accent">Retry</button></div> : !projects ? <div className="skeleton-shimmer mt-8 h-48 animate-shimmer rounded-3xl" aria-label="Loading brands" /> : !brand ? <p className="playbook-surface mt-8 p-8 text-text-secondary">Create a request first. Its brand appears here.</p> : <BrandPlaybook key={brand.id} projectId={brand.id} brandName={brand.name} />}
   </div>
