@@ -95,8 +95,10 @@ def test_a_round_waits_for_images_then_exports_them(env):
     r = close()
     assert r.status_code == 409 and r.json()["detail"] == {"error": "images_pending", "comment_ids": [cid]}
     # 15 minutes later it is images_failed - still not consumed, never dropped by time alone
+    from apps.api.models.agent import FeedbackRound
     with env.Session() as db:
         db.get(Comment, uuid.UUID(cid)).created_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+        db.query(FeedbackRound).update({FeedbackRound.opened_at: datetime.now(timezone.utc) - timedelta(minutes=30)})
         db.commit()
         assert fr.close_idle(db, datetime.now(timezone.utc) + timedelta(hours=1)) == 0
     assert close().status_code == 409
