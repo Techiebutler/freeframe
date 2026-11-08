@@ -516,16 +516,19 @@ every deployment shape, including sub-path ones:
 - Sub-path deployment (`NEXT_PUBLIC_BASE_PATH=/freeframe`): `https://your-domain.example/freeframe/s/6RBr2cQd`
 
 The lookup reaches the API through `API_INTERNAL_URL` when set, or through
-`NEXT_PUBLIC_API_URL` otherwise. Docker Compose sets
-`API_INTERNAL_URL=http://api:8000` for you; set it yourself if the app server
-cannot reach its own public origin (split DNS, self-signed certificates).
+`NEXT_PUBLIC_API_URL` otherwise. The bundled Docker Compose sets
+`API_INTERNAL_URL=http://api:8000` for you. If you run the web app any other
+way, set it yourself: the published web image is built with
+`NEXT_PUBLIC_API_URL=/api`, a relative path a server-side fetch cannot use, so
+without `API_INTERNAL_URL` every short link shows the retry screen.
 
-An unknown or deleted code shows the share page's "Link not found" screen. Links
+An unknown or deleted code, or one that points into trashed content, shows the
+share page's "Link not found" screen. Links
 created before this feature shipped have no code — run the backfill once to
 assign codes to them:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec api python -m apps.api.scripts.backfill_short_codes
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec api python -m apps.api.scripts.backfill_short_codes
 ```
 
 Short URLs appear in the dashboard and in share emails whenever a code exists,
