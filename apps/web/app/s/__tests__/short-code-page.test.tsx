@@ -69,7 +69,8 @@ describe('ShortCodePage (/s/[code])', () => {
   })
 
   it('falls back to the last x-forwarded-for address when x-real-ip is missing', async () => {
-    // The nearest proxy appends its own address last; the first entry is
+    // The nearest proxy appends the address it received the request from
+    // last; the first entry is
     // whatever the client sent, and the rate limiter must not key on that.
     h.headers.mockResolvedValue({
       get: (name: string) =>
