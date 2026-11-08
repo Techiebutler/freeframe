@@ -210,6 +210,10 @@ For the full guide including **SSL setup**, **bring-your-own infrastructure** (e
 
 **[Production Deployment Guide](docs/deployment.md)**
 
+## One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/FreeFrame/)
+
 ## Architecture
 
 ```
