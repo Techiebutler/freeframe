@@ -24,7 +24,8 @@ from apps.api.models.asset import Asset, AssetType, AssetVersion
 from apps.api.models.comment import Comment, CommentAttachment
 from apps.api.models.project import ProjectMember, ProjectRole
 from apps.api.models.share import ShareLink, SharePermission
-from apps.api.services import permissions
+from apps.api.services import downloads, permissions
+from apps.api.services.storage import get_allow_original_downloads
 
 ALL_TIERS = [ProjectRole.viewer, ProjectRole.reviewer, ProjectRole.editor, ProjectRole.owner]
 BELOW_ADMIN = [None, ProjectRole.viewer, ProjectRole.reviewer, ProjectRole.editor]
@@ -769,3 +770,33 @@ def test_only_a_superadmin_moderates_a_comment_and_an_attachment_they_do_not_own
     assert client.delete(f"/comments/{comment.id}").status_code == 204
     seed.db.refresh(comment)
     assert comment.deleted_at is not None
+
+
+# ── what the flag deliberately does not change ────────────────────────────────
+
+def test_an_original_download_still_keys_on_real_membership(seed):
+    """Deliberately unchanged: the download helper asks who is a member, not who is an admin.
+
+    With original downloads off, a non-member admin is treated like any other non-member
+    and gets the transcode, while the creator and the project's members get the master.
+    `may_download_original` is shared with the share-link download routes, so an
+    instance-admin branch in it would also decide what a link holder is served, and on a
+    public project an original would leave no `admin_project_access` row. An admin who
+    needs the master adds themselves to the project, which is a membership change and is
+    logged, or turns the instance setting on.
+    """
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.asset(project, owner)
+    admin = seed.user(superadmin=True)
+    outsider = seed.user()
+    assert get_allow_original_downloads(seed.db) is False
+    assert downloads.may_download_original(seed.db, asset, owner) is True
+    assert downloads.may_download_original(seed.db, asset, admin) is False
+    assert downloads.may_download_original(seed.db, asset, outsider) is False
+    assert downloads.original_allowed_for_download(
+        seed.db, asset, admin, rendition="original", prefer_original=False,
+    ) is False
+    # Membership is the thing that flips it, for an admin as for anybody else.
+    seed.member(project, admin, ProjectRole.viewer)
+    assert downloads.may_download_original(seed.db, asset, admin) is True

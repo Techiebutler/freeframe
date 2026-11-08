@@ -79,3 +79,36 @@ def test_the_last_owner_is_protected(seed, as_user, admin, how):
     assert "only owner" in refused.json()["detail"]
     seed.member(project, seed.user(), ProjectRole.owner)
     assert _try().status_code in (200, 204)
+
+
+@pytest.mark.parametrize("how", ["remove", "demote"])
+def test_a_deactivated_co_owner_does_not_count_as_the_second_owner(seed, as_user, admin, how):
+    """The guard keeps an owner who can still sign in, not an owner row.
+
+    A deactivated account is refused at sign-in, so a project whose only other owner is
+    deactivated is as ownerless as one with a single owner: its members would be locked
+    out of their own settings with no way back from inside. Reactivating the account
+    makes it count again, which is the same check from the other side.
+    """
+    from apps.api.models.user import UserStatus
+
+    owner = seed.user()
+    project = seed.project(owner)
+    gone = seed.user()
+    seed.member(project, gone, ProjectRole.owner)
+    gone.status = UserStatus.deactivated
+    seed.db.flush()
+    client = as_user(admin)
+
+    def _try():
+        if how == "remove":
+            return client.delete(f"/projects/{project.id}/members/{owner.id}")
+        return client.patch(
+            f"/projects/{project.id}/members/{owner.id}", json={"role": "editor"},
+        )
+    refused = _try()
+    assert refused.status_code == 400
+    assert "only owner" in refused.json()["detail"]
+    gone.status = UserStatus.active
+    seed.db.flush()
+    assert _try().status_code in (200, 204)

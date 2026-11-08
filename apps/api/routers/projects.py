@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from ..database import get_db
 from ..middleware.auth import get_current_user
-from ..models.user import User
+from ..models.user import User, UserStatus
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.asset import Asset
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectMemberResponse, AddProjectMemberRequest, UpdateProjectMemberRequest
@@ -47,13 +47,22 @@ def _require_project_owner(
     return require_project_role(db, project_id, user, ProjectRole.owner, project=project)
 
 def _live_owner_ids(db: Session, project_id: uuid.UUID) -> set[uuid.UUID]:
-    """User ids holding a live owner membership on this project."""
+    """User ids holding a live owner membership this project can still be managed by.
+
+    An account that is deleted or deactivated is refused at sign-in, so its owner
+    row cannot keep anybody out of an ownerless project; counting it would let the
+    last owner who can actually sign in be removed.
+    """
     return {
         uid
-        for (uid,) in db.query(ProjectMember.user_id).filter(
+        for (uid,) in db.query(ProjectMember.user_id).join(
+            User, User.id == ProjectMember.user_id,
+        ).filter(
             ProjectMember.project_id == project_id,
             ProjectMember.role == ProjectRole.owner,
             ProjectMember.deleted_at.is_(None),
+            User.deleted_at.is_(None),
+            User.status != UserStatus.deactivated,
         ).all()
     }
 
