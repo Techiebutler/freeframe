@@ -7,8 +7,9 @@ and size in five containers.
 
 gunicorn was installed unpinned in Dockerfile.prod while everything in
 requirements.txt is pinned, so two builds of the same commit could ship
-different gunicorn versions. The pin lives in requirements.txt now, which is
-also the manifest Dependabot's pip entry watches.
+different gunicorn versions. The pin lives in requirements.txt now, so it is
+covered by the pip entry in .github/dependabot.yml, which reads the
+requirements files in apps/api and not the Dockerfiles.
 """
 import re
 from pathlib import Path

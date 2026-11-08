@@ -38,9 +38,12 @@ def effective_crf_offset(row: InstanceSettings | None) -> int:
     """The CRF offset the next transcode will use.
 
     The chosen level when there is one, and `TRANSCODER_CRF_OFFSET` when there
-    is not. The same precedence the worker applies, through the same two
-    helpers it uses (`crf_offset_for_level` and `job_crf_offset`), so the
-    number the settings page shows is the number the encoder gets.
+    is not. It reproduces the precedence the job path applies, through the two
+    helpers that path itself ends up in: `crf_offset_for_level`, which maps the
+    level when a job is enqueued (`apps/api/tasks/transcode_tasks.py`), and
+    `get_crf_offset`, which the worker's `job_crf_offset` falls back to when no
+    level is set. So the number the settings page shows is the number the
+    encoder gets.
     """
     # Imported here, as everything else under `apps/api` imports the transcoder
     # package: it pulls in the ffmpeg backend detection, which has no business
