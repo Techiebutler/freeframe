@@ -48,7 +48,8 @@ from ..schemas.comment import (
 from ..services import s3_service
 from ..services import comment_export
 from ..services.permissions import (
-    require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
+    require_asset_access, can_access_asset, can_access_asset_audited,
+    validate_share_link_with_session, validate_asset_in_share,
     require_asset_project_live, require_project_role,
 )
 from ..tasks.email_tasks import send_mention_email, send_comment_email
@@ -1207,8 +1208,14 @@ def guest_comment(
     # so only a caller with real access to the asset may file it here. The field
     # used to be dropped, which stored a signed-in member's internal note as
     # public and showed it to every link holder. Refuse rather than downgrade.
+    #
+    # Audited, because this is a gate that answers an administrator who is not a
+    # member: a signed-in non-member admin holding a comment link may file an
+    # internal comment on a private project, which an ordinary signed-in
+    # non-member is refused. The same comment through
+    # `POST /assets/{id}/comments` leaves a row, so this one has to as well.
     if body.visibility == CommentVisibility.internal and not (
-        current_user is not None and can_access_asset(db, asset, current_user)
+        current_user is not None and can_access_asset_audited(db, asset, current_user)
     ):
         raise HTTPException(status_code=403, detail="Internal comments require access to the asset")
 

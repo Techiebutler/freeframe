@@ -267,6 +267,61 @@ def test_a_public_project_logs_only_what_the_admin_role_itself_allowed(
 
 
 @pytest.mark.parametrize(
+    ("public", "visibility", "rows"),
+    [
+        (False, "internal", 1),
+        (False, "public", 0),
+        (True, "internal", 0),
+    ],
+    ids=[
+        "a private project's internal comment",
+        "a comment the link alone allowed",
+        "a public project's internal comment",
+    ],
+)
+def test_a_share_link_comment_logs_what_the_admin_role_alone_allowed(
+    seed, as_user, admin, public, visibility, rows,
+):
+    """The one comment route that is reached through a share link follows the same rule.
+
+    A signed-in non-member admin holding a comment link may file an `internal` comment,
+    which the share listing never returns and which an ordinary signed-in non-member is
+    refused on a private project. The Admin role alone allowed that, so it is logged.
+    Two neighbours say what the row means: a `public` comment is what the link itself
+    allows anybody holding it, and on a public project the asset gate answers "public"
+    before it considers the flag, so neither is an administrative reach and neither
+    writes a row.
+
+    A project of its own per case, because the audit dedupes to one row per request
+    *and* project.
+    """
+    from apps.api.main import app
+    from apps.api.middleware.auth import get_optional_user
+
+    owner = seed.user()
+    project = seed.project(owner, public=public)
+    asset = seed.media(project, owner)
+    link = ShareLink(
+        token=f"tok-{uuid.uuid4().hex}", asset_id=asset.id,
+        permission=SharePermission.comment, created_by=owner.id, is_enabled=True,
+    )
+    seed.db.add(link)
+    seed.db.flush()
+    client = as_user(admin)
+    app.dependency_overrides[get_optional_user] = lambda: admin
+    posted = client.post(
+        f"/share/{link.token}/comment",
+        json={"body": "a note from the admin", "visibility": visibility},
+    )
+    assert posted.status_code == 201
+    seed.db.flush()
+    filed = seed.db.query(Comment).filter(Comment.asset_id == asset.id).one()
+    assert filed.visibility == visibility
+    assert filed.author_id == admin.id
+    assert len(admin_log(seed.db, project.id)) == rows
+
+
+@pytest.mark.parametrize(
     "purge", ["the asset", "the whole project"],
     ids=["the asset is purged", "the project is purged"],
 )
