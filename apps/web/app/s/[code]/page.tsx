@@ -29,7 +29,8 @@ export default async function ShortCodePage({
   // X-Forwarded-For is only a fallback, and there the last entry is the one
   // worth trusting: the nearest proxy appends the address it received the
   // request from, while the first entry is whatever the client sent and
-  // `rate_limit.py` deliberately ignores the header for that reason. Deployments that set X-Real-IP need no fallback.
+  // `rate_limit.py` deliberately ignores the header for that reason.
+  // Deployments that set X-Real-IP need no fallback.
   const requestHeaders = await headers()
   const visitorIp =
     requestHeaders.get('x-real-ip') ??
