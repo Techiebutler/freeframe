@@ -1,18 +1,19 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { withBasePath } from './lib/base-path'
+import { INTERNAL_API_URL } from './lib/server-api'
 
 const PUBLIC_ROUTES = ['/login', '/setup']
-const PUBLIC_PREFIXES = ['/invite/', '/share/']
+// `/s/` holds short share links (app/s/[code]), which redirect to a public
+// share page — visitors following one are anonymous by design.
+const PUBLIC_PREFIXES = ['/invite/', '/share/', '/s/']
 
-// Server-to-server address. NEXT_PUBLIC_API_URL is written for the browser (in
-// the production image it is the relative path `/api`, which a server-side
-// fetch cannot resolve), so the setup check would always fail and the redirect
-// to /setup would never fire. API_INTERNAL_URL is the address from inside the
-// web container (`http://api:8000` under compose); same fallback order as
-// lib/branding-server.ts.
-const API_URL =
-  process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// Server-to-server address, shared with the branding fetch and the
+// short-share-link lookup so the fallback order lives in one place
+// (lib/server-api.ts). NEXT_PUBLIC_API_URL is written for the browser (in the
+// production image it is the relative path `/api`, which a server-side fetch
+// cannot resolve), so without the internal address the setup check would
+// always fail and the redirect to /setup would never fire.
 
 function isPublicRoute(pathname: string): boolean {
   if (PUBLIC_ROUTES.includes(pathname)) return true
@@ -33,7 +34,7 @@ export async function proxy(request: NextRequest) {
   const setupDone = request.cookies.get('ff_setup_done')?.value
   if (!setupDone) {
     try {
-      const res = await fetch(`${API_URL}/setup/status`, {
+      const res = await fetch(`${INTERNAL_API_URL}/setup/status`, {
         cache: 'no-store', // the ff_setup_done cookie is the cache
         // A slow API (migrating, overloaded) must not hold navigation: after
         // 2 seconds the check is dropped as if the API were unreachable.

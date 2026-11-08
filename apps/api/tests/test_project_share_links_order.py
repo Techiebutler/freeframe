@@ -14,6 +14,7 @@ def _row(title, created_at, id=None):
     return SimpleNamespace(
         id=id or uuid.uuid4(),
         token=f"tok-{title}",
+        short_code=None,
         title=title,
         description=None,
         is_enabled=True,
