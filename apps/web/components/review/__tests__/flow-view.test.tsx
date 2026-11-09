@@ -41,6 +41,13 @@ const record = async () => {
 }
 
 describe('FlowView', () => {
+  it('keeps the phone Comment label whole: the button never shrinks below its label and the finish button yields', () => {
+    setup({ finishLabel: 'An den Agenten senden' })
+    const comment = screen.getByRole('button', { name: /comment/i })
+    expect(comment).toHaveClass('whitespace-nowrap', 'min-w-[7.5rem]')
+    expect(comment.className).not.toMatch(/\bmin-w-0\b/)
+    expect(screen.getByRole('button', { name: /approve/i })).toHaveClass('shrink')
+  })
   it('shows the briefing files across the top and switches file', () => {
     const p = setup().props
     expect(screen.getByRole('button', { name: 'Hook 1' })).toHaveAttribute('aria-current', 'true')

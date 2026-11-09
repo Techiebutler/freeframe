@@ -150,7 +150,7 @@ describe('static review voice memo', () => {
     const dictate = vi.fn(async () => ({ text: 'Make the logo bigger', segments: [] }))
     const { postComment } = setup({ startRecording: r.start, dictate })
     await screen.findByTestId('static-frame')
-    fireEvent.click(screen.getByLabelText('Talk'))
+    fireEvent.click(screen.getByLabelText('Comment'))
     expect(await screen.findByTestId('rec-glow')).toBeInTheDocument()
     const layer = screen.getByTestId('ink-layer')
     layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200, right: 200, bottom: 200, x: 0, y: 0, toJSON() {} })
@@ -173,7 +173,7 @@ describe('static review voice memo', () => {
       const dictate = vi.fn(async () => ({ text: 'x', segments: [{ start: 0.5, end: 1.5, text: 'Headline bigger.' }, { start: 5, end: 6, text: 'Swap the photo.' }] }))
       const { postComment } = setup({ startRecording: r.start, dictate })
       await screen.findByTestId('static-frame')
-      fireEvent.click(screen.getByLabelText('Talk'))
+      fireEvent.click(screen.getByLabelText('Comment'))
       await screen.findByTestId('rec-glow')
       now += 4000
       fireEvent.keyDown(window, { key: 'ArrowRight' })
@@ -198,7 +198,7 @@ describe('static review voice memo', () => {
     let release: (v: { text: string; segments: [] }) => void = () => {}
     const dictate = vi.fn(() => new Promise<{ text: string; segments: [] }>(res => { release = res }))
     const { postComment } = setup({ startRecording: r.start, dictate })
-    fireEvent.click(screen.getByLabelText('Talk'))
+    fireEvent.click(screen.getByLabelText('Comment'))
     fireEvent.click(await screen.findByLabelText('Stop recording'))
     await waitFor(() => expect(dictate).toHaveBeenCalled())
     fireEvent.click(screen.getByLabelText('Next image'))
@@ -211,7 +211,7 @@ describe('static review voice memo', () => {
     const post = vi.fn().mockRejectedValueOnce(new Error('no')).mockResolvedValue(undefined)
     setup({ startRecording: r.start, dictate: vi.fn(async () => ({ text: 'Too dark', segments: [] })), postComment: post })
     fireEvent.change(screen.getByLabelText('Write a note on this image'), { target: { value: 'typed' } })
-    fireEvent.click(screen.getByLabelText('Talk'))
+    fireEvent.click(screen.getByLabelText('Comment'))
     fireEvent.click(await screen.findByLabelText('Stop recording'))
     fireEvent.click(await screen.findByText('Retry'))
     await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
@@ -222,7 +222,7 @@ describe('static review voice memo', () => {
   it('a failed transcription says so and keeps typing available', async () => {
     const r = recorder()
     setup({ startRecording: r.start, dictate: vi.fn(async () => { throw new Error('x') }) })
-    fireEvent.click(screen.getByLabelText('Talk'))
+    fireEvent.click(screen.getByLabelText('Comment'))
     fireEvent.click(await screen.findByLabelText('Stop recording'))
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not transcribe')
     expect(screen.getByLabelText('Write a note on this image')).toBeInTheDocument()
@@ -231,7 +231,7 @@ describe('static review voice memo', () => {
   it('says when dictation is not set up', async () => {
     const r = recorder()
     setup({ startRecording: r.start, dictate: vi.fn(async () => { throw { detail: 'dictation_unavailable' } }) })
-    fireEvent.click(screen.getByLabelText('Talk'))
+    fireEvent.click(screen.getByLabelText('Comment'))
     fireEvent.click(await screen.findByLabelText('Stop recording'))
     expect(await screen.findByRole('alert')).toHaveTextContent('Dictation is not set up')
   })
@@ -239,16 +239,16 @@ describe('static review voice memo', () => {
   it('a blocked microphone gets a plain message, not a crash', async () => {
     const denied = Object.assign(new Error('denied'), { name: 'NotAllowedError' })
     setup({ startRecording: vi.fn(async () => { throw denied }) })
-    fireEvent.click(screen.getByLabelText('Talk'))
+    fireEvent.click(screen.getByLabelText('Comment'))
     expect(await screen.findByRole('alert')).toHaveTextContent('Microphone is blocked')
-    expect(screen.getByLabelText('Talk')).toBeEnabled()
+    expect(screen.getByLabelText('Comment')).toBeEnabled()
   })
 
   it('cancel throws the recording away without transcribing', async () => {
     const r = recorder()
     const dictate = vi.fn()
     setup({ startRecording: r.start, dictate })
-    fireEvent.click(screen.getByLabelText('Talk'))
+    fireEvent.click(screen.getByLabelText('Comment'))
     fireEvent.click(await screen.findByLabelText('Cancel recording'))
     expect(r.cancel).toHaveBeenCalled()
     expect(dictate).not.toHaveBeenCalled()

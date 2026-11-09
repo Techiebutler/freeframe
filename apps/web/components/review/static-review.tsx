@@ -270,7 +270,7 @@ export function StaticReview(p: StaticReviewProps) {
             {failed === file.id ? (
               <p role="alert" className="text-sm text-white/70">This image could not be loaded.</p>
             ) : !url ? (
-              <Loader2 className="animate-spin text-white/60 motion-reduce:animate-none" size={28} aria-label="Loading image" />
+              <Loader2 className="animate-spin text-white/60 motion-reduce:animate-none" size={28} role="img" aria-label="Loading image" />
             ) : (
               <div
                 key={file.id}
@@ -298,7 +298,7 @@ export function StaticReview(p: StaticReviewProps) {
                     type="button"
                     onClick={e => { e.stopPropagation(); setFocused(f => (f === c.id ? null : c.id)); setPending(null) }}
                     aria-label={`Note ${numberOf(c.id)}: ${c.body}`}
-                    className={cn('absolute grid h-7 w-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white text-[12px] font-bold text-white transition-transform duration-150 ease-out motion-reduce:transition-none', focused === c.id ? 'z-10 scale-125' : 'hover:scale-110')}
+                    className={cn('absolute grid h-7 w-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white text-[12px] font-bold text-white before:absolute before:-inset-2 before:content-[""] transition-transform duration-150 ease-out motion-reduce:transition-none', focused === c.id ? 'z-10 scale-125' : 'hover:scale-110')}
                     style={{ left: `${at![0] * 100}%`, top: `${at![1] * 100}%`, background: PIN, boxShadow: '0 3px 10px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.15)' }}
                   >{numberOf(c.id)}</button>
                 ))}
@@ -379,9 +379,9 @@ export function StaticReview(p: StaticReviewProps) {
                   className="max-h-32 min-h-11 block w-full min-w-0 resize-none bg-transparent px-2 py-2.5 text-base text-text-primary outline-none placeholder:text-text-tertiary focus:outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none" />
               )}
               <div className="flex items-center justify-between gap-2 pt-1">
-              <button type="button" onClick={talk} disabled={transcribing} aria-label={rec ? 'Stop recording' : 'Talk'} title={rec ? 'Stop (the words become your note)' : 'Talk: say what to change'}
+              <button type="button" onClick={talk} disabled={transcribing} aria-label={rec ? 'Stop recording' : 'Comment'} title={rec ? 'Stop (the words become your note)' : 'Comment: say what to change'}
                 className="flow-comment inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl px-3.5 text-sm font-semibold text-text-inverse disabled:opacity-40">
-                {rec ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Talk</>}
+                {rec ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Comment</>}
               </button>
               <button type="submit" disabled={!text.trim() || sending || !!rec || transcribing} aria-label="Send note"
                 className="flow-comment inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl px-4 text-sm font-semibold text-text-inverse disabled:opacity-40">

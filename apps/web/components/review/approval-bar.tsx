@@ -86,7 +86,7 @@ function RejectNoteDialog({ onConfirm, onCancel }: RejectNoteProps) {
           autoFocus
         />
         <div className="mt-3 flex items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={submitting} className="h-11 md:h-8">
             Cancel
           </Button>
           <Button
@@ -94,6 +94,7 @@ function RejectNoteDialog({ onConfirm, onCancel }: RejectNoteProps) {
             size="sm"
             onClick={handleConfirm}
             loading={submitting}
+            className="h-11 md:h-8"
           >
             Reject
           </Button>
@@ -253,7 +254,7 @@ export function ApprovalBar({ assetId, versionId, currentUserId, className }: Ap
                   size="sm"
                   onClick={() => setShowRejectDialog(true)}
                   disabled={approving}
-                  className="text-status-error border-status-error/30 hover:border-status-error/60 hover:bg-status-error/10"
+                  className="h-11 md:h-8 text-status-error border-status-error/30 hover:border-status-error/60 hover:bg-status-error/10"
                 >
                   <XCircle className="h-4 w-4" />
                   Reject
@@ -263,7 +264,7 @@ export function ApprovalBar({ assetId, versionId, currentUserId, className }: Ap
                   size="sm"
                   onClick={handleApprove}
                   loading={approving}
-                  className="bg-status-success hover:opacity-90"
+                  className="h-11 md:h-8 bg-status-success hover:opacity-90"
                 >
                   <CheckCircle2 className="h-4 w-4" />
                   Approve

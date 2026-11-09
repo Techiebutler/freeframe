@@ -423,8 +423,8 @@ export function FlowView(p: FlowViewProps) {
   )
   const finishButton = (
     <button type="button" onClick={finish} disabled={sending || (hasNotes ? blocked : (p.approved || !canApprove))}
-      className="press inline-flex h-14 shrink-0 items-center justify-center gap-1.5 rounded-full border border-border px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-50">
-      {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : hasNotes ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{sendLabel}
+      className="press inline-flex h-14 min-w-0 shrink items-center justify-center gap-1.5 rounded-full border border-border px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-50">
+      {sending ? <Loader2 size={16} className="shrink-0 animate-spin motion-reduce:animate-none" /> : hasNotes ? <Send size={16} className="shrink-0" aria-hidden="true" /> : <Check size={16} className="shrink-0" aria-hidden="true" />}<span className="truncate">{sendLabel}</span>
     </button>
   )
 
@@ -446,9 +446,9 @@ export function FlowView(p: FlowViewProps) {
               </div>
             )}
             <div className="flex w-full max-w-[560px] items-center gap-2 rounded-2xl border border-border bg-bg-secondary p-1.5 transition-colors focus-within:border-text-tertiary shadow-[0_8px_24px_-12px_rgba(0,0,0,.5)]">
-              <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Talk'} title={active ? 'Stop (saves the note)' : 'Talk and draw while it plays'}
+              <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} title={active ? 'Stop (saves the note)' : 'Comment: talk and draw while it plays'}
                 className="flow-comment inline-flex h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-text-inverse">
-                {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Talk</>}
+                {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Comment</>}
               </button>
               {active ? (
                 <div className="flex min-w-0 flex-1 items-center gap-2" role="status" aria-label="Recording">
@@ -464,8 +464,8 @@ export function FlowView(p: FlowViewProps) {
                     className="h-11 min-w-0 flex-1 bg-transparent px-2 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none" />
                   <input ref={filePick} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden onChange={e => { addImages(Array.from(e.target.files ?? [])); e.target.value = '' }} />
                   <button type="button" onClick={() => filePick.current?.click()} aria-label="Attach an image" title="Attach an image or paste a screenshot"
-                    className="press grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-secondary hover:bg-bg-hover hover:text-text-primary"><Paperclip size={16} /></button>
-                  <button type="submit" disabled={!typed.trim()} aria-label="Add note" className="press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-bg-hover text-text-primary disabled:opacity-40"><Send size={15} /></button>
+                    className="press grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-secondary hover:bg-bg-hover hover:text-text-primary"><Paperclip size={16} /></button>
+                  <button type="submit" disabled={!typed.trim()} aria-label="Add note" className="press grid h-11 w-11 shrink-0 place-items-center rounded-full bg-bg-hover text-text-primary disabled:opacity-40"><Send size={15} /></button>
                 </form>
               )}
             </div>
@@ -475,11 +475,11 @@ export function FlowView(p: FlowViewProps) {
       <aside aria-label="Feedback" className="flex w-[340px] shrink-0 flex-col border-l border-border bg-bg-secondary">
         <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
           <p className="text-sm font-semibold text-text-primary">Feedback{notes.length > 0 && <span className="ml-1.5 tabular-nums text-text-tertiary">{notes.length}</span>}</p>
-          {p.onExit && <button type="button" onClick={p.onExit} className="press min-h-9 rounded-md px-2 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary">{p.exitLabel ?? 'Exit'}</button>}
+          {p.onExit && <button type="button" onClick={p.onExit} className="press min-h-11 rounded-md px-3 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary">{p.exitLabel ?? 'Exit'}</button>}
         </div>
         <div className="flex min-h-0 flex-1 flex-col [&>ul]:max-h-none [&>ul]:flex-1 [&>ul]:border-t-0">
           {notes.some(n => n.status !== 'recording') ? notesList : (
-            <p className="m-auto max-w-[240px] text-center text-sm leading-relaxed text-text-tertiary">Press <span className="font-semibold text-text-secondary">Talk</span> and say what to change while it plays. Draw on the video to point. Or type below the video.</p>
+            <p className="m-auto max-w-[240px] text-center text-sm leading-relaxed text-text-tertiary">Press <span className="font-semibold text-text-secondary">Comment</span> and say what to change while it plays. Draw on the video to point. Or type below the video.</p>
           )}
         </div>
         {statusArea}
@@ -510,8 +510,8 @@ export function FlowView(p: FlowViewProps) {
             {!active && <button type="button" onClick={() => filePick.current?.click()} aria-label="Attach an image" title="Attach an image or a screenshot"
               className="press grid h-14 w-14 shrink-0 place-items-center rounded-full border border-border text-text-secondary hover:bg-bg-hover hover:text-text-primary"><Paperclip size={20} /></button>}
             <button type="button" onClick={tapComment}
-              className="flow-comment inline-flex h-14 min-w-0 flex-1 items-center justify-center gap-2 rounded-full px-5 text-base font-semibold text-text-inverse">
-              {active ? <><Square size={18} aria-hidden="true" />Stop</> : <><Mic size={24} aria-hidden="true" />Comment</>}
+              className="flow-comment inline-flex h-14 min-w-[7.5rem] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-base font-semibold text-text-inverse">
+              {active ? <><Square size={18} aria-hidden="true" />Stop</> : <><Mic size={20} aria-hidden="true" />Comment</>}
             </button>
             {finishButton}
           </>

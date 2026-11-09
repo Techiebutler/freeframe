@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Review UI: the phone Comment button no longer clips its label; touch targets in review, share and approval views are at least 44 px on phones; hover-only download button is reachable on touch.
+
 ### Added
 - Agents as its own sidebar page (Overview · Brand rules · Agents): owners pick a brand and an AI (Claude Code, Codex, ChatGPT, Cursor, other), create a key once and copy one ready prompt. Moved out of Project › Settings; editors keep joining through share links. Empty projects offer "Connect your AI" first.
 - `POST /projects/{id}/agent-keys` creates an agent key straight from the signed-in owner or editor; agent keys carry a scope (`read` or `deliver`, existing keys stay `deliver`) and a per-key rate limit (120 reads / 30 writes per 10 min, `429` with `Retry-After`).

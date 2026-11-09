@@ -93,7 +93,7 @@ export function IdentityForm({ onIdentified }: IdentityFormProps) {
 
         {error && <p className="text-xs text-status-error">{error}</p>}
 
-        <Button type="submit" size="sm" className="w-full">
+        <Button type="submit" size="sm" className="h-11 md:h-8 w-full">
           Continue to comment
         </Button>
       </form>
