@@ -1,5 +1,6 @@
 import { buildDrawingData, clamp01, isInk, type InkMark } from '@/lib/ink'
 import type { DictationSegment } from '@/lib/agents'
+import { sentencesFromDictation, type DictationWord } from '@/lib/dictation-sentences'
 
 /** A pin on a static ad is the same `ink.v1` dot a video note carries, in the picture's own 0..1 frame, with no time. */
 export const pinDrawing = (x: number, y: number): Record<string, unknown> =>
@@ -28,9 +29,10 @@ export function staticNotesFromMemo(
   marks: { fileId: string; mark: InkMark }[],
   text: string,
   segments: DictationSegment[],
+  words: DictationWord[] = [],
 ): StaticMemoNote[] {
   const fileAt = (ms: number) => views.reduce((cur, v) => (v.at <= ms ? v.fileId : cur), views[0].fileId)
-  const spoken = segments.filter(s => s.text.trim()).sort((a, b) => a.start - b.start)
+  const spoken = sentencesFromDictation(segments, words)
   const groups: (StaticMemoNote & { from: number; to: number })[] = []
   if (!spoken.length && text.trim()) groups.push({ fileId: views[0].fileId, text: text.trim(), marks: [], from: 0, to: Infinity })
   for (const s of spoken) {

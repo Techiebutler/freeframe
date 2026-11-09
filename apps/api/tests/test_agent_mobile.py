@@ -69,6 +69,46 @@ def test_dictation_failure_is_a_visible_502(client, auth_headers, monkeypatch):
         assert client.post("/dictate", files={"audio": ("a.webm", b"1", "audio/webm")}, headers=auth_headers).status_code == 502
 
 
+def _groq_reply():
+    reply = MagicMock(status_code=200)
+    reply.json.return_value = {"text": " Der Hook ist langsam.", "segments": [{"start": 0.0, "end": 2.0, "text": " Der Hook ist langsam."}],
+                               "words": [{"start": 0.2, "end": 0.4, "word": " Der"}, {"start": 0.4, "end": 0.8, "word": "Hook"}, {"start": 0.9, "end": 1.0, "word": " "}]}
+    return reply
+
+
+def test_dictation_v2_sends_german_language_prompt_and_both_granularities(client, auth_headers, monkeypatch):
+    from apps.api.config import settings
+    from apps.api.services import dictation
+    monkeypatch.setattr(settings, "groq_api_key", "gsk_test")
+    with patch("apps.api.services.dictation.httpx.post", return_value=_groq_reply()) as post:
+        r = client.post("/dictate", files={"audio": ("a.webm", b"123", "audio/webm")}, headers=auth_headers)
+    data = post.call_args.kwargs["data"]
+    assert data["language"] == "de" and data["timestamp_granularities[]"] == ["word", "segment"]
+    assert 0 < len(data["prompt"]) <= 800 and data["prompt"].startswith("Card, Trello")
+    assert r.json()["words"] == [{"start": 0.2, "end": 0.4, "word": "Der"}, {"start": 0.4, "end": 0.8, "word": "Hook"}]
+    assert dictation.MAX_PROMPT == 800
+
+
+def test_dictation_v2_language_en_auto_and_bad(client, auth_headers, monkeypatch):
+    from apps.api.config import settings
+    monkeypatch.setattr(settings, "groq_api_key", "gsk_test")
+    with patch("apps.api.services.dictation.httpx.post", return_value=_groq_reply()) as post:
+        client.post("/dictate", data={"lang": "en"}, files={"audio": ("a.webm", b"1", "audio/webm")}, headers=auth_headers)
+        assert post.call_args.kwargs["data"]["language"] == "en"
+        client.post("/dictate", data={"lang": "auto"}, files={"audio": ("a.webm", b"1", "audio/webm")}, headers=auth_headers)
+        assert "language" not in post.call_args.kwargs["data"]
+        bad = client.post("/dictate", data={"lang": "fr"}, files={"audio": ("a.webm", b"1", "audio/webm")}, headers=auth_headers)
+    assert (bad.status_code, bad.json()["detail"]) == (400, "bad_lang")
+
+
+def test_build_prompt_keeps_whole_terms_within_the_budget():
+    from apps.api.services.dictation import build_prompt
+    assert build_prompt("", ["Card", "Trello", "B-Roll"], 800) == "Card, Trello, B-Roll"
+    assert build_prompt("", ["Card", "Trello", "B-Roll"], 13) == "Card, Trello"  # "Card, Trello, B-Roll" would be 20: the third term is dropped whole
+    assert build_prompt("Hint", ["Card"], 800) == "Hint Card"
+    assert build_prompt("x" * 900, ["Card"], 800) == ""
+
+
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
 def test_link_needs_a_configured_bot(client, auth_headers, monkeypatch):

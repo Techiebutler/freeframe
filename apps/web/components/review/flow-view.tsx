@@ -180,7 +180,7 @@ export function FlowView(p: FlowViewProps) {
       // One note per spoken sentence, each with the ink drawn while it was said (H69)
       const points = timelines.current.get(id) ?? []
       const timeAt = points.length ? (ms: number) => videoTimeAt(points, ms) : (ms: number) => Math.round((n.t + ms / 1000) * 1000) / 1000
-      const parts = notesFromDictation(timeAt, r.text, r.segments ?? [], n.marks ?? [])
+      const parts = notesFromDictation(timeAt, r.text, r.segments ?? [], n.marks ?? [], r.words ?? [])
       dispatch({ type: 'split', id, parts: parts.map((part, i) => ({ ...part, id: i === 0 ? id : newId() })) })
     }
     catch (e) { dispatch({ type: 'failed', id }); setMessages(m => ({ ...m, [id]: dictationMessage(e) })) }
@@ -221,7 +221,7 @@ export function FlowView(p: FlowViewProps) {
     try {
       levelRef.current = 0
       const rec = await start(v => { levelRef.current = v })
-      const startedAt = Date.now()
+      const startedAt = rec.startedAt ?? Date.now()
       tracker.current = trackVideo(rootRef.current?.querySelector('video') ?? null, startedAt)
       setActive({ id, rec, startedAt })
     }
