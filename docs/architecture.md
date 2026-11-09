@@ -176,19 +176,100 @@ Share Link (unauthenticated access, by token)
 └── view     ── read-only
 ```
 
-`User.is_superadmin` is a separate, instance-level flag covering user administration only:
-invite, deactivate, role change, first-run setup. It grants **no** content access and is not
-consulted when resolving asset permissions.
+`User.is_superadmin` is the one instance-level role: the account the first-run setup creates,
+shown as **Admin** in the dashboard. It covers user administration (invite, deactivate, role
+change), instance settings and branding, the admin panel's Storage tab, where it lists every
+project's files by name and size, moves them to the trash, restores them and deletes them
+permanently, **and instance-wide project access** — a superadmin may see, open, upload to and
+change every live project without being a member of it.
 
-**Asset access** is resolved by `can_access_asset` in `apps/api/services/permissions.py`, which
-returns true on the first of these that matches:
+That last part lives in exactly one place, `apps/api/services/permissions.py`, in the
+following access checks:
+
+| Function | What a superadmin gets |
+|---|---|
+| `require_project_role` | passes every tier (viewer to owner) on any live project |
+| `require_project_visible` | visible on any live project, not only a public one |
+| `require_asset_access` | reaches any asset whose project is live, and logs it |
+| `can_access_asset` | the same answer as a boolean, for filtering a list; never logs |
+| `project_events_denial` | may subscribe to any live project's event stream |
+
+No router repeats the rule, so a new endpoint that calls one of these inherits it rather than
+having to remember it. `routers/comments.py` was the last router with a membership query of its
+own (editing and deleting someone else's comment, and deleting an attachment); it now goes
+through `require_project_role` as well, with the refusal wording those routes always gave.
+The membership a superadmin is answered with is a **transient**
+`ProjectMember` that is never added to the session: the project's member list, its member count
+and its emails keep saying they are not a member.
+
+What this deliberately does **not** change:
+
+- **Project roles.** owner > editor > reviewer > viewer behaves exactly as before, and a
+  project owner still has no access to a project they are not in.
+- **Share links and the customer-facing viewer.** Share-link validation reads nothing off a
+  signed-in user, so the flag cannot change which links resolve or what a guest sees.
+- **Original downloads.** With original downloads disabled, `may_download_original` still
+  checks real membership or asset authorship, not the Admin role. Where a transcode exists,
+  a non-member admin gets that file and a 403 for `rendition=original`. To get the master,
+  they can add themselves to the project or enable original downloads. The helper is shared with
+  share-link downloads and does not grant an admin exception.
+- **A deleted project.** Still 404 for everyone, superadmin included.
+
+**Auditing.** Every path that the Admin role **alone** allowed is logged, reads included: an
+`ActivityLog` row with
+`action="admin_project_access"` and a payload naming `via: "superadmin"`, the role they actually
+held (`membership`, or `"none"`), the `scope` that let them in and the `required_role` where the
+scope is a tier. `scope` is a role tier for the project gate, `"asset"` for the asset, version,
+comment and attachment path (`GET /assets/batch` included, so one batch read logs what the
+per-asset reads it replaces would have), and `"events"` for the live stream at connect.
+
+What a **public project** already opens to every signed-in account is therefore not logged, and
+that is the rule working rather than a gap: the Admin role allowed nothing there, so there is no
+administrative access to record. That covers reading the project and, behind the asset gate, the
+comment actions a public project opens to any signed-in account (posting a comment, replying,
+resolving, reacting, adding an attachment). `require_project_visible` takes the admin branch only
+for a non-member on a private project, and `asset_access_reason` answers `"public"` before it
+considers the flag, so `require_asset_access` writes nothing there either. The other write gate
+does log on a public project: `require_project_role` never consults `is_public`, so a rename, a
+settings save, a membership change, an upload, a share link and a delete each leave their row
+whether the project is public or private.
+
+The instance-wide lists are **not** logged: `GET /projects?scope=all`, the Storage overview
+(`GET /admin/storage`) and the admin trash. They list projects and storage totals; the trash also
+lists trashed asset and version names from inside projects, including private ones. A row
+per listed project on every page open would bury the rows that matter. Opening one project from
+them does log, including reading its file list (`GET /admin/storage/projects/{id}`).
+
+**One row per request and project, not one per object.** A listing runs the gate for every item
+it returns and `GET /events/{project_id}` re-checks for as long as the stream stays open, so a
+row per check would turn one open tab into unbounded rows. The bookkeeping lives in
+`Session.info`, which is the request scope, and a heavier access later in the same request
+rewrites the row instead of adding one. `can_access_asset` therefore has no audit hook at all:
+it is also read per item to resolve mentions and filter comments, where the user named nothing.
+
+**The audit outlives what it audits.** Nothing prunes `activity_logs` on a schedule, and the
+retention collector, which does delete a purged project's or asset's history, keeps the admin
+audit actions (`admin_project_access`, `admin_bulk_delete`, `admin_restore`,
+`admin_trash_purge`). Their foreign key is cleared, since the row it named is gone, and the id
+moves into `payload` as `purged_project_id` or `purged_asset_id`
+(`tasks/cleanup_tasks.py:_purge_activity_logs`). So a superadmin's read of a project, followed
+by a trash and a purge, still has a record of the read.
+
+The row is added to the session and carried by the request's own commit, so a write that ends in
+a rollback leaves nothing behind. A read-only request commits nothing of its own, so `get_db`
+commits the row on its way out, and only ever when those rows are the whole of the pending work
+(`permissions.persist_admin_access_audit`).
+
+**Asset access** is resolved by `asset_access_reason` in `apps/api/services/permissions.py`,
+which returns why the caller may reach the asset, on the first of these that matches:
 
 1. The user created the asset (`Asset.created_by`)
 2. The user is a `ProjectMember` in any role
 3. The asset is shared directly with the user (`AssetShare.shared_with_user_id`)
 4. The project is public (`Project.is_public`) — any authenticated user may reach it
+5. The user is an instance superadmin (`User.is_superadmin`)
 
-Anything outside those four paths requires a `ShareLink` token. A share link targets an asset,
+Anything outside those five paths requires a `ShareLink` token. A share link targets an asset,
 a folder, a project, or an explicit set of items, and may be password-protected; folder-scoped
 links apply transitively to the folder's contents. Guests commenting through a share link are
 recorded in the `GuestUser` table with email and name only, no account required.
@@ -252,7 +333,8 @@ review workflow.
 `Notification` and `ActivityLog`. Nothing filters the column automatically — every query does
 it by hand. Soft deletion is also not permanent: `tasks/cleanup_tasks.py` hard-deletes
 soft-deleted rows and reclaims their S3 objects after `SOFT_DELETE_RETENTION_DAYS`
-(default 30).
+(default 30), and an admin can do the same earlier for chosen items from the trash
+(`POST /admin/trash/purge`).
 
 Key entity relationships:
 
@@ -283,6 +365,8 @@ migrated database. They are created by the initial migration and were never drop
 have no ORM model and no route behind them. Ignore them.
 
 **ORM:** SQLAlchemy 2.0 with Alembic for migrations.
+
+---
 
 ## Storage Accounting
 
@@ -338,7 +422,8 @@ whose version is in `processing` or `ready` — the original (`file_size_bytes`)
 transcode wrote for it (`derived_size_bytes`). An `uploading` or `failed` version is not counted,
 because its bytes are not (reliably) in the bucket. **The trash is counted**, because deleting is
 not freeing: a soft-deleted project, asset or version keeps its objects until the retention
-collector removes them. The admin overview, the member indicator on `GET /instance/settings`,
+collector removes them, or until an admin deletes it permanently from the trash
+(`POST /admin/trash/purge`). The admin overview, the member indicator on `GET /instance/settings`,
 the per-project figures and the upload guard are all that one sum, so no surface can report
 space as free that the next upload is refused for.
 
