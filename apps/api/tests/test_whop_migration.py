@@ -58,3 +58,15 @@ def test_workspace_brand_links_render_and_never_overwrite():
     assert result.returncode == 0, result.stderr
     assert "SET autoreview_brand_slug = 'audibene-gmbh' WHERE name = 'Audibene - Workspace'" in result.stdout
     assert result.stdout.count('AND autoreview_brand_slug IS NULL') == 12
+
+
+def test_aditor_workspace_link_renders_and_never_overwrites():
+    import subprocess
+    import sys
+    result = subprocess.run(
+        [sys.executable, '-m', 'alembic', 'upgrade', 'ap05_comment_attachment_upload:ap06_link_aditor_brand', '--sql'],
+        cwd=Path(__file__).parents[1], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SET autoreview_brand_slug = 'aditor' WHERE id = '0f353bd9-c353-4cfd-97d9-2997afb47feb'" in result.stdout
+    assert 'AND autoreview_brand_slug IS NULL' in result.stdout
