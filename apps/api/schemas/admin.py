@@ -229,9 +229,9 @@ class AdminPurgeResponse(BaseModel):
     #: and only for the roots that really cascaded. A root restored between the
     #: resolve and the lock is skipped, and it is not priced here either.
     freed_bytes: int
-    #: Object-store reclaims that **succeeded**, originals, renditions,
-    #: thumbnails and aborted multipart uploads alike, counted from what the
-    #: store answered rather than from what was attempted.
+    #: Object and prefix deletes that **succeeded**, including originals,
+    #: renditions and thumbnails. Multipart aborts are not object deletes.
+    #: Counted from what the store answered rather than from attempts.
     s3_deletes: int
     #: Reclaims that failed and were logged. The rows are gone either way, so a
     #: non-zero figure here means bytes the bucket is still holding and the

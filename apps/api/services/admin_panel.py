@@ -349,6 +349,20 @@ def latest_version_ids(db: Session, asset_ids: list) -> dict:
         current = newest.get(asset_id)
         if current is None or number > current[1]:
             newest[asset_id] = (version_id, number)
+    # `_display_version` falls back to the newest live row if none is viewable.
+    # Such an asset still needs the whole-file gate, including its only failed
+    # or unfinished version.
+    fallback_ids = set(asset_ids) - newest.keys()
+    if fallback_ids:
+        fallback = (
+            db.query(AssetVersion.asset_id, AssetVersion.id, AssetVersion.version_number)
+            .filter(AssetVersion.asset_id.in_(fallback_ids), AssetVersion.deleted_at.is_(None))
+            .all()
+        )
+        for asset_id, version_id, number in fallback:
+            current = newest.get(asset_id)
+            if current is None or number > current[1]:
+                newest[asset_id] = (version_id, number)
     return {asset_id: version_id for asset_id, (version_id, _) in newest.items()}
 
 
@@ -403,14 +417,14 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
             names = ", ".join(sorted({v["asset_name"] for v in blocked}))
             raise DeleteGate(
                 409,
-                f"The newest version of {names} can only be deleted with the whole "
+                f"In this Storage tab, the newest version of {names} can only be deleted with the whole "
                 "file. Select the file itself, or pick an older version.",
             )
 
     if needs_typed_confirmation(len(targets["projects"]), targets["bytes"]):
         if (confirm_text or "").strip() not in _ACCEPTED:
             raise DeleteGate(
-                428, f"This deletes {resolved} items. Type {CONFIRM_WORD} to confirm."
+                428, f"This deletes {resolved} {'item' if resolved == 1 else 'items'}. Type {CONFIRM_WORD} to confirm."
             )
 
 
@@ -820,11 +834,11 @@ def _still_being_written(db: Session, project_ids: list, asset_ids: list, versio
     still writing under its prefix, which both loses the job and leaves the
     output it writes after the purge behind as orphans.
 
-    Only `processing` counts. An `uploading` version in the trash is an upload
-    that was discarded or reclaimed, which is most of what an upgraded
-    instance's trash holds; refusing those would make Empty trash impossible
-    there for good. `_purge_version` aborts its multipart instead, so nothing
-    is left open.
+    An upload without its own deletion stamp may still be transferring under
+    a trashed parent. Keep it while its activity is inside the reaper window.
+    Explicitly discarded uploads can go. Processing jobs older than the stuck
+    requeue window can go too: trashed rows are not redispatched by that sweep.
+    A disabled sweep provides no age at which work is known to be abandoned.
     """
     if not project_ids and not asset_ids and not version_ids:
         return []
@@ -836,15 +850,29 @@ def _still_being_written(db: Session, project_ids: list, asset_ids: list, versio
     if version_ids:
         scopes.append(AssetVersion.id.in_(version_ids))
     rows = (
-        db.query(Asset.name, AssetVersion.version_number)
+        db.query(Asset.name, AssetVersion)
         .join(Asset, AssetVersion.asset_id == Asset.id)
         .filter(
             or_(*scopes),
-            AssetVersion.processing_status == ProcessingStatus.processing,
+            AssetVersion.processing_status.in_((ProcessingStatus.processing, ProcessingStatus.uploading)),
         )
         .all()
     )
-    return sorted({f"{name} version {number}" for name, number in rows})
+    now = datetime.now(timezone.utc)
+    in_flight = set()
+    for name, version in rows:
+        if version.processing_status == ProcessingStatus.uploading:
+            if version.deleted_at is not None:
+                continue
+            hours = settings.stale_upload_timeout_hours
+        else:
+            hours = settings.stuck_processing_timeout_hours
+        activity = version.last_activity_at or version.created_at
+        if activity.tzinfo is None:
+            activity = activity.replace(tzinfo=timezone.utc)
+        if hours <= 0 or activity >= now - timedelta(hours=hours):
+            in_flight.add(f"{name} version {version.version_number}")
+    return sorted(in_flight)
 
 
 def trash_purge_targets(
@@ -1078,14 +1106,6 @@ def reclaim_objects(db: Session, pending: dict) -> dict:
     pending["s3_deletes"] = counts.s3_deletes
     pending["s3_failures"] = counts.s3_failures
 
-    audit = pending["_audit"]
-    payload = dict(audit.payload or {})
-    payload.pop("s3_queued", None)
-    payload["s3_deletes"] = counts.s3_deletes
-    payload["s3_failures"] = counts.s3_failures
-    audit.payload = payload
-    db.commit()
-
     # WARNING, like the collector's own line: this is the only record of an
     # irreversible reclaim, and it has to survive a quiet log level.
     log.warning(
@@ -1094,4 +1114,15 @@ def reclaim_objects(db: Session, pending: dict) -> dict:
         pending["_actor_id"], counts.projects, counts.assets, counts.versions,
         pending["freed_bytes"], counts.s3_deletes, counts.s3_failures,
     )
+    try:
+        audit = pending["_audit"]
+        payload = dict(audit.payload or {})
+        payload.pop("s3_queued", None)
+        payload["s3_deletes"] = counts.s3_deletes
+        payload["s3_failures"] = counts.s3_failures
+        audit.payload = payload
+        db.commit()
+    except Exception:  # the purge is already committed; an audit outage cannot undo it
+        db.rollback()
+        log.warning("admin trash purge audit could not be amended", exc_info=True)
     return pending

@@ -26,10 +26,10 @@ import type { StorageOverview, StorageProjectFiles, TrashOverview } from '@/type
  */
 
 /** A fresh SWR cache per test, so one test's overview is not another's. */
-function render(ui: React.ReactElement) {
+function render(ui: React.ReactElement, revalidateOnFocus = true) {
   return rtlRender(
     <SWRConfig
-      value={{ provider: () => new Map(), dedupingInterval: 0, focusThrottleInterval: 0 }}
+      value={{ provider: () => new Map(), dedupingInterval: 0, focusThrottleInterval: 0, revalidateOnFocus, revalidateIfStale: revalidateOnFocus }}
     >
       {ui}
     </SWRConfig>,
@@ -268,12 +268,12 @@ describe('the delete gate', () => {
     expect(screen.queryByLabelText(/type DELETE/i)).not.toBeInTheDocument()
 
     post.mockRejectedValueOnce(
-      Object.assign(new Error('This deletes 1 items. Type DELETE to confirm.'), { status: 428 }),
+      Object.assign(new Error('This deletes 1 item. Type DELETE to confirm.'), { status: 428 }),
     )
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
     expect(await screen.findByLabelText(/type DELETE/i)).toBeInTheDocument()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByText('This deletes 1 items. Type DELETE to confirm.')).toBeInTheDocument()
+    expect(screen.getByText('This deletes 1 item. Type DELETE to confirm.')).toBeInTheDocument()
 
     await type('DELETE')
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
@@ -286,8 +286,9 @@ describe('the delete gate', () => {
   })
 
   it('does not promise a trash of zero days when the window is switched off', async () => {
-    serve({ storage: overview({ summary: summary({ retention_days: 0 }) }) })
+    serve({ storage: overview({ summary: summary({ retention_days: 0, trash_bytes: 90 * MB }) }) })
     render(<StorageTab />)
+    expect(await screen.findByText(/kept until somebody empties it/)).toBeInTheDocument()
     await pick('Big Campaign')
     fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
     const dialog = await screen.findByRole('dialog')
@@ -413,9 +414,9 @@ describe('the trash', () => {
   })
 
   it.each([
-    { what: 'a project', find: () => screen.findByTitle('Last Year Reel'), label: 'Delete Last Year Reel permanently', size: '1.5 GB', sent: { project_ids: ['p-gone'], confirm_bytes: 1.5 * GB } },
-    { what: 'an asset', find: () => screen.findByText('Old Master.mov'), label: 'Delete Old Master.mov permanently', size: '512 MB', sent: { asset_ids: ['a-gone'], confirm_bytes: 0.5 * GB } },
-    { what: 'a version', find: () => screen.findByText('Hero Cut.mov · version 2'), label: 'Delete Hero Cut.mov · version 2 permanently', size: '512 MB', sent: { version_ids: ['v-gone'], confirm_bytes: 0.5 * GB } },
+    { what: 'a project', find: () => screen.findByTitle('Last Year Reel'), label: 'Delete permanently: Last Year Reel', size: '1.5 GB', sent: { project_ids: ['p-gone'], confirm_bytes: 1.5 * GB } },
+    { what: 'an asset', find: () => screen.findByText('Old Master.mov'), label: 'Delete permanently: Old Master.mov', size: '512 MB', sent: { asset_ids: ['a-gone'], confirm_bytes: 0.5 * GB } },
+    { what: 'a version', find: () => screen.findByText('Hero Cut.mov · version 2'), label: 'Delete permanently: Hero Cut.mov · version 2', size: '512 MB', sent: { version_ids: ['v-gone'], confirm_bytes: 0.5 * GB } },
   ])('offers $what its own permanent delete, with its own size', async ({ find, label, size, sent }) => {
     render(<StorageTab />)
     await openTrash()
@@ -484,11 +485,15 @@ describe('the trash', () => {
       storage: overview({ summary: summary({ trash_bytes: 400 * GB }) }),
     })
     post.mockRejectedValue(
-      new Error('Confirmation is for 4 items but 5 are in the trash. Reload and try again.'),
+      Object.assign(new Error('Confirmation is for 4 items but 5 are in the trash. Reload and try again.'), { status: 409 }),
     )
     fireEvent.focus(window)
     expect(await screen.findByTitle('Just Trashed')).toBeInTheDocument()
 
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Permanently delete 4 items?')).toBeInTheDocument()
+    expect(within(dialog).getByText(/This frees 2.5 GB right away/)).toBeInTheDocument()
+    expect(within(dialog).queryByText(/400 GB/)).toBeNull()
     await type('DELETE')
     fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
     await waitFor(() =>
@@ -502,24 +507,151 @@ describe('the trash', () => {
     expect(
       await screen.findByText('Confirmation is for 4 items but 5 are in the trash. Reload and try again.'),
     ).toBeInTheDocument()
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: /Empty trash/ }))
+    const fresh = await screen.findByRole('dialog')
+    expect(within(fresh).getByText('Permanently delete 5 items?')).toBeInTheDocument()
+    expect(within(fresh).getByText(/This frees 400 GB/)).toBeInTheDocument()
+    expect(within(fresh).getByLabelText(/type DELETE/i)).toHaveValue('')
   })
 
   it.each([
     { what: 'the whole trash', open: async () => fireEvent.click(await screen.findByRole('button', { name: /Empty trash/ })) },
-    { what: 'one row', open: async () => fireEvent.click(await screen.findByRole('button', { name: 'Delete Old Master.mov permanently' })) },
+    { what: 'one row', open: async () => fireEvent.click(await screen.findByRole('button', { name: 'Delete permanently: Old Master.mov' })) },
   ])('shows the server refusal and keeps the dialog open: $what', async ({ open }) => {
     // A refused purge used to look like a button that did nothing: the 409s and
     // "A cleanup pass is already running" went nowhere at all.
     post.mockRejectedValue(new Error('A cleanup pass is already running. Try again in a moment.'))
-    render(<StorageTab />)
+    render(<StorageTab />, false)
     await openTrash()
     await open()
+    serve({ bin: trash({ ...FULL_BIN, projects: [...FULL_BIN.projects, { project_id: 'p-refresh', name: 'Refetched after refusal', deleted_at: null, days_left: 30, total_bytes: GB }] }) })
     await type('DELETE')
+    const before = get.mock.calls.filter((c) => c[0] === '/admin/trash').length
     fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
     expect(
       await screen.findByText('A cleanup pass is already running. Try again in a moment.'),
     ).toBeInTheDocument()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(await screen.findByTitle('Refetched after refusal')).toBeInTheDocument()
+    await waitFor(() => expect(get.mock.calls.filter((c) => c[0] === '/admin/trash').length).toBeGreaterThan(before))
   })
+})
+
+
+describe('review feedback', () => {
+  it.each(['empty', 'row'])('reports failed object reclaim above the list after closing %s purge', async (path) => {
+    serve({ bin: FULL_BIN, storage: overview({ summary: summary({ trash_bytes: GB }) }) })
+    post.mockResolvedValue({ s3_failures: 2, s3_deletes: 1, freed_bytes: GB })
+    render(<StorageTab />)
+    await openTrash()
+    fireEvent.click(await screen.findByRole('button', { name: path === 'empty' ? /Empty trash/ : 'Delete permanently: Old Master.mov' }))
+    await type('DELETE')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(await screen.findByText(/2 objects could not be removed from storage/)).toBeInTheDocument()
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { result: { skipped: ['a-gone'], blocked_by_parent: [] }, message: /1 item could not be restored.*upload/i },
+    { result: { skipped: [], blocked_by_parent: ['a-gone'] }, message: /1 item could not be restored.*parent/i },
+  ])('explains a restore that left the row in the trash', async ({ result, message }) => {
+    serve({ bin: FULL_BIN, storage: overview({ summary: summary({ trash_bytes: GB }) }) })
+    post.mockResolvedValue(result)
+    render(<StorageTab />)
+    await openTrash()
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore Old Master.mov' }))
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.getByText('Old Master.mov')).toBeInTheDocument()
+  })
+
+  it('gives an expired blocked version no impossible restore advice', async () => {
+    serve({ bin: trash({ ...FULL_BIN, versions: [{ ...FULL_BIN.versions[0], blocked_by_parent: true, days_left: 0 }] }), storage: overview({ summary: summary({ trash_bytes: GB }) }) })
+    render(<StorageTab />)
+    await openTrash()
+    const row = (await screen.findByText('Hero Cut.mov · version 2')).closest('tr')!
+    expect(within(row).getByText(/next cleanup pass removes it/)).toBeInTheDocument()
+    expect(within(row).queryByText(/Restore the/)).toBeNull()
+    expect(within(row).getByRole('button', { name: /Restore/ })).toBeDisabled()
+  })
+
+  it.each(['project', 'file', 'version'])('refetches and drops a stale selected %s after a 409', async (level) => {
+    serve()
+    render(<StorageTab />)
+    if (level !== 'project') fireEvent.click(await screen.findByRole('button', { name: /Big Campaign/, expanded: false }))
+    if (level === 'version') fireEvent.click(await screen.findByRole('button', { name: /Hero Cut/, expanded: false }))
+    await pick(level === 'project' ? 'Big Campaign' : level === 'file' ? 'Hero Cut.mov' : 'version 1 of Hero Cut.mov')
+    fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
+    const nextFiles = files()
+    if (level === 'file') nextFiles.assets = []
+    if (level === 'version') nextFiles.assets[0].versions = nextFiles.assets[0].versions.filter((v) => v.version_id !== 'v-1')
+    serve({ storage: level === 'project' ? overview({ projects: [], project_count: 0 }) : overview(), project: nextFiles })
+    post.mockRejectedValue(Object.assign(new Error('1 selected item no longer exists.'), { status: 409 }))
+    const before = get.mock.calls.length
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('1 selected item no longer exists.')).toBeInTheDocument()
+    await waitFor(() => expect(get.mock.calls.length).toBeGreaterThan(before))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Delete 1/ })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('closes after delete while refresh is still pending without showing Delete 0 items', async () => {
+    serve()
+    render(<StorageTab />)
+    await pick('Big Campaign')
+    fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
+    await screen.findByRole('dialog')
+    get.mockImplementation(() => new Promise(() => {}))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+})
+
+
+it.each([false, true])('refreshes a collapsed project after refusal and prunes only gone files: gone=%s', async (gone) => {
+  serve()
+  render(<StorageTab />)
+  fireEvent.click(await screen.findByRole('button', { name: /Big Campaign/, expanded: false }))
+  await pick('Hero Cut.mov')
+  fireEvent.click(screen.getByRole('button', { name: /Big Campaign/, expanded: true }))
+  fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
+  const next = files()
+  if (gone) next.assets = []
+  serve({ project: next })
+  post.mockRejectedValue(Object.assign(new Error('The selected item changed. Reload.'), { status: 409 }))
+  const before = get.mock.calls.filter((call) => call[0] === '/admin/storage/projects/p-big').length
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await waitFor(() => expect(get.mock.calls.filter((call) => call[0] === '/admin/storage/projects/p-big').length).toBeGreaterThan(before))
+  if (gone) await waitFor(() => expect(screen.queryByRole('button', { name: /Delete 1/ })).toBeNull())
+  else expect(screen.getByRole('button', { name: /Delete 1/ })).toBeInTheDocument()
+})
+
+it('clears the typed phrase after a soft-delete conflict before another confirmation', async () => {
+  serve()
+  render(<StorageTab />)
+  await pick('Big Campaign', 'Small Teaser')
+  fireEvent.click(screen.getByRole('button', { name: /Delete 2/ }))
+  await type('DELETE')
+  post.mockRejectedValue(Object.assign(new Error('The selected items changed. Reload.'), { status: 409 }))
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  fireEvent.click(screen.getByRole('button', { name: /Delete 2/ }))
+  expect(await screen.findByLabelText(/type DELETE/i)).toHaveValue('')
+  expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled()
+})
+
+it.each([404, 500])('prunes a missing parent but preserves selection when refresh is inconclusive: %s', async (status) => {
+  serve()
+  render(<StorageTab />)
+  fireEvent.click(await screen.findByRole('button', { name: /Big Campaign/, expanded: false }))
+  await pick('Hero Cut.mov')
+  fireEvent.click(screen.getByRole('button', { name: /Delete 1/ }))
+  serve({ project: Object.assign(new Error('Project refresh failed'), { status }) })
+  post.mockRejectedValue(Object.assign(new Error('The selected item changed. Reload.'), { status: 409 }))
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  if (status === 404) await waitFor(() => expect(screen.queryByRole('button', { name: /Delete 1/ })).toBeNull())
+  else expect(screen.getByRole('button', { name: /Delete 1/ })).toBeInTheDocument()
 })

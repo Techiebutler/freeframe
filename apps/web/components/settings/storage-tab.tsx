@@ -332,7 +332,15 @@ function TrashList({
   const restore = async (payload: Record<string, string[]>) => {
     setFailure(null);
     try {
-      await api.post("/admin/trash/restore", payload);
+      const result = await api.post<{ skipped?: string[]; blocked_by_parent?: string[] }>("/admin/trash/restore", payload);
+      const messages = [];
+      if (result.skipped?.length) {
+        messages.push(`${count(result.skipped.length, "item")} could not be restored: it may no longer be in the trash, or its upload has no stored master.`);
+      }
+      if (result.blocked_by_parent?.length) {
+        messages.push(`${count(result.blocked_by_parent.length, "item")} could not be restored: restore its parent file or project first.`);
+      }
+      setFailure(messages.join(" ") || null);
       await mutate();
       onChanged();
     } catch (err: unknown) {
@@ -352,22 +360,32 @@ function TrashList({
    */
   const purge = async (
     payload: Record<string, unknown>,
-    count: number,
+    itemCount: number,
     bytes: number,
     fallback: string,
   ) => {
     setPurgeFailure(null);
+    setFailure(null);
     try {
-      await api.post<AdminPurgeResponse>("/admin/trash/purge", {
+      const result = await api.post<AdminPurgeResponse>("/admin/trash/purge", {
         ...payload,
-        confirm_count: count,
+        confirm_count: itemCount,
         confirm_bytes: bytes,
         confirm_text: "DELETE",
       });
+      if (result.s3_failures > 0) {
+        setFailure(`The rows were deleted, but ${count(result.s3_failures, "object")} could not be removed from storage. Check the object store and cleanup logs.`);
+      }
     } catch (err: unknown) {
-      setPurgeFailure(reason(err, fallback));
+      const message = reason(err, fallback);
+      if (statusOf(err) === 409 && (/^Confirmation is for /.test(message) || message.includes("not in the trash"))) {
+        setPurging(null);
+        setFailure(message);
+      } else {
+        setPurgeFailure(message);
+      }
       await mutate();
-      // Rethrown so the dialog stays open carrying the server's own reason.
+      // Retryable refusals stay in the dialog; stale figures close it above.
       throw err;
     }
     await mutate();
@@ -438,12 +456,12 @@ function TrashList({
                   {/* The reason used to live in the Restore button's tooltip,
                       which is nothing on a touch screen and nothing to a
                       glance. It belongs in the row. */}
-                  {e.blocked && (
+                  {e.blocked && !expired(e.daysLeft) && (
                     <span className="block text-2xs text-status-warning">
                       Restore the {e.holder} above it first
                     </span>
                   )}
-                  {!e.blocked && expired(e.daysLeft) && (
+                  {expired(e.daysLeft) && (
                     <span className="block text-2xs text-status-warning">
                       Past the window: the next cleanup pass removes it
                     </span>
@@ -481,7 +499,7 @@ function TrashList({
                       <Button
                         variant="ghost"
                         size="sm"
-                        aria-label={`Delete ${e.what} permanently`}
+                        aria-label={`Delete permanently: ${e.what}`}
                         onClick={() => {
                           setPurgeFailure(null);
                           setPurging({ kind: "one", entry: e });
@@ -499,6 +517,9 @@ function TrashList({
       </ListState>
 
       <TypedConfirmDialog
+        // A stale refusal closes this from the parent. Remount so its typed
+        // phrase cannot authorize the next snapshot when it is reopened.
+        key={purging === null ? "closed" : "open"}
         open={purging !== null}
         onOpenChange={(open) => {
           if (!open) {
@@ -564,7 +585,7 @@ export function StorageTab() {
     "/admin/trash",
     (key: string) => api.get<TrashOverview>(key),
   );
-  const { mutate: revalidate } = useSWRConfig();
+  const { mutate: revalidate, cache } = useSWRConfig();
 
   const [showTrash, setShowTrash] = React.useState(false);
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
@@ -606,14 +627,38 @@ export function StorageTab() {
     selection.projects.size > 1 ||
     (onlyProjects && projectBytes > CONFIRM_ABOVE_BYTES);
 
-  const refresh = async () => {
-    await Promise.all([
+  const refresh = async (prune = false) => {
+    // Include previously opened lists even when collapsed: their checkboxes
+    // can still be selected when another admin removes one of those rows.
+    const fileKeys = new Set([
+      ...[...expanded].map((id) => `/admin/storage/projects/${id}`),
+      ...[...cache.keys()].filter((key) => key.startsWith("/admin/storage/projects/")),
+    ]);
+    const [fresh, , ...fileLists] = await Promise.all([
       mutate(),
       mutateTrash(),
-      // The open project lists too, or a file deleted from an expanded project
-      // keeps its row and its live checkbox, and ticking it again gets a 409.
-      ...[...expanded].map((id) => revalidate(`/admin/storage/projects/${id}`)),
+      ...[...fileKeys].map(async (key) => {
+        const previous = cache.get(key)?.data as StorageProjectFiles | undefined;
+        try {
+          return await revalidate<StorageProjectFiles>(key, api.get<StorageProjectFiles>(key), { revalidate: false });
+        } catch (err: unknown) {
+          // A missing project confirms its selected children are gone. Keep
+          // cached rows only when the refresh failed without that evidence.
+          if (statusOf(err) === 404) return undefined;
+          return previous;
+        }
+      }),
     ]);
+    if (prune) {
+      const projectIds = new Set(fresh?.projects.map((p) => p.project_id));
+      const assetIds = new Set(fileLists.flatMap((list) => list?.assets.map((a) => a.asset_id) ?? []));
+      const versionIds = new Set(fileLists.flatMap((list) => list?.assets.flatMap((a) => a.versions.map((v) => v.version_id)) ?? []));
+      setSelection((current) => ({
+        projects: fresh ? new Set([...current.projects].filter((id) => projectIds.has(id))) : current.projects,
+        assets: new Set([...current.assets].filter((id) => assetIds.has(id))),
+        versions: new Set([...current.versions].filter((id) => versionIds.has(id))),
+      }));
+    }
   };
 
   const handleDelete = async () => {
@@ -627,15 +672,19 @@ export function StorageTab() {
         confirm_text: needsPhrase ? "DELETE" : null,
       });
     } catch (err: unknown) {
-      // Rethrown so the dialog stays open carrying the server's own reason,
-      // which is the only place the refusal is explained.
+      // A threshold refusal stays in the dialog. A conflict closes it and
+      // refreshes the selection, with the reason above the list.
       if (statusOf(err) === 428) setPhraseRequired(true);
       setFailure(reason(err, "Could not delete that selection"));
+      if (statusOf(err) === 409) {
+        setConfirming(false);
+        await refresh(true);
+      }
       throw err;
     }
     setSelection(EMPTY);
     setPhraseRequired(false);
-    await refresh();
+    void refresh();
   };
 
   if (showTrash) {
@@ -712,8 +761,7 @@ export function StorageTab() {
         </div>
       )}
 
-      {/* A delete refusal is shown in the dialog, which stays open to carry it;
-          printing it out here as well put the same sentence on screen twice. */}
+      {failure && !confirming && <p className="text-sm text-status-error">{failure}</p>}
 
       <ListState
         isLoading={isLoading}
@@ -811,6 +859,7 @@ export function StorageTab() {
       />
 
       <TypedConfirmDialog
+        key={confirming ? "open" : "closed"}
         open={confirming}
         onOpenChange={(open) => {
           setConfirming(open);
