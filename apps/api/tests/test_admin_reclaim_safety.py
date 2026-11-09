@@ -155,6 +155,9 @@ def test_latest_version_falls_back_when_no_version_is_viewable(status):
 def test_project_restore_clamps_an_absurd_retention_setting(monkeypatch, mock_db):
     from apps.api.routers.projects import restore_project
 
+    # This contract isolates retention; authenticated authorization is exercised
+    # against Postgres by test_superadmin_access.
+    monkeypatch.setattr('apps.api.routers.projects.require_project_role', lambda *args, **kwargs: None)
     project = Project(id=uuid.uuid4(), deleted_at=datetime.now(timezone.utc))
     mock_db.first.return_value = project
     mock_db.update.return_value = 1
