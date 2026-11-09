@@ -183,8 +183,8 @@ project's files by name and size, moves them to the trash, restores them and del
 permanently, **and instance-wide project access** — a superadmin may see, open, upload to and
 change every live project without being a member of it.
 
-That last part lives in exactly one place, `apps/api/services/permissions.py`, in the three
-functions every router goes through:
+That last part lives in exactly one place, `apps/api/services/permissions.py`, in the
+following access checks:
 
 | Function | What a superadmin gets |
 |---|---|
@@ -208,6 +208,11 @@ What this deliberately does **not** change:
   project owner still has no access to a project they are not in.
 - **Share links and the customer-facing viewer.** Share-link validation reads nothing off a
   signed-in user, so the flag cannot change which links resolve or what a guest sees.
+- **Original downloads.** With original downloads disabled, `may_download_original` still
+  checks real membership or asset authorship, not the Admin role. Where a transcode exists,
+  a non-member admin gets that file and a 403 for `rendition=original`. To get the master,
+  they can add themselves to the project or enable original downloads. The helper is shared with
+  share-link downloads and does not grant an admin exception.
 - **A deleted project.** Still 404 for everyone, superadmin included.
 
 **Auditing.** Every path that the Admin role **alone** allowed is logged, reads included: an
@@ -230,7 +235,8 @@ settings save, a membership change, an upload, a share link and a delete each le
 whether the project is public or private.
 
 The instance-wide lists are **not** logged: `GET /projects?scope=all`, the Storage overview
-(`GET /admin/storage`) and the admin trash. They list projects rather than open one, and a row
+(`GET /admin/storage`) and the admin trash. They list projects and storage totals; the trash also
+lists trashed asset and version names from inside projects, including private ones. A row
 per listed project on every page open would bury the rows that matter. Opening one project from
 them does log, including reading its file list (`GET /admin/storage/projects/{id}`).
 

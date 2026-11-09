@@ -61,7 +61,7 @@ def test_who_adds_changes_removes_a_member_and_renames_a_project(
 
 @pytest.mark.parametrize("how", ["remove", "demote"])
 def test_the_last_owner_is_protected(seed, as_user, admin, how):
-    """Every membership endpoint is owner tier, so an ownerless project locks its own
+    """Every membership-editing endpoint is owner tier, so an ownerless project locks its own
     people out of their settings. Demoting the last owner leaves the same ownerless project
     behind as removing them; with a second owner in place, either is allowed."""
     owner = seed.user()

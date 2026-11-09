@@ -2,12 +2,11 @@
  * An instance admin gets owner controls on a project it does not own.
  *
  * The server gives the Admin role owner rights on every live project and keeps
- * `role` saying what the caller's own membership is, so three screens worked it
- * out from `role` alone and got it wrong: the project page fell back to
- * `viewer`, the card menu saw the null `GET /projects?scope=all` leaves for a
- * non-member, and the settings page locked on anything but `owner`. All three
- * now read `effectiveProjectRole`, and all three are checked here, against the
- * cases that were broken and against the people who must still be refused.
+ * `role` saying what the caller's own membership is. Four surfaces used that
+ * membership alone: the project page, card menu, settings page and asset review
+ * page. All four now read `effectiveProjectRole`. The first three are checked
+ * here against admins and people who must still be refused; asset review has
+ * its own focused admin-review-controls.test.tsx regression.
  *
  * Everything but the screen under test is replaced, as in
  * toolbar-settings-links.test.tsx.
