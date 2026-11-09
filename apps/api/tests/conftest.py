@@ -226,10 +226,22 @@ class MediaSeed:
         self.db.flush()
         return m
 
-    def asset(self, project, owner, name="clip", deleted=False):
+    def folder(self, project, owner, name="shots", parent=None, deleted=False):
+        from apps.api.models.folder import Folder
+        f = Folder(
+            project_id=project.id, name=name, created_by=owner.id,
+            parent_id=parent.id if parent else None,
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        self.db.add(f)
+        self.db.flush()
+        return f
+
+    def asset(self, project, owner, name="clip", deleted=False, folder=None):
         from apps.api.models.asset import Asset, AssetType
         a = Asset(
             project_id=project.id, name=name, asset_type=AssetType.video, created_by=owner.id,
+            folder_id=folder.id if folder else None,
             deleted_at=datetime.now(timezone.utc) if deleted else None,
         )
         self.db.add(a)
@@ -269,13 +281,13 @@ class MediaSeed:
 
     def media(
         self, project, owner, name="clip", versions=1, original=1_000,
-        derived: int | None = 0, s3_keys=True,
+        derived: int | None = 0, s3_keys=True, folder=None, status=None,
     ):
         """An asset holding `versions` ready versions of the given size each."""
-        a = self.asset(project, owner, name=name)
+        a = self.asset(project, owner, name=name, folder=folder)
         for n in range(1, versions + 1):
             self.version(a, owner, number=n, original=original, derived=derived,
-                         filename=f"{name}-v{n}.mp4", s3_keys=s3_keys)
+                         filename=f"{name}-v{n}.mp4", s3_keys=s3_keys, status=status)
         return a
 
     def versions_of(self, asset):
@@ -309,3 +321,43 @@ class MediaSeed:
 def seed(live_db):
     """Row factory bound to `live_db`; see `MediaSeed`."""
     return MediaSeed(live_db)
+
+
+@pytest.fixture
+def admin(seed):
+    """The one superadmin the panel tests sign in as."""
+    return seed.user(superadmin=True, name="Ada Admin")
+
+
+@pytest.fixture
+def s3(monkeypatch):
+    """Record every object-store call the purge cascade makes, patched on
+    `tasks.cleanup_tasks`, which is where the cascade reaches for them."""
+    calls = {"delete_object": [], "delete_prefix": [], "abort": []}
+    import apps.api.tasks.cleanup_tasks as ct
+    monkeypatch.setattr(ct, "delete_object", lambda k: calls["delete_object"].append(k))
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: calls["delete_prefix"].append(k))
+    monkeypatch.setattr(ct, "abort_multipart_upload", lambda k, u: calls["abort"].append(k))
+    return calls
+
+
+class _Panel:
+    """The two panel reads the delete and purge tests quote their figures from."""
+
+    @staticmethod
+    def summary(client):
+        return client.get("/admin/storage").json()["summary"]
+
+    @staticmethod
+    def trash_counts(client):
+        """The count and byte figures the purge dialog would echo back."""
+        body = client.get("/admin/trash").json()
+        return {
+            "confirm_count": len(body["projects"]) + len(body["assets"]) + len(body["versions"]),
+            "confirm_bytes": body["total_bytes"],
+        }
+
+
+@pytest.fixture
+def panel():
+    return _Panel()

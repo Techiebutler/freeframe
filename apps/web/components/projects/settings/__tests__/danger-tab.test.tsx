@@ -12,7 +12,8 @@ import { ProjectDangerTab } from '../danger-tab'
 
 // Deleting a project used to be a native confirm() in the card menu that
 // swallowed any failure. It is now one place, behind typing the name, with
-// copy that says what happens: gone at once, purged later, no restore.
+// copy that says what happens: gone at once, purged later, and nothing here
+// brings it back.
 
 function openDialog() {
   render(<ProjectDangerTab projectId="p1" projectName="Launch film" />)
@@ -26,10 +27,13 @@ beforeEach(() => {
 })
 
 describe('deleting a project', () => {
-  it('says the project goes now, is purged after the retention period, and cannot be restored', () => {
+  it('says the project goes now, is purged after the retention period, and who can undo it', () => {
+    // "It cannot be restored from the app" stopped being true for an instance
+    // admin when the Storage tab got a restore, and still is true from here.
     render(<ProjectDangerTab projectId="p1" projectName="Launch film" />)
     expect(screen.getByText(/permanently deleted after the retention period/)).toBeInTheDocument()
-    expect(screen.getByText(/cannot be restored from the app/)).toBeInTheDocument()
+    expect(screen.getByText(/an instance admin can restore it/)).toBeInTheDocument()
+    expect(screen.getByText(/no way back from here/)).toBeInTheDocument()
   })
 
   it('only allows the delete once the name is typed exactly', () => {
