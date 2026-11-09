@@ -1,4 +1,5 @@
 import { api } from './api'
+import type { DictationWord } from './dictation-sentences'
 
 // Contract: docs/superpowers/specs/2026-11-04-agent-review-platform-CONTRACT.md
 
@@ -93,12 +94,14 @@ export const acceptRuleSuggestion = (roundId: string, suggestionId: string) =>
 
 export const linkTelegram = () => api.post<{ url: string }>('/me/telegram/link')
 export interface DictationSegment { start: number; end: number; text: string }
-export interface DictationResult { text: string; segments: DictationSegment[] }
-export async function dictate(audio: Blob): Promise<DictationResult> {
+export interface DictationResult { text: string; segments: DictationSegment[]; words?: DictationWord[] }
+/** `lang` defaults to German on the server; pass 'en' or 'auto' to change it. */
+export async function dictate(audio: Blob, lang?: 'de' | 'en' | 'auto'): Promise<DictationResult> {
   const fd = new FormData()
   fd.append('audio', audio, 'dictation.webm')
-  const r = await api.upload<{ text: string; segments?: DictationSegment[] }>('/dictate', fd)
-  return { text: r.text, segments: r.segments ?? [] }
+  if (lang) fd.append('lang', lang)
+  const r = await api.upload<{ text: string; segments?: DictationSegment[]; words?: DictationWord[] }>('/dictate', fd)
+  return { text: r.text, segments: r.segments ?? [], ...(r.words?.length ? { words: r.words } : {}) }
 }
 
 export function countdown(expiresAt: string, now: number): { label: string; expired: boolean } {

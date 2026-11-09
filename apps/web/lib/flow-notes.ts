@@ -1,5 +1,6 @@
 import type { InkMark } from './ink'
 import type { DictationSegment } from './agents'
+import { sentencesFromDictation, type DictationWord } from './dictation-sentences'
 
 // Notes drafted in the phone "Flow" view before they are sent as comments.
 
@@ -69,13 +70,14 @@ export const sendBlocked = (notes: FlowNote[]) => notes.some(n => n.status === '
 export interface NotePart { t: number; text: string; marks: InkMark[] }
 
 /**
- * One note per spoken segment (H69), fragments on the same frame merged. `timeAt` maps an offset into the recording to video time (pauses, seeks and
+ * One note per spoken sentence (H69, dictation v2: segments merged until . ? ! or a 1.5 s pause), fragments on the same frame merged. `timeAt` maps an offset into the recording to video time (pauses, seeks and
  * playback rate included), for the sentence's note AND for every ink mark. A mark belongs to the last segment that
  * had started when it was drawn. No segments: one note with everything.
  */
-export function notesFromDictation(timeAt: (offsetMs: number) => number, text: string, segments: DictationSegment[], marks: InkMark[]): NotePart[] {
+export function notesFromDictation(timeAt: (offsetMs: number) => number, text: string, segments: DictationSegment[], marks: InkMark[], words: DictationWord[] = []): NotePart[] {
   const timed = marks.map(m => ({ ...m, t: timeAt(m.offset_ms) }))
-  const spoken = segments.filter(s => s.text.trim()).sort((a, b) => a.start - b.start)
+  // Whole sentences, each stamped where the video was when its first word was said
+  const spoken = sentencesFromDictation(segments, words)
   if (!spoken.length) return [{ t: timeAt(0), text: text.trim(), marks: timed }]
   const parts: NotePart[] = spoken.map(s => ({ t: timeAt(s.start * 1000), text: s.text.trim(), marks: [] }))
   for (const m of timed) {

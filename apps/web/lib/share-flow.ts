@@ -46,7 +46,7 @@ export async function guestDictate(token: string, audio: Blob, shareSession?: st
   const res = await fetch(`${API_URL()}/share/${token}/dictate${sessionQuery(shareSession)}`, { method: 'POST', body: fd })
   if (!res.ok) await fail(res, 'dictation_unavailable')
   const r = await res.json()
-  return { text: r.text, segments: r.segments ?? [] }
+  return { text: r.text, segments: r.segments ?? [], ...(r.words?.length ? { words: r.words } : {}) }
 }
 
 /** Approve one asset through a folder share link: POST /share/{token}/assets/{asset_id}/approve (Lane A). */

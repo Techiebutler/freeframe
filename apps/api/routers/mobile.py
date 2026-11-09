@@ -4,7 +4,7 @@ from typing import Any
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -21,14 +21,14 @@ router = APIRouter(tags=["mobile"])
 
 
 @router.post("/dictate", dependencies=[Depends(rate_limit("dictate", 60, 600))])
-def dictate(audio: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+def dictate(audio: UploadFile = File(...), lang: str = Form("de"), current_user: User = Depends(get_current_user)):
     # A plain def runs in the threadpool: the Groq call below is a blocking httpx request.
     data = audio.file.read(dictation.MAX_BYTES + 1)
-    return dictation.transcribe(data, audio.filename or "", audio.content_type or "")
+    return dictation.transcribe(data, audio.filename or "", audio.content_type or "", lang)
 
 
 @router.post("/share/{token}/dictate")
-def share_dictate(token: str, request: Request, audio: UploadFile = File(...), share_session: Optional[str] = Query(None),
+def share_dictate(token: str, request: Request, audio: UploadFile = File(...), lang: str = Form("de"), share_session: Optional[str] = Query(None),
                   db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
     """Dictation for a logged-out guest: only on a valid link that allows comments, throttled per token and IP."""
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
@@ -39,7 +39,7 @@ def share_dictate(token: str, request: Request, audio: UploadFile = File(...), s
     if not allowed:
         raise HTTPException(429, "Too many requests", headers={"Retry-After": str(retry_after)})
     data = audio.file.read(dictation.MAX_BYTES + 1)
-    return dictation.transcribe(data, audio.filename or "", audio.content_type or "")
+    return dictation.transcribe(data, audio.filename or "", audio.content_type or "", lang)
 
 
 @router.post("/me/telegram/link")

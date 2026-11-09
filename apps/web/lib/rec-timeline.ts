@@ -16,11 +16,14 @@ export function videoTimeAt(points: TimelinePoint[], offsetMs: number): number {
 /** Logs play, pause, seek and rate changes of a video from now on. */
 export function trackVideo(video: HTMLVideoElement | null, startedAt: number, now: () => number = Date.now) {
   const points: TimelinePoint[] = []
-  const log = () => {
+  const log = (e?: Event) => {
     if (!video) return
-    points.push({ rec_ms: Math.max(0, now() - startedAt), video_t: video.currentTime, playing: !video.paused && !video.ended, rate: video.playbackRate || 1 })
+    // `waiting` = buffering: the playhead stands still although the video is not paused.
+    const stalled = e?.type === 'waiting'
+    points.push({ rec_ms: Math.max(0, now() - startedAt), video_t: video.currentTime, playing: !video.paused && !video.ended && !stalled, rate: video.playbackRate || 1 })
   }
-  const events = ['play', 'pause', 'seeked', 'ratechange', 'ended'] as const
+  // `playing` and `waiting` matter: after a stall the video is behind the clock, and `play` alone would not say so.
+  const events = ['play', 'playing', 'waiting', 'pause', 'seeked', 'ratechange', 'ended'] as const
   log()
   if (video) events.forEach(e => video.addEventListener(e, log))
   return {

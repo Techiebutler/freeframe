@@ -215,7 +215,7 @@ export function StaticReview(p: StaticReviewProps) {
       setRec(null); setTranscribing(true)
       try {
         const out = await dictate(await r.stop())
-        const notes = staticNotesFromMemo(views, marks, out.text, out.segments ?? [])
+        const notes = staticNotesFromMemo(views, marks, out.text, out.segments ?? [], out.words ?? [])
         if (!notes.length) { setMemoMsg('Nothing was heard. Try again or type it.'); return }
         await saveMemo(notes)
       } catch (e) { setMemoMsg(dictationMessage(e)) }
@@ -227,7 +227,7 @@ export function StaticReview(p: StaticReviewProps) {
       const r = await start(v => { level.current = v })
       track.current = { views: [{ fileId: file!.id, at: 0 }], marks: [] }
       setPending(null)
-      setRec({ rec: r, startedAt: Date.now(), fileId: file!.id })
+      setRec({ rec: r, startedAt: r.startedAt ?? Date.now(), fileId: file!.id })
     } catch (e) {
       const denied = (e as Error)?.name === 'NotAllowedError' || (e as Error)?.name === 'SecurityError'
       setMemoMsg(denied ? 'Microphone is blocked. Allow it in the browser, or type your note.' : 'Microphone unavailable. Type your note instead.')
