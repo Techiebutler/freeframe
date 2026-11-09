@@ -270,7 +270,7 @@ export function StaticReview(p: StaticReviewProps) {
             {failed === file.id ? (
               <p role="alert" className="text-sm text-white/70">This image could not be loaded.</p>
             ) : !url ? (
-              <Loader2 className="animate-spin text-white/60 motion-reduce:animate-none" size={28} aria-label="Loading image" />
+              <Loader2 className="animate-spin text-white/60 motion-reduce:animate-none" size={28} role="img" aria-label="Loading image" />
             ) : (
               <div
                 key={file.id}
@@ -298,7 +298,7 @@ export function StaticReview(p: StaticReviewProps) {
                     type="button"
                     onClick={e => { e.stopPropagation(); setFocused(f => (f === c.id ? null : c.id)); setPending(null) }}
                     aria-label={`Note ${numberOf(c.id)}: ${c.body}`}
-                    className={cn('absolute grid h-7 w-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white text-[12px] font-bold text-white transition-transform duration-150 ease-out motion-reduce:transition-none', focused === c.id ? 'z-10 scale-125' : 'hover:scale-110')}
+                    className={cn('absolute grid h-7 w-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white text-[12px] font-bold text-white before:absolute before:-inset-2 before:content-[""] transition-transform duration-150 ease-out motion-reduce:transition-none', focused === c.id ? 'z-10 scale-125' : 'hover:scale-110')}
                     style={{ left: `${at![0] * 100}%`, top: `${at![1] * 100}%`, background: PIN, boxShadow: '0 3px 10px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.15)' }}
                   >{numberOf(c.id)}</button>
                 ))}

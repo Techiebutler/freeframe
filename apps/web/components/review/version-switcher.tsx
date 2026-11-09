@@ -63,7 +63,7 @@ export function VersionSwitcher({ versions, className }: VersionSwitcherProps) {
       <span className="text-xs text-text-tertiary shrink-0">Version:</span>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
-          <button className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 border border-border text-text-secondary text-xs font-medium hover:text-text-primary hover:bg-bg-hover transition-colors outline-none focus-visible:ring-2 focus-visible:ring-text-secondary">
+          <button className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-11 md:h-8 border border-border text-text-secondary text-xs font-medium hover:text-text-primary hover:bg-bg-hover transition-colors outline-none focus-visible:ring-2 focus-visible:ring-text-secondary">
             <span>v{currentVersion?.version_number ?? latest.version_number}</span>
             {inFlightCfg && (
               <span

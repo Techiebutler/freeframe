@@ -168,7 +168,7 @@ function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Enter password…"
             autoFocus
-            className="flex h-9 w-full rounded-md border border-border bg-bg-tertiary px-3 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-focus"
+            className="flex h-11 w-full rounded-md border border-border bg-bg-tertiary px-3 text-base md:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-focus"
           />
           {error && <p className="text-xs text-status-error">{error}</p>}
           <Button type="submit" size="sm" className="w-full" loading={loading}>
@@ -363,7 +363,7 @@ function GuestApprovalActions({ token, asset }: GuestApprovalActionsProps) {
         size="sm"
         onClick={() => handleDecision('rejected')}
         disabled={loading}
-        className="text-red-400 border-red-500/30 hover:border-red-500/60 hover:bg-red-500/10"
+        className="h-11 md:h-8 text-red-400 border-red-500/30 hover:border-red-500/60 hover:bg-red-500/10"
       >
         <XCircle className="h-4 w-4" />
         Reject
@@ -373,7 +373,7 @@ function GuestApprovalActions({ token, asset }: GuestApprovalActionsProps) {
         size="sm"
         onClick={() => handleDecision('approved')}
         loading={loading}
-        className="bg-green-600 hover:bg-green-700"
+        className="h-11 md:h-8 bg-green-600 hover:bg-green-700"
       >
         <CheckCircle2 className="h-4 w-4" />
         Approve
@@ -443,7 +443,8 @@ function ShareTopBar({
         {onBack && (
           <button
             onClick={onBack}
-            className="flex items-center justify-center h-7 w-7 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+            aria-label="Back"
+            className="flex items-center justify-center h-11 w-11 md:h-7 md:w-7 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
@@ -488,7 +489,7 @@ function ShareTopBar({
           <button
             onClick={handleDownload}
             disabled={downloading}
-            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-700 px-3 py-1.5 text-xs font-medium text-white transition-colors disabled:opacity-60"
+            className="inline-flex h-11 md:h-auto shrink-0 items-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-700 px-3 md:py-1.5 text-xs font-medium text-white transition-colors disabled:opacity-60"
           >
             {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
             Download
