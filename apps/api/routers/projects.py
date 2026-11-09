@@ -265,7 +265,9 @@ def restore_project(project_id: uuid.UUID, db: Session = Depends(get_db), curren
         project=project, include_trashed=True,
     )
 
-    days = settings.soft_delete_retention_days
+    from ..tasks.cleanup_tasks import _retention_days
+
+    days = _retention_days()
     if days > 0 and project.deleted_at is not None:
         deleted_at = project.deleted_at
         if deleted_at.tzinfo is None:

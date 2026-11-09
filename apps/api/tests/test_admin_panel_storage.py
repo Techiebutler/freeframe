@@ -665,6 +665,16 @@ def test_a_purge_is_refused_while_a_worker_is_still_writing(seed, as_user, admin
     ).status_code == 200
 
 
+def _project_artwork(seed, project):
+    from apps.api.models.branding import ProjectBranding
+
+    project.poster_s3_key = f"posters/{project.id}/cover.jpg"
+    logo = f"branding/{project.id}/logo/mark.png"
+    seed.db.add(ProjectBranding(project_id=project.id, logo_s3_key=logo))
+    seed.db.flush()
+    return project.poster_s3_key, logo
+
+
 def test_a_purge_prices_logs_and_counts_only_what_really_happened(
     seed, as_user, admin, monkeypatch,
 ):
@@ -680,6 +690,7 @@ def test_a_purge_prices_logs_and_counts_only_what_really_happened(
     doomed = seed.project(owner, name="really going")
     seed.media(doomed, owner, original=2_000, derived=0)
     seed.trash(doomed)
+    _project_artwork(seed, doomed)
     targets = admin_panel.trash_purge_targets(seed.db, [], [], [], everything=True)
     assert len(targets["projects"]) == 2
 
@@ -715,6 +726,7 @@ def test_the_objects_go_only_after_the_rows_are_committed(seed, as_user, admin, 
     keys are collected, the caller commits, and `reclaim_objects` sends them."""
     owner = seed.user()
     project, asset = _trashed_project(seed, owner)
+    artwork = _project_artwork(seed, project)
     version = seed.versions_of(asset)[0]
     targets = admin_panel.trash_purge_targets(seed.db, [], [], [], everything=True)
 
@@ -727,6 +739,7 @@ def test_the_objects_go_only_after_the_rows_are_committed(seed, as_user, admin, 
     assert f"raw/{version.id}" in s3["delete_object"]
     assert f"processed/{version.id}/" in s3["delete_prefix"]
     assert pending["s3_deletes"] > 0 and pending["s3_failures"] == 0
+    assert set(artwork).issubset(s3["delete_object"])
 
 
 def test_the_endpoint_commits_the_rows_before_it_reclaims_the_objects(
@@ -739,7 +752,8 @@ def test_the_endpoint_commits_the_rows_before_it_reclaims_the_objects(
     apart. So watch the calls rather than the result: the commit has to be what
     immediately precedes the reclaim."""
     owner = seed.user()
-    _trashed_project(seed, owner)
+    project, _ = _trashed_project(seed, owner)
+    _project_artwork(seed, project)
     client = as_user(admin)
     confirmation = panel.trash_counts(client)
 
@@ -750,6 +764,8 @@ def test_the_endpoint_commits_the_rows_before_it_reclaims_the_objects(
     real_commit, real_reclaim = seed.db.commit, admin_panel.reclaim_objects
 
     def spy_commit(*args, **kwargs):
+        if not calls:
+            assert s3["delete_object"] == [], "artwork must wait for commit too"
         calls.append("commit")
         return real_commit(*args, **kwargs)
 
@@ -780,3 +796,125 @@ def test_a_project_restore_is_recorded_as_a_reach_into_the_project(seed, as_user
     assert len(rows) == 1
     assert (rows[0].project_id, rows[0].user_id) == (project.id, admin.id)
     assert rows[0].payload["by_superadmin"] is True
+
+
+@pytest.mark.parametrize("status", ["ready", "uploading"])
+def test_only_open_multipart_uploads_are_aborted_and_not_counted_as_deletes(
+    seed, as_user, admin, s3, status,
+):
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    asset = seed.media(seed.project(owner), owner, status=ProcessingStatus(status))
+    version = seed.versions_of(asset)[0]
+    version.upload_id = "synthetic-upload"
+    seed.trash(version, asset)
+    response = _purge(as_user(admin), asset_ids=[str(asset.id)],
+                      confirm_count=1, confirm_bytes=1_000 if status == "ready" else 0)
+    assert response.status_code == 200
+    assert s3["abort"] == ([f"raw/{version.id}"] if status == "uploading" else [])
+    assert response.json()["s3_deletes"] == len(s3["delete_object"]) + len(s3["delete_prefix"])
+    assert response.json()["s3_failures"] == 0
+
+
+@pytest.mark.parametrize("code", ["NoSuchUpload", "NoSuchKey", "404"])
+def test_an_already_gone_multipart_is_not_a_failed_reclaim(
+    seed, as_user, admin, s3, monkeypatch, code,
+):
+    from botocore.exceptions import ClientError
+    from apps.api.models.asset import ProcessingStatus
+    from apps.api.services.s3_service import UPLOAD_GONE_CODES
+
+    assert code in UPLOAD_GONE_CODES
+    owner = seed.user()
+    asset = seed.media(seed.project(owner), owner, status=ProcessingStatus.uploading)
+    version = seed.versions_of(asset)[0]
+    version.upload_id = "synthetic-upload"
+    seed.trash(version, asset)
+
+    def gone(*args):
+        raise ClientError({"Error": {"Code": code}}, "AbortMultipartUpload")
+
+    monkeypatch.setattr(cleanup_tasks, "abort_multipart_upload", gone)
+    response = _purge(as_user(admin), asset_ids=[str(asset.id)], confirm_count=1, confirm_bytes=0)
+    assert response.status_code == 200
+    assert response.json()["s3_failures"] == 0
+
+
+@pytest.mark.parametrize("master_size", [None, 0, 1_000])
+def test_a_failed_version_restores_only_when_its_master_is_still_in_storage(
+    seed, as_user, admin, monkeypatch, master_size,
+):
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    asset = seed.asset(seed.project(owner), owner)
+    version, media = seed.version(asset, owner, status=ProcessingStatus.failed, deleted=True)
+    checked = []
+
+    def head(key):
+        checked.append(key)
+        return master_size
+
+    monkeypatch.setattr(cleanup_tasks, "head_object_size", head)
+    response = _restore(as_user(admin), version_ids=[str(version.id)])
+    assert response.status_code == 200
+    assert checked == [media.s3_key_raw]
+    restored = master_size is not None
+    assert response.json()["restored_versions"] == int(restored)
+    assert response.json()["skipped"] == ([] if restored else [str(version.id)])
+    seed.db.refresh(version)
+    assert (version.deleted_at is None) == restored
+
+
+@pytest.mark.parametrize("status", ["failed", "uploading"])
+def test_the_only_nonviewable_version_still_requires_selecting_the_file(seed, as_user, admin, status):
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    asset = seed.media(seed.project(owner), owner, status=ProcessingStatus(status))
+    version = seed.versions_of(asset)[0]
+    response = _delete(as_user(admin), version_ids=[str(version.id)], confirm_count=1)
+    assert response.status_code == 409
+    assert "In this Storage tab" in response.json()["detail"]
+    seed.db.refresh(version)
+    assert version.deleted_at is None
+
+
+@pytest.mark.parametrize(
+    ("status", "deleted", "age_hours", "timeout", "expected"),
+    [
+        ("uploading", False, 1, 24, 409),
+        ("uploading", False, 25, 24, 200),
+        ("uploading", True, 1, 24, 200),
+        ("uploading", False, 1000, 0, 409),
+        ("uploading", False, 1000, -1, 409),
+        ("processing", True, 1, 6, 409),
+        ("processing", True, 7, 6, 200),
+        ("processing", True, 1000, 0, 409),
+    ],
+)
+def test_purging_a_parent_observes_job_activity_and_disabled_sweeps(
+    seed, as_user, admin, panel, s3, monkeypatch, status, deleted, age_hours, timeout, expected,
+):
+    from apps.api.models.asset import ProcessingStatus
+
+    monkeypatch.setattr(settings, "stale_upload_timeout_hours" if status == "uploading" else "stuck_processing_timeout_hours", timeout)
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.media(project, owner, status=ProcessingStatus(status))
+    version = seed.versions_of(asset)[0]
+    version.upload_id = "synthetic-upload"
+    version.last_activity_at = datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    seed.trash(project)
+    if deleted:
+        seed.trash(version)
+    seed.db.flush()
+    client = as_user(admin)
+    response = _purge(client, everything=True, **panel.trash_counts(client))
+    assert response.status_code == expected
+    if expected == 409:
+        assert s3["abort"] == [] and s3["delete_object"] == []
+        assert seed.db.query(Project).filter(Project.id == project.id).first() is not None
+    else:
+        assert seed.db.query(Project).filter(Project.id == project.id).first() is None

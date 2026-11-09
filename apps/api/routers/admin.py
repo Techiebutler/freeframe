@@ -258,7 +258,7 @@ def admin_delete(
     Superadmin only, and **soft delete only**. Rows get a `deleted_at`, the same
     trash every other delete in the app uses, and the existing retention
     collector reclaims the bytes after `SOFT_DELETE_RETENTION_DAYS` (30 by
-    default). Nothing in this panel hard-deletes.
+    default). Permanent deletion is a separate action in the Trash view.
 
     The confirmation gate is enforced here, not in the browser:
 

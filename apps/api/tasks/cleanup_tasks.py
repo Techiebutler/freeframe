@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
+from botocore.exceptions import ClientError
 from sqlalchemy import text, func
 from sqlalchemy.orm import Session
 
@@ -24,7 +25,7 @@ from ..models.activity import Mention, ActivityLog, Notification
 from ..services.owned_keys import is_project_logo_key
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
-    head_object_size,
+    head_object_size, UPLOAD_GONE_CODES,
 )
 
 log = logging.getLogger("celery.cleanup")
@@ -63,7 +64,8 @@ def _safe(fn, *args) -> bool:
 class PurgeCounts:
     """Accumulates what a purge run reclaimed. `retention_days` is filled by `_run_cleanup`.
 
-    `s3_deletes` counts object-store reclaims that **succeeded** and `s3_failures` the ones
+    `s3_deletes` counts object/prefix deletes that **succeeded**, excluding multipart
+    aborts, and `s3_failures` counts reclaim operations that failed, including aborts. These are the ones
     that were logged and swallowed. It used to count attempts, so a store that was down had
     the rows go, the objects stay, and the figures report the bytes as reclaimed.
 
@@ -85,6 +87,15 @@ class PurgeCounts:
     deferred: list | None = None
 
 
+def _abort_open_upload(key: str, upload_id: str) -> None:
+    """A completed or already reaped multipart has nothing left to abort."""
+    try:
+        abort_multipart_upload(key, upload_id)
+    except ClientError as exc:
+        if str(exc.response.get("Error", {}).get("Code", "")) not in UPLOAD_GONE_CODES:
+            raise
+
+
 def _run_reclaim(counts: PurgeCounts, op: str, args: tuple) -> None:
     """Do one object-store reclaim now and count whether it worked.
 
@@ -94,10 +105,11 @@ def _run_reclaim(counts: PurgeCounts, op: str, args: tuple) -> None:
     fn = {
         "object": delete_object,
         "prefix": delete_prefix,
-        "abort": abort_multipart_upload,
+        "abort": _abort_open_upload,
     }[op]
     if _safe(fn, *args):
-        counts.s3_deletes += 1
+        if op != "abort":
+            counts.s3_deletes += 1
     else:
         counts.s3_failures += 1
 
@@ -185,7 +197,7 @@ def _purge_version(db, version_id, counts: PurgeCounts) -> None:
         # An upload still open leaks its parts if only the keys go: the parts are
         # not reachable by key and no listing finds them on every backend. Same
         # call `_dispose_version_files` makes when a user discards an upload.
-        if v.upload_id:
+        if v.upload_id and v.processing_status == ProcessingStatus.uploading:
             _reclaim(counts, "abort", mf.s3_key_raw, v.upload_id)
         _reclaim_media_s3(mf, counts)
     counts.media_files += len(media)
@@ -328,15 +340,13 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
         # that was checked can name any object in the bucket, another project's
         # media included, and purging this project must not take it with it.
         if is_project_logo_key(project_id, branding.logo_s3_key):
-            _safe(delete_object, branding.logo_s3_key)
-            counts.s3_deletes += 1
+            _reclaim(counts, "object", branding.logo_s3_key)
         db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).delete(synchronize_session=False)
     db.query(WatermarkSettings).filter(WatermarkSettings.project_id == project_id).delete(synchronize_session=False)
     db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(synchronize_session=False)
     _purge_activity_logs(db, ActivityLog.project_id, project_id)
     if p.poster_s3_key:
-        _safe(delete_object, p.poster_s3_key)
-        counts.s3_deletes += 1
+        _reclaim(counts, "object", p.poster_s3_key)
     db.query(Project).filter(Project.id == project_id).delete(synchronize_session=False)
     counts.projects += 1
     db.flush()

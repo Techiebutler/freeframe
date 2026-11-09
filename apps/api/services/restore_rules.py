@@ -17,8 +17,9 @@ call it:
   round: restoring the folder brings its own assets back into it.)
 * Nothing that was never usable work comes back at all. A discarded upload is
   soft-deleted by `_strip_asset_with_no_versions`, and `_dispose_version_files`
-  deletes its objects *before* stamping the row, so restoring it would bring
-  back a card that cannot be opened, streamed or given a version.
+  deletes its objects *before* stamping the row. A `failed` version can also
+  be an abandoned upload, so it comes back only if storage still holds its
+  master. Restoring an empty row would bring back a card that cannot be opened.
 
 Neither door decides anything else here: who may restore, whether the project
 is live and whether the retention window still allows it stay with the
@@ -36,10 +37,10 @@ from ..models.folder import Folder
 #: How far a version must have got for its row to be worth restoring.
 #:
 #: `failed` counts. The question is how far the version ever got, not where it
-#: stopped: a failed transcode got as far as being dispatched, the bytes landed,
-#: the asset carries a red Failed badge in the grid, and deleting it is someone
-#: deleting their own work. `uploading` is the one status this excludes, and it
-#: is the one the discard helpers were written for.
+#: stopped. Keep this shared classification for `was_ever_usable`: main counts
+#: failed work there on purpose. A failed version can also be an aborted upload,
+#: so `restore_version_row` separately checks that its master is still stored.
+#: An `uploading` version never qualifies for version restore.
 RESTORABLE_STATUSES = (
     ProcessingStatus.processing,
     ProcessingStatus.ready,
@@ -116,10 +117,22 @@ def restore_version_row(db: Session, version_id: uuid.UUID) -> bool:
     """Clear one trashed version's `deleted_at`, under the same rule.
 
     A version has no folder to be stranded in, so only the second half applies:
-    an `uploading` version in the trash was discarded or reclaimed, and
-    `_dispose_version_files` removed its objects before it stamped the row.
+    an `uploading` version in the trash was discarded or reclaimed. A failed
+    row comes back only when storage still holds its master; upload abort and
+    the reaper also leave failed rows whose objects never assembled or are gone.
     Returns whether a row really came back.
     """
+    from ..tasks.cleanup_tasks import _holds_a_master
+
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id,
+        AssetVersion.deleted_at.isnot(None),
+        AssetVersion.processing_status.in_(RESTORABLE_STATUSES),
+    ).first()
+    if version is None:
+        return False
+    if version.processing_status == ProcessingStatus.failed and not _holds_a_master(db, version):
+        return False
     return bool(
         db.query(AssetVersion)
         .filter(
