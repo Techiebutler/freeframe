@@ -23,8 +23,9 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
+  const playheadTime = useReviewStore((s) => s.playheadTime)
   const ink = isInk(active)
-  const replay = React.useMemo(() => (isInk(active) ? { key: 1, marks: active.marks } : null), [active])
+  const replay = React.useMemo(() => (isInk(active) ? { key: 1, at: active.marks[0]?.t, marks: active.marks } : null), [active])
 
   useEffect(() => {
     if (ink || !active || !canvasRef.current || !containerRef.current) return
@@ -100,7 +101,7 @@ export function AnnotationOverlay({ annotation }: AnnotationOverlayProps = {}) {
   }, [active, ink])
 
   if (!active) return null
-  if (ink) return <InkLayer active={false} onStart={() => {}} onMark={() => {}} replay={replay} />
+  if (ink) return <InkLayer active={false} onStart={() => {}} onMark={() => {}} replay={replay} time={playheadTime} />
 
   return (
     <div

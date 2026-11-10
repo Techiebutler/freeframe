@@ -141,4 +141,30 @@ describe('InkLayer never keeps drawing after the button is up', () => {
     expect(onMark).toHaveBeenCalledTimes(1)
     expect(container.querySelector('[data-live]')).toBeNull()
   })
+
+  it('a drawn stroke shows only on its frame: scrubbing away hides it, coming back shows it again', () => {
+    const noop = () => {}
+    const { getByTestId, container, rerender } = render(<InkLayer active playing={false} time={10} onStart={noop} onMark={noop} />)
+    draw(getByTestId('ink-layer'))
+    expect(strokes(container)).toHaveLength(1)
+    rerender(<InkLayer active playing={false} time={10.2} onStart={noop} onMark={noop} />)
+    expect(strokes(container)).toHaveLength(1)
+    rerender(<InkLayer active playing={false} time={10.5} onStart={noop} onMark={noop} />)
+    expect(strokes(container)).toHaveLength(0)
+    rerender(<InkLayer active playing={false} time={4} onStart={noop} onMark={noop} />)
+    expect(strokes(container)).toHaveLength(0)
+    rerender(<InkLayer active playing={false} time={10} onStart={noop} onMark={noop} />)
+    expect(strokes(container)).toHaveLength(1)
+  })
+
+  it('a replayed comment drawing shows when the playhead reaches its time and hides when it leaves', () => {
+    const noop = () => {}
+    const replay = { key: 1, at: 20, marks: [{ k: 'stroke' as const, points: [[0, 0], [1, 1]] as [number, number][] }] }
+    const { container, rerender } = render(<InkLayer active={false} playing={false} time={5} replay={replay} onStart={noop} onMark={noop} />)
+    expect(strokes(container)).toHaveLength(0)
+    rerender(<InkLayer active={false} playing={false} time={20} replay={replay} onStart={noop} onMark={noop} />)
+    expect(strokes(container)).toHaveLength(1)
+    rerender(<InkLayer active={false} playing={false} time={21} replay={replay} onStart={noop} onMark={noop} />)
+    expect(strokes(container)).toHaveLength(0)
+  })
 })

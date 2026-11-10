@@ -1,9 +1,9 @@
 'use client'
 
 import * as React from 'react'
-import { CONTOUR_WIDTH, DOT_PX, classifyMark, normalizePoint, replayDuration, smoothPath, taperChunks, thinPoints, visibleMarks, type InkMark } from '@/lib/ink'
+import { CONTOUR_WIDTH, DOT_PX, classifyMark, inkOnFrame, normalizePoint, replayDuration, smoothPath, taperChunks, thinPoints, visibleMarks, type InkMark } from '@/lib/ink'
 
-type Ink = { id: number; k: 'stroke' | 'dot'; points: [number, number][] }
+type Ink = { id: number; k: 'stroke' | 'dot'; points: [number, number][]; /** playhead seconds when drawn */ t?: number }
 
 /** Fade-out length once playback resumes; CSS holds the same value. */
 const FADE_MS = 250
@@ -27,7 +27,7 @@ export const Strokes = ({ list, live, fading }: { list: Ink[]; live?: boolean; f
   </>
 )
 
-export interface InkReplay { key: number; marks: (Pick<InkMark, 'k' | 'points'> & Partial<Pick<InkMark, 'times' | 'offset_ms'>>)[] }
+export interface InkReplay { key: number; /** playhead seconds the replay belongs to (the comment's time); with `time` set it only shows on that frame */ at?: number; marks: (Pick<InkMark, 'k' | 'points'> & Partial<Pick<InkMark, 'times' | 'offset_ms'>>)[] }
 
 /**
  * The drawing surface over the picture, mounted inside the video frame (so 0..1 is the picture, never the letterbox).
@@ -35,12 +35,14 @@ export interface InkReplay { key: number; marks: (Pick<InkMark, 'k' | 'points'> 
  * paused and fades out as soon as it plays again (it is kept in the note, only the screen is cleared).
  * The first touch pauses the video; the recording goes on. A second finger is ignored while the first draws.
  */
-export function InkLayer({ active, playing = false, onStart, onMark, replay, trail: showTrail = true }: {
+export function InkLayer({ active, playing = false, time, onStart, onMark, replay, trail: showTrail = true }: {
   active: boolean
   /** false: the owner draws the finished marks itself (static review keeps them per picture). */
   trail?: boolean
   /** Video is playing: ink stays while it is paused and fades out once it runs again. */
   playing?: boolean
+  /** Playhead seconds. When given, drawings show only on the frame they were drawn on (|time - t| <= INK_FRAME_TOL); omit for ungated. */
+  time?: number
   onStart: () => void
   onMark: (k: 'stroke' | 'dot', points: [number, number][], times: number[]) => void
   replay?: InkReplay | null
@@ -50,6 +52,8 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay, tra
   const [trail, setTrail] = React.useState<Ink[]>([])
   const g = React.useRef<{ pid: number; pts: [number, number][]; times: number[]; t0: number; x0: number; y0: number; far: number } | null>(null)
   const seq = React.useRef(0)
+  const timeRef = React.useRef(time)
+  timeRef.current = time
   const gone = React.useRef(false)
   React.useEffect(() => { gone.current = false; return () => { gone.current = true } }, [])
   React.useEffect(() => { if (!active) { g.current = null; setCur(null) } }, [active])
@@ -118,15 +122,16 @@ export function InkLayer({ active, playing = false, onStart, onMark, replay, tra
     const points = k === 'dot' ? [s.pts[0]] : s.pts
     onMark(k, points, k === 'dot' ? [0] : s.times)
     const id = ++seq.current
-    setTrail(l => [...l, { id, k, points }])
+    setTrail(l => [...l, { id, k, points, t: timeRef.current }])
   }
-  const shown: Ink[] = replayShown ? (replayMs === Infinity ? replayShown.marks : visibleMarks(replayShown.marks, replayMs)).map((m, i) => ({ id: replayShown.key * 100 + i, k: m.k, points: m.points })) : []
+  const replayOn = !!replayShown && inkOnFrame(replayShown.at, time)
+  const shown: Ink[] = replayShown && replayOn ? (replayMs === Infinity ? replayShown.marks : visibleMarks(replayShown.marks, replayMs)).map((m, i) => ({ id: replayShown.key * 100 + i, k: m.k, points: m.points })) : []
   return (
     <div ref={root} className="ink-layer" data-testid="ink-layer" data-on={active ? '' : undefined}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onLostPointerCapture={up}
       onClick={e => { if (active) e.stopPropagation() }}>
-      {showTrail && <Strokes list={trail} fading={fading} />}
-      {replayShown ? <Strokes key={replayShown.key} list={shown} fading={fading} /> : null}
+      {showTrail && <Strokes list={trail.filter(m => inkOnFrame(m.t, time))} fading={fading} />}
+      {replayShown && replayOn ? <Strokes key={replayShown.key} list={shown} fading={fading} /> : null}
       {cur ? <Strokes list={[{ id: -1, k: 'stroke', points: cur.length > 1 ? cur : [cur[0], cur[0]] }]} live /> : null}
     </div>
   )
