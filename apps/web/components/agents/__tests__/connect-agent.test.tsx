@@ -11,7 +11,7 @@ const agents = [
 function mock() {
   vi.spyOn(api, 'get').mockImplementation(async (p: string) => (p.endsWith('/agents') ? agents : { agents_may_approve: false }) as never)
 }
-const wrap = () => render(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><ConnectAgent projectId="p1" /></SWRConfig>)
+const wrap = (brandName?: string) => render(<SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}><ConnectAgent projectId="p1" brandName={brandName} /></SWRConfig>)
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('ConnectAgent', () => {
@@ -34,7 +34,8 @@ describe('ConnectAgent', () => {
     Object.assign(navigator, { clipboard: { writeText: write } })
     wrap()
     fireEvent.click(await screen.findByRole('button', { name: /create pairing code/i }))
-    fireEvent.click(await screen.findByRole('button', { name: /^copy$/i }))
+    await screen.findByText('ABCD2345')
+    fireEvent.click(screen.getAllByRole('button', { name: /^copy$/i })[0]) // pairing copy comes before the import card's
     await waitFor(() => expect(write).toHaveBeenCalledWith('Pair with AutoReview: ABCD2345'))
   })
 
@@ -89,5 +90,36 @@ describe('ConnectAgent', () => {
     await waitFor(() => expect(write).toHaveBeenCalledWith(expect.stringContaining('ara_test_0123456789')))
     fireEvent.click(screen.getByRole('button', { name: /^done$/i }))
     expect(screen.queryByText(/ara_test_0123456789/)).not.toBeInTheDocument()
+  })
+
+  describe('import card', () => {
+    it('is hidden with no active AI', async () => {
+      vi.spyOn(api, 'get').mockImplementation(async (p: string) => (p.endsWith('/agents') ? [] : { agents_may_approve: false }) as never)
+      wrap()
+      await screen.findByText(/no ai connected yet/i)
+      expect(screen.queryByText('Import past feedback')).not.toBeInTheDocument()
+    })
+
+    it('copies the brand-specific line for one brand and shows Copied', async () => {
+      mock()
+      const write = vi.fn().mockResolvedValue(undefined)
+      Object.assign(navigator, { clipboard: { writeText: write } })
+      wrap('Acme')
+      await screen.findByText('Import past feedback')
+      expect(screen.getByText('Your AI finds the feedback you already gave and turns it into rules.')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /^copy$/i }))
+      await waitFor(() => expect(write).toHaveBeenCalledWith('Import my past video feedback into AutoReview (brand: Acme).'))
+      expect(await screen.findByRole('button', { name: /copied/i })).toBeInTheDocument()
+    })
+
+    it('copies the generic line with several brands', async () => {
+      mock()
+      const write = vi.fn().mockResolvedValue(undefined)
+      Object.assign(navigator, { clipboard: { writeText: write } })
+      wrap()
+      await screen.findByText('Import past feedback')
+      fireEvent.click(screen.getByRole('button', { name: /^copy$/i }))
+      await waitFor(() => expect(write).toHaveBeenCalledWith('Import my past video feedback into AutoReview.'))
+    })
   })
 })
