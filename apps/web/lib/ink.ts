@@ -15,6 +15,12 @@ export interface InkMark {
   times?: number[]
 }
 
+/** Ink belongs to its frame: visible only while the playhead is within this many seconds of the moment it was drawn. */
+export const INK_FRAME_TOL = 0.25
+/** `time` undefined = the owner does not track the playhead (ungated). */
+export const inkOnFrame = (t: number | undefined, time: number | undefined): boolean =>
+  time === undefined || t === undefined || Math.abs(time - t) <= INK_FRAME_TOL
+
 export const clamp01 = (n: number) => Math.min(1, Math.max(0, n))
 export const normalizePoint = (r: { left: number; top: number; width: number; height: number }, x: number, y: number): [number, number] =>
   [clamp01((x - r.left) / r.width), clamp01((y - r.top) / r.height)]

@@ -141,12 +141,13 @@ export function FlowView(p: FlowViewProps) {
   const onNeedSave = React.useRef(p.onNeedSave)
   onNeedSave.current = p.onNeedSave
   const [playing, setPlaying] = React.useState(false)
+  const [time, setTime] = React.useState<number | undefined>(undefined)
   // Media events do not bubble, but they can be caught on the way down: follow whichever <video> the player mounts.
   React.useEffect(() => {
     const root = rootRef.current
     if (!root) return
-    const on = (e: Event) => { if (e.target instanceof HTMLVideoElement) setPlaying(!e.target.paused && !e.target.ended) }
-    const events = ['play', 'playing', 'pause', 'ended', 'seeking'] as const
+    const on = (e: Event) => { if (e.target instanceof HTMLVideoElement) { setPlaying(!e.target.paused && !e.target.ended); setTime(e.target.currentTime) } }
+    const events = ['play', 'playing', 'pause', 'ended', 'seeking', 'seeked', 'timeupdate'] as const
     events.forEach(ev => root.addEventListener(ev, on, true))
     return () => events.forEach(ev => root.removeEventListener(ev, on, true))
   }, [])
@@ -323,6 +324,7 @@ export function FlowView(p: FlowViewProps) {
           <InkLayer
             active={!!active}
             playing={playing}
+            time={time}
             onStart={p.onPause}
             replay={replay}
             onMark={(k, points, times) => { if (active) marks.current.push({ k, points, times, t: p.getPlayhead(), offset_ms: Date.now() - active.startedAt }) }}
@@ -340,7 +342,7 @@ export function FlowView(p: FlowViewProps) {
         <ul aria-label="Your notes" className="max-h-[30dvh] shrink-0 space-y-2 overflow-y-auto border-t border-border bg-bg-secondary px-3 py-2">
           {notes.filter(n => n.status !== 'recording').map(n => {
             const entry = ob.byId(n.id)
-            const replayAll = () => { p.onSeek(n.t); if (n.marks?.length) setReplay({ key: ++replayKey.current, marks: n.marks }) }
+            const replayAll = () => { p.onSeek(n.t); if (n.marks?.length) setReplay({ key: ++replayKey.current, at: n.t, marks: n.marks }) }
             return (
               <li key={n.id} data-testid="note-chip" data-state={entry?.status ?? n.status} className="flex items-start gap-2">
                 <button type="button" onClick={() => p.onSeek(n.t)} aria-label={`Go to ${timecode(n.t)}`} className="press min-h-11 shrink-0 rounded-lg bg-bg-tertiary px-2.5 font-mono text-xs tabular-nums text-text-primary">{timecode(n.t)}</button>
@@ -363,7 +365,7 @@ export function FlowView(p: FlowViewProps) {
                         <ul aria-label={`Drawings on the note at ${timecode(n.t)}`} className="mt-1 flex flex-wrap gap-1.5">
                           {n.marks.map((m, i) => (
                             <li key={i}>
-                              <button type="button" onClick={() => { p.onSeek(m.t); setReplay({ key: ++replayKey.current, marks: [m] }) }}
+                              <button type="button" onClick={() => { p.onSeek(m.t); setReplay({ key: ++replayKey.current, at: m.t, marks: [m] }) }}
                                 aria-label={`Drawing at ${stamp(m.t)}`}
                                 className="press inline-flex min-h-11 items-center gap-2 rounded-full border border-border py-1 pl-1.5 pr-3 font-mono text-xs tabular-nums text-text-secondary hover:bg-bg-hover">
                                 <InkThumb mark={m} />{stamp(m.t)}
