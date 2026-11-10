@@ -76,6 +76,10 @@ export function setupLine(program: AgentProgram, key: string): { label: string; 
   return { label: 'Own agent', text: `curl -H "Authorization: Bearer ${key}" -A "AutoReview-Agent/1.0" ${AGENT_MD_URL}` }
 }
 
+/** Tells a connected AI to dig up the reviewer's old feedback; the brand only when the workspace has one. */
+export const importPrompt = (brandName?: string) =>
+  `Import my past video feedback into AutoReview${brandName ? ` (brand: ${brandName})` : ''}.`
+
 export const createPairingCode = (projectId: string) =>
   api.post<PairingCode>(`/projects/${projectId}/agent-pairing-codes`)
 export const listAgents = (projectId: string) => api.get<ProjectAgent[]>(`/projects/${projectId}/agents`)

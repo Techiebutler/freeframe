@@ -6,7 +6,7 @@ import * as Switch from '@radix-ui/react-switch'
 import { Check, Copy, Loader2, Plus } from 'lucide-react'
 import { api } from '@/lib/api'
 import {
-  KEY_PROGRAMS, KIT_URL, MCP_URL, PROGRAM_LABEL, agentPrompt, countdown, createAgentKey, createPairingCode, kitInstruction,
+  KEY_PROGRAMS, KIT_URL, importPrompt, MCP_URL, PROGRAM_LABEL, agentPrompt, countdown, createAgentKey, createPairingCode, kitInstruction,
   listAgents, mcpAddCommand, pairInstruction, revokeAgent, setAgentsMayApprove, setupLine,
   type AgentKeyReply, type AgentProgram, type AgentScope, type PairingCode, type ProjectAgent,
 } from '@/lib/agents'
@@ -225,7 +225,7 @@ function AgentRow({ agent, onRevoke }: { agent: ProjectAgent; onRevoke: (a: Proj
   )
 }
 
-export function ConnectAgent({ projectId }: { projectId: string }) {
+export function ConnectAgent({ projectId, brandName }: { projectId: string; brandName?: string }) {
   const agentsKey = `/projects/${projectId}/agents`
   const { data: agents, error, mutate } = useSWR<ProjectAgent[]>(agentsKey, () => listAgents(projectId))
   const { data: project, mutate: mutateProject } = useSWR<{ agents_may_approve?: boolean }>(`/projects/${projectId}`, () => api.get<{ agents_may_approve?: boolean }>(`/projects/${projectId}`))
@@ -262,6 +262,14 @@ export function ConnectAgent({ projectId }: { projectId: string }) {
           : <ul className="mt-2 divide-y divide-border">{active.map(a => <AgentRow key={a.user_id} agent={a} onRevoke={revoke} />)}</ul>}
         {revokeError && <p role="alert" className="mt-2 text-sm text-status-error">{revokeError}</p>}
       </section>
+
+      {active.length > 0 && (
+        <section aria-labelledby="import-h" className="playbook-surface p-5 sm:p-6">
+          <h2 id="import-h" className="text-[1.0625rem] font-semibold tracking-tight text-text-primary">Import past feedback</h2>
+          <p className="mt-1 text-sm text-text-secondary">Your AI finds the feedback you already gave and turns it into rules.</p>
+          <div className="mt-3"><CopyButton text={importPrompt(brandName)} label="Copy" /></div>
+        </section>
+      )}
 
       <section className="playbook-surface p-5 sm:p-6">
         <div className="flex items-center justify-between gap-4">

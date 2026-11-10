@@ -51,7 +51,7 @@ function Agents() {
       ) : !projectId ? (
         <p className="playbook-surface mt-8 p-8 text-text-secondary">Only the workspace owner connects an AI.</p>
       ) : (
-        <div className="mt-8"><ConnectAgent key={projectId} projectId={projectId} /></div>
+        <div className="mt-8"><ConnectAgent key={projectId} projectId={projectId} brandName={brands.length === 1 ? brands[0].name : undefined} /></div>
       )}
     </div>
   )
