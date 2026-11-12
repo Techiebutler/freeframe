@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -30,8 +30,10 @@ class GuestCommentCreate(BaseModel):
     # "internal" is accepted only from a signed-in caller who can open the asset.
     visibility: CommentVisibility = CommentVisibility.public
     annotation: Optional[AnnotationData] = None
-    guest_email: Optional[str] = None  # Not needed if user is logged in
-    guest_name: Optional[str] = None
+    guest_email: Optional[EmailStr] = Field(
+        default=None, max_length=255
+    )  # Not needed if user is logged in
+    guest_name: Optional[str] = Field(default=None, max_length=255)
 
 class CommentUpdate(BaseModel):
     body: str
