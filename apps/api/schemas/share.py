@@ -29,7 +29,7 @@ class ShareLinkCreate(BaseModel):
     expires_at: Optional[datetime] = None
     password: Optional[str] = None
     allow_download: bool = False
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
     show_versions: bool = True
     show_watermark: bool = False
@@ -39,7 +39,7 @@ class ShareLinkCreate(BaseModel):
 class MultiShareCreate(BaseModel):
     asset_ids: list[uuid.UUID] = []
     folder_ids: list[uuid.UUID] = []
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=255)
     # Same default as ShareLinkCreate; see the note there. (#266)
     permission: SharePermission = SharePermission.comment
     visibility: str = "public"
@@ -119,7 +119,7 @@ class ShareVerifyRequest(BaseModel):
 
 
 class ShareLinkUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
     permission: Optional[SharePermission] = None
     visibility: Optional[str] = None

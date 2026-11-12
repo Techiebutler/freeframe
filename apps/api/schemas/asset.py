@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -57,7 +57,7 @@ class AssetResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 class AssetUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
     status: Optional[AssetStatus] = None
     rating: Optional[int] = None
