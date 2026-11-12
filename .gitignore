@@ -229,3 +229,6 @@ CLAUDE.md
 # Product route, not an upload scratch directory.
 !apps/web/app/\(dashboard\)/parts/
 !apps/web/app/\(dashboard\)/parts/page.tsx
+Thumbs.db
+*.pyc
+.env
