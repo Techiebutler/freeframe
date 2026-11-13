@@ -118,6 +118,18 @@ def test_get_settings_member(client, auth_headers, mock_db, test_user, monkeypat
     assert r.json() == {"storage_limit_bytes": 8000, "storage_used_bytes": 100}
 
 
+def test_get_settings_customer_sees_only_own_usage(client, auth_headers, mock_db, test_user, monkeypatch):
+    # Regression: a new customer showed the instance-wide total (497 GB) instead of its own.
+    test_user.is_superadmin = False
+    test_user.is_staff = False
+    mock_db.first.return_value = MagicMock(storage_limit_bytes=0)
+    monkeypatch.setattr(storage_service, "instance_storage_used_bytes", lambda db: 497_200_000_000)
+    monkeypatch.setattr(storage_service, "member_storage_used_bytes", lambda db, uid: 42)
+    r = client.get("/instance/settings", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["storage_used_bytes"] == 42
+
+
 def test_get_settings_no_row_is_read_only_and_unlimited(client, auth_headers, mock_db, test_user, monkeypatch):
     # No row exists yet — GET must NOT create one; it should default to unlimited (0).
     test_user.is_superadmin = False

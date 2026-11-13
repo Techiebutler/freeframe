@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus
 from ..models.instance_settings import InstanceSettings
+from ..models.project import ProjectMember
 from ..schemas.upload import _format_bytes, upload_size_error
 
 
@@ -42,6 +43,15 @@ def project_storage_used_bytes(db: Session, project_id) -> int:
     """Committed storage in bytes for a single project — same semantics as the instance-wide
     figure, so per-project and instance usage agree."""
     return _committed_media_sum(db).filter(Asset.project_id == project_id).scalar() or 0
+
+
+def member_storage_used_bytes(db: Session, user_id) -> int:
+    """Committed storage across only the projects `user_id` is a member of — what a customer
+    account may see instead of the instance-wide total (which spans every customer)."""
+    member_projects = db.query(ProjectMember.project_id).filter(
+        ProjectMember.user_id == user_id, ProjectMember.deleted_at.is_(None)
+    )
+    return _committed_media_sum(db).filter(Asset.project_id.in_(member_projects)).scalar() or 0
 
 
 def storage_cap_error(db: Session, incoming_bytes: int) -> str | None:

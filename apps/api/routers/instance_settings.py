@@ -11,6 +11,7 @@ from ..models.instance_settings import InstanceSettings
 from ..routers.users import require_admin
 from ..schemas.instance_settings import InstanceSettingsUpdate, InstanceSettingsResponse
 from ..services import storage as storage_service
+from ..services.permissions import implicit_project_role, is_staff
 
 router = APIRouter(tags=["instance_settings"])
 
@@ -52,9 +53,14 @@ def get_instance_settings(
     when no row exists yet — only PUT creates the singleton row.
     """
     row = db.query(InstanceSettings).first()
+    # A customer must not see the instance-wide total (every other customer's uploads).
+    if is_staff(current_user) or implicit_project_role(current_user):
+        used = storage_service.instance_storage_used_bytes(db)
+    else:
+        used = storage_service.member_storage_used_bytes(db, current_user.id)
     return InstanceSettingsResponse(
         storage_limit_bytes=row.storage_limit_bytes if row else 0,
-        storage_used_bytes=storage_service.instance_storage_used_bytes(db),
+        storage_used_bytes=used,
     )
 
 
