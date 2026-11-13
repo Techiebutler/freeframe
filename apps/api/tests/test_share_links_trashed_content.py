@@ -175,7 +175,7 @@ def _share_calls(token, asset_id, listing):
         ("GET", f"/share/{token}/assets/{asset_id}/versions", None),
         ("GET", f"/share/{token}/comments?asset_id={asset_id}", None),
         ("POST", f"/share/{token}/comment",
-         {"asset_id": str(asset_id), "body": "hello", "guest_email": "g@t.local", "guest_name": "G"}),
+         {"asset_id": str(asset_id), "body": "hello", "guest_email": "g@example.com", "guest_name": "G"}),
     ]
     if listing:
         calls.append(("GET", f"/share/{token}/assets", None))
