@@ -4,7 +4,7 @@ These are only available when no superadmin exists in the system.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..database import get_db
 from ..models.user import User, UserStatus
@@ -22,7 +22,7 @@ class SetupStatusResponse(BaseModel):
 
 class CreateSuperAdminRequest(BaseModel):
     email: NewUserEmail
-    name: str
+    name: str = Field(max_length=255)
     password: NewPassword
 
 

@@ -129,8 +129,8 @@ def mime_to_asset_type(mime_type: str) -> AssetType:
 
 class InitiateUploadRequest(BaseModel):
     project_id: uuid.UUID
-    asset_name: str
-    original_filename: str
+    asset_name: str = Field(max_length=255)
+    original_filename: str = Field(max_length=500)
     mime_type: str
     # gt=0 because a zero or negative value otherwise reaches upload_guard_error
     # and the client's ceil(size / chunk) arithmetic, where it produces a part

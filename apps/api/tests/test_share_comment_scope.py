@@ -73,7 +73,7 @@ def _post(real_db, link, **body):
     body.setdefault("body", "a guest note")
     return comments_module.guest_comment(
         link.token,
-        GuestCommentCreate(guest_email="guest@t.local", guest_name="Guest", **body),
+        GuestCommentCreate(guest_email="guest@example.com", guest_name="Guest", **body),
         share_session=None, db=real_db, current_user=None,
     )
 
@@ -262,7 +262,7 @@ def test_an_internal_comment_from_an_anonymous_guest_is_refused(real_db, seed):
     assert exc.value.detail == "Internal comments require access to the asset"
     assert _comments_with_body(real_db, "guest internal") == []
     # Refused before the guest identity is written, too.
-    assert real_db.query(GuestUser).filter(GuestUser.email == "guest@t.local").count() == 0
+    assert real_db.query(GuestUser).filter(GuestUser.email == "guest@example.com").count() == 0
 
 
 def test_an_internal_comment_from_a_signed_in_user_without_access_is_refused(real_db, seed):
