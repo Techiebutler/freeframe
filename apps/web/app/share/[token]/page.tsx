@@ -28,6 +28,7 @@ import { FlowView } from '@/components/review/flow-view'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
+import { sendToParent } from '@/lib/embed-bridge'
 import { guestDictate, shareFeedbackDone, undoApproveSharedAsset } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
@@ -871,6 +872,8 @@ interface ShareViewerProps {
   branding: ProjectBranding | null
   shareName?: string
   onBack?: () => void
+  /** ?embed=1: video-only page inside the Desk's iframe, reports to the parent window. */
+  embed?: boolean
 }
 
 function ShareViewer({
@@ -881,6 +884,7 @@ function ShareViewer({
   branding,
   shareName,
   onBack,
+  embed,
 }: ShareViewerProps) {
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
@@ -936,7 +940,7 @@ function ShareViewer({
   const displayName = shareName || branding?.custom_title || 'FreeFrame'
 
   const canComment = permission === 'comment' || permission === 'approve'
-  const flow = (isNarrow || phoneView) && asset.asset_type === 'video'
+  const flow = (embed || isNarrow || phoneView) && asset.asset_type === 'video'
   const flowVideo = () => videoRef.current
   const flowApprove = async () => {
     const res = await fetch(`${API_URL}/share/${token}/approve`, {
@@ -944,6 +948,58 @@ function ShareViewer({
     })
     if (!res.ok) throw new Error('Failed to approve')
     setFlowApproved(true)
+    if (embed) sendToParent({ type: 'ar:approved' })
+  }
+
+  // Embed: tell the parent what the video does. The element mounts after the stream URL arrives, so rebind then.
+  React.useEffect(() => {
+    const v = videoRef.current
+    if (!embed || !v) return
+    const ready = () => { if (v.videoWidth) sendToParent({ type: 'ar:ready', width: v.videoWidth, height: v.videoHeight, duration: v.duration }) }
+    const on = (type: 'ar:play' | 'ar:pause' | 'ar:ended') => () => sendToParent({ type })
+    const handlers: [string, () => void][] = [['loadedmetadata', ready], ['play', on('ar:play')], ['pause', on('ar:pause')], ['ended', on('ar:ended')]]
+    handlers.forEach(([e, h]) => v.addEventListener(e, h))
+    ready()
+    return () => handlers.forEach(([e, h]) => v.removeEventListener(e, h))
+  }, [embed, streamUrl, streamLoading])
+
+  if (flow && embed) {
+    return (
+      <div className="absolute inset-0 overflow-hidden bg-black text-white">
+        <FlowView
+          embed
+          renderMedia={(ink) => (
+            <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} />
+          )}
+          files={[{ id: asset.id, name: asset.name }]}
+          currentFileId={asset.id}
+          onSelectFile={() => {}}
+          getPlayhead={() => flowVideo()?.currentTime ?? 0}
+          onPause={() => flowVideo()?.pause()}
+          onSeek={(t) => { const v = flowVideo(); if (v) { v.currentTime = t; v.pause() } }}
+          canComment={canComment}
+          canApprove={permission === 'approve'}
+          notePayload={(n) => ({ kind: 'share', token, assetId: asset.id, identity, ...n })}
+          canSave={!!identity}
+          onNeedSave={() => setAskIdentity(true)}
+          onApprove={flowApprove}
+          onSent={() => { shareFeedbackDone(token, asset.id); sendToParent({ type: 'ar:sent' }) }}
+          onNoteSaved={(t) => sendToParent({ type: 'ar:comment', t })}
+          onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id); setFlowApproved(false) }}
+          sessionKey={token}
+          approved={flowApproved}
+          dictate={(audio) => guestDictate(token, audio)}
+        />
+        {askIdentity && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center">
+            <div className="w-full max-w-sm overflow-hidden rounded-t-2xl bg-bg-primary sm:rounded-2xl" role="dialog" aria-label="Who are you?">
+              <IdentityForm onIdentified={(id) => { setIdentity(id); setAskIdentity(false) }} />
+              <p className="px-4 pb-4 text-xs text-text-tertiary">Your notes are kept and saved as soon as you continue.</p>
+            </div>
+          </div>
+        )}
+      </div>
+    )
   }
 
   if (flow) {
@@ -1057,6 +1113,8 @@ export default function SharePage({
   params: { token: string }
 }) {
   const { token } = params
+  // Only mounted after the client-side validate() below, so reading the URL here never hits SSR.
+  const embed = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('embed') === '1'
 
   type PageState =
     | { stage: 'loading' }
@@ -1249,6 +1307,7 @@ export default function SharePage({
       permission={state.permission}
       allowDownload={state.allowDownload}
       branding={state.branding}
+      embed={embed}
     />
   )
 }

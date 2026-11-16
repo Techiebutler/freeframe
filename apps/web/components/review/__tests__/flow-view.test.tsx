@@ -40,6 +40,26 @@ const record = async () => {
   fireEvent.click(await screen.findByRole('button', { name: /stop/i }))
 }
 
+describe('FlowView embed', () => {
+  it('renders the video with Comment and Approve only: no files bar, no notes list, no column', () => {
+    setup({ embed: true })
+    expect(screen.getByTestId('flow-view')).toHaveAttribute('data-layout', 'embed')
+    expect(screen.getByTestId('media')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /comment/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: /files/i })).toBeNull()
+    expect(screen.queryByLabelText('Feedback')).toBeNull()
+    expect(screen.queryByLabelText('Your notes')).toBeNull()
+  })
+  it('announces a note once it is saved, with its time', async () => {
+    const onNoteSaved = vi.fn()
+    setup({ embed: true, onNoteSaved })
+    await record()
+    await waitFor(() => expect(onNoteSaved).toHaveBeenCalledWith(3.2))
+    expect(onNoteSaved).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('FlowView', () => {
   it('keeps the phone Comment label whole: the button never shrinks below its label and the finish button yields', () => {
     setup({ finishLabel: 'An den Agenten senden' })
