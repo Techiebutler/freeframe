@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
-import { FlowView, type FlowViewProps } from '../flow-view'
+import { FlowView, tabLabels, type FlowViewProps } from '../flow-view'
 import { createOutbox, memoryStore } from '@/lib/outbox'
 import { resetSession } from '@/lib/flow-session'
 import { beforeEach } from 'vitest'
@@ -469,5 +469,16 @@ describe('FlowView', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent(/could not approve/i)
       expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
     })
+  })
+})
+
+describe('tabLabels', () => {
+  it('names the iteration, not the shared concept (Alan 2026-11-16)', () => {
+    expect(tabLabels(['Black Friday UGC 3 – Hook 5', 'Black Friday UGC 3 – Hook 1'])).toEqual(['Hook 5', 'Hook 1'])
+  })
+  it('keeps whole words and leaves unrelated or single names alone', () => {
+    expect(tabLabels(['Hook 10', 'Hook 1'])).toEqual(['Hook 10', 'Hook 1'])
+    expect(tabLabels(['Intro', 'Outro'])).toEqual(['Intro', 'Outro'])
+    expect(tabLabels(['Only file'])).toEqual(['Only file'])
   })
 })

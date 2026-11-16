@@ -113,6 +113,14 @@ function InkThumb({ mark }: { mark: InkMark }) {
   )
 }
 
+/** A tab names what differs between the files ("Hook 3"), not the concept they share; the full name stays as the tooltip. */
+export function tabLabels(names: string[]): string[] {
+  if (names.length < 2) return names
+  const shared = names.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i) })
+  const cut = Math.max(...[' - ', ' – ', ' — ', ': ', ' | '].map(sep => { const i = shared.lastIndexOf(sep); return i < 0 ? -1 : i + sep.length })) // only at a separator, never mid-word
+  return cut < 0 ? names : names.map(x => x.slice(cut).trim() || x)
+}
+
 export function dictationMessage(e: unknown): string {
   const detail = (e as { detail?: string })?.detail
   return detail === 'dictation_unavailable' ? 'Dictation is not set up. Type your note instead.' : 'Could not transcribe. Try again or type it.'
@@ -330,11 +338,11 @@ export function FlowView(p: FlowViewProps) {
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-secondary pl-2">
         <nav aria-label="Files in this briefing" className="min-w-0 flex-1">
           <ul className="flex gap-1 overflow-x-auto py-1">
-            {p.files.map(f => (
+            {p.files.map((f, i, all) => (
               <li key={f.id} className="shrink-0">
                 <button type="button" onClick={() => f.id !== p.currentFileId && p.onSelectFile(f.id)} aria-current={f.id === p.currentFileId ? 'true' : undefined}
-                  className={cn('press min-h-11 max-w-[160px] truncate rounded-full px-4 text-sm font-medium', f.id === p.currentFileId ? 'bg-bg-hover text-text-primary ring-1 ring-text-tertiary' : 'text-text-secondary hover:bg-bg-hover')}>
-                  {f.name}
+                  title={f.name} className={cn('press min-h-11 max-w-[160px] truncate rounded-full px-4 text-sm font-medium', f.id === p.currentFileId ? 'bg-bg-hover text-text-primary ring-1 ring-text-tertiary' : 'text-text-secondary hover:bg-bg-hover')}>
+                  {tabLabels(all.map(x => x.name))[i]}
                 </button>
               </li>
             ))}
