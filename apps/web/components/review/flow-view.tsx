@@ -55,6 +55,8 @@ export interface FlowViewProps {
   canApprove?: boolean
   onExit?: () => void
   exitLabel?: string
+  /** Left of the file tabs: the caller's way out (back to the folder) and download. */
+  lead?: React.ReactNode
   dictate?: (audio: Blob) => Promise<DictationResult>
   startRecording?: StartRecording
   /** Desktop: video left, notes in a right-hand column, talk/type bar under the video (Flask). */
@@ -336,6 +338,7 @@ export function FlowView(p: FlowViewProps) {
     <>
       {/* The briefing's files */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-secondary pl-2">
+        {p.lead}
         <nav aria-label="Files in this briefing" className="min-w-0 flex-1">
           <ul className="flex gap-1 overflow-x-auto py-1">
             {p.files.map((f, i, all) => (

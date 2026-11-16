@@ -857,6 +857,11 @@ function ShareReviewInner({
               onExit={isNarrow ? onBack : () => setPhoneView(false)}
               exitLabel={isNarrow ? 'Files' : 'Classic comments'}
               wide={!isNarrow}
+              lead={isNarrow ? undefined : <>
+                <button type="button" onClick={onBack} className="press inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary"><ArrowLeft className="h-4 w-4" aria-hidden="true" />All files</button>
+                {allowDownload && <button type="button" onClick={() => handleDownload(token, asset.id, shareSession)} aria-label="Download" title="Download this file" className="press grid h-11 w-11 shrink-0 place-items-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary"><Download className="h-4 w-4" /></button>}
+                <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-border" />
+              </>}
             />
           </div>
         </div>
