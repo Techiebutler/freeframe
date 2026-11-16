@@ -353,6 +353,14 @@ export function VideoPlayer({
   }, [currentTime, setPlayheadTime]);
 
   // Keyboard shortcuts
+  //
+  // The arrow keys read the time through a ref, not from the effect's scope:
+  // the display now updates once per presented frame, and `currentTime` in
+  // the dependency list rebound the window listener on every one of them.
+  const currentTimeRef = useRef(currentTime);
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -375,11 +383,11 @@ export function VideoPlayer({
           break;
         case "ArrowLeft":
           e.preventDefault();
-          seek(currentTime - 5);
+          seek(currentTimeRef.current - 5);
           break;
         case "ArrowRight":
           e.preventDefault();
-          seek(currentTime + 5);
+          seek(currentTimeRef.current + 5);
           break;
         case "KeyJ":
           if (shuttleKey) {
@@ -400,7 +408,7 @@ export function VideoPlayer({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, shuttleForward, shuttleReverse, setActiveAnnotation, seek, currentTime, isDrawingMode]);
+  }, [togglePlay, shuttleForward, shuttleReverse, setActiveAnnotation, seek, isDrawingMode]);
 
   const handleContainerClick = useCallback(() => {
     if (swallowStageClickRef.current) {
