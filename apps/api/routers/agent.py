@@ -18,7 +18,7 @@ from ..models.approval import ApprovalStatus
 from ..models.asset import Asset, AssetVersion
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.upload_request import UploadRequest
-from ..services import agent_queue, feedback_rounds, review_bridge
+from ..services import agent_queue, deliveries, feedback_rounds, review_bridge
 from ..services.agents import AgentContext
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -94,16 +94,19 @@ def suggest_rule(body: RuleSuggestion, agent: AgentContext = Depends(get_agent),
 
 @router.get("/feedback")
 def feedback(cursor: str = "", agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
-    """Closed, unacknowledged rounds after `cursor` (an ISO timestamp, or empty), oldest first."""
+    """Closed, unacknowledged rounds and settled approvals (a delivery each) after `cursor` (an ISO timestamp, or empty), oldest first."""
     try:
         after = datetime.fromisoformat(cursor) if cursor else None
     except ValueError:
         raise HTTPException(422, "invalid_cursor")
     if after is not None and after.tzinfo is None:
         after = after.replace(tzinfo=timezone.utc)
-    rows = feedback_rounds.agent_rounds(db, agent.user, _project(db, agent).id, after)
-    return {"rounds": [feedback_rounds.feedback_v1(db, r) for r in rows],
-            "next_cursor": rows[-1].closed_at.isoformat() if rows else (cursor or None)}
+    project_id = _project(db, agent).id
+    rows = feedback_rounds.agent_rounds(db, agent.user, project_id, after)
+    approved = deliveries.agent_events(db, agent.user, project_id, after, datetime.now(timezone.utc))
+    stamps = [r.closed_at for r in rows] + [deliveries.event_at(d) for d in approved]
+    return {"rounds": [feedback_rounds.feedback_v1(db, r) for r in rows], "approvals": [deliveries.event(d) for d in approved],
+            "next_cursor": max(stamps).isoformat() if stamps else (cursor or None)}
 
 
 @router.post("/feedback/{round_id}/ack", status_code=status.HTTP_204_NO_CONTENT)

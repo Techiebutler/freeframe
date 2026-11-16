@@ -207,7 +207,7 @@ def test_close_collects_rule_suggestions_and_accept_forwards_to_the_rules_import
 def test_agent_polls_with_cursor_and_acks_idempotently(scene):
     e = scene
     agent = e.scene.agent
-    assert e.client.get("/agent/feedback", headers=agent.headers).json() == {"rounds": [], "next_cursor": None}
+    assert e.client.get("/agent/feedback", headers=agent.headers).json() == {"rounds": [], "approvals": [], "next_cursor": None}
     comment(e, e.scene.asset)
     assert e.client.get("/agent/feedback", headers=agent.headers).json()["rounds"] == []  # still open
     e.client.post(f"/requests/{e.scene.req.id}/feedback-rounds/close", json={}, headers=e.headers(e.owner))

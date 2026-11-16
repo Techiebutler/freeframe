@@ -29,7 +29,7 @@ import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
 import { sendToParent } from '@/lib/embed-bridge'
-import { guestDictate, shareFeedbackDone, undoApproveSharedAsset } from '@/lib/share-flow'
+import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
 
@@ -943,12 +943,10 @@ function ShareViewer({
   const flow = (embed || isNarrow || phoneView) && asset.asset_type === 'video'
   const flowVideo = () => videoRef.current
   const flowApprove = async () => {
-    const res = await fetch(`${API_URL}/share/${token}/approve`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: asset.id }),
-    })
-    if (!res.ok) throw new Error('Failed to approve')
+    const made = await approveSharedAsset(token, asset.id)
     setFlowApproved(true)
     if (embed) sendToParent({ type: 'ar:approved' })
+    return made
   }
 
   // Embed: tell the parent what the video does. The element mounts after the stream URL arrives, so rebind then.

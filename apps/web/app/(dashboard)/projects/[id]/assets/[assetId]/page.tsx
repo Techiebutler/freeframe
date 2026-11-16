@@ -22,6 +22,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
 import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
+import { deliveryOf } from '@/lib/delivery'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { canCompare } from '@/lib/compare-time'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
@@ -213,8 +214,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   // Flow view: approve stays on this file for 5 s (Undo), then the view itself moves on
   const approveOnly = async () => {
     if (!asset || !currentVersion || approved) return
-    await api.post(`/assets/${asset.id}/approve`, { version_id: currentVersion.id })
+    const res = await api.post(`/assets/${asset.id}/approve`, { version_id: currentVersion.id })
     await mutateApprovals()
+    return deliveryOf(res)
   }
   const undoApprove = async () => {
     if (!asset || !currentVersion) return

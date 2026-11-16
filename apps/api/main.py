@@ -102,6 +102,8 @@ from .routers import mobile
 app.include_router(mobile.router)
 from .routers import share_approval
 app.include_router(share_approval.router)
+from .routers import deliveries as deliveries_api
+app.include_router(deliveries_api.router)
 
 @app.get("/health")
 def health():

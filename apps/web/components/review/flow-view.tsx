@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Clock, Loader2, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
+import { Check, Clock, Link2, Loader2, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
@@ -11,6 +11,8 @@ import { getNoteOutbox, useNoteOutbox, type NoteBody, type NotePayload } from '@
 import { imagesFrom, IMAGE_TYPES, pickImages } from '@/lib/comment-images'
 import type { Outbox } from '@/lib/outbox'
 import { doneLine, markApproved, markFeedback, sentLine, sessionSummary, unmarkApproved } from '@/lib/flow-session'
+import { Confetti } from './confetti'
+import { markHandedOn, type DeliveryRef } from '@/lib/delivery'
 import { InkLayer, type InkReplay } from './ink-layer'
 import { LevelMeter } from './level-meter'
 import { trackVideo, videoTimeAt, type TimelinePoint } from '@/lib/rec-timeline'
@@ -39,7 +41,8 @@ export interface FlowViewProps {
   /** Notes sent (share links): tells the server the round is done, so a waiting agent starts now. */
   onSent?: () => void
   finishLabel?: string
-  onApprove: () => Promise<void> | void
+  /** May hand back the delivery page the approval created: Approve then bursts confetti and offers one main action, Copy share link. */
+  onApprove: () => Promise<DeliveryRef | null | void> | DeliveryRef | null | void
   /** Takes the approval back (offered for 5 s after approving). Without it Approve is final and moves on quickly. */
   onUndoApprove?: () => Promise<void>
   /** Another file waits after this one; onNext opens it. */
@@ -135,6 +138,8 @@ export function FlowView(p: FlowViewProps) {
   const sKey = p.sessionKey ?? 'flow'
   const [toast, setToast] = React.useState<{ secs: number } | null>(null)
   const [moment, setMoment] = React.useState<{ title: string; sub?: string } | null>(null)
+  const [delivery, setDelivery] = React.useState<DeliveryRef | null>(null)
+  const [burst, setBurst] = React.useState(0)
   const advanceRef = React.useRef<() => void>(() => {})
   const box = React.useMemo(() => p.outbox ?? getNoteOutbox(), [p.outbox])
   const ob = useNoteOutbox(box)
@@ -249,17 +254,18 @@ export function FlowView(p: FlowViewProps) {
   // After Approve: "Approved" with 5 s to undo, then on to the next file (or the closing moment).
   React.useEffect(() => {
     if (!toast) return
-    if (toast.secs <= 0) { setToast(null); advanceRef.current(); return }
+    if (toast.secs <= 0) { setToast(null); if (delivery) setMoment({ title: 'Approved' }); else advanceRef.current(); return }
     const id = setTimeout(() => setToast({ secs: toast.secs - 1 }), 1000)
     return () => clearTimeout(id)
-  }, [toast])
+  }, [toast, delivery])
 
   const finish = async () => {
     setSending(true); setError('')
     try {
       if (!hasNotes) {
-        await p.onApprove()
+        const made = await p.onApprove()
         markApproved(sKey, p.currentFileId)
+        if (made) { setDelivery(made); setBurst(n => n + 1) }
         setToast({ secs: p.onUndoApprove ? 5 : 1 })
         return
       }
@@ -273,9 +279,21 @@ export function FlowView(p: FlowViewProps) {
   }
   const undo = async () => {
     setToast(null); setError('')
-    try { await p.onUndoApprove?.(); unmarkApproved(sKey, p.currentFileId) }
+    try { await p.onUndoApprove?.(); unmarkApproved(sKey, p.currentFileId); setDelivery(null) }
     catch { setError('Could not undo. The file is still approved.') }
   }
+
+  // Copying the link is what hands the work on (the request moves to Delivered); until then an Undo still means no delivery.
+  const copyLink = async () => {
+    if (!delivery) return
+    try { await navigator.clipboard.writeText(delivery.share_url) } catch { setError(`Could not copy. Share this link: ${delivery.share_url}`); return }
+    setError(''); setToast(null); setMoment({ title: 'Link copied' })
+    void markHandedOn(delivery.token)
+    setDelivery(null)
+  }
+  const copyButton = delivery && (
+    <button type="button" onClick={copyLink} className="flow-comment inline-flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-sm font-semibold text-text-inverse"><Link2 size={16} aria-hidden="true" />Copy share link</button>
+  )
 
   const canApprove = p.canApprove ?? true
   const sendLabel = hasNotes ? (p.finishLabel ?? (p.onFinishRound ? 'Send to agent' : 'Done')) : !canApprove ? 'Send' : p.approved ? 'Approved ✓' : 'Approve'
@@ -296,7 +314,10 @@ export function FlowView(p: FlowViewProps) {
           <span className="grid h-16 w-16 place-items-center rounded-full bg-status-success/15 text-status-success"><Check size={32} aria-hidden="true" /></span>
           <p className="text-xl font-semibold leading-tight text-text-primary">{moment.title}</p>
           {moment.sub && <p className="text-sm text-text-secondary">{moment.sub}</p>}
-          {p.hasNext && p.onNext
+          {delivery && <button type="button" onClick={copyLink} className="flow-comment inline-flex h-14 items-center justify-center gap-2 rounded-full px-8 text-base font-semibold text-text-inverse"><Link2 size={18} aria-hidden="true" />Copy share link</button>}
+          {delivery
+            ? <button type="button" onClick={() => { setMoment(null); setDelivery(null); advanceRef.current() }} className="press inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm font-semibold text-text-secondary hover:bg-bg-hover">Skip</button>
+          : p.hasNext && p.onNext
             ? <button type="button" onClick={() => { setMoment(null); p.onNext!() }} className="flow-comment inline-flex h-14 items-center justify-center rounded-full px-8 text-base font-semibold text-text-inverse">Next file</button>
             : <button type="button" onClick={() => setMoment(null)} className="press inline-flex h-14 items-center justify-center rounded-full border border-border px-8 text-base font-semibold text-text-primary hover:bg-bg-hover">Close</button>}
         </div>
@@ -418,6 +439,7 @@ export function FlowView(p: FlowViewProps) {
       {toast && (
         <div role="status" className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-bg-secondary pl-4 pr-1">
           <p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>
+          {copyButton}
           {p.onUndoApprove && <button type="button" onClick={undo} className="press min-h-11 rounded-full px-4 text-sm font-semibold text-text-primary hover:bg-bg-hover">Undo ({toast.secs} s)</button>}
         </div>
       )}
@@ -442,6 +464,7 @@ export function FlowView(p: FlowViewProps) {
   if (p.embed) return (
     <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-black" data-testid="flow-view" data-layout="embed">
       {doneMoment}
+      <Confetti burst={burst} />
       {mediaArea}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex flex-col gap-1 bg-gradient-to-b from-black/60 to-transparent p-2">
         {p.canComment && (
@@ -464,7 +487,7 @@ export function FlowView(p: FlowViewProps) {
         ))}
         {error && <p role="alert" className="rounded-lg bg-black/70 px-3 py-2 text-sm text-status-error">{error}</p>}
         {ob.summary.failed > 0 && <button type="button" onClick={() => ob.entries.filter(e => e.status === 'failed').forEach(e => ob.retry(e.id))} className="press pointer-events-auto inline-flex min-h-11 items-center gap-1 self-start rounded-full bg-black/70 px-3 text-xs font-semibold text-white"><RotateCcw size={12} />Retry sending notes</button>}
-        {toast && <p role="status" className="flex items-center gap-2 rounded-lg bg-black/70 px-3 py-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>}
+        {toast && <div role="status" className="pointer-events-auto flex items-center justify-between gap-2 rounded-lg bg-black/70 py-1 pl-3 pr-1"><p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>{copyButton}</div>}
       </div>
     </div>
   )
@@ -473,6 +496,7 @@ export function FlowView(p: FlowViewProps) {
   if (p.wide) return (
     <div ref={rootRef} className="relative flex h-full min-h-0 bg-bg-primary" data-testid="flow-view" data-layout="wide">
       {doneMoment}
+      <Confetti burst={burst} />
       <div className="flex min-w-0 flex-1 flex-col">
         {filesBar}
         {mediaArea}
@@ -532,6 +556,7 @@ export function FlowView(p: FlowViewProps) {
   return (
     <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-bg-primary" style={{ paddingTop: 'env(safe-area-inset-top)' }} data-testid="flow-view">
       {doneMoment}
+      <Confetti burst={burst} />
       {filesBar}
       {mediaArea}
       {notesList}

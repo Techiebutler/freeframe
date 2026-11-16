@@ -1,4 +1,5 @@
 import type { DictationResult } from './agents'
+import { deliveryOf, type DeliveryRef } from './delivery'
 
 const API_URL = () => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -54,7 +55,7 @@ export async function approveSharedAsset(
   token: string,
   assetId: string,
   opts: { identity?: GuestIdentity | null; shareSession?: string | null; versionId?: string; headers?: Record<string, string> } = {},
-): Promise<void> {
+): Promise<DeliveryRef | null> {
   const body: Record<string, unknown> = {}
   if (opts.versionId) body.version_id = opts.versionId
   if (opts.identity) { body.guest_name = opts.identity.name; body.guest_email = opts.identity.email }
@@ -64,6 +65,7 @@ export async function approveSharedAsset(
     body: JSON.stringify(body),
   })
   if (!res.ok) await fail(res, 'Failed to approve')
+  return deliveryOf(await res.json().catch(() => null))
 }
 
 /** The file tab after `currentId`, or null at the end of the briefing. */

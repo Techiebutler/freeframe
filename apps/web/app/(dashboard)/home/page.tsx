@@ -32,7 +32,7 @@ export default function HomePage() {
   })
   const { data: saved, error: savedError } = useSWR('/insights/time-saved?30', () => getTimeSaved(30), { shouldRetryOnError: false })
   const { data: performance, error: editorError, mutate: refreshEditors } = useSWR('/insights/editors', getEditors, { refreshInterval: 30000, shouldRetryOnError: false })
-  const live = (requests || []).filter(r => r.state === 'live')
+  const live = (requests || []).filter(r => r.state === 'live' && !r.delivered_at)
   const ready = live.filter(r => r.assets > 0 && r.status === 'clear')
   const filtered = (filter === 'Ready' ? ready : requests || [])
     .filter(r => `${r.title} ${r.project_name} ${r.last_uploader_name || ''}`.toLowerCase().includes(query.toLowerCase().trim()))

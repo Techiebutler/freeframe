@@ -15,6 +15,7 @@ const STAGES = [
 type Stage = typeof STAGES[number]['id']
 
 function stageOf(r: FileRequest): Stage | 'closed' {
+  if (r.delivered_at) return 'closed'
   if (r.state !== 'live') return 'closed'
   if (r.review_phase === 'self_review') return 'review'
   if (r.review_phase === 'agent_stuck') return 'corrections'
@@ -40,7 +41,9 @@ export function ProjectKanban({ requests, paused, onShare, onDone, focusReady = 
   const positions = React.useRef(new Map<string, Position>())
   const animations = React.useRef<Animation[]>([])
   const [announcement, setAnnouncement] = React.useState('')
-  const closed = requests.filter(r => r.state !== 'live')
+  const closed = requests.filter(r => r.state !== 'live' && !r.delivered_at)
+  // Approved and handed on (share link copied): off the board, still one tap away.
+  const delivered = requests.filter(r => !!r.delivered_at)
   // Done is a small celebration: the cards glow, burst and lift away, then leave the board
   const [leaving, setLeaving] = React.useState<Map<string, number>>(new Map())
   const finish = (items: FileRequest[]) => {
@@ -102,6 +105,10 @@ export function ProjectKanban({ requests, paused, onShare, onDone, focusReady = 
       })}
     </div>
     <p className="mt-3 text-sm text-text-secondary">Ready to go means the current videos passed review with no required changes. Brand approval is a separate decision in FreeFrame.</p>
+    {!!delivered.length && <details className="mt-4 rounded-2xl border border-border px-4">
+      <summary className="min-h-11 cursor-pointer py-3 text-[0.8125rem] text-text-secondary"><span>Delivered</span> <span className="kanban-done-count ml-1">{delivered.length}</span></summary>
+      <ul className="grid gap-3 pb-4 sm:grid-cols-2 lg:grid-cols-4">{delivered.map(r => <ProjectCard key={r.id} request={r} stage="closed" onShare={() => onShare(r)} />)}</ul>
+    </details>}
     {!!closed.length && <details className="mt-4 rounded-2xl border border-border px-4">
       <summary className="min-h-11 cursor-pointer py-3 text-[0.8125rem] text-text-secondary"><span>Done</span> <span key={closed.length} className="kanban-done-count ml-1">{closed.length}</span></summary>
       <ul className="grid gap-3 pb-4 sm:grid-cols-2 lg:grid-cols-4">{closed.map(r => <ProjectCard key={r.id} request={r} stage="closed" onShare={() => onShare(r)} />)}</ul>
@@ -116,7 +123,7 @@ const DONE_MS = 700
 const STAGGER_MS = 70
 
 function ProjectCard({ request: r, stage, onShare, onDone, leaving }: { request: FileRequest; stage: Stage | 'closed'; onShare: () => void; onDone?: () => void; leaving?: number }) {
-  const label = r.state === 'live' && r.review_phase === 'self_review' ? `Self-review · ${r.last_uploader_name || 'agent'}` : r.state === 'live' && r.review_phase === 'agent_stuck' ? 'Agent stuck · needs you' : r.status === 'unavailable' ? 'Review unavailable' : stage === 'editor' ? 'Waiting for files' : stage === 'review' ? 'Reviewing files' : stage === 'corrections' ? r.open_must_fixes > 0 ? `${r.open_must_fixes} ${r.open_must_fixes === 1 ? 'fix' : 'fixes'} to make` : 'With editor for updates' : stage === 'ready' ? 'Ready to go' : r.state === 'revoked' ? 'Closed' : 'Expired'
+  const label = r.delivered_at ? 'Delivered' : r.state === 'live' && r.review_phase === 'self_review' ? `Self-review · ${r.last_uploader_name || 'agent'}` : r.state === 'live' && r.review_phase === 'agent_stuck' ? 'Agent stuck · needs you' : r.status === 'unavailable' ? 'Review unavailable' : stage === 'editor' ? 'Waiting for files' : stage === 'review' ? 'Reviewing files' : stage === 'corrections' ? r.open_must_fixes > 0 ? `${r.open_must_fixes} ${r.open_must_fixes === 1 ? 'fix' : 'fixes'} to make` : 'With editor for updates' : stage === 'ready' ? 'Ready to go' : r.state === 'revoked' ? 'Closed' : 'Expired'
   return <li className="kanban-card" data-request-id={r.id} data-stage={stage} data-leaving={leaving !== undefined || undefined} style={leaving !== undefined ? { '--i': leaving } as React.CSSProperties : undefined}>
     <div className="flex items-start justify-between gap-2">
       <div className="kanban-art" aria-hidden="true"><FolderArt size={36} label="" />{stage === 'review' && <span className="kanban-scan" />}{stage === 'corrections' && <PencilLine className="kanban-pencil" size={19} />}{stage === 'ready' && <span className="kanban-check"><CheckCheck size={13} /></span>}</div>

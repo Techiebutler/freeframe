@@ -373,6 +373,59 @@ describe('FlowView', () => {
       expect(screen.queryByText('Approved')).toBeNull()
     })
 
+    describe('delivery', () => {
+      const made = { token: 'tok', share_url: 'https://feedback.test/d/tok' }
+      const copy = vi.fn().mockResolvedValue(undefined)
+      beforeEach(() => {
+        copy.mockClear()
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: copy }, configurable: true })
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+        vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }))
+      })
+      afterEach(() => vi.unstubAllGlobals())
+
+      it('Approve bursts confetti and offers Copy share link; copying hands the delivery on', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        setup({ onApprove: vi.fn().mockResolvedValue(made), onUndoApprove: vi.fn().mockResolvedValue(undefined) })
+        await approve()
+        expect(screen.getByTestId('confetti')).toBeInTheDocument()
+        fireEvent.click(screen.getByRole('button', { name: 'Copy share link' }))
+        await vi.advanceTimersByTimeAsync(10)
+        expect(copy).toHaveBeenCalledWith(made.share_url)
+        expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/deliveries/tok/handed-on'), { method: 'POST' })
+        expect(await screen.findByText('Link copied')).toBeInTheDocument()
+        await vi.advanceTimersByTimeAsync(1500)
+        expect(screen.queryByTestId('confetti')).toBeNull()
+      })
+
+      it('Undo before copying means no hand-on, and the moment never offers the link', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        setup({ onApprove: vi.fn().mockResolvedValue(made), onUndoApprove: vi.fn().mockResolvedValue(undefined) })
+        await approve()
+        fireEvent.click(screen.getByRole('button', { name: /^Undo/ }))
+        await vi.advanceTimersByTimeAsync(7000)
+        expect(screen.queryByRole('button', { name: 'Copy share link' })).toBeNull()
+        expect(fetch).not.toHaveBeenCalled()
+      })
+
+      it('after the 5 s the link is still the one main action', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        setup({ onApprove: vi.fn().mockResolvedValue(made), onUndoApprove: vi.fn().mockResolvedValue(undefined) })
+        await approve()
+        await vi.advanceTimersByTimeAsync(5200)
+        expect(screen.getByRole('dialog', { name: 'Done' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Copy share link' })).toBeInTheDocument()
+      })
+
+      it('shows no confetti under reduced motion', async () => {
+        vi.stubGlobal('matchMedia', (q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} }))
+        setup({ onApprove: vi.fn().mockResolvedValue(made) })
+        await approve()
+        expect(screen.queryByTestId('confetti')).toBeNull()
+        expect(screen.getByRole('button', { name: 'Copy share link' })).toBeInTheDocument()
+      })
+    })
+
     it('after the last file it ends with "All done · X approved, Y with feedback"', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       setup({ onUndoApprove: vi.fn().mockResolvedValue(undefined), hasNext: false, sessionKey: 'folder' })

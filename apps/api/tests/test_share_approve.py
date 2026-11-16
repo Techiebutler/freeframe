@@ -30,7 +30,9 @@ def test_guest_approves_the_latest_version_through_a_folder_link(env):
     assert r.status_code == 200, r.text
     [row] = approvals(env)
     assert (row.asset_id, row.version_id, row.user_id, row.status.value) == (a.id, a.versions[1].id, env.owner.id, "approved")
-    assert r.json() == {"asset_id": str(a.id), "version_id": str(a.versions[1].id), "status": "approved"}
+    body = r.json()
+    assert (body["asset_id"], body["version_id"], body["status"]) == (str(a.id), str(a.versions[1].id), "approved")
+    assert body["delivery"]["share_url"].endswith(f"/d/{body['delivery']['token']}")
 
 
 def test_an_explicit_version_and_a_repeat_are_idempotent(env):

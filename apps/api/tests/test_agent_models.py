@@ -27,4 +27,4 @@ def test_agent_tables_and_dedup_key():
 def test_single_alembic_head_is_ap06():
     cfg = Config()
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["ap06_link_aditor_brand"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["d3l1v3r1e5"]

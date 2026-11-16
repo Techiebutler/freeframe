@@ -34,6 +34,8 @@ export interface FileRequest {
   status: GateStatus
   open_must_fixes: number
   created_at: string | null
+  /** The reviewer copied the delivery link: the request sits in the Delivered archive. */
+  delivered_at?: string | null
   checklist_binding_id?: string | null
   checklist?: import('./checklist').ChecklistState | null
 }

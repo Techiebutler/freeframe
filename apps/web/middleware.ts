@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server'
 
 // '/' is the public WeTransfer-style front door (platform v2); '/r/' is a file-request link.
 const PUBLIC_ROUTES = ['/', '/login', '/setup', '/whop', '/whop/session']
-const PUBLIC_PREFIXES = ['/invite/', '/share/', '/r/']
+const PUBLIC_PREFIXES = ['/invite/', '/share/', '/r/', '/d/']
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 // Build-time flag (docker-compose.aditor.yml): only bounce /login straight to the
@@ -65,6 +65,12 @@ export async function middleware(request: NextRequest) {
   if (pathname === '/login') {
     const redirect = handleLoginRoute(request)
     if (redirect) return redirect
+  }
+
+  // /d/<token>?format=json is the machine-readable delivery (delivery.v1): the API answers it, read from the runtime env.
+  const delivery = pathname.match(/^\/d\/([\w-]+)$/)
+  if (delivery && request.nextUrl.searchParams.get('format') === 'json') {
+    return NextResponse.rewrite(new URL(`${process.env.API_INTERNAL_URL || 'http://localhost:8000'}/deliveries/${delivery[1]}?format=json`))
   }
 
   // Always allow public routes

@@ -15,6 +15,7 @@ from ..services.permissions import require_asset_access, require_project_role
 from ..tasks.email_tasks import send_approval_email
 from ..tasks.celery_app import send_task_safe
 from ..config import settings
+from ..services import deliveries
 
 router = APIRouter(tags=["approvals"])
 
@@ -93,6 +94,7 @@ def approve_asset(
                 note=body.note,
             )
     db.commit()
+    approval.delivery = deliveries.out(deliveries.on_approved(db, asset, body.version_id, current_user))
 
     return approval
 
@@ -121,6 +123,7 @@ def remove_approval(db: Session, asset: Asset, user_id: uuid.UUID, version_id: u
         db.query(Approval).filter(Approval.asset_id == asset.id, Approval.version_id == version_id,
                                   Approval.user_id == user_id).delete(synchronize_session=False)
     db.commit()
+    deliveries.on_unapproved(db, asset, version_id)
 
 
 @router.post("/assets/{asset_id}/reject", response_model=ApprovalResponse)

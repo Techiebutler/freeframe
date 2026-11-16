@@ -808,8 +808,9 @@ function ShareReviewInner({
       let identity: { name: string; email: string } | null = null
       try { identity = JSON.parse(localStorage.getItem('ff_guest_identity') || 'null') } catch { /* no identity */ }
       if (!hasAuth && !identity) { setShowGuestPrompt(true); throw new Error('identity') }
-      await approveSharedAsset(token, asset.id, { identity: hasAuth ? null : identity, shareSession, versionId: currentVersion?.id })
+      const made = await approveSharedAsset(token, asset.id, { identity: hasAuth ? null : identity, shareSession, versionId: currentVersion?.id })
       onApproved?.(asset.id)
+      return made
     }
     const undoApproveAsset = async () => {
       const t = await getUsableAccessToken()

@@ -35,6 +35,7 @@ from ..middleware.rate_limit import rate_limit
 from ..models.agent import AgentKey
 from ..models.asset import Asset, AssetType, AssetVersion, FileType, MediaFile, ProcessingStatus
 from ..models.comment import Comment
+from ..models.delivery import Delivery
 from ..models.folder import Folder
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.share import ShareLink, SharePermission
@@ -153,7 +154,7 @@ class RequestCreate(BaseModel):
     expires_in_days: Optional[int] = Field(default=None, ge=1, le=365)
 
 
-def _request_out(req: UploadRequest, project: Optional[Project], st: Optional[dict] = None, assets: int = 0, binding=None) -> dict:
+def _request_out(req: UploadRequest, project: Optional[Project], st: Optional[dict] = None, assets: int = 0, binding=None, delivered_at=None) -> dict:
     base = (settings.frontend_url or "").rstrip("/")
     return {
         "id": str(req.id),
@@ -174,6 +175,7 @@ def _request_out(req: UploadRequest, project: Optional[Project], st: Optional[di
         "checklist_binding_id": str(binding.id) if binding else None,
         "checklist": binding_out(binding) if binding else None,
         "review_phase": None,
+        "delivered_at": delivered_at.isoformat() if delivered_at else None,  # the share link was copied: the request is in the Delivered archive
         **(st or {"status": "reviewing", "open_must_fixes": 0}),
         **request_fields(req),
     }
@@ -361,11 +363,14 @@ def list_requests(project_id: Optional[uuid.UUID] = Query(None), db: Session = D
     reviewer = db.query(GuestUser).filter(GuestUser.email == REVIEWER_EMAIL).first()
     bindings = {b.request_id: b for b in db.query(ChecklistBinding).filter(
         ChecklistBinding.request_id.in_([r.id for r in reqs]), ChecklistBinding.deleted_at.is_(None)).all()}
+    delivered: dict = {}
+    for d in db.query(Delivery).filter(Delivery.request_id.in_([r.id for r in reqs]), Delivery.handed_on_at.isnot(None)).all():
+        delivered[d.request_id] = max(d.handed_on_at, delivered.get(d.request_id, d.handed_on_at))
     out = []
     for r in reqs:
         reviews = _review_assets(db, r, assets[r.id], reviewer, stats, include_media=False)
         gate = {**_request_gate(reviews, statuses.get(r.review_share_token)), "review_phase": phase_of_reviews(db, reviews)}
-        out.append(_request_out(r, projects.get(r.project_id), gate, len(assets[r.id]), bindings.get(r.id)))
+        out.append(_request_out(r, projects.get(r.project_id), gate, len(assets[r.id]), bindings.get(r.id), delivered.get(r.id)))
     db.commit()  # Persist observed campaign usage after assembling the response.
     return out
 

@@ -16,4 +16,5 @@ class ApprovalResponse(BaseModel):
     status: ApprovalStatus
     note: Optional[str]
     created_at: datetime
+    delivery: Optional[dict] = None  # approve only: {token, share_url} of the hand-off page
     model_config = {"from_attributes": True}
