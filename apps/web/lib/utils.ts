@@ -22,11 +22,20 @@ export function formatTime(seconds: number): string {
 }
 
 /**
+ * Whole frames elapsed at `seconds`. A frame's own start time often lands a hair
+ * below its boundary in floating point (1.16 * 25 = 28.999…), and a plain floor
+ * would label it as the frame before; the tolerance is far below one frame.
+ */
+function frameIndex(seconds: number, fps: number): number {
+  return Math.floor(seconds * fps + 1e-3)
+}
+
+/**
  * Format seconds into SMPTE timecode "HH:MM:SS:FF" at 24fps
  * e.g. 83.5 → "00:01:23:12"
  */
 export function formatTimecode(seconds: number, fps = 24): string {
-  const totalFrames = Math.floor(seconds * fps)
+  const totalFrames = frameIndex(seconds, fps)
   const frames = totalFrames % fps
   const totalSeconds = Math.floor(totalFrames / fps)
   const secs = totalSeconds % 60
@@ -46,7 +55,7 @@ export function formatTimecode(seconds: number, fps = 24): string {
  * e.g. 83.5 at 24fps → "2004"
  */
 export function formatFrames(seconds: number, fps = 24): string {
-  return String(Math.floor(seconds * fps))
+  return String(frameIndex(seconds, fps))
 }
 
 /**
