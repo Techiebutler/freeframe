@@ -482,3 +482,43 @@ describe('tabLabels', () => {
     expect(tabLabels(['Only file'])).toEqual(['Only file'])
   })
 })
+
+describe('drop anywhere (spec 2026-11-16)', () => {
+  const dt = (files: File[]) => ({ dataTransfer: { types: ['Files'], files } })
+  const png = new File(['x'], 'ref.png', { type: 'image/png' })
+  it('dragging a file over the video pauses and shows where it will go', () => {
+    const { props } = setup({ wide: true })
+    fireEvent.dragEnter(screen.getByTestId('media'), dt([png]))
+    expect(props.onPause).toHaveBeenCalled()
+    expect(screen.getByTestId('drop-overlay')).toHaveTextContent(/at 0:03/)
+  })
+  it('a picture dropped on the video goes into the tray, the overlay leaves', () => {
+    setup({ wide: true })
+    fireEvent.dragEnter(screen.getByTestId('media'), dt([png]))
+    fireEvent.drop(screen.getByTestId('media'), dt([png]))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+    expect(screen.getByLabelText('Images for this comment')).toBeInTheDocument()
+  })
+  it('a PDF is refused with the existing line and nothing is attached', () => {
+    setup({ wide: true })
+    fireEvent.drop(screen.getByTestId('media'), dt([new File(['x'], 'a.pdf', { type: 'application/pdf' })]))
+    expect(screen.getByText(/Only PNG, JPEG, WebP or GIF/)).toBeInTheDocument()
+  })
+  it('the phone layout has no drop zone (Alan: no drag and drop on a phone)', () => {
+    setup()
+    fireEvent.dragEnter(screen.getByTestId('media'), dt([png]))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+  })
+  it('view-only shows no overlay', () => {
+    setup({ wide: true, canComment: false })
+    fireEvent.dragEnter(screen.getByTestId('media'), dt([png]))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+  })
+  it('a file dropped anywhere on the page never opens in the tab', () => {
+    setup()
+    const e = new Event('drop', { cancelable: true }) as Event & { dataTransfer: unknown }
+    Object.defineProperty(e, 'dataTransfer', { value: { types: ['Files'] } })
+    window.dispatchEvent(e)
+    expect(e.defaultPrevented).toBe(true)
+  })
+})
