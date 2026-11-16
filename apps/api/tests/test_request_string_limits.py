@@ -6,7 +6,12 @@ import pytest
 from pydantic import ValidationError
 
 from apps.api.routers.setup import CreateSuperAdminRequest
+from apps.api.schemas.asset import AssetUpdate
 from apps.api.schemas.comment import GuestCommentCreate
+from apps.api.schemas.metadata import CollectionCreate, MetadataFieldCreate
+from apps.api.schemas.project import ProjectCreate, ProjectUpdate
+from apps.api.schemas.share import MultiShareCreate, ShareLinkCreate, ShareLinkUpdate
+from apps.api.schemas.upload import InitiateUploadRequest
 
 
 PROJECT_ID = str(uuid.uuid4())
@@ -106,9 +111,69 @@ def test_setup_name_is_bounded_to_the_user_column():
         CreateSuperAdminRequest.model_validate(payload)
 
 
-def test_guest_email_must_be_a_valid_email_address():
-    with pytest.raises(ValidationError):
-        GuestCommentCreate(body="hello", guest_email="not-an-email")
+@pytest.mark.parametrize(
+    ("model", "field", "limit", "payload"),
+    [
+        (ProjectCreate, "name", 255, {}),
+        (ProjectUpdate, "name", 255, {}),
+        (AssetUpdate, "name", 255, {}),
+        (CollectionCreate, "name", 255, {}),
+        (MetadataFieldCreate, "name", 255, {"field_type": "text"}),
+        (
+            CreateSuperAdminRequest,
+            "name",
+            255,
+            {
+                "email": "person@example.com",
+                "password": "Password123!",
+            },
+        ),
+        (GuestCommentCreate, "guest_name", 255, {"body": "hello"}),
+        (GuestCommentCreate, "guest_email", 255, {"body": "hello"}),
+        (
+            InitiateUploadRequest,
+            "asset_name",
+            255,
+            {
+                "project_id": PROJECT_ID,
+                "original_filename": "file.mp4",
+                "mime_type": "video/mp4",
+                "file_size_bytes": 1,
+            },
+        ),
+        (
+            InitiateUploadRequest,
+            "original_filename",
+            500,
+            {
+                "project_id": PROJECT_ID,
+                "asset_name": "asset",
+                "mime_type": "video/mp4",
+                "file_size_bytes": 1,
+            },
+        ),
+        (ShareLinkCreate, "title", 255, {}),
+        (MultiShareCreate, "title", 255, {}),
+        (ShareLinkUpdate, "title", 255, {}),
+    ],
+    ids=[
+        "project-create-name",
+        "project-update-name",
+        "asset-update-name",
+        "collection-name",
+        "metadata-field-name",
+        "setup-name",
+        "guest-name",
+        "guest-email",
+        "upload-asset-name",
+        "upload-original-filename",
+        "share-create-title",
+        "multi-share-title",
+        "share-update-title",
+    ],
+)
+def test_request_field_accepts_exact_column_limit(model, field, limit, payload):
+    model.model_validate({**payload, field: "x" * limit})
 
 
 def test_project_create_rejects_name_over_column_limit_before_database(
