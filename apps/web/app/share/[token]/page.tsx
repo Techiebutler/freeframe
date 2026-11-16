@@ -20,6 +20,8 @@ import {
   Image as ImageIcon,
   Video,
   Music,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -28,10 +30,10 @@ import { FlowView } from '@/components/review/flow-view'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
-import { sendToParent } from '@/lib/embed-bridge'
+import { sendToParent, type EmbedMessage } from '@/lib/embed-bridge'
 import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
-import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance } from '@/types'
+import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance, FolderShareAssetItem, FolderShareAssetsResponse } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -874,6 +876,8 @@ interface ShareViewerProps {
   onBack?: () => void
   /** ?embed=1: video-only page inside the Desk's iframe, reports to the parent window. */
   embed?: boolean
+  /** Folder embed: this asset's place in the folder, the stepper, and what the approve acts on. */
+  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void }
 }
 
 function ShareViewer({
@@ -885,6 +889,7 @@ function ShareViewer({
   shareName,
   onBack,
   embed,
+  folder,
 }: ShareViewerProps) {
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
@@ -894,7 +899,7 @@ function ShareViewer({
   const videoRef = React.useRef<HTMLVideoElement>(null)
   const [identity, setIdentity] = React.useState<GuestIdentity | null>(null)
   const [askIdentity, setAskIdentity] = React.useState(false)
-  const [flowApproved, setFlowApproved] = React.useState(false)
+  const [flowApproved, setFlowApproved] = React.useState(!!folder?.approved)
   React.useEffect(() => { setIdentity(loadIdentity()) }, [])
   const [sidebarOpen, setSidebarOpen] = React.useState(() => {
     if (SHARE_COMMENTS_COLLAPSED) return false
@@ -942,10 +947,12 @@ function ShareViewer({
   const canComment = permission === 'comment' || permission === 'approve'
   const flow = (embed || isNarrow || phoneView) && asset.asset_type === 'video'
   const flowVideo = () => videoRef.current
+  const send = (m: EmbedMessage) => sendToParent({ ...m, asset_id: asset.id })
   const flowApprove = async () => {
-    const made = await approveSharedAsset(token, asset.id)
+    const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession })
     setFlowApproved(true)
-    if (embed) sendToParent({ type: 'ar:approved' })
+    folder?.onApproved(true)
+    if (embed) send({ type: 'ar:approved' })
     return made
   }
 
@@ -953,8 +960,8 @@ function ShareViewer({
   React.useEffect(() => {
     const v = videoRef.current
     if (!embed || !v) return
-    const ready = () => { if (v.videoWidth) sendToParent({ type: 'ar:ready', width: v.videoWidth, height: v.videoHeight, duration: v.duration }) }
-    const on = (type: 'ar:play' | 'ar:pause' | 'ar:ended') => () => sendToParent({ type })
+    const ready = () => { if (v.videoWidth) send({ type: 'ar:ready', width: v.videoWidth, height: v.videoHeight, duration: v.duration, ...(folder && { index: folder.index + 1, count: folder.count }) }) }
+    const on = (type: 'ar:play' | 'ar:pause' | 'ar:ended') => () => send({ type })
     const handlers: [string, () => void][] = [['loadedmetadata', ready], ['play', on('ar:play')], ['pause', on('ar:pause')], ['ended', on('ar:ended')]]
     handlers.forEach(([e, h]) => v.addEventListener(e, h))
     ready()
@@ -966,6 +973,13 @@ function ShareViewer({
       <div className="absolute inset-0 overflow-hidden bg-black text-white">
         <FlowView
           embed
+          embedNav={folder && folder.count > 1 && (
+            <div className="pointer-events-auto flex items-center gap-1 self-center rounded-full bg-black/50 text-white" role="group" aria-label="Videos in this review">
+              <button type="button" onClick={() => folder.onStep(-1)} disabled={folder.index === 0} aria-label="Previous video" className="press grid h-11 w-11 place-items-center rounded-full disabled:opacity-40"><ChevronLeft size={20} aria-hidden="true" /></button>
+              <span className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums" aria-live="polite">{folder.index + 1} / {folder.count}</span>
+              <button type="button" onClick={() => folder.onStep(1)} disabled={folder.index === folder.count - 1} aria-label="Next video" className="press grid h-11 w-11 place-items-center rounded-full disabled:opacity-40"><ChevronRight size={20} aria-hidden="true" /></button>
+            </div>
+          )}
           renderMedia={(ink) => (
             <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} />
           )}
@@ -981,9 +995,9 @@ function ShareViewer({
           canSave={!!identity}
           onNeedSave={() => setAskIdentity(true)}
           onApprove={flowApprove}
-          onSent={() => { shareFeedbackDone(token, asset.id); sendToParent({ type: 'ar:sent' }) }}
-          onNoteSaved={(t) => sendToParent({ type: 'ar:comment', t })}
-          onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id); setFlowApproved(false) }}
+          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }) }}
+          onNoteSaved={(t) => send({ type: 'ar:comment', t })}
+          onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id, { shareSession: folder?.shareSession }); setFlowApproved(false); folder?.onApproved(false) }}
           sessionKey={token}
           approved={flowApproved}
           dictate={(audio) => guestDictate(token, audio)}
@@ -1104,6 +1118,45 @@ function ShareViewer({
 
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
+
+/** ?embed=1 on a folder share: the video-only embed over the folder's videos, newest first, starting at the first not yet approved. */
+function FolderEmbed({ token, shareSession, permission, branding }: { token: string; shareSession: string | null; permission: SharePermission; branding: ProjectBranding | null }) {
+  const [items, setItems] = React.useState<FolderShareAssetItem[] | null>(null)
+  const [index, setIndex] = React.useState(0)
+  React.useEffect(() => {
+    const ss = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+    fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500${ss}`)
+      .then((r) => (r.ok ? (r.json() as Promise<FolderShareAssetsResponse>) : null))
+      .then((data) => {
+        const videos = (data?.assets ?? []).filter((a) => a.asset_type === 'video')
+        setItems(videos)
+        setIndex(Math.max(0, videos.findIndex((a) => !a.approved)))
+      })
+      .catch(() => setItems([]))
+  }, [token, shareSession])
+  if (!items) return <div className="flex min-h-screen items-center justify-center bg-black"><Loader2 className="h-8 w-8 animate-spin text-zinc-500" /></div>
+  const current = items[index]
+  if (!current) return <ErrorState />
+  const step = (d: -1 | 1) => {
+    const n = Math.min(items.length - 1, Math.max(0, index + d))
+    if (n === index) return
+    setIndex(n)
+    sendToParent({ type: 'ar:asset', asset_id: items[n].id, index: n + 1, count: items.length })
+  }
+  return (
+    <ShareViewer
+      key={current.id}
+      embed
+      token={token}
+      asset={{ id: current.id, name: current.name, asset_type: current.asset_type } as Asset}
+      permission={permission}
+      allowDownload={false}
+      branding={branding}
+      folder={{ index, count: items.length, approved: !!current.approved, shareSession, onStep: step,
+        onApproved: (v) => setItems((prev) => prev && prev.map((a) => (a.id === current.id ? { ...a, approved: v } : a))) }}
+    />
+  )
+}
 
 export default function SharePage({
   params,
@@ -1280,6 +1333,7 @@ export default function SharePage({
   }
 
   if (state.stage === 'folder_ready') {
+    if (embed) return <FolderEmbed token={token} shareSession={shareSession} permission={state.permission} branding={state.branding} />
     return (
       <FolderShareViewer
         token={token}

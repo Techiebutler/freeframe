@@ -15,6 +15,7 @@ from ..middleware.rate_limit import rate_limit
 from ..models.user import User
 from ..models.asset import Asset
 from ..models.folder import Folder
+from ..models.approval import Approval, ApprovalStatus
 from ..models.share import AssetShare, ShareLink, ShareLinkItem, SharePermission, ShareLinkActivity, ShareActivityAction
 from ..models.activity import ActivityLog, ActivityAction
 from ..models.branding import ProjectBranding
@@ -145,14 +146,25 @@ def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFi
     return db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
 
 
-def _latest_version_comment_counts(db: Session, asset_id: uuid.UUID) -> tuple[int, int]:
-    """Count comments on an asset's latest ready version — matches the version-scoped
-    folder/grid preview, which has no version picker."""
-    version = db.query(AssetVersion).filter(
+def _latest_reviewable_version(db: Session, asset_id: uuid.UUID) -> Optional[AssetVersion]:
+    return db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset_id,
         AssetVersion.deleted_at.is_(None),
         or_(AssetVersion.processing_status == ProcessingStatus.ready, and_(AssetVersion.processing_status == ProcessingStatus.processing, AssetVersion.iteration_review_ready.is_(True))),
     ).order_by(AssetVersion.version_number.desc()).first()
+
+
+def _latest_version_approved(db: Session, asset_id: uuid.UUID) -> bool:
+    """Whether the version a tile shows is approved (the embed steps to the newest one that is not)."""
+    version = _latest_reviewable_version(db, asset_id)
+    return bool(version and db.query(Approval.id).filter(
+        Approval.version_id == version.id, Approval.status == ApprovalStatus.approved, Approval.deleted_at.is_(None)).first())
+
+
+def _latest_version_comment_counts(db: Session, asset_id: uuid.UUID) -> tuple[int, int]:
+    """Count comments on an asset's latest ready version — matches the version-scoped
+    folder/grid preview, which has no version picker."""
+    version = _latest_reviewable_version(db, asset_id)
     if not version:
         return 0, 0
     # (people, auto review). An Auto Review publication carries review_publication_id or review_source; the bubble on a
@@ -1240,7 +1252,7 @@ def get_folder_share_assets(
                     thumbnail_url=thumbnail_url, created_at=a.created_at.isoformat() if a.created_at else "",
                     file_size=mf.file_size_bytes if mf else None,
                     duration_seconds=mf.duration_seconds if mf else None,
-                    comment_count=comment_count, auto_comment_count=auto_comment_count,
+                    comment_count=comment_count, auto_comment_count=auto_comment_count, approved=_latest_version_approved(db, a.id),
                     version_count=(_ready_version_count(db, a.id) if link.show_versions else 1),
                 ))
         else:
@@ -1353,7 +1365,7 @@ def get_folder_share_assets(
             thumbnail_url=thumbnail_url,
             file_size=file_size,
             duration_seconds=duration_seconds,
-            comment_count=comment_count, auto_comment_count=auto_comment_count,
+            comment_count=comment_count, auto_comment_count=auto_comment_count, approved=_latest_version_approved(db, asset.id),
             version_count=(_ready_version_count(db, asset.id) if link.show_versions else 1),
             created_by_name=creator.name if creator else None,
             created_at=asset.created_at,

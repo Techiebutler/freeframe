@@ -81,3 +81,12 @@ def test_the_agent_sees_the_approval_on_the_newest_version_only(env):
         db.add(AssetVersion(asset_id=a.id, version_number=2, processing_status=ProcessingStatus.ready, created_by=env.owner.id))
         db.commit()
     assert queue() is None                                              # a new version is not approved yet
+
+
+def test_folder_listing_marks_the_assets_whose_shown_version_is_approved(env):
+    req = env.request(env.project_a, env.owner)
+    done, open_ = env.asset(req, "Done"), env.asset(req, "Open")
+    token = link(env, req.folder_id)
+    assert env.client.post(f"/share/{token}/assets/{done.id}/approve", json={}).status_code == 200
+    rows = {a["name"]: a["approved"] for a in env.client.get(f"/share/{token}/assets").json()["assets"]}
+    assert rows == {"Done": True, "Open": False}

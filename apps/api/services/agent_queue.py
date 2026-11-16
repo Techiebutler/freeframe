@@ -1,5 +1,7 @@
 """What an agent works from: its project's live requests by kanban stage, and one asset's review."""
+import secrets
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -8,6 +10,7 @@ from ..config import settings
 from ..models.approval import Approval, ApprovalStatus
 from ..models.asset import Asset
 from ..models.project import Project
+from ..models.share import ShareLink, SharePermission
 from ..models.upload_request import UploadRequest
 from ..models.user import GuestUser
 from . import agent_notify, review_bridge
@@ -32,15 +35,32 @@ def review_url(req: UploadRequest) -> Optional[str]:
     return f"{(settings.frontend_url or '').rstrip('/')}/share/{req.review_share_token}" if req.review_share_token else None
 
 
+def embed_url(db: Session, req: UploadRequest, owner_id: uuid.UUID) -> str:
+    """The request's video-only embed link (share page ?embed=1), made once: any usable comment+approve folder share
+    of the hand-in is reused, else one is created as the project owner (an approve through a link is recorded as its creator)."""
+    now = datetime.now(timezone.utc)
+    link = next((s for s in db.query(ShareLink).filter(
+        ShareLink.folder_id == req.folder_id, ShareLink.permission == SharePermission.approve, ShareLink.is_enabled.is_(True),
+        ShareLink.deleted_at.is_(None), ShareLink.visibility == "public", ShareLink.password_hash.is_(None),
+    ).order_by(ShareLink.created_at).all() if not s.expires_at or s.expires_at > now), None)
+    if link is None:
+        link = ShareLink(folder_id=req.folder_id, token=secrets.token_urlsafe(32), created_by=owner_id, title="Gen review",
+                         description="Embedded review inside Gen. Safe to leave in place.", permission=SharePermission.approve,
+                         allow_download=False, visibility="public")
+        db.add(link)
+        db.flush()
+    return f"{(settings.frontend_url or '').rstrip('/')}/share/{link.token}?embed=1"
+
+
 def queue(db: Session, project_id: uuid.UUID, state: Optional[str] = None) -> list[dict]:
     from ..routers import requests as r
-    from datetime import datetime, timezone
     reqs = db.query(UploadRequest).filter(UploadRequest.project_id == project_id).order_by(UploadRequest.created_at.desc()).limit(100).all()
     reqs = [q for q in reqs if r.request_state(q, datetime.now(timezone.utc)) == "live"]
     statuses = review_bridge.request_status([q.review_share_token for q in reqs])
     assets = {q.id: r._submitted_assets(db, q) for q in reqs}
     stats = review_bridge.asset_stats([str(a.id) for items in assets.values() for a in items])
     reviewer = db.query(GuestUser).filter(GuestUser.email == r.REVIEWER_EMAIL).first()
+    owner_id = db.get(Project, project_id).created_by
     out = []
     for q in reqs:
         reviews = r._review_assets(db, q, assets[q.id], reviewer, stats, include_media=False)
@@ -53,7 +73,8 @@ def queue(db: Session, project_id: uuid.UUID, state: Optional[str] = None) -> li
         if state and stage != state:
             continue
         out.append({"request_id": str(q.id), "title": q.title, "folder_id": str(q.folder_id), "stage": stage,
-                    "upload_token": q.token, "review_url": review_url(q), "review_phase": phase_of_reviews(db, reviews),
+                    "upload_token": q.token, "review_url": review_url(q),
+                    "embed_url": embed_url(db, q, owner_id) if assets[q.id] else None, "review_phase": phase_of_reviews(db, reviews),
                     "assets": [{"asset_id": a["asset_id"], "name": a["name"], "version_id": a["version_id"],
                                 "version_number": a["version"], "review_state": a["review_state"],
                                 "processing_status": a["processing"],
@@ -82,6 +103,8 @@ def asset_review(db: Session, project_id: uuid.UUID, asset_id: uuid.UUID) -> Opt
     if entry is None:
         return None
     must_fix, guidance = split_notes(entry["comments"])
-    return {"asset_id": entry["asset_id"], "version_id": entry["version_id"], "review_state": entry["review_state"],
+    embed = embed_url(db, req, db.get(Project, project_id).created_by)
+    db.commit()
+    return {"embed_url": embed, "asset_id": entry["asset_id"], "version_id": entry["version_id"], "review_state": entry["review_state"],
             "gate": {"status": entry["review_state"], "open_must_fixes": entry["open_must_fixes"]},
             "must_fix": must_fix, "guidance": guidance}

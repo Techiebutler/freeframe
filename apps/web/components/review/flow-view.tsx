@@ -63,6 +63,8 @@ export interface FlowViewProps {
   embed?: boolean
   /** A note reached the server (embed: tells the parent page). */
   onNoteSaved?: (t: number) => void
+  /** Embed only: the folder stepper, shown under the Comment row while not recording. */
+  embedNav?: React.ReactNode
 }
 
 let seq = 0
@@ -479,6 +481,7 @@ export function FlowView(p: FlowViewProps) {
             {!active && finishButton}
           </div>
         )}
+        {!active && p.embedNav}
         {notes.filter(n => n.status === 'failed' && !ob.byId(n.id)).map(n => (
           <p key={n.id} role="alert" className="pointer-events-auto flex flex-wrap items-center gap-x-3 rounded-lg bg-black/70 px-3 text-xs text-white">
             <span>{messages[n.id] ?? 'Could not transcribe.'}</span>

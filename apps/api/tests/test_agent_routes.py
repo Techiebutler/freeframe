@@ -139,3 +139,25 @@ def test_agent_upload_is_attributed_to_the_agent_user(env):
         assert rec.uploader_name == "Cutter (codex)" and rec.uploader_email.endswith("@agents.autoreview.local")
         v = db.get(AssetVersion, uuid.UUID(r.json()["version_id"]))
         assert str(v.created_by) == agent.user_id
+
+
+def test_embed_url_is_made_once_per_request_with_approve_and_stays_in_the_project(env):
+    from apps.api.models.share import ShareLink, SharePermission
+    agent = env.pair_agent(env.project_a)
+    req = env.request(env.project_a, env.owner, "Cut")
+    empty = env.request(env.project_a, env.owner, "Empty")
+    a = env.asset(req)
+    p1, p2 = patched({str(a.id): clear(a.versions[0])}, bridge(req))
+    with p1, p2:
+        first = {r["title"]: r for r in env.client.get("/agent/queue", headers=agent.headers).json()}
+        again = {r["title"]: r for r in env.client.get("/agent/queue", headers=agent.headers).json()}
+        review = env.client.get(f"/agent/assets/{a.id}/review", headers=agent.headers).json()
+    url = first["Cut"]["embed_url"]
+    assert url.endswith("?embed=1") and "/share/" in url and url.split("?")[0] != first["Cut"]["review_url"]
+    assert again["Cut"]["embed_url"] == url == review["embed_url"]
+    assert first["Empty"]["embed_url"] is None
+    token = url.split("/share/")[1].split("?")[0]
+    with env.Session() as db:
+        links = db.query(ShareLink).filter(ShareLink.folder_id == req.folder_id, ShareLink.token == token).all()
+        assert len(links) == 1 and links[0].permission == SharePermission.approve and links[0].created_by == env.owner.id
+        assert db.query(ShareLink).filter(ShareLink.folder_id == empty.folder_id).count() == 0

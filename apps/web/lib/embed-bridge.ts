@@ -2,10 +2,13 @@
 
 export const EMBED_PARENT_ORIGINS = ['https://gen.aditor.ai', 'https://app.aditor.ai']
 
-export type EmbedMessage =
-  | { type: 'ar:ready'; width: number; height: number; duration: number }
+/** `asset_id` names the asset on screen (a folder share embeds several); `index` is 1-based. */
+export type EmbedMessage = (
+  | { type: 'ar:ready'; width: number; height: number; duration: number; index?: number; count?: number }
   | { type: 'ar:play' | 'ar:pause' | 'ar:ended' | 'ar:sent' | 'ar:approved' }
   | { type: 'ar:comment'; t: number }
+  | { type: 'ar:asset'; index: number; count: number }
+) & { asset_id?: string }
 
 /** The embedding page's origin if (and only if) it is allowlisted. Chrome/Safari give ancestorOrigins, Firefox only the referrer. */
 export function parentOrigin(ancestors: ArrayLike<string> | undefined, referrer: string): string | null {

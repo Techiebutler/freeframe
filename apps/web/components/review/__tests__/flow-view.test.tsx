@@ -51,6 +51,12 @@ describe('FlowView embed', () => {
     expect(screen.queryByLabelText('Feedback')).toBeNull()
     expect(screen.queryByLabelText('Your notes')).toBeNull()
   })
+  it('shows the folder stepper in the embed, and hides it while recording', async () => {
+    setup({ embed: true, embedNav: <div data-testid="nav">2 / 7</div> })
+    expect(screen.getByTestId('nav')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /comment/i }))
+    await waitFor(() => expect(screen.queryByTestId('nav')).toBeNull())
+  })
   it('announces a note once it is saved, with its time', async () => {
     const onNoteSaved = vi.fn()
     setup({ embed: true, onNoteSaved })
