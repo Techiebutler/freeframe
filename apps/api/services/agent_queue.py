@@ -35,14 +35,19 @@ def review_url(req: UploadRequest) -> Optional[str]:
     return f"{(settings.frontend_url or '').rstrip('/')}/share/{req.review_share_token}" if req.review_share_token else None
 
 
+def embed_link(db: Session, folder_id: uuid.UUID) -> Optional[ShareLink]:
+    """The request folder's embed link: the oldest usable comment+approve folder share (public, no passphrase). None when there is none yet."""
+    now = datetime.now(timezone.utc)
+    return next((s for s in db.query(ShareLink).filter(
+        ShareLink.folder_id == folder_id, ShareLink.permission == SharePermission.approve, ShareLink.is_enabled.is_(True),
+        ShareLink.deleted_at.is_(None), ShareLink.visibility == "public", ShareLink.password_hash.is_(None),
+    ).order_by(ShareLink.created_at).all() if not s.expires_at or s.expires_at > now), None)
+
+
 def embed_url(db: Session, req: UploadRequest, owner_id: uuid.UUID) -> str:
     """The request's video-only embed link (share page ?embed=1), made once: any usable comment+approve folder share
     of the hand-in is reused, else one is created as the project owner (an approve through a link is recorded as its creator)."""
-    now = datetime.now(timezone.utc)
-    link = next((s for s in db.query(ShareLink).filter(
-        ShareLink.folder_id == req.folder_id, ShareLink.permission == SharePermission.approve, ShareLink.is_enabled.is_(True),
-        ShareLink.deleted_at.is_(None), ShareLink.visibility == "public", ShareLink.password_hash.is_(None),
-    ).order_by(ShareLink.created_at).all() if not s.expires_at or s.expires_at > now), None)
+    link = embed_link(db, req.folder_id)
     if link is None:
         link = ShareLink(folder_id=req.folder_id, token=secrets.token_urlsafe(32), created_by=owner_id, title="Gen review",
                          description="Embedded review inside Gen. Safe to leave in place.", permission=SharePermission.approve,

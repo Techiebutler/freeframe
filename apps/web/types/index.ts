@@ -347,6 +347,9 @@ export interface FolderShareAssetItem {
   version_count?: number
   created_by_name: string | null
   created_at: string
+  /** Parts of a module request: hook / body / cta ... and the place among that role. */
+  role?: string | null
+  order?: number | null
 }
 
 export interface FolderShareSubfolder {

@@ -51,11 +51,46 @@ describe('FlowView embed', () => {
     expect(screen.queryByLabelText('Feedback')).toBeNull()
     expect(screen.queryByLabelText('Your notes')).toBeNull()
   })
-  it('shows the folder stepper in the embed, and hides it while recording', async () => {
+  it('shows the file navigation in the embed column', () => {
     setup({ embed: true, embedNav: <div data-testid="nav">2 / 7</div> })
     expect(screen.getByTestId('nav')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /comment/i }))
-    await waitFor(() => expect(screen.queryByTestId('nav')).toBeNull())
+  })
+  it('has the glass bar: seek, play/pause, mute, fullscreen, mono time and comment markers', () => {
+    setup({ embed: true, embedMarkers: [1, 2] })
+    expect(screen.getByTestId('embed-bar')).toBeInTheDocument()
+    expect(screen.getByRole('slider', { name: 'Seek' })).toBeInTheDocument()
+    for (const n of ['Play', 'Mute', 'Fullscreen']) expect(screen.getByRole('button', { name: n })).toBeInTheDocument()
+  })
+  it('space plays and pauses, arrows seek one second', () => {
+    setup({ embed: true })
+    const root = screen.getByTestId('flow-view')
+    const v = document.createElement('video')
+    Object.defineProperty(v, 'duration', { value: 30, configurable: true })
+    const play = vi.fn().mockResolvedValue(undefined)
+    v.play = play
+    root.appendChild(v)
+    fireEvent.keyDown(root, { key: ' ' })
+    expect(play).toHaveBeenCalled()
+    v.currentTime = 10
+    fireEvent.keyDown(root, { key: 'ArrowRight' })
+    expect(v.currentTime).toBe(11)
+    fireEvent.keyDown(root, { key: 'ArrowLeft' })
+    expect(v.currentTime).toBe(10)
+  })
+  it('a comment in the list goes to its time and plays its drawing', () => {
+    const { props } = setup({
+      embed: true,
+      embedComments: (show) => <button onClick={() => show(7, { format: 'ink.v1', mark_offset_ms: 0, marks: [{ k: 'dot', points: [[0.5, 0.5]], t: 7, offset_ms: 0 }] })}>c7</button>,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'c7' }))
+    expect(props.onSeek).toHaveBeenCalledWith(7)
+  })
+  it('lets the comments of a narrow frame be opened and closed', () => {
+    setup({ embed: true, embedComments: () => <p>list</p> })
+    const toggle = screen.getByRole('button', { name: /comments/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
   })
   it('announces a note once it is saved, with its time', async () => {
     const onNoteSaved = vi.fn()

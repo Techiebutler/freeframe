@@ -143,6 +143,9 @@ class FolderShareAssetItem(BaseModel):
     version_count: int = 1
     created_by_name: Optional[str] = None
     created_at: datetime
+    # Parts of a module request: role (hook/body/cta/...) and place among that role; None for everything else.
+    role: Optional[str] = None
+    order: Optional[int] = None
 
 
 class FolderShareSubfolder(BaseModel):

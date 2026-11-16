@@ -27,6 +27,8 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { GuestCommentInput, IdentityForm, loadIdentity, type GuestIdentity } from '@/components/review/guest-comment-input'
 import { FlowView } from '@/components/review/flow-view'
+import { GuestCommentList, type CommentsResponse } from '@/components/share/guest-comments'
+import { EmbedChain, chainOrder } from '@/components/share/embed-chain'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
@@ -63,28 +65,6 @@ interface ShareValidateResponse {
   error?: string
 }
 
-interface CommentAuthor {
-  id: string
-  name: string
-  avatar_url?: string | null
-}
-
-interface GuestAuthor {
-  id: string
-  name: string
-  email?: string
-}
-
-interface GuestComment {
-  id: string
-  body: string
-  author?: CommentAuthor | null
-  guest_author?: GuestAuthor | null
-  created_at: string
-  timecode_start?: number | null
-}
-
-type CommentsResponse = GuestComment[]
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -211,101 +191,6 @@ function ErrorState({ expired }: ErrorStateProps) {
             : 'This share link is invalid or has been removed.'}
         </p>
       </div>
-    </div>
-  )
-}
-
-// ─── Guest comment item ───────────────────────────────────────────────────────
-
-interface GuestCommentItemProps {
-  comment: GuestComment
-}
-
-function GuestCommentItem({ comment }: GuestCommentItemProps) {
-  const displayName = comment.guest_author?.name || comment.author?.name || 'Unknown'
-  const avatarUrl = comment.author?.avatar_url ?? null
-  const [imgError, setImgError] = React.useState(false)
-
-  return (
-    <div className="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5">
-      <div className="flex items-center gap-2 mb-1.5">
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-purple-500/20 text-2xs font-medium text-purple-400">
-          {avatarUrl && !imgError ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img
-              src={avatarUrl}
-              alt=""
-              className="h-full w-full rounded-full object-cover"
-              referrerPolicy="no-referrer"
-              onError={() => setImgError(true)}
-            />
-          ) : (
-            displayName.charAt(0).toUpperCase()
-          )}
-        </div>
-        <span className="text-xs font-medium text-zinc-200">{displayName}</span>
-        {comment.timecode_start != null && (
-          <span className="text-2xs text-zinc-500 font-mono bg-white/5 px-1.5 py-0.5 rounded">
-            {Math.floor(comment.timecode_start / 60)}:
-            {String(Math.floor(comment.timecode_start % 60)).padStart(2, '0')}
-          </span>
-        )}
-        <span className="ml-auto text-2xs text-zinc-600">
-          {new Date(comment.created_at).toLocaleDateString()}
-        </span>
-      </div>
-      <p className="text-sm text-zinc-300 leading-relaxed">{comment.body}</p>
-    </div>
-  )
-}
-
-// ─── Guest comment list (for right panel) ────────────────────────────────────
-
-interface GuestCommentListProps {
-  token: string
-  refreshKey: number
-}
-
-function GuestCommentList({ token, refreshKey }: GuestCommentListProps) {
-  const [comments, setComments] = React.useState<GuestComment[]>([])
-  const [loading, setLoading] = React.useState(true)
-
-  React.useEffect(() => {
-    setLoading(true)
-    fetch(`${API_URL}/share/${token}/comments`)
-      .then((r) => (r.ok ? r.json() : Promise.resolve([])))
-      .then((data: CommentsResponse) => setComments(data))
-      .catch(() => setComments([]))
-      .finally(() => setLoading(false))
-  }, [token, refreshKey])
-
-  if (loading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
-      </div>
-    )
-  }
-
-  if (comments.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-        <div className="h-12 w-12 rounded-full bg-white/5 flex items-center justify-center mb-3">
-          <MessageSquare className="h-6 w-6 text-zinc-600" />
-        </div>
-        <p className="text-sm font-medium text-zinc-300">No comments — yet</p>
-        <p className="text-xs text-zinc-500 mt-1">
-          Be the first to leave feedback on this asset.
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
-      {comments.map((comment) => (
-        <GuestCommentItem key={comment.id} comment={comment} />
-      ))}
     </div>
   )
 }
@@ -542,9 +427,11 @@ interface ShareMediaViewerProps {
   /** Flow view: the page needs the video element, and mounts the ink layer inside the picture. */
   videoRef?: React.RefObject<HTMLVideoElement>
   overlay?: React.ReactNode
+  /** Embed player: no native controls, the embed draws its own bar (components/review/embed-bar.tsx). */
+  bare?: boolean
 }
 
-function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: externalVideoRef, overlay }: ShareMediaViewerProps) {
+function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: externalVideoRef, overlay, bare }: ShareMediaViewerProps) {
   const ownVideoRef = React.useRef<HTMLVideoElement>(null)
   const videoRef = externalVideoRef ?? ownVideoRef
   const audioRef = React.useRef<HTMLAudioElement>(null)
@@ -644,7 +531,7 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: ex
           ) : streamUrl ? (
             overlay ? (
               <div className="relative h-full w-full">
-                <video ref={videoRef} controls className="absolute inset-0 h-full w-full object-contain" preload="metadata" playsInline>
+                <video ref={videoRef} controls={!bare} className="absolute inset-0 h-full w-full object-contain" preload="metadata" playsInline>
                   Your browser does not support video playback.
                 </video>
                 <VideoFrameConstraint videoRef={videoRef}>{overlay}</VideoFrameConstraint>
@@ -877,7 +764,7 @@ interface ShareViewerProps {
   /** ?embed=1: video-only page inside the Desk's iframe, reports to the parent window. */
   embed?: boolean
   /** Folder embed: this asset's place in the folder, the stepper, and what the approve acts on. */
-  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void }
+  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** The file chain of a module request; without it the plain 1 / N stepper. */ nav?: React.ReactNode }
 }
 
 function ShareViewer({
@@ -894,6 +781,8 @@ function ShareViewer({
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
   const [commentKey, setCommentKey] = React.useState(0)
+  const [commentTimes, setCommentTimes] = React.useState<number[]>([])
+  const [selectedComment, setSelectedComment] = React.useState<string | null>(null)
   const isNarrow = useIsNarrow()
   const [phoneView, setPhoneView] = usePhoneView()
   const videoRef = React.useRef<HTMLVideoElement>(null)
@@ -973,15 +862,22 @@ function ShareViewer({
       <div className="absolute inset-0 overflow-hidden bg-black text-white">
         <FlowView
           embed
-          embedNav={folder && folder.count > 1 && (
-            <div className="pointer-events-auto flex items-center gap-1 self-center rounded-full bg-black/50 text-white" role="group" aria-label="Videos in this review">
+          embedNav={folder && folder.count > 1 && (folder.nav ?? (
+            <div className="flex items-center gap-1 self-center rounded-full bg-white/10 text-white" role="group" aria-label="Videos in this review">
               <button type="button" onClick={() => folder.onStep(-1)} disabled={folder.index === 0} aria-label="Previous video" className="press grid h-11 w-11 place-items-center rounded-full disabled:opacity-40"><ChevronLeft size={20} aria-hidden="true" /></button>
               <span className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums" aria-live="polite">{folder.index + 1} / {folder.count}</span>
               <button type="button" onClick={() => folder.onStep(1)} disabled={folder.index === folder.count - 1} aria-label="Next video" className="press grid h-11 w-11 place-items-center rounded-full disabled:opacity-40"><ChevronRight size={20} aria-hidden="true" /></button>
             </div>
+          ))}
+          embedComments={(show) => (
+            <GuestCommentList token={token} refreshKey={commentKey} assetId={folder ? asset.id : undefined}
+              onLoaded={(list) => setCommentTimes(list.map((c) => c.timecode_start).filter((t): t is number => typeof t === 'number'))}
+              selectedId={selectedComment}
+              onSelect={(c) => { setSelectedComment(c.id); show(c.timecode_start ?? 0, c.annotation?.drawing_data) }} />
           )}
+          embedMarkers={commentTimes}
           renderMedia={(ink) => (
-            <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} />
+            <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} bare />
           )}
           files={[{ id: asset.id, name: asset.name }]}
           currentFileId={asset.id}
@@ -996,7 +892,7 @@ function ShareViewer({
           onNeedSave={() => setAskIdentity(true)}
           onApprove={flowApprove}
           onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }) }}
-          onNoteSaved={(t) => send({ type: 'ar:comment', t })}
+          onNoteSaved={(t) => { send({ type: 'ar:comment', t }); setCommentKey((k) => k + 1) }}
           onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id, { shareSession: folder?.shareSession }); setFlowApproved(false); folder?.onApproved(false) }}
           sessionKey={token}
           approved={flowApproved}
@@ -1125,24 +1021,32 @@ function FolderEmbed({ token, shareSession, permission, branding }: { token: str
   const [index, setIndex] = React.useState(0)
   React.useEffect(() => {
     const ss = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
-    fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500${ss}`)
+    fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500&embed=true${ss}`)
       .then((r) => (r.ok ? (r.json() as Promise<FolderShareAssetsResponse>) : null))
       .then((data) => {
         const videos = (data?.assets ?? []).filter((a) => a.asset_type === 'video')
-        setItems(videos)
-        setIndex(Math.max(0, videos.findIndex((a) => !a.approved)))
+        const sorted = chainOrder(videos) ?? videos
+        setItems(sorted)
+        setIndex(Math.max(0, sorted.findIndex((a) => !a.approved)))
       })
       .catch(() => setItems([]))
   }, [token, shareSession])
   if (!items) return <div className="flex min-h-screen items-center justify-center bg-black"><Loader2 className="h-8 w-8 animate-spin text-zinc-500" /></div>
   const current = items[index]
   if (!current) return <ErrorState />
-  const step = (d: -1 | 1) => {
-    const n = Math.min(items.length - 1, Math.max(0, index + d))
-    if (n === index) return
+  const go = (n: number) => {
+    if (n === index || n < 0 || n > items.length - 1) return
     setIndex(n)
     sendToParent({ type: 'ar:asset', asset_id: items[n].id, index: n + 1, count: items.length })
   }
+  const parts = items.filter((a) => a.role)
+  const nav = parts.length > 0 && (
+    <EmbedChain
+      items={parts.map((a) => ({ id: a.id, name: a.name, role: a.role!, order: a.order ?? 0, duration: a.duration_seconds, count: a.comment_count }))}
+      selectedId={current.id}
+      onSelect={(id) => go(items.findIndex((a) => a.id === id))}
+    />
+  )
   return (
     <ShareViewer
       key={current.id}
@@ -1152,7 +1056,7 @@ function FolderEmbed({ token, shareSession, permission, branding }: { token: str
       permission={permission}
       allowDownload={false}
       branding={branding}
-      folder={{ index, count: items.length, approved: !!current.approved, shareSession, onStep: step,
+      folder={{ index, count: items.length, approved: !!current.approved, shareSession, onStep: (d) => go(index + d), nav: nav || undefined,
         onApproved: (v) => setItems((prev) => prev && prev.map((a) => (a.id === current.id ? { ...a, approved: v } : a))) }}
     />
   )

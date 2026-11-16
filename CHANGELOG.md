@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Review UI: the phone Comment button no longer clips its label; touch targets in review, share and approval views are at least 44 px on phones; hover-only download button is reachable on touch.
 
 ### Added
+- Share page `?embed=1` (Review Player v5): the video keeps AutoReview's own player but gets a glass control bar (seek track with comment markers, mono time, play/pause, mute, fullscreen, auto-hides while playing; space and arrow keys work). Beside the video (below it on narrow frames): the file chain for module ads (hooks stacked, then body, then CTA), AutoReview's normal comment list (click a comment to jump to it and see its drawing), and Comment / Approve. The share assets API adds `role` / `order` to the parts of a module request and `embed=true` leaves the assembled combinations out of the preview. Nothing stored changes.
 - Agents as its own sidebar page (Overview · Brand rules · Agents): owners pick a brand and an AI (Claude Code, Codex, ChatGPT, Cursor, other), create a key once and copy one ready prompt. Moved out of Project › Settings; editors keep joining through share links. Empty projects offer "Connect your AI" first.
 - `POST /projects/{id}/agent-keys` creates an agent key straight from the signed-in owner or editor; agent keys carry a scope (`read` or `deliver`, existing keys stay `deliver`) and a per-key rate limit (120 reads / 30 writes per 10 min, `429` with `Retry-After`).
 

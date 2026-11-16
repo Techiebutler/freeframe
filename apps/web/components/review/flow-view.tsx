@@ -6,12 +6,13 @@ import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
 import { notesFromDictation, notesReducer, sendBlocked, sendable, type FlowNote } from '@/lib/flow-notes'
-import { buildDrawingData, splitDeictic, type InkMark } from '@/lib/ink'
+import { buildDrawingData, isInk, splitDeictic, type InkMark } from '@/lib/ink'
 import { getNoteOutbox, useNoteOutbox, type NoteBody, type NotePayload } from '@/lib/note-outbox'
 import { imagesFrom, IMAGE_TYPES, pickImages } from '@/lib/comment-images'
 import type { Outbox } from '@/lib/outbox'
 import { doneLine, markApproved, markFeedback, sentLine, sessionSummary, unmarkApproved } from '@/lib/flow-session'
 import { Confetti } from './confetti'
+import { EmbedBar, embedKey } from './embed-bar'
 import { markHandedOn, type DeliveryRef } from '@/lib/delivery'
 import { InkLayer, type InkReplay } from './ink-layer'
 import { LevelMeter } from './level-meter'
@@ -67,6 +68,10 @@ export interface FlowViewProps {
   onNoteSaved?: (t: number) => void
   /** Embed only: the folder stepper, shown under the Comment row while not recording. */
   embedNav?: React.ReactNode
+  /** Embed only: AutoReview's comment list; `show` goes to a comment's time and plays its drawing on the video. */
+  embedComments?: (show: (t: number, drawing: unknown) => void) => React.ReactNode
+  /** Embed only: comment times for the player's markers (default: this session's notes). */
+  embedMarkers?: number[]
 }
 
 let seq = 0
@@ -128,6 +133,33 @@ export function dictationMessage(e: unknown): string {
   return detail === 'dictation_unavailable' ? 'Dictation is not set up. Type your note instead.' : 'Could not transcribe. Try again or type it.'
 }
 
+/** Embed layout: a column beside the video when the frame has the room for it (the video keeps its own ratio), else below. */
+export const SIDE_MIN = 300
+export function useEmbedSide(root: React.RefObject<HTMLElement | null>, on: boolean) {
+  const [state, setState] = React.useState({ side: false, ratio: 9 / 16 })
+  React.useEffect(() => {
+    const el = root.current
+    if (!on || !el) return
+    let ratio = 9 / 16
+    const measure = () => {
+      const { width, height } = el.getBoundingClientRect()
+      const side = height > 0 && width - height * ratio >= SIDE_MIN
+      setState(prev => (prev.side === side && prev.ratio === ratio ? prev : { side, ratio }))
+    }
+    const meta = (e: Event) => {
+      if (e.target instanceof HTMLVideoElement && e.target.videoWidth && e.target.videoHeight) { ratio = Math.min(3, Math.max(0.3, e.target.videoWidth / e.target.videoHeight)); measure() }
+    }
+    el.addEventListener('loadedmetadata', meta, true)
+    const v = el.querySelector('video')
+    if (v?.videoWidth && v.videoHeight) ratio = Math.min(3, Math.max(0.3, v.videoWidth / v.videoHeight))
+    measure()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    ro?.observe(el)
+    return () => { el.removeEventListener('loadedmetadata', meta, true); ro?.disconnect() }
+  }, [root, on])
+  return state
+}
+
 export function FlowView(p: FlowViewProps) {
   const dictate = p.dictate ?? dictateApi
   const start = p.startRecording ?? startMicRecording
@@ -178,6 +210,11 @@ export function FlowView(p: FlowViewProps) {
   const [replay, setReplay] = React.useState<InkReplay | null>(null)
   const replayKey = React.useRef(0)
   const rootRef = React.useRef<HTMLDivElement>(null)
+  const areaRef = React.useRef<HTMLDivElement>(null)
+  const [commentsOpen, setCommentsOpen] = React.useState(false)
+  const embedSide = useEmbedSide(rootRef, !!p.embed)
+  // Embed: playback goes on after a note. Drawing pauses the picture, so pick it up again if it was running when the note began.
+  const wasPlaying = React.useRef(false)
   const levelRef = React.useRef(0)
   const sKey = p.sessionKey ?? 'flow'
   const [toast, setToast] = React.useState<{ secs: number } | null>(null)
@@ -209,6 +246,14 @@ export function FlowView(p: FlowViewProps) {
     return () => events.forEach(ev => root.removeEventListener(ev, on, true))
   }, [])
   const tracker = React.useRef<ReturnType<typeof trackVideo> | null>(null)
+  React.useEffect(() => {
+    if (!p.embed) return
+    if (active) { wasPlaying.current = wasPlaying.current || playing; return }
+    if (!wasPlaying.current) return
+    wasPlaying.current = false
+    const v = rootRef.current?.querySelector('video')
+    if (v?.paused && !v.ended) v.play().catch(() => {})
+  }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
   /** What the video did during each note's recording; kept so Try again maps times the same way. */
   const timelines = React.useRef(new Map<string, TimelinePoint[]>())
 
@@ -505,38 +550,73 @@ export function FlowView(p: FlowViewProps) {
     </button>
   )
 
-  // Embed: the page is the video; the two actions float over its top edge so the frame keeps the video's own shape.
-  if (p.embed) return (
-    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-black" data-testid="flow-view" data-layout="embed">
-      {doneMoment}
-      <Confetti burst={burst} />
-      {mediaArea}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex flex-col gap-1 bg-gradient-to-b from-black/60 to-transparent p-2">
-        {p.canComment && (
-          <div className="pointer-events-auto flex items-center gap-2">
-            <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'}
-              className="flow-comment inline-flex h-11 min-w-11 items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-sm font-semibold text-text-inverse">
-              {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Comment</>}
-            </button>
-            {active && <span data-testid="rec-timer" className="font-mono text-sm font-semibold tabular-nums text-white">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>}
-            {active && <button type="button" onClick={cancelRecording} aria-label="Cancel recording" className="press grid h-11 w-11 shrink-0 place-items-center rounded-full bg-black/50 text-white"><X size={18} /></button>}
-            <span className="flex-1" />
-            {!active && finishButton}
+  // Embed (Review Player v5): the video at its own ratio with the glass bar; beside it (or below, when the frame has no room) the
+  // file chain, AutoReview's comment list and Comment / Approve. Same notes, ink, outbox and approve as everywhere else.
+  if (p.embed) {
+    const toggleVideo = (e: React.MouseEvent) => {
+      if (active || (e.target as HTMLElement).closest('.ep-bar')) return
+      const v = rootRef.current?.querySelector('video')
+      if (!v) return
+      if (v.paused) v.play().catch(() => {}); else v.pause()
+    }
+    const showComment = (t: number, drawing: unknown) => {
+      p.onSeek(t)
+      if (isInk(drawing)) setReplay({ key: ++replayKey.current, at: t, marks: drawing.marks })
+      else setReplay(null)
+    }
+    return (
+      <div ref={rootRef} className="ep-root" data-testid="flow-view" data-layout="embed" data-side={embedSide.side ? '' : undefined} tabIndex={-1}
+        onKeyDown={e => embedKey(e, rootRef.current?.querySelector('video') ?? null)}>
+        {doneMoment}
+        <Confetti burst={burst} />
+        <div ref={areaRef} className="ep-video" style={embedSide.side ? { aspectRatio: String(embedSide.ratio) } : undefined} onClick={toggleVideo}>
+          {mediaArea}
+          <EmbedBar root={rootRef} area={areaRef} playing={playing} time={time ?? p.getPlayhead()} markers={p.embedMarkers ?? notes.map(n => n.t)} />
+        </div>
+        <aside className="ep-side" aria-label="Review">
+          {p.embedNav}
+          {p.embedComments && (
+            <>
+              <button type="button" className="ep-comments-toggle" aria-expanded={commentsOpen} onClick={() => setCommentsOpen(o => !o)}>Comments<span className="text-text-secondary">{commentsOpen ? '⌃' : '›'}</span></button>
+              <div className="ep-comments" data-open={commentsOpen ? '' : undefined}>
+                <div className="ep-comments-head"><span>All comments</span></div>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{p.embedComments(showComment)}</div>
+              </div>
+            </>
+          )}
+          {notes.filter(n => n.status === 'failed' && !ob.byId(n.id)).map(n => (
+            <p key={n.id} role="alert" className="flex flex-wrap items-center gap-x-3 rounded-lg bg-bg-secondary px-3 text-xs text-text-primary">
+              <span>{messages[n.id] ?? 'Could not transcribe.'}</span>
+              {n.audio && <button type="button" onClick={() => transcribe(n, n.audio!)} className="press inline-flex min-h-11 items-center gap-1 font-semibold"><RotateCcw size={12} />Try again</button>}
+            </p>
+          ))}
+          {error && <p role="alert" className="rounded-lg bg-bg-secondary px-3 py-2 text-sm text-status-error">{error}</p>}
+          {ob.summary.failed > 0 && <button type="button" onClick={() => ob.entries.filter(e => e.status === 'failed').forEach(e => ob.retry(e.id))} className="press inline-flex min-h-11 items-center gap-1 self-start rounded-full bg-bg-secondary px-3 text-xs font-semibold"><RotateCcw size={12} />Retry sending notes</button>}
+          {toast && <div role="status" className="flex items-center justify-between gap-2 rounded-lg bg-bg-secondary py-1 pl-3 pr-1"><p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>{copyButton}</div>}
+          {active && (
+            <div className="ep-rec" role="status" aria-label="Recording">
+              <span className="ep-rec-dot" aria-hidden="true" />
+              <span data-testid="rec-timer" className="font-mono tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
+              <span className="min-w-0 truncate">Draw on the video while you talk</span>
+              <button type="button" onClick={cancelRecording} aria-label="Cancel recording" className="ep-cancel press">Cancel</button>
+            </div>
+          )}
+          <div className="ep-actions">
+            {p.canComment && (
+              <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} data-recording={active ? '' : undefined} className="ep-cta">
+                {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Comment</>}
+              </button>
+            )}
+            {!active && (
+              <button type="button" onClick={finish} disabled={sending || (hasNotes ? blocked : (!!p.approved || !canApprove))} className="ep-approve glass">
+                {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : hasNotes ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{hasNotes ? 'Send' : sendLabel}
+              </button>
+            )}
           </div>
-        )}
-        {!active && p.embedNav}
-        {notes.filter(n => n.status === 'failed' && !ob.byId(n.id)).map(n => (
-          <p key={n.id} role="alert" className="pointer-events-auto flex flex-wrap items-center gap-x-3 rounded-lg bg-black/70 px-3 text-xs text-white">
-            <span>{messages[n.id] ?? 'Could not transcribe.'}</span>
-            {n.audio && <button type="button" onClick={() => transcribe(n, n.audio!)} className="press inline-flex min-h-11 items-center gap-1 font-semibold"><RotateCcw size={12} />Try again</button>}
-          </p>
-        ))}
-        {error && <p role="alert" className="rounded-lg bg-black/70 px-3 py-2 text-sm text-status-error">{error}</p>}
-        {ob.summary.failed > 0 && <button type="button" onClick={() => ob.entries.filter(e => e.status === 'failed').forEach(e => ob.retry(e.id))} className="press pointer-events-auto inline-flex min-h-11 items-center gap-1 self-start rounded-full bg-black/70 px-3 text-xs font-semibold text-white"><RotateCcw size={12} />Retry sending notes</button>}
-        {toast && <div role="status" className="pointer-events-auto flex items-center justify-between gap-2 rounded-lg bg-black/70 py-1 pl-3 pr-1"><p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>{copyButton}</div>}
+        </aside>
       </div>
-    </div>
-  )
+    )
+  }
 
   // Desktop (Flask): the video takes the room, notes live in a column on the right, talk / type / draw sit right under the video.
   if (p.wide) return (
