@@ -137,7 +137,8 @@ class FolderShareAssetItem(BaseModel):
     thumbnail_url: Optional[str] = None
     file_size: Optional[int] = None
     duration_seconds: Optional[float] = None
-    comment_count: int = 0
+    comment_count: int = 0  # people only
+    auto_comment_count: int = 0  # Auto Review's own notes
     version_count: int = 1
     created_by_name: Optional[str] = None
     created_at: datetime

@@ -19,6 +19,7 @@ import {
   PanelRightOpen,
   ArrowLeft,
   Mic,
+  Bot,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getUsableAccessToken } from '@/lib/auth'
@@ -326,11 +327,21 @@ function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, 
           </div>
         )}
 
-        {/* Comment count badge — bottom left */}
-        {asset.comment_count > 0 && (
-          <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5">
-            <MessageSquare className="h-3 w-3 text-text-primary" />
-            <span className="text-[10px] font-medium text-text-primary">{asset.comment_count}</span>
+        {/* Comment counts — bottom left: people in the bubble, Auto Review's own notes quieter beside it */}
+        {(asset.comment_count > 0 || (asset.auto_comment_count ?? 0) > 0) && (
+          <div className="absolute bottom-2 left-2 flex items-center gap-1.5">
+            {asset.comment_count > 0 && (
+              <div className="flex items-center gap-1 bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5" title={`${asset.comment_count} ${asset.comment_count === 1 ? 'comment' : 'comments'}`}>
+                <MessageSquare className="h-3 w-3 text-text-primary" />
+                <span className="text-[10px] font-medium text-text-primary">{asset.comment_count}</span>
+              </div>
+            )}
+            {(asset.auto_comment_count ?? 0) > 0 && (
+              <div className="flex items-center gap-1 bg-bg-primary/60 backdrop-blur-sm rounded-md px-1.5 py-0.5" title={`${asset.auto_comment_count} from Auto Review`}>
+                <Bot className="h-3 w-3 text-text-secondary" />
+                <span className="text-[10px] font-medium text-text-secondary">{asset.auto_comment_count}</span>
+              </div>
+            )}
           </div>
         )}
 

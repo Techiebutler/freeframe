@@ -342,6 +342,7 @@ export interface FolderShareAssetItem {
   file_size: number | null
   duration_seconds: number | null
   comment_count: number
+  auto_comment_count?: number
   version_count?: number
   created_by_name: string | null
   created_at: string

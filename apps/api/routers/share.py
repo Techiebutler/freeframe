@@ -145,7 +145,7 @@ def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFi
     return db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
 
 
-def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
+def _latest_version_comment_counts(db: Session, asset_id: uuid.UUID) -> tuple[int, int]:
     """Count comments on an asset's latest ready version — matches the version-scoped
     folder/grid preview, which has no version picker."""
     version = db.query(AssetVersion).filter(
@@ -154,12 +154,17 @@ def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
         or_(AssetVersion.processing_status == ProcessingStatus.ready, and_(AssetVersion.processing_status == ProcessingStatus.processing, AssetVersion.iteration_review_ready.is_(True))),
     ).order_by(AssetVersion.version_number.desc()).first()
     if not version:
-        return 0
-    return db.query(sa_func.count(Comment.id)).filter(
+        return 0, 0
+    # (people, auto review). An Auto Review publication carries review_publication_id or review_source; the bubble on a
+    # tile counts people only, so a file nobody has looked at does not read as commented on.
+    auto = or_(Comment.review_publication_id.isnot(None), Comment.review_source.isnot(None))
+    rows = db.query(auto, sa_func.count(Comment.id)).filter(
         Comment.asset_id == asset_id,
         Comment.version_id == version.id,
         Comment.deleted_at.is_(None),
-    ).scalar() or 0
+    ).group_by(auto).all()
+    counts = {bool(k): n for k, n in rows}
+    return counts.get(False, 0), counts.get(True, 0)
 
 
 def _ready_version_count(db: Session, asset_id: uuid.UUID) -> int:
@@ -1229,13 +1234,13 @@ def get_folder_share_assets(
             for a in shared_assets:
                 mf = _get_latest_media_file(db, a.id)
                 thumbnail_url = generate_presigned_get_url(mf.s3_key_thumbnail) if mf and mf.s3_key_thumbnail else None
-                comment_count = _latest_version_comment_count(db, a.id)
+                comment_count, auto_comment_count = _latest_version_comment_counts(db, a.id)
                 asset_items.append(FolderShareAssetItem(
                     id=a.id, name=a.name, asset_type=a.asset_type.value if hasattr(a.asset_type, 'value') else str(a.asset_type),
                     thumbnail_url=thumbnail_url, created_at=a.created_at.isoformat() if a.created_at else "",
                     file_size=mf.file_size_bytes if mf else None,
                     duration_seconds=mf.duration_seconds if mf else None,
-                    comment_count=comment_count,
+                    comment_count=comment_count, auto_comment_count=auto_comment_count,
                     version_count=(_ready_version_count(db, a.id) if link.show_versions else 1),
                 ))
         else:
@@ -1336,7 +1341,7 @@ def get_folder_share_assets(
             file_size = media_file.file_size_bytes
             duration_seconds = media_file.duration_seconds
 
-        comment_count = _latest_version_comment_count(db, asset.id)
+        comment_count, auto_comment_count = _latest_version_comment_counts(db, asset.id)
 
         # Get creator name
         creator = db.query(User).filter(User.id == asset.created_by).first() if asset.created_by else None
@@ -1348,7 +1353,7 @@ def get_folder_share_assets(
             thumbnail_url=thumbnail_url,
             file_size=file_size,
             duration_seconds=duration_seconds,
-            comment_count=comment_count,
+            comment_count=comment_count, auto_comment_count=auto_comment_count,
             version_count=(_ready_version_count(db, asset.id) if link.show_versions else 1),
             created_by_name=creator.name if creator else None,
             created_at=asset.created_at,
