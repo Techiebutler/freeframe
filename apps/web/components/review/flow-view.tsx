@@ -167,9 +167,10 @@ export function FlowView(p: FlowViewProps) {
     window.addEventListener('dragover', guard); window.addEventListener('drop', guard); window.addEventListener('keydown', esc)
     return () => { window.removeEventListener('dragover', guard); window.removeEventListener('drop', guard); window.removeEventListener('keydown', esc) }
   }, [])
+  // The comment box itself turns into the drop zone; the video is never covered (Alan 2026-11-17).
   const dropOverlay = dropAt !== null && (
-    <div data-testid="drop-overlay" className="pointer-events-none absolute inset-2 z-50 grid place-items-center rounded-2xl border-2 border-dashed border-text-secondary bg-bg-primary/70 backdrop-blur-sm">
-      <p className="rounded-full bg-bg-secondary px-4 py-2 text-sm font-medium text-text-primary">Drop to attach to a comment at {timecode(dropAt)}</p>
+    <div data-testid="drop-overlay" className="pointer-events-none absolute inset-0 z-10 grid place-items-center rounded-2xl border-2 border-dashed border-accent bg-bg-secondary">
+      <p className="flex items-center gap-2 text-sm font-medium text-text-primary"><Paperclip size={16} aria-hidden="true" />Drop to attach to a comment at {timecode(dropAt)}</p>
     </div>
   )
   const [messages, setMessages] = React.useState<Record<string, string>>({})
@@ -540,7 +541,6 @@ export function FlowView(p: FlowViewProps) {
   // Desktop (Flask): the video takes the room, notes live in a column on the right, talk / type / draw sit right under the video.
   if (p.wide) return (
     <div ref={rootRef} className="relative flex h-full min-h-0 bg-bg-primary" data-testid="flow-view" data-layout="wide" {...dropProps}>
-      {dropOverlay}
       {doneMoment}
       <Confetti burst={burst} />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -554,11 +554,12 @@ export function FlowView(p: FlowViewProps) {
                 {imageNote && <p role="status" className="text-xs text-text-secondary">{imageNote}</p>}
               </div>
             )}
-            <div className="flex w-full max-w-[560px] items-center gap-2 rounded-2xl border border-border bg-bg-secondary p-1.5 transition-colors focus-within:border-text-tertiary shadow-[0_8px_24px_-12px_rgba(0,0,0,.5)]">
+            <div className="relative flex w-full max-w-[560px] items-center gap-2 rounded-2xl border border-border bg-bg-secondary p-1.5 transition-colors focus-within:border-text-tertiary shadow-[0_8px_24px_-12px_rgba(0,0,0,.5)]">
               <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} title={active ? 'Stop (saves the note)' : 'Comment: talk and draw while it plays'}
                 className="flow-comment inline-flex h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-text-inverse">
                 {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Comment</>}
               </button>
+              {dropOverlay}
               {active ? (
                 <div className="flex min-w-0 flex-1 items-center gap-2" role="status" aria-label="Recording">
                   <LevelMeter levelRef={levelRef} />

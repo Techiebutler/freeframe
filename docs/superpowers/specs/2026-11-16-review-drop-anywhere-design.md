@@ -9,7 +9,7 @@ Today an image only attaches when it is dropped on the thin strip around the com
 ## What
 
 1. **The whole review is the drop target** (desktop layout only; on a phone there is no drag and drop, Alan 2026-11-17): files bar, video, comment bar, notes column.
-2. **While a file is dragged over it**: the video pauses, and one overlay covers the review. It has a dashed outline and one line in the middle: "Drop to attach to a comment at 0:12". The time is the playhead.
+2. **While a file is dragged over it**: the video pauses and the comment box turns into a dashed drop zone: "Drop to attach to a comment at 0:12" (the playhead). The rest of the screen is never blurred or covered (Alan 2026-11-17).
 3. **On drop**: the images go into the same tray as paste / paperclip today (`addImages`, same rules: PNG/JPEG/WebP/GIF, ≤ 10 MB, max 4, same skip message). Focus moves to the comment input, so the next words or Comment press carry them. Nothing is sent by the drop alone.
 4. **Never navigates away**: a file dropped anywhere on the page (also outside the review, also a non-image) is caught. A non-image shows the existing "Only PNG, JPEG, WebP or GIF images up to 10 MB." line instead of opening the file.
 5. **View-only shares** (`canComment` false): no overlay, drop is swallowed silently.
