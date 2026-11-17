@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   Video,
   Music,
+  Check,
   Loader2,
   MessageSquare,
   Layers,
@@ -742,6 +743,7 @@ function ShareReviewInner({
   const isNarrow = useIsNarrow()
   const [phoneView, setPhoneView] = usePhoneView()
   const [authed, setAuthed] = React.useState(false)
+  const [approving, setApproving] = React.useState(false)
   React.useEffect(() => { void getUsableAccessToken().then((t) => setAuthed(t !== null)).catch(() => {}) }, [])
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
@@ -802,21 +804,26 @@ function ShareReviewInner({
   }
 
   const flow = (isNarrow || phoneView) && asset.asset_type === 'video' && versionReady && !!VideoPlayer
-  if (flow) {
-    const approveAsset = async () => {
+  const approveAsset = async () => {
       const hasAuth = (await getUsableAccessToken()) !== null
       let identity: { name: string; email: string } | null = null
       try { identity = JSON.parse(localStorage.getItem('ff_guest_identity') || 'null') } catch { /* no identity */ }
       if (!hasAuth && !identity) { setShowGuestPrompt(true); throw new Error('identity') }
-      const made = await approveSharedAsset(token, asset.id, { identity: hasAuth ? null : identity, shareSession, versionId: currentVersion?.id })
+      const made = await approveSharedAsset(token, asset.id, { identity: hasAuth ? null : identity, shareSession, versionId: currentVersion?.id, headers: authHeaders(await getUsableAccessToken()) })
       onApproved?.(asset.id)
       return made
     }
-    const undoApproveAsset = async () => {
+  const undoApproveAsset = async () => {
       const t = await getUsableAccessToken()
       await undoApproveSharedAsset(token, asset.id, { shareSession, versionId: currentVersion?.id, headers: t ? { Authorization: `Bearer ${t}` } : undefined })
       onUnapproved?.(asset.id)
     }
+  const approved = !!approvedIds?.has(asset.id)
+  const toggleApprove = async () => {
+    setApproving(true)
+    try { await (approved ? undoApproveAsset() : approveAsset()) } catch { /* identity prompt or a failed call: the button stays as it was */ } finally { setApproving(false) }
+  }
+  if (flow) {
     const next = nextFileId(files ?? [], asset.id)
     return (
       <div className="flex flex-col h-dvh bg-bg-primary text-text-primary">
@@ -890,8 +897,15 @@ function ShareReviewInner({
             <VersionSwitcher versions={versions} />
           )}
           {allowDownload && (
-            <button className="flex shrink-0 items-center gap-1.5 h-11 md:h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
+            <button className={`flex shrink-0 items-center gap-1.5 h-11 md:h-7 px-3 rounded-md text-xs font-medium transition-colors ${permission === 'approve' ? 'text-text-secondary hover:text-text-primary hover:bg-bg-hover' : 'text-text-inverse bg-accent hover:bg-accent-hover'}`} onClick={() => handleDownload(token, asset.id, shareSession)}>
               <Download className="h-3 w-3" /> Download
+            </button>
+          )}
+          {permission === 'approve' && (
+            <button type="button" onClick={toggleApprove} disabled={approving} aria-pressed={approved} title={approved ? 'Undo approval' : undefined}
+              className={`press flex shrink-0 items-center gap-1.5 h-11 md:h-8 px-3.5 rounded-md text-xs font-semibold transition-colors disabled:opacity-60 ${approved ? 'text-status-success bg-status-success/10 hover:bg-status-success/15' : 'text-text-inverse bg-accent hover:bg-accent-hover'}`}>
+              {approving ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check className="h-3.5 w-3.5" aria-hidden="true" />}
+              {approved ? 'Approved' : 'Approve'}
             </button>
           )}
           {asset.asset_type === 'video' && (
@@ -1042,7 +1056,7 @@ function StaticShareReview({ token, shareSession, files, startId, permission, on
     const t = await getUsableAccessToken()
     const who = identity()
     if (!t && !who) { setShowPrompt(true); throw new Error('identity') }
-    await approveSharedAsset(token, id, { identity: t ? null : who, shareSession })
+    await approveSharedAsset(token, id, { identity: t ? null : who, shareSession, headers: authHeaders(t) })
     onApproved(id)
   }
   return (

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { undoApproveSharedAsset, approveSharedAsset, guestDictate, nextFileId, postGuestNote, shareFeedbackDone, ShareFlowError } from '../share-flow'
+import { undoApproveSharedAsset, approveSharedAsset, guestDictate, nextFileId, postGuestNote, viewerPermission, shareFeedbackDone, ShareFlowError } from '../share-flow'
 
 afterEach(() => vi.unstubAllGlobals())
 const ok = (b: unknown = {}, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } })
@@ -83,5 +83,14 @@ describe('shareFeedbackDone', () => {
     const [url, init] = f.mock.calls[0]
     expect(url).toMatch(/\/share\/tok\/assets\/a1\/feedback-done\?share_session=s%201$/)
     expect(init.method).toBe('POST')
+  })
+})
+
+describe('viewerPermission', () => {
+  it('gives signed-in staff Approve on a comment link and leaves a client with the link as it is', () => {
+    expect(viewerPermission('comment', true)).toBe('approve')
+    expect(viewerPermission('comment', false)).toBe('comment')
+    expect(viewerPermission('comment')).toBe('comment')
+    expect(viewerPermission('view', false)).toBe('view')
   })
 })

@@ -2,7 +2,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,7 @@ from ..models.approval import ApprovalStatus
 from ..models.asset import Asset, AssetVersion
 from ..models.share import SharePermission
 from ..models.user import User
-from ..services import deliveries
+from ..services import client_view, deliveries
 from ..services.permissions import validate_asset_in_share, validate_share_link_with_session
 
 router = APIRouter(tags=["share"])
@@ -24,10 +24,16 @@ class ShareApprove(BaseModel):
     version_id: Optional[uuid.UUID] = None
 
 
-def _approvable_asset(db: Session, token: str, asset_id: uuid.UUID, share_session, current_user):
-    """The link and asset an approve/undo through `token` may touch; the same gates for both."""
+def _approvable_asset(db: Session, token: str, asset_id: uuid.UUID, share_session, current_user, authorization=None):
+    """The link, asset and approver an approve/undo through `token` may touch; the same gates for both.
+    Signed-in Aditor staff approve on any link as themselves (V3); others only on an `approve` link, as its
+    creator. An agent never approves here (the agent route's rule, routers/agent.py)."""
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
-    if link.permission != SharePermission.approve:
+    # An agent key (`ara_…`) is no JWT, so it would otherwise pass as an anonymous guest.
+    if (authorization or "").startswith("Bearer ara_") or getattr(current_user, "kind", "human") == "agent":
+        raise HTTPException(403, "agents_may_not_approve")
+    staff = client_view.viewer_is_staff(current_user)
+    if not staff and link.permission != SharePermission.approve:
         raise HTTPException(403, "approve_not_allowed")
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
     if asset is None:
@@ -36,36 +42,39 @@ def _approvable_asset(db: Session, token: str, asset_id: uuid.UUID, share_sessio
         validate_asset_in_share(db, link, asset)
     except HTTPException:
         raise HTTPException(404, "not_found")
-    return link, asset
+    return link, asset, (current_user.id if staff else link.created_by)
 
 
 @router.delete("/share/{token}/assets/{asset_id}/approve", status_code=204, dependencies=[Depends(rate_limit("share_approve", 30, 600))])
 def share_unapprove(token: str, asset_id: uuid.UUID, version_id: Optional[uuid.UUID] = None, share_session: Optional[str] = Query(None),
-                    db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
-    """Take the approval back (the link creator's, as recorded by the approve). Idempotent."""
+                    db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user),
+                    authorization: Optional[str] = Header(None)):
+    """Take the approval back (the approver's, as recorded by the approve). Idempotent."""
     from .approvals import remove_approval
-    link, asset = _approvable_asset(db, token, asset_id, share_session, current_user)
-    remove_approval(db, asset, link.created_by, version_id)
+    _, asset, approver = _approvable_asset(db, token, asset_id, share_session, current_user, authorization)
+    remove_approval(db, asset, approver, version_id)
     return Response(status_code=204)
 
 
 @router.post("/share/{token}/assets/{asset_id}/approve", dependencies=[Depends(rate_limit("share_approve", 30, 600))])
 def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_session: Optional[str] = Query(None),
-                  db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
-    """A guest has no user row, so the approval is recorded for the link's creator: the person who made the
-    link `approve` is the one approving through it."""
+                  db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user),
+                  authorization: Optional[str] = Header(None)):
+    """Signed-in staff are recorded as themselves. A guest has no user row, so their approval is recorded for the
+    link's creator: the person who made the link `approve` is the one approving through it."""
     from .approvals import _upsert_approval
-    link, asset = _approvable_asset(db, token, asset_id, share_session, current_user)
+    _, asset, approver_id = _approvable_asset(db, token, asset_id, share_session, current_user, authorization)
+    approver = db.get(User, approver_id)
     versions = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None))
     version = (versions.filter(AssetVersion.id == body.version_id).first() if body.version_id
                else versions.order_by(AssetVersion.version_number.desc()).first())
     if version is None:
         raise HTTPException(404, "not_found")
-    _upsert_approval(db, asset, version.id, db.get(User, link.created_by), ApprovalStatus.approved, None)
-    db.add(ActivityLog(user_id=link.created_by, asset_id=asset.id, action=ActivityAction.approved))
+    _upsert_approval(db, asset, version.id, approver, ApprovalStatus.approved, None)
+    db.add(ActivityLog(user_id=approver_id, asset_id=asset.id, action=ActivityAction.approved))
     db.commit()
     return {"asset_id": str(asset.id), "version_id": str(version.id), "status": "approved",
-            "delivery": deliveries.out(deliveries.on_approved(db, asset, version.id, db.get(User, link.created_by)))}
+            "delivery": deliveries.out(deliveries.on_approved(db, asset, version.id, approver))}
 
 
 @router.post("/share/{token}/assets/{asset_id}/feedback-done", status_code=204, dependencies=[Depends(rate_limit("share_feedback_done", 30, 600))])

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Share links: a client (anyone but signed-in Aditor staff) no longer sees Auto Review notes, internal notes or agent-written comments, and an agent uploader shows as "Aditor". Signed-in staff see everything and get Approve on every share link, recorded as themselves; agent keys get `403 agents_may_not_approve`.
+
 ### Fixed
 - Review UI: the phone Comment button no longer clips its label; touch targets in review, share and approval views are at least 44 px on phones; hover-only download button is reachable on touch.
 
