@@ -112,3 +112,52 @@ def test_a_deactivated_co_owner_does_not_count_as_the_second_owner(seed, as_user
     gone.status = UserStatus.active
     seed.db.flush()
     assert _try().status_code in (200, 204)
+
+
+@pytest.mark.parametrize("how", ["remove", "demote"])
+def test_a_deactivated_sole_owner_is_still_protected(seed, as_user, admin, how):
+    """A deactivated owner who is the only owner keeps the project: the guard asks whether
+    anyone *else* would be left, not whether the target is the only live owner.
+
+    Leaving deactivated accounts out of the live owners must not turn "no other owner" into
+    "nothing to protect". Without that, an administrator removing or demoting the sole owner
+    would leave the project with no owner row at all, and reactivating the account would no
+    longer give the project its owner back. Adding a live owner first lifts the refusal.
+    """
+    from apps.api.models.project import ProjectMember
+    from apps.api.models.user import UserStatus
+
+    owner = seed.user()
+    project = seed.project(owner)
+    owner.status = UserStatus.deactivated
+    seed.db.flush()
+    client = as_user(admin)
+
+    def _try():
+        if how == "remove":
+            return client.delete(f"/projects/{project.id}/members/{owner.id}")
+        return client.patch(
+            f"/projects/{project.id}/members/{owner.id}", json={"role": "editor"},
+        )
+
+    refused = _try()
+    assert refused.status_code == 400
+    assert "only owner" in refused.json()["detail"]
+
+    def live_owner_rows():
+        return seed.db.query(ProjectMember).filter(
+            ProjectMember.project_id == project.id,
+            ProjectMember.role == ProjectRole.owner,
+            ProjectMember.deleted_at.is_(None),
+        ).count()
+
+    assert live_owner_rows() == 1
+
+    # The way out stays open: appoint a live owner, then the deactivated one may go.
+    successor = seed.user(name="Successor")
+    added = client.post(f"/projects/{project.id}/members", json={
+        "user_id": str(successor.id), "role": "owner",
+    })
+    assert added.status_code == 201
+    assert _try().status_code in (200, 204)
+    assert live_owner_rows() == 1

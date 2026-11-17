@@ -79,7 +79,9 @@ def _refuse_losing_last_owner(db: Session, project_id: uuid.UUID, user_id: uuid.
     would make every ownerless project an admin ticket.
     """
     owners = _live_owner_ids(db, project_id)
-    if owners == {user_id}:
+    # "Nobody else would be left", not "this is the one live owner": a sole owner
+    # who is deactivated is absent from `owners` and still has to be kept.
+    if not (owners - {user_id}):
         raise HTTPException(
             status_code=400,
             detail="This is the project's only owner. Give someone else Full Access first.",
