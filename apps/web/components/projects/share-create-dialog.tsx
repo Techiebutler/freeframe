@@ -30,6 +30,7 @@ import { cn, copyToClipboard, dateInputValue, endOfDayISO } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { SHARE_PASSWORD_TOO_LONG, sharePasswordTooLong } from '@/lib/share-password'
 import {
   ShareAppearanceFields,
   DEFAULT_SHARE_APPEARANCE,
@@ -718,6 +719,10 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   const [allowDownloads, setAllowDownloads] = React.useState(false)
   const [passphrase, setPassphrase] = React.useState(false)
   const [passphraseValue, setPassphraseValue] = React.useState('')
+  // The link already has a password, which the details call does not send back.
+  const [passphraseStored, setPassphraseStored] = React.useState(false)
+  // The typed password is over the API's limit, so it is not being saved.
+  const [passphraseTooLong, setPassphraseTooLong] = React.useState(false)
   const [showPassphraseInput, setShowPassphraseInput] = React.useState(false)
   const [watermark, setWatermark] = React.useState(false)
   const [expiresAt, setExpiresAt] = React.useState<string>('')
@@ -750,6 +755,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
       setAllowComments(data.permission === 'comment' || data.permission === 'approve')
       setAllowDownloads(data.allow_download)
       setPassphrase(data.has_password ?? false)
+      setPassphraseStored(data.has_password ?? false)
       setWatermark(data.show_watermark)
       setExpiresAt(dateInputValue(data.expires_at))
       setAppearance({ ...DEFAULT_SHARE_APPEARANCE, ...(data.appearance ?? {}) })
@@ -1024,7 +1030,13 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                     onCheckedChange={(v) => {
                       setPassphrase(v)
                       setShowPassphraseInput(v)
-                      if (!v) { setPassphraseValue(''); patchLink({ password: null }) }
+                      if (!v) {
+                        if (debounceRef.current) clearTimeout(debounceRef.current)
+                        setPassphraseValue('')
+                        setPassphraseStored(false)
+                        setPassphraseTooLong(false)
+                        patchLink({ password: null })
+                      }
                     }}
                     className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors"
                   >
@@ -1036,8 +1048,24 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                     <input
                       type={showPassphraseInput ? 'text' : 'password'}
                       value={passphraseValue}
-                      onChange={(e) => { setPassphraseValue(e.target.value); debouncedPatch({ password: e.target.value || null }) }}
-                      placeholder={passphrase && !passphraseValue ? '••••••••' : 'Enter passphrase'}
+                      // Keeps the browser from filling in a saved password over the link's.
+                      autoComplete="new-password"
+                      onChange={(e) => {
+                        setPassphraseValue(e.target.value)
+                        // Over the limit the API refuses the save, and this
+                        // dialog would not show that, so it is never sent and
+                        // the message below says why.
+                        const tooLong = sharePasswordTooLong(e.target.value)
+                        setPassphraseTooLong(tooLong)
+                        // An empty box is not "remove the password": the switch does that.
+                        if (e.target.value && !tooLong) {
+                          debouncedPatch({ password: e.target.value })
+                        } else if (debounceRef.current) {
+                          clearTimeout(debounceRef.current)
+                        }
+                      }}
+                      aria-invalid={passphraseTooLong || undefined}
+                      placeholder={passphraseStored ? 'Password set. Type a new one to replace it' : 'Enter passphrase'}
                       className="w-full rounded-md border border-border bg-bg-secondary px-3 py-2 pr-14 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
                     />
                     <button
@@ -1048,6 +1076,9 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                       {showPassphraseInput ? 'Hide' : 'Show'}
                     </button>
                   </div>
+                )}
+                {passphrase && passphraseTooLong && (
+                  <p role="alert" className="text-xs text-status-error">{SHARE_PASSWORD_TOO_LONG}</p>
                 )}
               </div>
 
