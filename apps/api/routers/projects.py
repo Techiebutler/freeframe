@@ -52,6 +52,15 @@ def _live_owner_ids(db: Session, project_id: uuid.UUID) -> set[uuid.UUID]:
     An account that is deleted or deactivated is refused at sign-in, so its owner
     row cannot keep anybody out of an ownerless project; counting it would let the
     last owner who can actually sign in be removed.
+
+    The owner rows are locked (`FOR UPDATE OF project_members`, not the users
+    joined in to filter them) until the caller's transaction ends. The guard
+    that uses this reads and then writes, so without the lock two owners
+    removing each other at the same moment both count {A, B}, both pass, and
+    the project is left with none. The second request now waits for the first
+    to commit and counts again, which no longer includes the owner just removed.
+    Rows are locked in a fixed order so two such requests cannot deadlock.
+    Only the two write endpoints that reach the guard call this, never a read.
     """
     return {
         uid
@@ -63,7 +72,7 @@ def _live_owner_ids(db: Session, project_id: uuid.UUID) -> set[uuid.UUID]:
             ProjectMember.deleted_at.is_(None),
             User.deleted_at.is_(None),
             User.status != UserStatus.deactivated,
-        ).all()
+        ).order_by(ProjectMember.id).with_for_update(of=ProjectMember).all()
     }
 
 def _refuse_losing_last_owner(db: Session, project_id: uuid.UUID, user_id: uuid.UUID) -> None:

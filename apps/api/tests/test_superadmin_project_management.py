@@ -4,6 +4,8 @@ The membership endpoints and the rename are owner tier, which an administrator
 reaches past their own membership. Real Postgres over HTTP, for the reason the
 storage half of these tests gives. Harness shared, in conftest.
 """
+import uuid
+
 import pytest
 
 from apps.api.models.project import ProjectMember, ProjectRole
@@ -161,3 +163,111 @@ def test_a_deactivated_sole_owner_is_still_protected(seed, as_user, admin, how):
     assert added.status_code == 201
     assert _try().status_code in (200, 204)
     assert live_owner_rows() == 1
+
+
+# ── two owners removing each other at the same moment ─────────────────────────
+
+@pytest.fixture
+def two_owners():
+    """Two owners of one project, committed, because the race needs two real
+    connections that each see the other's commit. Removed again afterwards."""
+    from apps.api.database import SessionLocal
+    from apps.api.models.project import Project
+    from apps.api.models.user import User, UserStatus
+
+    tag = uuid.uuid4().hex[:8]
+    s = SessionLocal()
+    users, projects = [], []
+    try:
+        def user(name):
+            u = User(id=uuid.uuid4(), email=f"owners-{name}-{tag}@example.test", name=name,
+                     status=UserStatus.active, is_superadmin=False)
+            s.add(u)
+            users.append(u.id)
+            return u
+
+        a, b = user("a"), user("b")
+        s.flush()
+        project = Project(id=uuid.uuid4(), name=f"P-{tag}", created_by=a.id, is_public=False)
+        s.add(project)
+        projects.append(project.id)
+        s.flush()
+        s.add_all([
+            ProjectMember(project_id=project.id, user_id=a.id, role=ProjectRole.owner),
+            ProjectMember(project_id=project.id, user_id=b.id, role=ProjectRole.owner),
+        ])
+        s.commit()
+        yield {"a": a.id, "b": b.id, "project": project.id}
+    finally:
+        s.rollback()
+        s.query(ProjectMember).filter(
+            ProjectMember.project_id.in_(projects),
+        ).delete(synchronize_session=False)
+        s.query(Project).filter(Project.id.in_(projects)).delete(synchronize_session=False)
+        s.query(User).filter(User.id.in_(users)).delete(synchronize_session=False)
+        s.commit()
+        s.close()
+
+
+def test_two_owners_removing_each_other_at_once_leave_one_owner(two_owners, monkeypatch):
+    """The last-owner guard checks and then writes, so without a lock on the owner rows both
+    requests count {A, B}, both pass, and the project ends with no owner.
+
+    Two real requests on their own sessions, held between the check and the write until each
+    has passed it. With the owner rows locked the second request waits for the first to
+    commit, counts again, finds only its own target left, and is refused; the hold then
+    simply times out for the first. Exactly one removal succeeds.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    from apps.api.database import SessionLocal
+    from apps.api.routers import projects as projects_router
+    from apps.api.services.auth_service import create_access_token
+
+    with patch("apps.api.services.s3_service.ensure_bucket_exists"), \
+         patch("apps.api.services.s3_service.get_s3_client", return_value=MagicMock()):
+        from apps.api.main import app
+
+    both_checked = threading.Barrier(2)
+    guard = projects_router._refuse_losing_last_owner
+
+    def check_then_hold(*args, **kwargs):
+        guard(*args, **kwargs)
+        try:
+            both_checked.wait(timeout=3)
+        except threading.BrokenBarrierError:
+            pass  # the other request is waiting on the lock, which is the point
+
+    monkeypatch.setattr(projects_router, "_refuse_losing_last_owner", check_then_hold)
+    project = two_owners["project"]
+
+    def remove(actor, target):
+        client = TestClient(app, raise_server_exceptions=False)
+        token = create_access_token(str(two_owners[actor]))
+        return client.delete(
+            f"/projects/{project}/members/{two_owners[target]}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = pool.submit(remove, "a", "b"), pool.submit(remove, "b", "a")
+        results = [first.result(timeout=60), second.result(timeout=60)]
+
+    assert sorted(r.status_code for r in results) == [204, 400]
+    assert all(
+        "only owner" in r.json()["detail"] for r in results if r.status_code == 400
+    )
+    check = SessionLocal()
+    try:
+        owners = check.query(ProjectMember).filter(
+            ProjectMember.project_id == project,
+            ProjectMember.role == ProjectRole.owner,
+            ProjectMember.deleted_at.is_(None),
+        ).count()
+    finally:
+        check.close()
+    assert owners == 1
