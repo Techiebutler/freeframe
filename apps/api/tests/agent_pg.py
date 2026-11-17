@@ -109,7 +109,8 @@ def env():
 
     with patch("apps.api.services.s3_service.ensure_bucket_exists"), \
          patch("apps.api.services.s3_service.get_s3_client", return_value=MagicMock()), \
-         patch("apps.api.middleware.setup_guard._setup_complete", True):
+         patch("apps.api.middleware.setup_guard._setup_complete", True), \
+         patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)):   # the IP limiter lives in a shared Redis (20 pairings / 10 min)
         app.dependency_overrides[get_db] = override
         e.client = TestClient(app, raise_server_exceptions=False)
         yield e
