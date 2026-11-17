@@ -16,6 +16,15 @@ from apps.api.middleware.auth import get_optional_user
 from apps.api.main import app
 
 
+def _still_an_editor():
+    """The creator bypass holds only while the creator edits the project."""
+    from apps.api.models.project import ProjectRole
+    return patch(
+        "apps.api.services.permissions.get_project_member",
+        return_value=MagicMock(role=ProjectRole.editor),
+    )
+
+
 def _password_link_owned_by(user, *, project_id=None, folder_id=None):
     """A password-protected ShareLink whose creator is `user`."""
     link = MagicMock()
@@ -49,7 +58,8 @@ def test_folder_share_assets_creator_bypasses_password(
     mock_db.scalar.return_value = 0
     mock_db.all.return_value = []
 
-    response = client.get("/share/some-token/assets?page=1&per_page=50")
+    with _still_an_editor():
+        response = client.get("/share/some-token/assets?page=1&per_page=50")
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -93,7 +103,8 @@ def test_share_thumbnail_creator_bypasses_password(
     mock_get_latest_media_file.return_value = media_file
     mock_presign.side_effect = lambda key, **kwargs: f"https://s3.example/{key}?sig=x"
 
-    response = client.get(f"/share/some-token/thumbnail/{asset_id}")
+    with _still_an_editor():
+        response = client.get(f"/share/some-token/thumbnail/{asset_id}")
 
     assert response.status_code == 200, response.text
     assert response.json()["url"].startswith("https://s3.example/")
