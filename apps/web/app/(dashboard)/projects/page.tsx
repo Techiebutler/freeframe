@@ -375,6 +375,7 @@ export default function ProjectsPage() {
                 <form onSubmit={handleCreate} className="mt-5 space-y-4">
                   <Input
                     label="Project name"
+                    maxLength={255}
                     placeholder="e.g. Brand Campaign 2025"
                     value={form.name}
                     onChange={(e) =>

@@ -27,7 +27,7 @@ def test_a_guest_mention_names_the_guest(client, db):
     r = client.post(f"/share/{w.links['asset'].token}/comment", json={
         "asset_id": str(w.A.id),
         "body": f"over to you @{w.editor.email}",
-        "guest_email": f"jane-{uuid.uuid4().hex[:8]}@t.local",
+        "guest_email": f"jane-{uuid.uuid4().hex[:8]}@example.com",
         "guest_name": "Jane",
     })
     assert r.status_code == 201, r.text
@@ -49,7 +49,7 @@ def test_a_guest_reply_names_the_guest(client, db):
         "asset_id": str(w.A.id),
         "parent_id": str(parent.id),
         "body": "looks good",
-        "guest_email": f"jane-{uuid.uuid4().hex[:8]}@t.local",
+        "guest_email": f"jane-{uuid.uuid4().hex[:8]}@example.com",
         "guest_name": "Jane",
     })
     assert r.status_code == 201, r.text

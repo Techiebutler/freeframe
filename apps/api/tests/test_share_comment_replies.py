@@ -70,7 +70,7 @@ def _guest_reply(link, parent_id, current_user=None, **kw):
     import apps.api.routers.comments as comments_module
     from apps.api.schemas.comment import GuestCommentCreate
     body = GuestCommentCreate(body="a guest reply", parent_id=parent_id,
-                              guest_name="Guest", guest_email=f"g-{uuid.uuid4()}@t.local", **kw)
+                              guest_name="Guest", guest_email=f"g-{uuid.uuid4()}@example.com", **kw)
     return lambda db: comments_module.guest_comment(link.token, body, share_session=None,
                                                     db=db, current_user=current_user)
 
