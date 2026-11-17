@@ -933,39 +933,30 @@ button:not(:disabled), summary { cursor: pointer; }
 .ep-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: rgb(255 255 255 / 0.14); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* the glass bar */
-.ep-bar { position: absolute; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 2px 6px; padding: 6px 8px; border-radius: 20px; border: 1px solid rgb(255 255 255 / 0.16); color: #fff;
+/* The bar scales with the video's own width (container query on .ep-video): --ib is the button/track height. Single row always,
+   so it stays well under ~12% of the video height; targets 44 from phone width up, 32 in tiles. */
+.ep-bar { --ib: 36px; position: absolute; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 0 4px; padding: 3px 6px; border-radius: 16px; border: 1px solid rgb(255 255 255 / 0.16); color: #fff;
   background: linear-gradient(145deg, oklch(0.8 0.025 255 / 0.16), transparent 60%), oklch(0.22 0.02 255 / 0.55); -webkit-backdrop-filter: saturate(180%) blur(24px); backdrop-filter: saturate(180%) blur(24px); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 32px -12px rgb(0 0 0 / 0.7);
   transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out); }
 .ep-bar[data-hidden] { opacity: 0; transform: translateY(6px); pointer-events: none; }
-.ep-ib { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 14px; color: #fff; transition: background 150ms, transform 160ms var(--ease-out); }
+.ep-ib { width: var(--ib); height: var(--ib); display: grid; place-items: center; border-radius: 12px; color: #fff; transition: background 150ms, transform 160ms var(--ease-out); }
+.ep-ib svg { width: calc(var(--ib) * 0.5); height: calc(var(--ib) * 0.5); }
 @media (hover: hover) and (pointer: fine) { .ep-ib:hover { background: rgb(255 255 255 / 0.12); } }
 .ep-ib:active { transform: scale(0.94); }
-.ep-time { padding: 0 4px; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; color: rgb(255 255 255 / 0.85); white-space: nowrap; }
+.ep-time { padding: 0 4px; font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: rgb(255 255 255 / 0.85); white-space: nowrap; }
 .ep-time b { font-weight: 400; color: rgb(255 255 255 / 0.5); }
-.ep-trk { position: relative; height: 44px; min-width: 40px; cursor: pointer; touch-action: none; }
-.ep-rail, .ep-fill { position: absolute; left: 0; top: 20px; height: 4px; border-radius: 2px; }
+.ep-trk { position: relative; height: var(--ib); min-width: 24px; margin: 0 6px; cursor: pointer; touch-action: none; }
+.ep-rail, .ep-fill { position: absolute; left: 0; top: calc(var(--ib) / 2 - 2px); height: 4px; border-radius: 2px; }
 .ep-rail { right: 0; background: rgb(255 255 255 / 0.22); }
 .ep-fill { background: linear-gradient(90deg, oklch(0.78 0.12 245), oklch(0.55 0.19 258)); box-shadow: 0 0 10px oklch(0.55 0.19 258 / 0.6); }
-.ep-knob { position: absolute; top: 22px; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #fff; box-shadow: 0 1px 5px rgb(0 0 0 / 0.5); transition: transform 160ms var(--ease-out); }
+.ep-knob { position: absolute; top: calc(var(--ib) / 2); width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #fff; box-shadow: 0 1px 5px rgb(0 0 0 / 0.5); transition: transform 160ms var(--ease-out); }
 .ep-trk:hover .ep-knob, .ep-trk:active .ep-knob, .ep-trk:focus-visible .ep-knob { transform: scale(1.4); }
-.ep-mk { position: absolute; top: 13px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: oklch(0.86 0.09 250); box-shadow: 0 0 0 1.5px rgb(10 20 40 / 0.55); }
-@container (max-width: 420px) {
-  .ep-bar { grid-template-columns: auto 1fr auto auto; grid-template-areas: "trk trk trk trk" "play time mute fs"; gap: 0 4px; padding: 2px 8px 4px; }
-  .ep-bar .ep-trk { grid-area: trk; margin: 0 4px; }
-  .ep-bar .ep-play { grid-area: play; }
-  .ep-bar .ep-time { grid-area: time; }
-  .ep-bar .ep-mute { grid-area: mute; }
-  .ep-bar .ep-fs { grid-area: fs; }
-}
-/* A very narrow video (a tile): the bar keeps inside it, time without the total, 36 px buttons */
-@container (max-width: 260px) {
-  .ep-bar { left: 6px; right: 6px; bottom: 6px; }
-  .ep-bar .ep-time b { display: none; }
-  .ep-bar { gap: 0; }
-  .ep-bar .ep-ib { width: 32px; height: 32px; }
-  .ep-bar .ep-time { padding: 0; }
-  .ep-bar .ep-trk { min-width: 0; }
-}
+.ep-mk { position: absolute; top: calc(var(--ib) / 2 - 7px); width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: oklch(0.86 0.09 250); box-shadow: 0 0 0 1.5px rgb(10 20 40 / 0.55); }
+@media (pointer: coarse) { .ep-bar { --ib: 44px; } }
+@container (max-width: 439px) { .ep-bar { --ib: 44px; } }
+@container (max-width: 359px) { .ep-bar { --ib: 36px; } }
+@container (max-width: 319px) { .ep-bar { --ib: 32px; left: 6px; right: 6px; bottom: 6px; padding: 2px 4px; gap: 0; } .ep-bar .ep-time b { display: none; } .ep-bar .ep-time { padding: 0 2px; } }
+@container (max-width: 219px) { .ep-bar .ep-time, .ep-bar .ep-mute { display: none; } .ep-bar { grid-template-columns: auto 1fr auto; } }
 @media (prefers-reduced-motion: reduce) { .ep-rec-dot, .ep-actions[data-dictating] > .ep-cta { animation: none; } .ep-bar, .ep-knob, .ep-pill, .ep-cta, .ep-approve, .ep-ib { transition: none; } }
 .ep-comments .px-4 { padding-left: 0; padding-right: 0; }
 
