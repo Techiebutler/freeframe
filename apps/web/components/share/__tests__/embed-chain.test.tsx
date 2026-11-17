@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { EmbedChain, EmbedTabs, chainColumns, chainOrder, inferRoles, moduleRoleOf } from '../embed-chain'
+import { EmbedChain, chainColumns, chainOrder, inferRoles, moduleRoleOf } from '../embed-chain'
+import { ModuleTabs } from '../module-tabs'
 
 afterEach(cleanup)
 
@@ -58,11 +59,18 @@ describe('modules recognised from file names', () => {
     const served = [{ id: 'a', name: 'EN_Hook1_X', role: 'body', order: 0 }]
     expect(inferRoles(served)).toBe(served)
   })
-  it('plain files show as named tabs, the current one pressed, no pager', () => {
+  it('the segmented switcher shows full names, hooks first, current one pressed; a tap switches', () => {
     const onSelect = vi.fn()
-    render(<EmbedTabs items={[{ id: 'a', name: 'cut v2.mp4' }, { id: 'b', name: 'cut v3.mp4' }]} selectedId="b" onSelect={onSelect} />)
+    const assets = inferRoles(names.map((name, i) => ({ id: String(i), name })).reverse())
+    render(<ModuleTabs items={assets} selectedId="3" onSelect={onSelect} />)
+    expect(screen.getAllByRole('button').map(b => b.textContent)).toEqual(['Hook 1', 'Hook 2', 'Hook 3', 'Body', 'CTA'])
+    expect(screen.getByRole('button', { name: 'Body' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Hook 2' }))
+    expect(onSelect).toHaveBeenCalledWith('1')
+  })
+  it('plain files show as their own names (no abbreviations, no pager)', () => {
+    render(<ModuleTabs items={[{ id: 'a', name: 'cut v2.mp4' }, { id: 'b', name: 'cut v3.mp4' }]} selectedId="b" onSelect={() => {}} />)
     expect(screen.getByRole('button', { name: 'cut v3' })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(screen.getByRole('button', { name: 'cut v2' }))
-    expect(onSelect).toHaveBeenCalledWith('a')
+    expect(screen.getByRole('button', { name: 'cut v2' })).toBeInTheDocument()
   })
 })

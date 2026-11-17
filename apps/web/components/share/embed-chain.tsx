@@ -49,21 +49,7 @@ export function inferRoles<T extends { name: string; role?: string | null; order
   return assets.map((a, i) => (found[i] ? { ...a, role: found[i]!.role, order: rank.get(i) ?? 0 } : a))
 }
 
-/** Plain files (no module parts): their names as tappable chips, the current one highlighted. Never a numeric pager. */
-export function EmbedTabs({ items, selectedId, onSelect }: { items: { id: string; name: string; count?: number }[]; selectedId: string; onSelect: (id: string) => void }) {
-  return (
-    <div className="ep-tabs" role="group" aria-label="Files of this review">
-      {items.map(i => (
-        <button key={i.id} type="button" aria-pressed={i.id === selectedId} title={i.name} onClick={() => onSelect(i.id)} className="ep-pill ep-tab">
-          <span>{i.name.replace(/\.[a-z0-9]{2,4}$/i, '')}</span>
-          {!!i.count && <span className="ep-count" aria-label={`${i.count} comments`}>{i.count}</span>}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-const label = (item: ChainItem, siblings: number) => `${ROLE_LABEL[item.role] ?? item.role}${siblings > 1 ? ` ${item.order + 1}` : ''}`
+export const partLabel = (item: { role?: string | null; order?: number | null }, siblings: number) => { const r = item.role ?? ''; return `${ROLE_LABEL[r] ?? r}${siblings > 1 ? ` ${(item.order ?? 0) + 1}` : ''}` }
 /** The pill's width hints at the part's length. */
 const width = (item: ChainItem) => Math.round(76 + Math.min(item.duration ?? 5, 30) * 2)
 
@@ -110,7 +96,7 @@ export function EmbedChain({ items, selectedId, onSelect }: { items: ChainItem[]
           <div key={ci} className="ep-col">
             {col.map(item => (
               <button key={item.id} type="button" data-id={item.id} aria-pressed={item.id === selectedId} title={item.name} onClick={() => onSelect(item.id)} className="ep-pill" style={{ width: width(item) }}>
-                <span>{label(item, col.length)}</span>
+                <span>{partLabel(item, col.length)}</span>
                 {!!item.count && <span className="ep-count" aria-label={`${item.count} comments`}>{item.count}</span>}
               </button>
             ))}

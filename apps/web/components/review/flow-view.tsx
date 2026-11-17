@@ -650,8 +650,8 @@ export function FlowView(p: FlowViewProps) {
         onKeyDown={e => embedKey(e, rootRef.current?.querySelector('video') ?? null)}>
         {doneMoment}
         <Confetti burst={burst} />
-        <div ref={areaRef} className="ep-video" style={embedSide.side ? { aspectRatio: String(embedSide.ratio) } : undefined} onClick={toggleVideo}>
-          {mediaArea}
+        <div ref={areaRef} className="ep-stage" style={embedSide.side ? { ['--ratio' as string]: String(embedSide.ratio) } : undefined}>
+          <div className="ep-video" onClick={toggleVideo}>{mediaArea}</div>
           <EmbedBar root={rootRef} area={areaRef} playing={playing} time={time ?? p.getPlayhead()} markers={p.embedMarkers ?? notes.map(n => n.t)} />
         </div>
         <aside className="ep-side" aria-label="Review">
@@ -659,7 +659,7 @@ export function FlowView(p: FlowViewProps) {
           {p.embedComments && (
             <>
               <button type="button" className="ep-comments-toggle" aria-expanded={commentsOpen} onClick={() => setCommentsOpen(o => !o)}>Comments<span className="text-text-secondary">{commentsOpen ? '⌃' : '›'}</span></button>
-              <div className="ep-comments" data-open={commentsOpen ? '' : undefined}>
+              <div className="ep-comments" data-open={commentsOpen || typing ? '' : undefined}>
                 <div className="ep-comments-head"><span>All comments</span></div>
                 <div className="ep-comments-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">{p.embedComments(showComment)}</div>
               </div>
