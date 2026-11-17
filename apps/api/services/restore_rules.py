@@ -15,7 +15,8 @@ call it:
 * An asset whose folder is in the trash is moved to the project's root, which
   is the one place it is reachable from. (`restore_folder` is the other way
   round: restoring the folder brings its own assets back into it.)
-* Nothing that was never usable work comes back at all. A discarded upload is
+* A version that was never usable does not come back (`restore_version_row`;
+  the asset rule is `was_ever_usable`). A discarded upload is
   soft-deleted by `_strip_asset_with_no_versions`, and `_dispose_version_files`
   deletes its objects *before* stamping the row. A `failed` version can also
   be an abandoned upload, so it comes back only if storage still holds its
