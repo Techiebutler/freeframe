@@ -14,12 +14,14 @@ const versions = [
   { id: 'v-3', version_number: 3, processing_status: 'ready' },
   { id: 'v-4', version_number: 4, processing_status: 'processing' },
 ]
+// Which version the server marks `is_current`; an editor can set an older one.
+let currentId = 'v-3'
 
 vi.mock('@/lib/api', () => ({
   api: {
     get: vi.fn(async (url: string) => {
       if (url === '/assets/a1') return { id: 'a1', name: 'Demo', asset_type: 'video', latest_version: null }
-      if (url === '/assets/a1/versions') return versions.map((v) => ({ ...v }))
+      if (url === '/assets/a1/versions') return versions.map((v) => ({ ...v, is_current: v.id === currentId }))
       return []
     }),
     post: vi.fn(),
@@ -30,6 +32,7 @@ import { ReviewProvider, useReview } from '../review-provider'
 
 beforeEach(() => {
   useReviewStore.getState().reset()
+  currentId = 'v-3'
 })
 
 async function loadedVersionWith(initialVersionId?: string | null) {
@@ -56,5 +59,15 @@ describe('ReviewProvider initial version', () => {
 
   it('falls back to the newest ready version when the named one is not ready', async () => {
     expect(await loadedVersionWith('v-4')).toBe('v-3')
+  })
+
+  it('opens on the version set as current when none is named', async () => {
+    currentId = 'v-1'
+    expect(await loadedVersionWith(null)).toBe('v-1')
+  })
+
+  it('still opens on the version the URL names when another is current', async () => {
+    currentId = 'v-1'
+    expect(await loadedVersionWith('v-2')).toBe('v-2')
   })
 })

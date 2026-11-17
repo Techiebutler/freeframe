@@ -22,6 +22,7 @@ from ..models.instance_branding import InstanceBranding
 from ..models.user import User
 from ..models.activity import Mention, ActivityLog, Notification
 from ..services.owned_keys import is_project_logo_key
+from ..services.versions import newer_version_ready
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
     head_object_size,
@@ -550,6 +551,7 @@ def requeue_stuck_processing():
             ).first()
             if done is not None:
                 v.processing_status = ProcessingStatus.ready
+                newer_version_ready(db, v)
                 log.info("requeue: version %s already had output; marking ready", v.id)
                 continue
 

@@ -15,6 +15,7 @@ from ..database import SessionLocal
 from ..models.asset import AssetVersion, MediaFile, ProcessingStatus, AssetType
 from ..models.asset import Asset
 from ..services.s3_service import get_s3_client
+from ..services.versions import newer_version_ready
 from ..config import settings
 
 log = logging.getLogger("celery.transcode")
@@ -78,6 +79,7 @@ def process_asset(self, asset_id: str, version_id: str):
 
             _record_derived_size(db, media_file, output_prefix)
             version.processing_status = ProcessingStatus.ready
+            newer_version_ready(db, version)
             db.commit()
 
             # Publish SSE event (best-effort)

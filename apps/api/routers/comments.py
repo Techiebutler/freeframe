@@ -11,6 +11,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -47,6 +48,7 @@ from ..schemas.comment import (
 )
 from ..services import s3_service
 from ..services import comment_export
+from ..services.versions import current_version
 from ..services.permissions import (
     require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
     require_asset_project_live,
@@ -156,6 +158,21 @@ def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     return asset
+
+
+def _on_a_live_version(asset_id: uuid.UUID):
+    """Comments on a version that has not been deleted on its own (#419).
+
+    A deleted version keeps its comments until the retention purge, so a
+    restore brings them back. Until then a listing must leave them out: they
+    belong to a cut nobody can open any more.
+    """
+    return Comment.version_id.in_(
+        select(AssetVersion.id).where(
+            AssetVersion.asset_id == asset_id,
+            AssetVersion.deleted_at.is_(None),
+        )
+    )
 
 
 def _get_comment(db: Session, comment_id: uuid.UUID) -> Comment:
@@ -465,6 +482,7 @@ def list_comments(
         Comment.asset_id == asset_id,
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
+        _on_a_live_version(asset_id),
     )
     if version_id:
         query = query.filter(Comment.version_id == version_id)
@@ -921,11 +939,7 @@ def export_comments(
             AssetVersion.deleted_at.is_(None),
         ).first()
     else:
-        version = db.query(AssetVersion).filter(
-            AssetVersion.asset_id == asset.id,
-            AssetVersion.processing_status == ProcessingStatus.ready,
-            AssetVersion.deleted_at.is_(None),
-        ).order_by(AssetVersion.version_number.desc()).first()
+        version = current_version(db, asset.id, AssetVersion.processing_status == ProcessingStatus.ready)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
 
@@ -1094,14 +1108,11 @@ def list_share_comments(
     validate_asset_in_share(db, link, asset)
     asset_id = asset.id
 
-    # The folder/grid preview has no version switcher, so it scopes to the latest ready version.
+    # The folder/grid preview has no version switcher, so it scopes to the current
+    # ready version: the one set as current, else the newest.
     if latest_only and not version_id:
         from ..models.asset import AssetVersion, ProcessingStatus
-        latest = db.query(AssetVersion).filter(
-            AssetVersion.asset_id == asset_id,
-            AssetVersion.deleted_at.is_(None),
-            AssetVersion.processing_status == ProcessingStatus.ready,
-        ).order_by(AssetVersion.version_number.desc()).first()
+        latest = current_version(db, asset_id, AssetVersion.processing_status == ProcessingStatus.ready)
         version_id = latest.id if latest else version_id
 
     # Get top-level comments — reuse same format as authenticated endpoint. Internal-visibility
@@ -1111,6 +1122,7 @@ def list_share_comments(
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
         Comment.visibility != "internal",
+        _on_a_live_version(asset_id),
     )
     if version_id:
         query = query.filter(Comment.version_id == version_id)
@@ -1174,15 +1186,11 @@ def guest_comment(
         if not owned:
             raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
 
-    # Resolve version_id: the parent's for a reply, else provided, else the latest ready version
+    # Resolve version_id: the parent's for a reply, else provided, else the current ready version
     if parent:
         version_id = parent.version_id
     elif not version_id:
-        latest = db.query(AssetVersion).filter(
-            AssetVersion.asset_id == asset.id,
-            AssetVersion.deleted_at.is_(None),
-            AssetVersion.processing_status == ProcessingStatus.ready,
-        ).order_by(AssetVersion.version_number.desc()).first()
+        latest = current_version(db, asset.id, AssetVersion.processing_status == ProcessingStatus.ready)
         if latest:
             version_id = latest.id
         else:
