@@ -841,9 +841,12 @@ def _still_being_written(db: Session, project_ids: list, asset_ids: list, versio
 
     An upload without its own deletion stamp may still be transferring under
     a trashed parent. Keep it while its activity is inside the reaper window.
-    Explicitly discarded uploads can go. Processing jobs older than the stuck
-    requeue window can go too: trashed rows are not redispatched by that sweep.
-    A disabled sweep provides no age at which work is known to be abandoned.
+    Explicitly discarded uploads can go. A processing version without its own
+    stamp is always in flight: deleting an asset or a project stamps only the
+    parent, and the stuck-processing requeue sweep keeps redispatching such a
+    version under it. Only a version stamped itself is skipped by that sweep,
+    so only it can go once it is older than the requeue window. A disabled
+    sweep provides no age at which work is known to be abandoned.
     """
     if not project_ids and not asset_ids and not version_ids:
         return []
@@ -871,6 +874,10 @@ def _still_being_written(db: Session, project_ids: list, asset_ids: list, versio
                 continue
             hours = settings.stale_upload_timeout_hours
         else:
+            if version.deleted_at is None:
+                # Under a trashed parent the requeue sweep still redispatches it.
+                in_flight.add(f"{name} version {version.version_number}")
+                continue
             hours = settings.stuck_processing_timeout_hours
         activity = version.last_activity_at or version.created_at
         if activity.tzinfo is None:

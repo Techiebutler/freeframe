@@ -892,6 +892,8 @@ def test_the_only_nonviewable_version_still_requires_selecting_the_file(seed, as
         ("processing", True, 1, 6, 409),
         ("processing", True, 7, 6, 200),
         ("processing", True, 1000, 0, 409),
+        # No stamp of its own: the requeue sweep still redispatches it under a trashed parent.
+        ("processing", False, 7, 6, 409),
     ],
 )
 def test_purging_a_parent_observes_job_activity_and_disabled_sweeps(
