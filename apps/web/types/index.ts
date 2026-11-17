@@ -166,6 +166,19 @@ export interface AssetVersion {
   files?: MediaFile[];
 }
 
+/** A version deleted on its own that can still be restored (`GET /assets/{id}/deleted-versions`). */
+export interface DeletedAssetVersion {
+  id: string;
+  asset_id: string;
+  version_number: number;
+  processing_status: AssetVersionStatus;
+  created_by: string;
+  created_at: string;
+  deleted_at: string;
+  /** When the retention purge may take it; null while the purge is off. */
+  restorable_until: string | null;
+}
+
 /** Backend returns AssetResponse with latest_version embedded */
 export interface AssetResponse extends Asset {
   latest_version: AssetVersion | null;

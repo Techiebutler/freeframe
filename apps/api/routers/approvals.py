@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
-from ..models.asset import Asset
+from ..models.asset import Asset, AssetVersion
 from ..models.approval import Approval, ApprovalStatus
 from ..models.activity import ActivityLog, ActivityAction, Notification, NotificationType
 from ..models.project import ProjectRole
@@ -36,6 +36,15 @@ def _upsert_approval(
     note: str | None,
 ) -> Approval:
     """Create or update an approval record for a user+version."""
+    # The version has to be one of this asset's live ones: a version deleted on
+    # its own keeps its approvals for a restore, and must not take new ones.
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id,
+        AssetVersion.asset_id == asset.id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if not version:
+        raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
     existing = db.query(Approval).filter(
         Approval.asset_id == asset.id,
         Approval.version_id == version_id,
@@ -151,7 +160,10 @@ def list_approvals(
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
-    return db.query(Approval).filter(
+    # Approvals of a version deleted on its own are kept for a restore, and left
+    # out here until then, as its comments are.
+    return db.query(Approval).join(AssetVersion, Approval.version_id == AssetVersion.id).filter(
         Approval.asset_id == asset_id,
         Approval.deleted_at.is_(None),
+        AssetVersion.deleted_at.is_(None),
     ).all()

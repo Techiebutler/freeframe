@@ -254,6 +254,22 @@ it by hand. Soft deletion is also not permanent: `tasks/cleanup_tasks.py` hard-d
 soft-deleted rows and reclaims their S3 objects after `SOFT_DELETE_RETENTION_DAYS`
 (default 30).
 
+**Deleting one version** (`DELETE /assets/{asset_id}/versions/{version_id}`, editor role) is
+such a soft delete. The version, its comments and its approvals leave every listing, share links
+included, and `POST /assets/{asset_id}/versions/{version_id}/restore` brings them back until the
+retention purge hard-deletes them. Only a version that ran (processing or ready) comes back: the
+reaper soft-deletes failed uploads without a file on its own, so a failed version in the trash may
+be an empty row nobody deleted. `GET /assets/{asset_id}/deleted-versions` lists, for editors and
+above only, the deleted versions that can still be restored and until when (`deleted_at` plus
+`SOFT_DELETE_RETENTION_DAYS`). A version cannot be deleted this way when no other version of the
+asset is ready or processing (delete the asset instead), and neither can an upload in flight
+(discard it).
+The storage cap stops counting a deleted version at once, but its bytes stay in the bucket until
+the purge, so the bucket can hold more than the cap shows for up to `SOFT_DELETE_RETENTION_DAYS`.
+Version numbers come from a per-asset counter (`assets.last_version_number`), not from the
+surviving rows, so a purged version's number is never handed out again: "v2" in a comment export
+or a share URL names one cut for the life of the asset.
+
 Key entity relationships:
 
 ```

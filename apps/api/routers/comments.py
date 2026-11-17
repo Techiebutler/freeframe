@@ -11,6 +11,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -156,6 +157,21 @@ def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     return asset
+
+
+def _on_a_live_version(asset_id: uuid.UUID):
+    """Comments on a version that has not been deleted on its own (#419).
+
+    A deleted version keeps its comments until the retention purge, so a
+    restore brings them back. Until then a listing must leave them out: they
+    belong to a cut nobody can open any more.
+    """
+    return Comment.version_id.in_(
+        select(AssetVersion.id).where(
+            AssetVersion.asset_id == asset_id,
+            AssetVersion.deleted_at.is_(None),
+        )
+    )
 
 
 def _get_comment(db: Session, comment_id: uuid.UUID) -> Comment:
@@ -465,6 +481,7 @@ def list_comments(
         Comment.asset_id == asset_id,
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
+        _on_a_live_version(asset_id),
     )
     if version_id:
         query = query.filter(Comment.version_id == version_id)
@@ -1111,6 +1128,7 @@ def list_share_comments(
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
         Comment.visibility != "internal",
+        _on_a_live_version(asset_id),
     )
     if version_id:
         query = query.filter(Comment.version_id == version_id)
