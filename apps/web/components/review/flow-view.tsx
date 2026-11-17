@@ -18,6 +18,7 @@ import { InkLayer, type InkReplay } from './ink-layer'
 import { LevelMeter } from './level-meter'
 import { trackVideo, videoTimeAt, type TimelinePoint } from '@/lib/rec-timeline'
 import { startMicRecording, type ActiveRecording, type StartRecording } from '@/lib/recorder'
+import { dictInitial, dictStep, keepSegment, type DictEvent } from '@/lib/embed-dictation'
 
 export interface FlowFile { id: string; name: string; thumbnail_url?: string | null; version?: number | null }
 
@@ -164,7 +165,10 @@ export function FlowView(p: FlowViewProps) {
   const dictate = p.dictate ?? dictateApi
   const start = p.startRecording ?? startMicRecording
   const [notes, dispatch] = React.useReducer(notesReducer, [] as FlowNote[])
-  const [active, setActive] = React.useState<{ id: string; rec: ActiveRecording; startedAt: number } | null>(null)
+  const [active, setActiveState] = React.useState<{ id: string; t: number; rec: ActiveRecording; startedAt: number } | null>(null)
+  // The ref changes in the same tick as the state: a Play right after a start must still find the recording to close.
+  const activeRef = React.useRef<typeof active>(null)
+  const setActive = (a: typeof active) => { activeRef.current = a; setActiveState(a) }
   const [elapsed, setElapsed] = React.useState(0)
   const [sending, setSending] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -213,8 +217,6 @@ export function FlowView(p: FlowViewProps) {
   const areaRef = React.useRef<HTMLDivElement>(null)
   const [commentsOpen, setCommentsOpen] = React.useState(false)
   const embedSide = useEmbedSide(rootRef, !!p.embed)
-  // Embed: playback goes on after a note. Drawing pauses the picture, so pick it up again if it was running when the note began.
-  const wasPlaying = React.useRef(false)
   const levelRef = React.useRef(0)
   const sKey = p.sessionKey ?? 'flow'
   const [toast, setToast] = React.useState<{ secs: number } | null>(null)
@@ -246,14 +248,6 @@ export function FlowView(p: FlowViewProps) {
     return () => events.forEach(ev => root.removeEventListener(ev, on, true))
   }, [])
   const tracker = React.useRef<ReturnType<typeof trackVideo> | null>(null)
-  React.useEffect(() => {
-    if (!p.embed) return
-    if (active) { wasPlaying.current = wasPlaying.current || playing; return }
-    if (!wasPlaying.current) return
-    wasPlaying.current = false
-    const v = rootRef.current?.querySelector('video')
-    if (v?.paused && !v.ended) v.play().catch(() => {})
-  }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
   /** What the video did during each note's recording; kept so Try again maps times the same way. */
   const timelines = React.useRef(new Map<string, TimelinePoint[]>())
 
@@ -291,8 +285,9 @@ export function FlowView(p: FlowViewProps) {
 
   /** Throws the recording away: no transcription, no note, nothing saved. */
   const cancelRecording = () => {
-    if (!active) return
-    const { id, rec } = active
+    const cur = activeRef.current
+    if (!cur) return
+    const { id, rec } = cur
     rec.cancel()
     tracker.current?.stop(); tracker.current = null
     marks.current = []
@@ -301,37 +296,92 @@ export function FlowView(p: FlowViewProps) {
     setActive(null)
   }
 
-  const tapComment = async () => {
-    setError('')
-    if (active) {
-      const { id, rec } = active
-      setActive(null)
-      const drawn = marks.current
-      marks.current = []
-      tracker.current?.stop()
-      timelines.current.set(id, tracker.current?.points ?? [])
-      tracker.current = null
-      dispatch({ type: 'marks', id, marks: drawn })
-      const note = notes.find(n => n.id === id)
-      await transcribe({ id, t: note?.t ?? p.getPlayhead(), marks: drawn }, await rec.stop())
-      return
-    }
-    // The video keeps playing: talk and draw while it runs (H69).
-    const id = newId()
+  /** Closes the running recording and turns it into notes. `dropEmpty` (embed, Play): nothing said or drawn means no note. */
+  const stopSegment = async (dropEmpty = false) => {
+    const cur = activeRef.current
+    if (!cur) return
+    const { id, rec, t, startedAt } = cur
+    setActive(null)
+    const drawn = marks.current
     marks.current = []
-    dispatch({ type: 'add', id, t: p.getPlayhead(), images })
+    tracker.current?.stop()
+    timelines.current.set(id, tracker.current?.points ?? [])
+    tracker.current = null
+    if (dropEmpty && !keepSegment(Date.now() - startedAt, drawn.length)) { rec.cancel(); timelines.current.delete(id); dispatch({ type: 'remove', id }); return }
+    dispatch({ type: 'marks', id, marks: drawn })
+    await transcribe({ id, t, marks: drawn }, await rec.stop())
+  }
+
+  /** Starts a recording at the playhead. Resolves false when there is no microphone (the note is dropped). */
+  const startSegment = async (): Promise<boolean> => {
+    // The video keeps playing in the other views: talk and draw while it runs (H69).
+    const id = newId()
+    const t = p.getPlayhead()
+    marks.current = []
+    dispatch({ type: 'add', id, t, images })
     setImages([]); setImageNote(null)
     try {
       levelRef.current = 0
       const rec = await start(v => { levelRef.current = v })
+      // Embed: the video was played again while the mic was still opening; nothing was said, nothing is kept.
+      if (p.embed && dict.current.mic !== 'on') { rec.cancel(); dispatch({ type: 'remove', id }); return true }
       const startedAt = rec.startedAt ?? Date.now()
       tracker.current = trackVideo(rootRef.current?.querySelector('video') ?? null, startedAt)
-      setActive({ id, rec, startedAt })
+      setActive({ id, t, rec, startedAt })
+      return true
     }
     catch {
+      if (p.embed) { dispatch({ type: 'remove', id }); return false }
       dispatch({ type: 'failed', id })
       setMessages(m => ({ ...m, [id]: 'Microphone unavailable. Type your note instead.' }))
+      return true
     }
+  }
+
+  // Embed: the mic follows the video (lib/embed-dictation.ts). Paused = talk, playing = silence.
+  const dict = React.useRef(dictInitial)
+  const [micHint, setMicHint] = React.useState('')
+  // Typing mode (no mic): strokes drawn while paused wait here and become a note on Play, on a typed note, or on Send. Never lost.
+  const [typing, setTyping] = React.useState(false)
+  const [inkPending, setInkPending] = React.useState(false)
+  const flushInk = (text?: string): boolean => {
+    const drawn = marks.current
+    if (!p.embed || active || !drawn.length) return false
+    marks.current = []; setInkPending(false)
+    const id = newId()
+    dispatch({ type: 'add', id, t: p.getPlayhead(), status: 'ready', images })
+    dispatch({ type: 'edit', id, text: text?.trim() || 'Drawing' })
+    dispatch({ type: 'marks', id, marks: drawn })
+    if (images.length) { setImages([]); setImageNote(null) }
+    return true
+  }
+  const dictate_ = (e: DictEvent) => {
+    const r = dictStep(dict.current, e)
+    dict.current = r.state
+    if (e === 'play' && r.state.mic === 'typing') flushInk()
+    for (const fx of r.effects) {
+      if (fx === 'start') void startSegment().then(ok => { if (!ok) dictate_('denied') })
+      else if (fx === 'flush') void stopSegment()
+      else if (fx === 'close') void stopSegment(true)
+      else if (fx === 'discard') cancelRecording()
+      else if (fx === 'pause') p.onPause()
+      else if (fx === 'hint') { setTyping(true); setMicHint('Microphone not available. Type your note below.') }
+      // A phone keyboard would cover the video he is about to draw on: only focus where there is a real keyboard, or when typing is all that is left.
+      else if (fx === 'focus' && (r.state.mic === 'typing' || (typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches))) typedRef.current?.focus()
+    }
+  }
+  const prevPlaying = React.useRef(false)
+  React.useEffect(() => {
+    if (!p.embed || prevPlaying.current === playing) return
+    prevPlaying.current = playing
+    dictate_(playing ? 'play' : 'pause')
+  }, [playing]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tapComment = async () => {
+    setError('')
+    if (p.embed) { dictate_('comment'); return }
+    if (activeRef.current) { await stopSegment(); return }
+    await startSegment()
   }
 
   const blocked = sendBlocked(notes) || ob.summary.pending > 0 || ob.summary.failed > 0
@@ -349,6 +399,7 @@ export function FlowView(p: FlowViewProps) {
   }, [toast, delivery])
 
   const finish = async () => {
+    if (flushInk(typed)) { setTyped(''); return } // a drawing still waiting becomes its note first; the next tap sends
     setSending(true); setError('')
     try {
       if (!hasNotes) {
@@ -391,6 +442,7 @@ export function FlowView(p: FlowViewProps) {
     e.preventDefault()
     const text = typed.trim()
     if (!text) return
+    if (flushInk(text)) { setTyped(''); return }
     const id = newId()
     dispatch({ type: 'add', id, t: p.getPlayhead(), status: 'ready', images })
     dispatch({ type: 'edit', id, text })
@@ -441,12 +493,15 @@ export function FlowView(p: FlowViewProps) {
           <>
           {active && <div className="flow-rec-glow" data-testid="rec-glow" aria-hidden="true" />}
           <InkLayer
-            active={!!active}
+            active={!!active || (!!p.embed && typing && !playing)}
             playing={playing}
             time={time}
             onStart={p.onPause}
             replay={replay}
-            onMark={(k, points, times) => { if (active) marks.current.push({ k, points, times, t: p.getPlayhead(), offset_ms: Date.now() - active.startedAt }) }}
+            onMark={(k, points, times) => {
+              if (active) marks.current.push({ k, points, times, t: p.getPlayhead(), offset_ms: Date.now() - active.startedAt })
+              else if (p.embed && typing) { marks.current.push({ k, points, times, t: p.getPlayhead(), offset_ms: 0 }); setInkPending(true) }
+            }}
           />
           </>,
           { markers: notes.map(n => ({ t: n.t, label: stamp(n.t) })) },
@@ -593,15 +648,23 @@ export function FlowView(p: FlowViewProps) {
           {error && <p role="alert" className="rounded-lg bg-bg-secondary px-3 py-2 text-sm text-status-error">{error}</p>}
           {ob.summary.failed > 0 && <button type="button" onClick={() => ob.entries.filter(e => e.status === 'failed').forEach(e => ob.retry(e.id))} className="press inline-flex min-h-11 items-center gap-1 self-start rounded-full bg-bg-secondary px-3 text-xs font-semibold"><RotateCcw size={12} />Retry sending notes</button>}
           {toast && <div role="status" className="flex items-center justify-between gap-2 rounded-lg bg-bg-secondary py-1 pl-3 pr-1"><p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>{copyButton}</div>}
-          {active && (
-            <div className="ep-rec" role="status" aria-label="Recording">
-              <span className="ep-rec-dot" aria-hidden="true" />
-              <span data-testid="rec-timer" className="font-mono tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
-              <span className="min-w-0 truncate">Draw on the video while you talk</span>
-              <button type="button" onClick={cancelRecording} aria-label="Cancel recording" className="ep-cancel press">Cancel</button>
-            </div>
+          {micHint && !active && <p role="status" className="ep-hint">{micHint}</p>}
+          {p.canComment && !active && (
+            <form onSubmit={typeNote} className="ep-type glass">
+              <input ref={typedRef} value={typed} onChange={e => setTyped(e.target.value)} onFocus={p.onPause} aria-label="Type a note at the current time"
+                onPaste={e => { const f = imagesFrom(e.clipboardData); if (f.length) { e.preventDefault(); addImages(f) } }}
+                placeholder={`Type a note at ${timecode(time ?? p.getPlayhead())}…`} enterKeyHint="send" />
+              <button type="submit" disabled={!typed.trim()} aria-label="Add note" className="ep-send"><Send size={16} aria-hidden="true" /></button>
+            </form>
           )}
           <div className="ep-actions">
+            {active && <button type="button" onClick={() => dictate_('stop')} aria-label="Cancel recording" className="ep-cancel press">Cancel</button>}
+            {active && (
+              <div className="ep-rec" role="status" aria-label="Recording">
+                <span className="ep-rec-dot" aria-hidden="true" />
+                <span data-testid="rec-timer" className="font-mono tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
+              </div>
+            )}
             {p.canComment && (
               <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} data-recording={active ? '' : undefined} className="ep-cta">
                 {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Comment</>}
@@ -609,7 +672,7 @@ export function FlowView(p: FlowViewProps) {
             )}
             {!active && (
               <button type="button" onClick={finish} disabled={sending || (hasNotes ? blocked : (!!p.approved || !canApprove))} className="ep-approve glass">
-                {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : hasNotes ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{hasNotes ? 'Send' : sendLabel}
+                {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : hasNotes || inkPending ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}{hasNotes || inkPending ? 'Send' : sendLabel}
               </button>
             )}
           </div>
