@@ -2,6 +2,7 @@
 
 import useSWR from 'swr'
 import { api } from '@/lib/api'
+import { sendDrawnFrame } from '@/lib/note-outbox'
 import type { Comment, Annotation, CommentReaction } from '@/types'
 
 // ─── Extended comment type with nested data ───────────────────────────────────
@@ -102,6 +103,7 @@ export function useComments(assetId: string | null, versionId: string | null, ve
     parentId?: string,
     visibility?: string,
     mentionUserIds?: string[],
+    drawnFrame?: File,
   ): Promise<CommentWithReplies> {
     if (!assetId) throw new Error('No asset selected')
     if (!versionId) throw new Error('No version selected')
@@ -113,12 +115,14 @@ export function useComments(assetId: string | null, versionId: string | null, ve
     if (parentId) payload.parent_id = parentId
     if (visibility) payload.visibility = visibility
     if (mentionUserIds?.length) (payload as any).mention_user_ids = mentionUserIds
+    if (drawnFrame) (payload as any).attachments_expected = 1
 
     const endpoint = parentId
       ? `/assets/${assetId}/comments/${parentId}/replies`
       : `/assets/${assetId}/comments`
 
     const newComment = await api.post<CommentWithReplies>(endpoint, payload)
+    if (drawnFrame) void sendDrawnFrame(newComment.id, drawnFrame)
     // Optimistically insert the authoritative POST response into the cache, then
     // revalidate in the BACKGROUND (not awaited) — the composer clears after the
     // single POST round-trip instead of also waiting on a full re-fetch of every

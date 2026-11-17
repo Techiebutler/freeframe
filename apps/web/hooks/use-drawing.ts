@@ -35,6 +35,11 @@ function notifyCanvasReady() {
   readyListeners.forEach((cb) => cb())
 }
 
+/** The pixels of the classic drawing layer, for the drawn-frame picture (null when nothing is mounted). */
+export function getDrawingCanvasEl(): HTMLCanvasElement | null {
+  return ((sharedFabric as any)?.lowerCanvasEl as HTMLCanvasElement | undefined) ?? null
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useDrawing(): UseDrawingReturn {

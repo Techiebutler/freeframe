@@ -1,5 +1,7 @@
 'use client'
 
+import { drawnFrameFromOverlay } from '@/lib/drawn-frame'
+import { getDrawingCanvasEl } from '@/hooks/use-drawing'
 import * as React from 'react'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
@@ -266,14 +268,20 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     visibility?: string,
     mentionUserIds?: string[],
   ) => {
+    const drawing = annotation || annotationData || undefined
+    // A drawing on a video also goes up as a picture (frame + drawing); no picture (tainted, no video) = comment as before.
+    const drawnFrame = drawing && !parentId
+      ? await drawnFrameFromOverlay(document.querySelector('video'), getDrawingCanvasEl()).catch(() => null)
+      : null
     await createComment(
       body,
       timecodeStart,
       timecodeEnd,
-      annotation || annotationData || undefined,
+      drawing,
       parentId,
       visibility,
       mentionUserIds,
+      drawnFrame ?? undefined,
     )
     setAnnotationData(null)
     refetchComments()

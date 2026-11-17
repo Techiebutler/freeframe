@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
 import { notesFromDictation, notesReducer, sendBlocked, sendable, type FlowNote } from '@/lib/flow-notes'
+import { drawnFrameFile, nearestShot, snapshotVideo, type FrameShot } from '@/lib/drawn-frame'
 import { buildDrawingData, isInk, splitDeictic, type InkMark } from '@/lib/ink'
 import { getNoteOutbox, useNoteOutbox, type NoteBody, type NotePayload } from '@/lib/note-outbox'
 import { imagesFrom, IMAGE_TYPES, pickImages } from '@/lib/comment-images'
@@ -211,6 +212,14 @@ export function FlowView(p: FlowViewProps) {
   )
   const [messages, setMessages] = React.useState<Record<string, string>>({})
   const marks = React.useRef<InkMark[]>([])
+  /** The picture under each stroke when it was drawn: the drawn frame is built from these when the note is saved. */
+  const shots = React.useRef<FrameShot[]>([])
+  const snap = (t: number) => {
+    const canvas = snapshotVideo(rootRef.current?.querySelector('video'))
+    if (canvas) shots.current = [...shots.current.slice(-11), { t, canvas }]
+  }
+  const framing = React.useRef(new Set<string>())
+  const queueChain = React.useRef<Promise<unknown>>(Promise.resolve())
   const [replay, setReplay] = React.useState<InkReplay | null>(null)
   const replayKey = React.useRef(0)
   const rootRef = React.useRef<HTMLDivElement>(null)
@@ -264,7 +273,15 @@ export function FlowView(p: FlowViewProps) {
     for (const n of notes) {
       if (n.status !== 'ready' || !n.text.trim() || ob.byId(n.id)) continue
       if (!canSave) { onNeedSave.current?.(); continue }
-      void ob.enqueue(n.id, payloadRef.current({ text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []), ...(n.images?.length ? { images: n.images } : {}) }))
+      const note = { text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []), ...(n.images?.length ? { images: n.images } : {}) }
+      if (framing.current.has(n.id)) continue
+      framing.current.add(n.id)
+      // Ink: render the drawn frame first (milliseconds), then queue; no frame (tainted, no video) = ink only. One chain keeps note order.
+      const marksOfNote = n.marks ?? []
+      queueChain.current = queueChain.current
+        .then(() => (marksOfNote.length ? drawnFrameFile(nearestShot(shots.current, marksOfNote[0].t), marksOfNote) : null))
+        .then(drawnFrame => ob.enqueue(n.id, payloadRef.current({ ...note, ...(drawnFrame ? { drawnFrame } : {}) })))
+        .catch(() => undefined)
     }
   }, [notes, canSave, ob.entries]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -499,6 +516,7 @@ export function FlowView(p: FlowViewProps) {
             onStart={p.onPause}
             replay={replay}
             onMark={(k, points, times) => {
+              snap(p.getPlayhead())
               if (active) marks.current.push({ k, points, times, t: p.getPlayhead(), offset_ms: Date.now() - active.startedAt })
               else if (p.embed && typing) { marks.current.push({ k, points, times, t: p.getPlayhead(), offset_ms: 0 }); setInkPending(true) }
             }}
