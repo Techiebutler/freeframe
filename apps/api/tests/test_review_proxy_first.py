@@ -25,9 +25,10 @@ def _quick(height):
     return job, media_file, upgrade
 
 
-def test_quick_pass_encodes_only_360p_into_the_quick_prefix():
+def test_quick_pass_encodes_the_540p_proxy_and_360p_into_the_quick_prefix():
+    """Every new version enqueues the 540p review proxy with its first pass."""
     job, media_file, _ = _quick(1080)
-    assert job.qualities == ["360p"]
+    assert job.qualities == ["540p", "360p"]
     assert job.output_s3_prefix == f"{BASE}/quick"
     assert job.make_thumbnail is True
     assert media_file.s3_key_processed == f"{BASE}/quick"
@@ -119,7 +120,7 @@ def _run_upgrade(current_key, result, status=None, retries=0, key_after=None):
 
 def test_upgrade_builds_the_full_ladder_and_switches_playback():
     media_file, job, _ = _run_upgrade(f"{BASE}/quick", TranscodeResult(success=True, hls_prefix=BASE))
-    assert job.qualities == ["1080p", "720p", "360p"]
+    assert job.qualities == ["1080p", "720p", "540p", "360p"]
     assert job.output_s3_prefix == BASE
     assert job.make_thumbnail is False
     assert media_file.s3_key_processed == BASE

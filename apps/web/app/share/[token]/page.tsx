@@ -33,6 +33,7 @@ import { EmbedChain, chainOrder } from '@/components/share/embed-chain'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
+import { REVIEW_HLS_CONFIG, pickPlaybackSource, pickReviewLevel } from '@/lib/hls-review'
 import { sendToParent, sendAutoreviewEvent, type EmbedMessage } from '@/lib/embed-bridge'
 import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset, viewerPermission } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
@@ -427,6 +428,8 @@ interface ShareMediaViewerProps {
   token: string
   streamUrl: string | null
   streamLoading: boolean
+  /** 540p review proxy MP4 (when the version has one): the video starts here. */
+  proxyUrl?: string | null
   /** Flow view: the page needs the video element, and mounts the ink layer inside the picture. */
   videoRef?: React.RefObject<HTMLVideoElement>
   overlay?: React.ReactNode
@@ -434,11 +437,14 @@ interface ShareMediaViewerProps {
   bare?: boolean
 }
 
-function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: externalVideoRef, overlay, bare }: ShareMediaViewerProps) {
+function ShareMediaViewer({ asset, token, streamUrl, streamLoading, proxyUrl, videoRef: externalVideoRef, overlay, bare }: ShareMediaViewerProps) {
   const ownVideoRef = React.useRef<HTMLVideoElement>(null)
   const videoRef = externalVideoRef ?? ownVideoRef
   const audioRef = React.useRef<HTMLAudioElement>(null)
   const [fatalError, setFatalError] = React.useState<string | null>(null)
+  const [proxyBroken, setProxyBroken] = React.useState(false)
+  const source = streamUrl && asset.asset_type === 'video' ? pickPlaybackSource(streamUrl, proxyBroken ? null : proxyUrl) : null
+  const preparing = source?.kind === 'original'
 
   React.useEffect(() => {
     if (!streamUrl || streamLoading) return
@@ -447,24 +453,42 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: ex
     const mediaEl = asset.asset_type === 'video' ? videoRef.current : audioRef.current
     if (!mediaEl) return
 
-    const isHls = streamUrl.includes('.m3u8')
+    const isProxy = source?.kind === 'proxy'
+    const isHls = !isProxy && streamUrl.includes('.m3u8')
 
     // Resolve relative stream URLs against API_URL (backend returns /stream/hls/master.m3u8?token=...)
-    const resolvedUrl = streamUrl.startsWith('/')
-      ? `${API_URL}${streamUrl}`
-      : streamUrl
+    const resolvedUrl = isProxy
+      ? source!.url
+      : streamUrl.startsWith('/')
+        ? `${API_URL}${streamUrl}`
+        : streamUrl
 
     let hls: any = null
     let cancelled = false
+    let onFullscreen: (() => void) | null = null
 
     function setupHls() {
       import('hls.js').then(({ default: Hls }) => {
         if (cancelled) return
 
         if (isHls && Hls.isSupported()) {
-          hls = new Hls()
+          hls = new Hls(REVIEW_HLS_CONFIG)
           hls.loadSource(resolvedUrl)
           hls.attachMedia(mediaEl!)
+          // Start on the 540p rung and cap there; fullscreen lifts the cap.
+          let reviewLevel = -1
+          hls.on(Hls.Events.MANIFEST_PARSED, (_e: any, data: any) => {
+            reviewLevel = pickReviewLevel(data.levels)
+            if (reviewLevel < 0) return
+            hls.startLevel = reviewLevel
+            hls.currentLevel = reviewLevel
+            hls.autoLevelCapping = reviewLevel
+            hls.nextLevel = -1
+          })
+          onFullscreen = () => {
+            if (hls && reviewLevel >= 0) hls.autoLevelCapping = document.fullscreenElement ? -1 : reviewLevel
+          }
+          document.addEventListener('fullscreenchange', onFullscreen)
 
           hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
             if (data.fatal) {
@@ -497,10 +521,17 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: ex
     if (isHls) {
       setupHls()
     } else if (mediaEl) {
+      // crossOrigin keeps drawn-frame (canvas capture) working on the cross-origin proxy file.
+      if (isProxy) (mediaEl as HTMLVideoElement).crossOrigin = 'anonymous'
       mediaEl.src = resolvedUrl
     }
 
     function handleMediaError() {
+      // A broken proxy file must never block review: fall back to the HLS ladder.
+      if (isProxy) {
+        setProxyBroken(true)
+        return
+      }
       // Tear down hls.js (if it's driving playback) so it doesn't keep fetching
       // segments into the now-detached element once the error UI replaces it.
       if (hls) {
@@ -514,14 +545,21 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, videoRef: ex
     return () => {
       cancelled = true
       mediaEl.removeEventListener('error', handleMediaError)
+      if (onFullscreen) document.removeEventListener('fullscreenchange', onFullscreen)
+      if (isProxy) { mediaEl.removeAttribute('src'); mediaEl.load() }
       if (hls) {
         hls.destroy()
       }
     }
-  }, [streamUrl, streamLoading, asset.asset_type])
+  }, [streamUrl, streamLoading, asset.asset_type, source?.url, source?.kind])
 
   return (
-    <div className="flex-1 flex items-center justify-center bg-black min-h-0 overflow-hidden">
+    <div className="relative flex-1 flex items-center justify-center bg-black min-h-0 overflow-hidden">
+      {preparing && (
+        <p className="pointer-events-none absolute left-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs text-zinc-300">
+          Preparing faster playback…
+        </p>
+      )}
       {asset.asset_type === 'video' && (
         <div className="w-full h-full flex items-center justify-center">
           {streamLoading ? (
@@ -786,6 +824,7 @@ function ShareViewer({
 }: ShareViewerProps) {
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
+  const [proxyUrl, setProxyUrl] = React.useState<string | null>(null)
   const [commentKey, setCommentKey] = React.useState(0)
   const [commentTimes, setCommentTimes] = React.useState<number[]>([])
   const [selectedComment, setSelectedComment] = React.useState<string | null>(null)
@@ -832,6 +871,7 @@ function ShareViewer({
       .then((data) => {
         if (data?.stream_url) setStreamUrl(data.stream_url)
         else if (data?.url) setStreamUrl(data.url)
+        setProxyUrl(data?.proxy_url ?? null)
       })
       .catch(() => null)
       .finally(() => setStreamLoading(false))
@@ -884,7 +924,7 @@ function ShareViewer({
           )}
           embedMarkers={commentTimes}
           renderMedia={(ink) => (
-            <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} bare />
+            <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} proxyUrl={proxyUrl} videoRef={videoRef} overlay={ink} bare />
           )}
           files={[{ id: asset.id, name: asset.name }]}
           currentFileId={asset.id}
@@ -931,7 +971,7 @@ function ShareViewer({
           <div className={isNarrow ? 'h-full w-full max-w-[430px] md:border-x md:border-white/[0.06]' : 'h-full w-full'}>
             <FlowView
               renderMedia={(ink) => (
-                <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} videoRef={videoRef} overlay={ink} />
+                <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} proxyUrl={proxyUrl} videoRef={videoRef} overlay={ink} />
               )}
               files={[{ id: asset.id, name: asset.name }]}
               currentFileId={asset.id}

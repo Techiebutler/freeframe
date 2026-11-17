@@ -122,8 +122,9 @@ def process_asset(self, asset_id: str, version_id: str):
 # version ready; `upgrade_video_renditions` then builds the full ladder into the version's main
 # prefix and switches playback over. The quick output lives under QUICK_SUFFIX inside that prefix,
 # so deleting the version still removes both.
-FULL_QUALITIES = ["1080p", "720p", "360p"]
-QUICK_QUALITIES = ["360p"]
+FULL_QUALITIES = ["1080p", "720p", "540p", "360p"]
+# 540p is the review proxy (HLS rung + review_540.mp4); 360p stays for the AI proxy and weak links.
+QUICK_QUALITIES = ["540p", "360p"]
 QUICK_SUFFIX = "quick"
 UPGRADE_MIN_SOURCE_HEIGHT = 720  # below this the ladder trims to 360p anyway (see the transcoder)
 
@@ -312,5 +313,54 @@ def backfill_media_metadata(self):
                 log.warning("backfill: skipping media_file %s: %s", row_id, exc)
                 continue
         return {"updated": updated, "skipped": skipped}
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=300, acks_late=True)
+def build_review_proxy(self, asset_id: str, version_id: str):
+    """Backfill: add review_540.mp4 next to a version's existing ladder, without touching playback.
+
+    Encodes only the 540p rung into a side prefix and copies the MP4 beside the live ladder, so the
+    version keeps playing from its current prefix the whole time. A no-op when the proxy exists.
+    """
+    from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, REVIEW_PROXY_NAME, PROXY_SHORT_SIDE
+    from packages.transcoder.base import TranscodeJob
+    from ..services.s3_service import object_exists
+
+    db = SessionLocal()
+    try:
+        version = db.query(AssetVersion).filter(AssetVersion.id == uuid.UUID(version_id)).first()
+        asset = db.query(Asset).filter(Asset.id == uuid.UUID(asset_id)).first()
+        media_file = db.query(MediaFile).filter(MediaFile.version_id == uuid.UUID(version_id)).first() if version else None
+        if not (version and asset and media_file) or asset.asset_type != AssetType.video:
+            return
+        if version.processing_status != ProcessingStatus.ready or not media_file.s3_key_processed:
+            return
+        if min(media_file.width or PROXY_SHORT_SIDE, media_file.height or PROXY_SHORT_SIDE) < PROXY_SHORT_SIDE:
+            return  # smaller than the proxy: the HLS ladder is already lighter
+        live_prefix = media_file.s3_key_processed
+        target_key = f"{live_prefix}/{REVIEW_PROXY_NAME}"
+        if object_exists(target_key):
+            return
+        raw_key = media_file.s3_key_raw
+        side_prefix = f"processed/{asset.project_id}/{asset_id}/{version_id}/p540"
+        db.commit()  # release the connection for the length of the encode
+
+        s3 = get_s3_client()
+        transcoder = FFmpegTranscoder(s3, settings.s3_bucket, settings.s3_endpoint)
+        result = _run_async(transcoder.transcode(TranscodeJob(
+            media_id=asset_id, version_id=version_id, input_s3_key=raw_key,
+            output_s3_prefix=side_prefix, qualities=["540p"], make_thumbnail=False,
+        )))
+        if not result.success:
+            if self.request.retries < self.max_retries:
+                raise self.retry(exc=RuntimeError(result.error))
+            logger.warning("review proxy failed for %s: %s", asset_id, result.error)
+            return
+        s3.copy_object(
+            Bucket=settings.s3_bucket, Key=target_key,
+            CopySource={"Bucket": settings.s3_bucket, "Key": f"{side_prefix}/{REVIEW_PROXY_NAME}"},
+        )
     finally:
         db.close()

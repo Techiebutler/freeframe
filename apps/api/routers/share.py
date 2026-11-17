@@ -1462,6 +1462,7 @@ def get_share_stream_url(
     if not media_file:
         raise HTTPException(status_code=404, detail="No ready media file found")
 
+    proxy_url = None
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
         if download:
             s3_key = media_file.s3_key_raw or media_file.s3_key_processed
@@ -1471,6 +1472,10 @@ def get_share_stream_url(
             # Route through /stream/hls so S3 can stay private (#51)
             hls_token = create_hls_token(media_file.s3_key_processed)
             url = f"/stream/hls/master.m3u8?token={hls_token}"
+            # The 540p review proxy, when this version has one: the player starts on it.
+            proxy_key = f"{media_file.s3_key_processed}/review_540.mp4"
+            if object_exists(proxy_key):
+                proxy_url = generate_presigned_get_url(proxy_key)
     else:
         s3_key = media_file.s3_key_processed or media_file.s3_key_raw
         if download:
@@ -1499,6 +1504,7 @@ def get_share_stream_url(
     return {
         **timing,
         "url": url,
+        "proxy_url": proxy_url,
         "asset_type": asset.asset_type.value,
         "name": asset.name,
         "version_id": str(media_file.version_id) if media_file.version_id else None,
