@@ -19,7 +19,7 @@ def test_share_comments_returns_array_for_asset_share(
     mock_db,
 ):
     asset_id = uuid.uuid4()
-    comment = MagicMock()
+    comment = MagicMock(visibility="public", review_source=None, review_publication_id=None, author_id=None)  # a person's comment (client_view keeps it)
     expected = {
         "id": str(uuid.uuid4()),
         "body": "Looks good",
@@ -112,7 +112,7 @@ def test_share_comments_returns_array_for_folder_or_project_share_asset(
     mock_db,
 ):
     asset_id = uuid.uuid4()
-    comment = MagicMock()
+    comment = MagicMock(visibility="public", review_source=None, review_publication_id=None, author_id=None)  # a person's comment (client_view keeps it)
     expected = {
         "id": str(uuid.uuid4()),
         "body": "Needs one tweak",
@@ -307,7 +307,7 @@ def test_expired_bearer_is_anonymous_rather_than_rejected(
 # more importantly - the cases that must stay refused.
 
 def _guest_comment(guest_email="review@aditor.ai"):
-    comment = MagicMock()
+    comment = MagicMock(visibility="public", review_source=None, review_publication_id=None, author_id=None)  # a person's comment (client_view keeps it)
     comment.id = uuid.uuid4()
     comment.author_id = None
     comment.guest_author_id = uuid.uuid4()
