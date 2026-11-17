@@ -33,7 +33,7 @@ import { EmbedChain, chainOrder } from '@/components/share/embed-chain'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
-import { sendToParent, type EmbedMessage } from '@/lib/embed-bridge'
+import { sendToParent, sendAutoreviewEvent, type EmbedMessage } from '@/lib/embed-bridge'
 import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset, viewerPermission } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance, FolderShareAssetItem, FolderShareAssetsResponse } from '@/types'
@@ -44,6 +44,7 @@ interface ShareValidateResponse {
   asset?: Asset
   asset_id?: string | null
   folder_id?: string | null
+  request_id?: string | null
   project_id?: string | null
   folder_name?: string
   project_name?: string
@@ -765,6 +766,8 @@ interface ShareViewerProps {
   onBack?: () => void
   /** ?embed=1: video-only page inside the Desk's iframe, reports to the parent window. */
   embed?: boolean
+  /** The upload request behind this share link; the embed names it in its hand-off events. */
+  requestId?: string | null
   /** Folder embed: this asset's place in the folder, the stepper, and what the approve acts on. */
   folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** The file chain of a module request; without it the plain 1 / N stepper. */ nav?: React.ReactNode }
 }
@@ -778,6 +781,7 @@ function ShareViewer({
   shareName,
   onBack,
   embed,
+  requestId,
   folder,
 }: ShareViewerProps) {
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
@@ -839,11 +843,12 @@ function ShareViewer({
   const flow = (embed || isNarrow || phoneView) && asset.asset_type === 'video'
   const flowVideo = () => videoRef.current
   const send = (m: EmbedMessage) => sendToParent({ ...m, asset_id: asset.id })
+  const handoff = (event: 'round_sent' | 'approved') => { if (requestId) sendAutoreviewEvent({ event, request_id: requestId, asset_id: asset.id }) }
   const flowApprove = async () => {
     const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession, headers: authHeaders(await getUsableAccessToken()) })
     setFlowApproved(true)
     folder?.onApproved(true)
-    if (embed) send({ type: 'ar:approved' })
+    if (embed) { send({ type: 'ar:approved' }); handoff('approved') }
     return made
   }
 
@@ -893,7 +898,7 @@ function ShareViewer({
           canSave={!!identity}
           onNeedSave={() => setAskIdentity(true)}
           onApprove={flowApprove}
-          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }) }}
+          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }); handoff('round_sent') }}
           onNoteSaved={(t) => { send({ type: 'ar:comment', t }); setCommentKey((k) => k + 1) }}
           onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id, { shareSession: folder?.shareSession }); setFlowApproved(false); folder?.onApproved(false) }}
           sessionKey={token}
@@ -1018,7 +1023,7 @@ function ShareViewer({
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 /** ?embed=1 on a folder share: the video-only embed over the folder's videos, newest first, starting at the first not yet approved. */
-function FolderEmbed({ token, shareSession, permission, branding }: { token: string; shareSession: string | null; permission: SharePermission; branding: ProjectBranding | null }) {
+function FolderEmbed({ token, shareSession, permission, branding, requestId }: { token: string; shareSession: string | null; permission: SharePermission; branding: ProjectBranding | null; requestId: string | null }) {
   const [items, setItems] = React.useState<FolderShareAssetItem[] | null>(null)
   const [index, setIndex] = React.useState(0)
   React.useEffect(() => {
@@ -1053,6 +1058,7 @@ function FolderEmbed({ token, shareSession, permission, branding }: { token: str
     <ShareViewer
       key={current.id}
       embed
+      requestId={requestId}
       token={token}
       asset={{ id: current.id, name: current.name, asset_type: current.asset_type } as Asset}
       permission={permission}
@@ -1103,6 +1109,7 @@ export default function SharePage({
 
   const [state, setState] = React.useState<PageState>({ stage: 'loading' })
   const [shareSession, setShareSession] = React.useState<string | null>(null)
+  const [requestId, setRequestId] = React.useState<string | null>(null)
   const openLogged = React.useRef(false)
 
   async function validate(password?: string) {
@@ -1132,6 +1139,7 @@ export default function SharePage({
       const permission = viewerPermission(data.permission, data.viewer_is_staff)
 
       // Store share session from password-protected link validation
+      setRequestId(data.request_id ?? null)
       if (data.share_session) {
         setShareSession(data.share_session)
       }
@@ -1240,7 +1248,7 @@ export default function SharePage({
   }
 
   if (state.stage === 'folder_ready') {
-    if (embed) return <FolderEmbed token={token} shareSession={shareSession} permission={state.permission} branding={state.branding} />
+    if (embed) return <FolderEmbed requestId={requestId} token={token} shareSession={shareSession} permission={state.permission} branding={state.branding} />
     return (
       <FolderShareViewer
         token={token}
@@ -1267,6 +1275,7 @@ export default function SharePage({
       allowDownload={state.allowDownload}
       branding={state.branding}
       embed={embed}
+      requestId={requestId}
     />
   )
 }

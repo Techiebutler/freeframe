@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { parentOrigin, sendToParent } from '../embed-bridge'
+import { EMBED_PARENT_ORIGINS, parentOrigin, sendAutoreviewEvent, sendToParent } from '../embed-bridge'
 
 const framed = (ancestors: string[] | undefined, referrer = '') => {
   const postMessage = vi.fn()
@@ -34,5 +34,33 @@ describe('embed bridge', () => {
     ;(win as { parent: unknown }).parent = win
     expect(sendToParent({ type: 'ar:ended' }, win)).toBe(false)
     expect(postMessage).not.toHaveBeenCalled()
+  })
+
+  describe('autoreview hand-off', () => {
+    it('posts round_sent with the request id to the parent origin', () => {
+      const { win, postMessage } = framed(['https://gen.aditor.ai'])
+      expect(sendAutoreviewEvent({ event: 'round_sent', request_id: 'r1', asset_id: 'a1' }, win)).toBe(true)
+      expect(postMessage).toHaveBeenCalledWith({ type: 'autoreview', event: 'round_sent', request_id: 'r1', asset_id: 'a1' }, 'https://gen.aditor.ai')
+    })
+    it('posts approved', () => {
+      const { win, postMessage } = framed(['https://web.telegram.org'])
+      sendAutoreviewEvent({ event: 'approved', request_id: 'r1' }, win)
+      expect(postMessage).toHaveBeenCalledWith({ type: 'autoreview', event: 'approved', request_id: 'r1' }, 'https://web.telegram.org')
+    })
+    it('without a known parent origin posts to each allowlisted origin, never "*"', () => {
+      const { win, postMessage } = framed(undefined)
+      sendAutoreviewEvent({ event: 'approved', request_id: 'r1' }, win)
+      expect(postMessage).toHaveBeenCalledTimes(EMBED_PARENT_ORIGINS.length)
+      expect(postMessage.mock.calls.map((c) => c[1])).toEqual(EMBED_PARENT_ORIGINS)
+      expect(postMessage.mock.calls.some((c) => c[1] === '*')).toBe(false)
+    })
+    it('posts nothing for a foreign parent or without a request id', () => {
+      const evil = framed(['https://evil.example'])
+      expect(sendAutoreviewEvent({ event: 'approved', request_id: 'r1' }, evil.win)).toBe(false)
+      const ok = framed(['https://gen.aditor.ai'])
+      expect(sendAutoreviewEvent({ event: 'approved', request_id: '' }, ok.win)).toBe(false)
+      expect(evil.postMessage).not.toHaveBeenCalled()
+      expect(ok.postMessage).not.toHaveBeenCalled()
+    })
   })
 })

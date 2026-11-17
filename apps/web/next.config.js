@@ -9,7 +9,7 @@ const nextConfig = {
     return [{
       source: '/share/:token',
       has: [{ type: 'query', key: 'embed', value: '1' }],
-      headers: [{ key: 'Content-Security-Policy', value: 'frame-ancestors https://gen.aditor.ai https://app.aditor.ai' }],
+      headers: [{ key: 'Content-Security-Policy', value: 'frame-ancestors https://gen.aditor.ai https://app.aditor.ai https://web.telegram.org https://*.telegram.org' }],
     }]
   },
   eslint: {

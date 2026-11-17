@@ -1,6 +1,6 @@
 /** postMessage bridge for the share page's ?embed=1 mode: the page tells its parent window what happens. */
 
-export const EMBED_PARENT_ORIGINS = ['https://gen.aditor.ai', 'https://app.aditor.ai']
+export const EMBED_PARENT_ORIGINS = ['https://gen.aditor.ai', 'https://app.aditor.ai', 'https://web.telegram.org']
 
 /** `asset_id` names the asset on screen (a folder share embeds several); `index` is 1-based. */
 export type EmbedMessage = (
@@ -23,5 +23,24 @@ export function sendToParent(msg: EmbedMessage, win: Window = window): boolean {
   const origin = parentOrigin((win.location as Location & { ancestorOrigins?: ArrayLike<string> }).ancestorOrigins, win.document.referrer)
   if (!origin) return false
   win.parent.postMessage(msg, origin)
+  return true
+}
+
+/** The hand-off contract with Gen (cut_handoff.v1): a feedback round was sent, or the cut was approved. */
+export type AutoreviewEvent = { type: 'autoreview'; event: 'round_sent' | 'approved'; request_id: string; asset_id?: string }
+
+/**
+ * Posts the hand-off event to the parent. Never "*": it goes to the parent's own origin when that is known (and allowlisted),
+ * otherwise (no ancestorOrigins, referrer stripped) to each allowlisted origin, where the browser drops every mismatch.
+ * A known foreign parent, no parent (top-level, Telegram WebView) or no request id: nothing.
+ */
+export function sendAutoreviewEvent(msg: Omit<AutoreviewEvent, 'type'>, win: Window = window): boolean {
+  if (win.parent === win || !msg.request_id) return false
+  const ancestors = (win.location as Location & { ancestorOrigins?: ArrayLike<string> }).ancestorOrigins
+  const full: AutoreviewEvent = { type: 'autoreview', ...msg }
+  const known = parentOrigin(ancestors, win.document.referrer)
+  if (known) { win.parent.postMessage(full, known); return true }
+  if (ancestors?.[0] || win.document.referrer) return false
+  EMBED_PARENT_ORIGINS.forEach((o) => win.parent.postMessage(full, o))
   return true
 }

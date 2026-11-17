@@ -89,6 +89,7 @@ class ShareLinkValidateResponse(BaseModel):
     asset: Optional[dict] = None  # Full asset details for asset shares
     branding: Optional[dict] = None  # Project branding info
     share_session: Optional[str] = None  # Session token for password-protected links
+    request_id: Optional[uuid.UUID] = None  # the upload request this link is the standing review link of (embed postMessage)
 
 
 class ShareLinkUpdate(BaseModel):
