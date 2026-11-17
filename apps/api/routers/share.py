@@ -40,6 +40,7 @@ from ..services.permissions import (
     require_project_role, validate_share_link, validate_share_link_with_session,
     validate_asset_in_share, _is_descendant_of,
 )
+from ..services import client_view
 from ..services.redis_service import create_share_session
 from ..services.s3_service import generate_presigned_get_url, build_download_filename, object_exists
 from ..services.crypto_service import encrypt_password, decrypt_password
@@ -168,8 +169,11 @@ def _latest_version_comment_counts(db: Session, asset_id: uuid.UUID) -> tuple[in
     if not version:
         return 0, 0
     # (people, auto review). An Auto Review publication carries review_publication_id or review_source; the bubble on a
-    # tile counts people only, so a file nobody has looked at does not read as commented on.
-    auto = or_(Comment.review_publication_id.isnot(None), Comment.review_source.isnot(None))
+    # tile counts people only, so a file nobody has looked at does not read as commented on. Internal notes and agent
+    # comments are not people either (client_view); coalesce keeps a NULL author out of a third group.
+    agent_users = select(User.id).where(User.kind == "agent")
+    auto = or_(Comment.review_publication_id.isnot(None), Comment.review_source.isnot(None),
+               Comment.visibility == "internal", sa_func.coalesce(Comment.author_id.in_(agent_users), False))
     rows = db.query(auto, sa_func.count(Comment.id)).filter(
         Comment.asset_id == asset_id,
         Comment.version_id == version.id,
@@ -351,7 +355,8 @@ def validate_share_link_endpoint(
 
     # Resolve creator name
     creator = db.query(User).filter(User.id == link.created_by).first()
-    created_by_name = creator.name if creator else None
+    staff = client_view.viewer_is_staff(current_user)
+    created_by_name = client_view.creator_name(creator, staff)
 
     return ShareLinkValidateResponse(
         asset_id=link.asset_id,
@@ -371,6 +376,7 @@ def validate_share_link_endpoint(
         created_by_name=created_by_name,
         viewer_name=current_user.name if current_user else None,
         viewer_email=current_user.email if current_user else None,
+        viewer_is_staff=staff,
         asset=asset_data,
         branding=branding_data,
         share_session=session_id,
@@ -1210,6 +1216,7 @@ def get_folder_share_assets(
     matching `/share/{token}/stream/{asset_id}`.
     """
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+    staff = client_view.viewer_is_staff(current_user)
 
     from ..models.upload_request import UploadRequest
     # The standing review link sees the parts of its request. So does the request's own embed link (the one the agent API hands the Gen desk),
@@ -1281,7 +1288,7 @@ def get_folder_share_assets(
                     thumbnail_url=thumbnail_url, created_at=a.created_at.isoformat() if a.created_at else "",
                     file_size=mf.file_size_bytes if mf else None,
                     duration_seconds=mf.duration_seconds if mf else None,
-                    comment_count=comment_count, auto_comment_count=auto_comment_count, approved=_latest_version_approved(db, a.id),
+                    comment_count=comment_count, auto_comment_count=auto_comment_count if staff else 0, approved=_latest_version_approved(db, a.id),
                     version_count=(_ready_version_count(db, a.id) if link.show_versions else 1),
                 ))
         else:
@@ -1403,9 +1410,9 @@ def get_folder_share_assets(
             thumbnail_url=thumbnail_url,
             file_size=file_size,
             duration_seconds=duration_seconds,
-            comment_count=comment_count, auto_comment_count=auto_comment_count, approved=_latest_version_approved(db, asset.id),
+            comment_count=comment_count, auto_comment_count=auto_comment_count if staff else 0, approved=_latest_version_approved(db, asset.id),
             version_count=(_ready_version_count(db, asset.id) if link.show_versions else 1),
-            created_by_name=creator.name if creator else None,
+            created_by_name=client_view.creator_name(creator, staff),
             created_at=asset.created_at,
             role=roles.get(str(asset.id), (None, None))[0], order=roles.get(str(asset.id), (None, None))[1],
         ))

@@ -1,6 +1,7 @@
 'use client'
 
 import { authHeaders } from '@/lib/auth-headers'
+import { getUsableAccessToken } from '@/lib/auth'
 
 import * as React from 'react'
 import {
@@ -33,7 +34,7 @@ import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
 import { sendToParent, type EmbedMessage } from '@/lib/embed-bridge'
-import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset } from '@/lib/share-flow'
+import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset, viewerPermission } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance, FolderShareAssetItem, FolderShareAssetsResponse } from '@/types'
 
@@ -61,6 +62,7 @@ interface ShareValidateResponse {
   created_by_name?: string | null
   viewer_name?: string | null
   viewer_email?: string | null
+  viewer_is_staff?: boolean
   branding?: ProjectBranding | null
   error?: string
 }
@@ -838,7 +840,7 @@ function ShareViewer({
   const flowVideo = () => videoRef.current
   const send = (m: EmbedMessage) => sendToParent({ ...m, asset_id: asset.id })
   const flowApprove = async () => {
-    const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession })
+    const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession, headers: authHeaders(await getUsableAccessToken()) })
     setFlowApproved(true)
     folder?.onApproved(true)
     if (embed) send({ type: 'ar:approved' })
@@ -1127,6 +1129,7 @@ export default function SharePage({
         setState({ stage: 'invalid' })
         return
       }
+      const permission = viewerPermission(data.permission, data.viewer_is_staff)
 
       // Store share session from password-protected link validation
       if (data.share_session) {
@@ -1154,7 +1157,7 @@ export default function SharePage({
           description: data.description ?? null,
           createdByName: data.created_by_name ?? null,
           viewerName: data.viewer_name ?? null,
-          permission: data.permission,
+          permission,
           allowDownload: data.allow_download ?? false,
           showVersions: data.show_versions ?? true,
           appearance: { ...defaultAppearance, ...(data.appearance ?? {}) },
@@ -1171,7 +1174,7 @@ export default function SharePage({
       setState({
         stage: 'ready',
         asset: data.asset,
-        permission: data.permission,
+        permission,
         allowDownload: data.allow_download ?? false,
         showVersions: data.show_versions ?? true,
         branding: data.branding ?? null,

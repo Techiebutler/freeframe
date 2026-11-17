@@ -1,5 +1,6 @@
 import type { DictationResult } from './agents'
 import { deliveryOf, type DeliveryRef } from './delivery'
+import type { SharePermission } from '@/types'
 
 const API_URL = () => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -92,4 +93,9 @@ export async function undoApproveSharedAsset(
 export function shareFeedbackDone(token: string, assetId: string, shareSession?: string | null): void {
   const qs = shareSession ? `?share_session=${encodeURIComponent(shareSession)}` : ''
   fetch(`${API_URL()}/share/${token}/assets/${assetId}/feedback-done${qs}`, { method: 'POST' }).catch(() => {})
+}
+
+/** Signed-in Aditor staff approve on any share link (the server checks it again, V3); everyone else gets the link's own permission. */
+export function viewerPermission(link: SharePermission, viewerIsStaff?: boolean): SharePermission {
+  return viewerIsStaff ? 'approve' : link
 }

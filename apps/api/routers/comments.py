@@ -43,7 +43,7 @@ from ..schemas.comment import (
     ReviewCommentCreate,
     public_review_source,
 )
-from ..services import brand_loop, feedback_rounds, s3_service
+from ..services import brand_loop, client_view, feedback_rounds, s3_service
 from ..services import comment_export
 from ..services import comment_attachments as images
 from ..services.permissions import (
@@ -182,9 +182,9 @@ def _build_comment_responses_batched(
     regardless of how many comments the asset has (avoids the N+1 that made the
     list endpoint slow — and it's re-fetched after every comment save).
 
-    exclude_internal drops visibility="internal" comments (and their whole subtree, since a
-    reply to a team-only comment is team-only too) — set for guest/public callers so an
-    internal note never reaches a share link, no matter how deep in the thread it is."""
+    exclude_internal is the client view: drops internal notes, Auto Review publications and agent-written
+    comments (and their whole subtree, since a reply to a team-only comment is team-only too) — set for
+    client callers of a share link, no matter how deep in the thread it is (client_view)."""
     if not top_level:
         return []
 
@@ -195,6 +195,9 @@ def _build_comment_responses_batched(
     if exclude_internal:
         all_comments_query = all_comments_query.filter(Comment.visibility != "internal")
     all_comments = all_comments_query.order_by(Comment.created_at).all()
+    if exclude_internal:
+        agents = client_view.agent_ids(db, [c.author_id for c in all_comments])
+        all_comments = [c for c in all_comments if client_view.client_visible(c, agents)]
     children_map: dict[uuid.UUID, list[Comment]] = defaultdict(list)
     for c in all_comments:
         if c.parent_id is not None:
@@ -1090,22 +1093,25 @@ def list_share_comments(
         ).order_by(AssetVersion.version_number.desc()).first()
         version_id = latest.id if latest else version_id
 
-    # Get top-level comments — reuse same format as authenticated endpoint. Internal-visibility
-    # comments are team-only and must never reach a public share link.
+    # Get top-level comments — reuse same format as authenticated endpoint. A client (anyone but
+    # signed-in Aditor staff) never sees internal notes, Auto Review or agent comments; staff see all.
+    staff = client_view.viewer_is_staff(current_user)
     query = db.query(Comment).filter(
         Comment.asset_id == asset_id,
         Comment.parent_id.is_(None),
         Comment.deleted_at.is_(None),
-        Comment.visibility != "internal",
     )
+    if not staff:
+        query = query.filter(Comment.visibility != "internal")
     if version_id:
         query = query.filter(Comment.version_id == version_id)
     top_level = query.order_by(Comment.created_at).all()
+    if not staff:
+        agents = client_view.agent_ids(db, [c.author_id for c in top_level])
+        top_level = [c for c in top_level if client_view.client_visible(c, agents)]
 
     # Batched build (fixed query count) — guests have no user, so no current_user_id.
-    # The automated reviewer's comments are stored visibility="internal" (see guest_comment), so the
-    # exclude_internal filter above already keeps them off this client-facing timeline.
-    return _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=True)
+    return _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=not staff)
 
 
 def automation_comment_id(token, asset_id, version_id, key, authorization):
