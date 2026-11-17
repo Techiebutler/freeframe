@@ -160,11 +160,26 @@ def _ms(seconds: Optional[float]) -> Optional[float]:
     return None if seconds is None else round(seconds, 3)
 
 
-def _frame_url(db: Session, version_id: uuid.UUID) -> Optional[str]:
+# The client uploads the frame with the ink rendered on it as a normal comment image with this file name.
+DRAWN_FRAME_NAME = "drawn-frame"
+
+
+def _is_drawn_frame(a: CommentAttachment) -> bool:
+    return (a.original_filename or "").lower().startswith(DRAWN_FRAME_NAME)
+
+
+def _frame_url(db: Session, comment_id: uuid.UUID, version_id: uuid.UUID) -> Optional[str]:
+    """The drawn frame when the client uploaded one; otherwise the version thumbnail (older clients)."""
+    from . import s3_service
+    drawn = next((a for a in _uploaded(db, comment_id) if _is_drawn_frame(a)), None)
+    if drawn:
+        try:
+            return s3_service.generate_presigned_get_url(drawn.s3_key, expires_in=7 * 24 * 3600)
+        except Exception:  # noqa: BLE001 - fall back to the thumbnail rather than lose the comment
+            pass
     media = db.query(MediaFile).filter(MediaFile.version_id == version_id).first()
     if not media or not media.s3_key_thumbnail:
         return None
-    from . import s3_service
     try:
         return s3_service.generate_presigned_get_url(media.s3_key_thumbnail, expires_in=7 * 24 * 3600)
     except Exception:  # noqa: BLE001 - a missing thumbnail must not lose the comment
@@ -186,11 +201,11 @@ def feedback_v1(db: Session, rnd: FeedbackRound) -> dict:
         note = db.query(Annotation).filter(Annotation.comment_id == c.id).first()
         files[key]["comments"].append({
             "comment_id": str(c.id), "t_start": _ms(c.timecode_start), "t_end": _ms(c.timecode_end), "text": c.body,
-            "drawing": {"drawing_data": note.drawing_data, "frame_url": _frame_url(db, c.version_id),
+            "drawing": {"drawing_data": note.drawing_data, "frame_url": _frame_url(db, c.id, c.version_id),
                         "mark_offset_ms": note.drawing_data.get("mark_offset_ms") if isinstance(note.drawing_data, dict) else None} if note else None,
             "attachments": [{"attachment_id": str(a.id), "file_name": a.original_filename, "content_type": a.file_type,
                              "url": s3_service.generate_presigned_get_url(a.s3_key, expires_in=7 * 24 * 3600)}
-                            for a in _uploaded(db, c.id)],
+                            for a in _uploaded(db, c.id) if not _is_drawn_frame(a)],
             "author": name, "author_kind": kind})
     return build_feedback_v1(round_id=rnd.id, request_id=rnd.request_id, project_id=req.project_id, briefing=req.title,
                              opened_at=rnd.opened_at, closed_at=rnd.closed_at, closed_by=rnd.closed_by,

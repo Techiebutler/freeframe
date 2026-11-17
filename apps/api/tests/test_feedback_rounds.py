@@ -157,6 +157,27 @@ def test_close_button_returns_feedback_v1_then_a_new_comment_opens_a_new_round(s
 
 
 @needs_pg
+def test_a_drawn_frame_upload_is_the_frame_url_and_not_an_attachment(scene):
+    e = scene
+    from apps.api.models.comment import CommentAttachment
+    drawn = comment(e, e.scene.asset, "Circle this", 3.2, annotation={"drawing_data": INK})
+    plain = comment(e, e.scene.asset, "No ink", 4.0)
+    with e.Session() as db:
+        for cid, name in ((drawn["id"], "drawn-frame.jpg"), (drawn["id"], "ref.png"), (plain["id"], "ref2.png")):
+            db.add(CommentAttachment(comment_id=uuid.UUID(cid), file_type="image/jpeg", s3_key=f"k/{cid}/{name}",
+                                     original_filename=name, file_size_bytes=1, uploaded_at=T0))
+        db.commit()
+    url = lambda key, expires_in=0: f"https://s3/{key}"
+    with patch("apps.api.services.s3_service.generate_presigned_get_url", side_effect=url):
+        v1 = e.client.post(f"/requests/{e.scene.req.id}/feedback-rounds/close", json={"reason": "button"}, headers=e.headers(e.owner)).json()
+    by_text = {n["text"]: n for n in v1["files"][0]["comments"]}
+    d, p = by_text["Circle this"], by_text["No ink"]
+    assert d["drawing"]["frame_url"] == f"https://s3/k/{drawn['id']}/drawn-frame.jpg"
+    assert [a["file_name"] for a in d["attachments"]] == ["ref.png"]   # the drawn frame is not a reviewer image
+    assert p["drawing"] is None and [a["file_name"] for a in p["attachments"]] == ["ref2.png"]
+
+
+@needs_pg
 def test_only_the_owner_closes_a_round(scene):
     e = scene
     comment(e, e.scene.asset)
