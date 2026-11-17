@@ -23,14 +23,14 @@
 
 services:
   api:
-    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.0}
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   worker:
-    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.0}
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   email_worker:
-    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.0}
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   maintenance_worker:
-    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.0}
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   beat:
-    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.0}
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   web:
-    image: ghcr.io/techiebutler/freeframe-web:${FREEFRAME_VERSION:-1.22.0}
+    image: ghcr.io/techiebutler/freeframe-web:${FREEFRAME_VERSION:-1.22.1}

@@ -66,15 +66,19 @@ class TestValidateShareLinkWithSession:
         assert result == mock_link
         mock_verify_session.assert_not_called()
 
+    @patch("apps.api.services.permissions.get_project_member")
     @patch("apps.api.services.permissions.verify_share_session")
     @patch("apps.api.services.permissions.validate_share_link")
-    def test_password_link_creator_bypasses(self, mock_validate, mock_verify_session):
+    def test_password_link_creator_bypasses(self, mock_validate, mock_verify_session, mock_member):
+        # The creator skips the password while they still edit the project.
         import uuid
+        from apps.api.models.project import ProjectRole
         creator_id = uuid.uuid4()
         mock_link = MagicMock()
         mock_link.password_hash = "$2b$12$hashvalue"
         mock_link.created_by = creator_id
         mock_validate.return_value = mock_link
+        mock_member.return_value = MagicMock(role=ProjectRole.editor)
 
         mock_user = MagicMock()
         mock_user.id = creator_id
@@ -87,6 +91,33 @@ class TestValidateShareLinkWithSession:
 
         assert result == mock_link
         mock_verify_session.assert_not_called()
+
+    @pytest.mark.parametrize("role", [None, "reviewer", "viewer"])
+    @patch("apps.api.services.permissions.get_project_member")
+    @patch("apps.api.services.permissions.verify_share_session")
+    @patch("apps.api.services.permissions.validate_share_link")
+    def test_password_link_creator_no_longer_editing_needs_a_session(
+        self, mock_validate, mock_verify_session, mock_member, role,
+    ):
+        # Removed from the project (no membership) or demoted below editor:
+        # the creator needs a session like any guest.
+        import uuid
+        from apps.api.models.project import ProjectRole
+        creator_id = uuid.uuid4()
+        mock_link = MagicMock()
+        mock_link.password_hash = "$2b$12$hashvalue"
+        mock_link.created_by = creator_id
+        mock_validate.return_value = mock_link
+        mock_member.return_value = None if role is None else MagicMock(role=ProjectRole(role))
+
+        mock_user = MagicMock()
+        mock_user.id = creator_id
+
+        from apps.api.services.permissions import validate_share_link_with_session
+
+        with pytest.raises(Exception) as exc_info:
+            validate_share_link_with_session(MagicMock(), "token123", current_user=mock_user)
+        assert exc_info.value.status_code == 403
 
     @patch("apps.api.services.permissions.verify_share_session")
     @patch("apps.api.services.permissions.validate_share_link")

@@ -1,8 +1,26 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uuid
 from datetime import datetime
 from typing import Optional, Literal
 from ..models.share import SharePermission, ShareVisibility
+
+
+# A link's password is kept twice: a bcrypt hash that guests are checked against,
+# and an encrypted copy so the settings panel can show it to the link's managers.
+# The copy grows with the password and has to fit share_links.password_encrypted
+# (String(512)), which holds about 319 bytes of password. The limit counts UTF-8
+# bytes, not characters, since that is what the column fills up with.
+SHARE_PASSWORD_MAX_BYTES = 128
+# Verifying only reads the hash, and links made before the limit can hold longer
+# passwords, so verify gets a looser bound that still refuses absurd bodies.
+SHARE_VERIFY_PASSWORD_MAX_BYTES = 1024
+
+
+def _bounded_password(value: Optional[str], limit: int) -> Optional[str]:
+    # The message must not quote the value: it is returned in the 422 body.
+    if value is not None and len(value.encode("utf-8")) > limit:
+        raise ValueError(f"Password must be at most {limit} bytes")
+    return value
 
 
 class ShareLinkAppearance(BaseModel):
@@ -35,6 +53,11 @@ class ShareLinkCreate(BaseModel):
     show_watermark: bool = False
     appearance: ShareLinkAppearance = ShareLinkAppearance()
 
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: Optional[str]) -> Optional[str]:
+        return _bounded_password(v, SHARE_PASSWORD_MAX_BYTES)
+
 
 class MultiShareCreate(BaseModel):
     asset_ids: list[uuid.UUID] = []
@@ -49,6 +72,11 @@ class MultiShareCreate(BaseModel):
     show_versions: bool = True
     show_watermark: bool = False
     appearance: ShareLinkAppearance = ShareLinkAppearance()
+
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: Optional[str]) -> Optional[str]:
+        return _bounded_password(v, SHARE_PASSWORD_MAX_BYTES)
 
 
 class ShareLinkResponse(BaseModel):
@@ -69,7 +97,9 @@ class ShareLinkResponse(BaseModel):
     expires_at: Optional[datetime] = None
     created_at: datetime
     has_password: bool = False
-    password_value: Optional[str] = None  # Decrypted password for admin display only
+    # The link's password, set only for callers who manage the link (editor or
+    # owner); everyone else gets None and reads has_password.
+    password_value: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -117,6 +147,11 @@ class ShareVerifyRequest(BaseModel):
     password: str
     log_open: bool = False
 
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: str) -> str:
+        return _bounded_password(v, SHARE_VERIFY_PASSWORD_MAX_BYTES)
+
 
 class ShareLinkUpdate(BaseModel):
     title: Optional[str] = None
@@ -130,6 +165,11 @@ class ShareLinkUpdate(BaseModel):
     password: Optional[str] = None
     expires_at: Optional[datetime] = None
     allow_download: Optional[bool] = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: Optional[str]) -> Optional[str]:
+        return _bounded_password(v, SHARE_PASSWORD_MAX_BYTES)
 
 
 class ShareLinkListItem(BaseModel):

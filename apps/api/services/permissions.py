@@ -288,6 +288,29 @@ def enforce_share_link_visibility(link: ShareLink, current_user: "User | None") 
         )
 
 
+def creator_skips_link_password(db: Session, link: ShareLink, user: "User | None") -> bool:
+    """Whether `user` may open the password link `link` without its password.
+
+    Only the link's creator may, so the dashboard can preview their own link,
+    and only while they still manage links in its project (editor or owner).
+    Someone who could not read the password in the settings panel must not get
+    around it either: once a creator is removed from the project or demoted,
+    they need the password like any guest, including a password changed after
+    they left.
+    """
+    if user is None or link.created_by != user.id:
+        return False
+    project_id = link.project_id
+    if project_id is None and link.asset_id is not None:
+        project_id = db.query(Asset.project_id).filter(Asset.id == link.asset_id).scalar()
+    if project_id is None and link.folder_id is not None:
+        project_id = db.query(Folder.project_id).filter(Folder.id == link.folder_id).scalar()
+    if project_id is None:
+        return False
+    member = get_project_member(db, project_id, user.id)
+    return member is not None and member.role in (ProjectRole.owner, ProjectRole.editor)
+
+
 def validate_share_link_with_session(
     db: Session,
     token: str,
@@ -296,12 +319,13 @@ def validate_share_link_with_session(
 ) -> ShareLink:
     """Validate a share link, enforce its visibility setting, and verify the
     password session if the link is password-protected.
-    Skips password check if the caller is the authenticated link creator."""
+    Skips the password check for the link's creator while they still manage
+    links in its project (see creator_skips_link_password)."""
     link = validate_share_link(db, token)
     enforce_share_link_visibility(link, current_user)
     if link.password_hash:
-        # Skip password for authenticated link creator (e.g. admin settings preview)
-        if current_user and link.created_by == current_user.id:
+        # The creator previews their own link from the dashboard without it.
+        if creator_skips_link_password(db, link, current_user):
             return link
         if not share_session or not verify_share_session(token, share_session):
             raise HTTPException(

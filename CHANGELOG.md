@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.1] - 2026-11-17
+
+Security release: fixes [GHSA-9rqc-xmrj-9qc6](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-9rqc-xmrj-9qc6), which let read-only project members read share-link passwords and let guests keep access after a link's password was changed. Upgrading is strongly recommended. It contains only this fix on top of v1.22.0, and no migrations.
+
+### Security
+- **Share-link settings show a link's password only to the project's editors and owners, and changing it signs out existing guests.** Reviewers and viewers get `has_password` without the password, the settings panel says "Password set" when it is not shown one, and every response that describes a link, including the create responses and the asset and folder link lists, reports `has_password` correctly. Changing or removing a link's password, disabling the link or deleting it now ends the guest sessions opened before, so a guest has to enter the new password. The link's creator opens it without the password only while they are an editor or owner of the project, so a creator who was removed or demoted needs the current password like any guest. Emptying the password box no longer removes the password (the switch does that), and a link password is limited to 128 bytes; the settings say so instead of saving a longer one. (#627)
+
 ## [1.22.0] - 2026-10-29
 
 ### Upgrade notes
