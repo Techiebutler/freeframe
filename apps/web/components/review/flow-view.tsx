@@ -372,28 +372,26 @@ export function FlowView(p: FlowViewProps) {
     if (images.length) { setImages([]); setImageNote(null) }
     return true
   }
-  const typedPause = React.useRef(false)
   const focusTyped = React.useRef(false)
-  React.useEffect(() => { if (!active && focusTyped.current) { focusTyped.current = false; typedRef.current?.focus() } }, [active])
+  React.useEffect(() => { if (!active && typing && focusTyped.current) { focusTyped.current = false; typedRef.current?.focus() } }, [active, typing])
   const dictate_ = (e: DictEvent) => {
     const r = dictStep(dict.current, e)
     dict.current = r.state
-    if (e === 'play' && (r.state.mic === 'typing' || typedPause.current)) {
+    setTyping(r.state.mic === 'typing')
+    if (e === 'play' && r.state.mic === 'typing') {
       // Typing session ends on Play: the typed note (with any ink) is saved, then the video plays.
       const text = typed.trim()
       if (text) { if (!flushInk(text)) typeNote(); setTyped('') } else flushInk()
-      typedPause.current = false
     }
-    if (e === 'type') typedPause.current = true
     for (const fx of r.effects) {
       if (fx === 'start') void startSegment().then(ok => { if (!ok) dictate_('denied') })
       else if (fx === 'flush') void stopSegment(e === 'type')
       else if (fx === 'close') void stopSegment(true)
       else if (fx === 'discard') cancelRecording()
       else if (fx === 'pause') p.onPause()
-      else if (fx === 'hint') { setTyping(true); setMicHint('Microphone not available. Type your note below.') }
+      else if (fx === 'hint') { setMicHint('Microphone not available. Type your note below.') }
       // A phone keyboard would cover the video he is about to draw on: only focus where there is a real keyboard, or when typing is all that is left.
-      else if (fx === 'focus' && e === 'type') focusTyped.current = true // the field mounts once the recording row is gone
+      else if (fx === 'focus' && r.state.mic === 'typing') { if (typedRef.current && !activeRef.current) typedRef.current.focus(); else focusTyped.current = true } // the field only exists in typing mode, once the recording row is gone
       else if (fx === 'focus' && (r.state.mic === 'typing' || (typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches))) typedRef.current?.focus()
     }
   }
@@ -677,7 +675,17 @@ export function FlowView(p: FlowViewProps) {
           {ob.summary.failed > 0 && <button type="button" onClick={() => ob.entries.filter(e => e.status === 'failed').forEach(e => ob.retry(e.id))} className="press inline-flex min-h-11 items-center gap-1 self-start rounded-full bg-bg-secondary px-3 text-xs font-semibold"><RotateCcw size={12} />Retry sending notes</button>}
           {toast && <div role="status" className="flex items-center justify-between gap-2 rounded-lg bg-bg-secondary py-1 pl-3 pr-1"><p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>{copyButton}</div>}
           {micHint && !active && <p role="status" className="ep-hint">{micHint}</p>}
-          {p.canComment && !active && (
+          {typing && !active && notes.some(n => n.status !== 'recording') && (
+            <ul className="ep-notes" aria-label="Your notes">
+              {notes.filter(n => n.status !== 'recording').slice().reverse().map(n => (
+                <li key={n.id}>
+                  <button type="button" onClick={() => p.onSeek(n.t)} aria-label={`Go to ${stamp(n.t)}`} className="ep-note-t press">{stamp(n.t)}</button>
+                  <span className="ep-note-text">{n.text || '…'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {p.canComment && !active && typing && (
             <form onSubmit={typeNote} className="ep-type glass">
               <input ref={typedRef} value={typed} onChange={e => setTyped(e.target.value)} onFocus={p.onPause} aria-label="Type a note at the current time"
                 onPaste={e => { const f = imagesFrom(e.clipboardData); if (f.length) { e.preventDefault(); addImages(f) } }}
@@ -685,7 +693,7 @@ export function FlowView(p: FlowViewProps) {
               <button type="submit" disabled={!typed.trim()} aria-label="Add note" className="ep-send"><Send size={16} aria-hidden="true" /></button>
             </form>
           )}
-          <div className="ep-actions">
+          <div className="ep-actions" data-dictating={active ? '' : undefined}>
             {active && <button type="button" onClick={() => dictate_('stop')} aria-label="Cancel recording" className="ep-cancel press">Cancel</button>}
             {active && (
               <div className="ep-rec" role="status" aria-label="Recording">
@@ -693,11 +701,13 @@ export function FlowView(p: FlowViewProps) {
                 <span data-testid="rec-timer" className="font-mono tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
               </div>
             )}
-            {active && <button type="button" onClick={() => dictate_('type')} aria-label="Type a note instead" className="ep-type-btn press"><Keyboard size={18} aria-hidden="true" /><span className="ep-lbl">Type</span></button>}
             {p.canComment && (
               <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} data-recording={active ? '' : undefined} className="ep-cta">
                 {active ? <><Square size={16} aria-hidden="true" /><span className="ep-lbl">Stop</span></> : <><Mic size={18} aria-hidden="true" /><span className="ep-lbl">Comment</span></>}
               </button>
+            )}
+            {p.canComment && !active && (
+              <button type="button" onClick={() => dictate_('type')} aria-label="Type a note" aria-pressed={typing} title="Type a note" className="ep-type-btn press"><Keyboard size={20} aria-hidden="true" /></button>
             )}
             {!active && (
               <button type="button" onClick={finish} disabled={sending || (hasNotes ? blocked : (!!p.approved || !canApprove))} aria-label={hasNotes || inkPending ? 'Send' : sendLabel} className="ep-approve glass">
