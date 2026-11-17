@@ -1012,23 +1012,46 @@ def test_the_purge_428_counts_what_it_would_remove(
     assert resp.json()["detail"].endswith(phrase)
 
 
+_WAIT_UPLOAD = "Wait for the upload to finish, then try again."
+_WAIT_JOB = "Wait for the job to finish, then try again."
+_ABANDONED_UPLOAD = "If an upload was abandoned, it stays until STALE_UPLOAD_TIMEOUT_HOURS is above 0."
+_ABANDONED_JOB = "If a job was abandoned, it stays until STUCK_PROCESSING_TIMEOUT_HOURS is above 0."
+
+
+def _in_flight_trashed_project(seed, as_user, admin, panel, versions):
+    """Trash a project holding one single-version asset per (name, status) and try to empty the trash."""
+    from apps.api.models.asset import ProcessingStatus
+
+    owner = seed.user()
+    project = seed.project(owner)
+    for name, status in versions:
+        asset = seed.media(project, owner, name=name, status=ProcessingStatus(status))
+        seed.versions_of(asset)[0].last_activity_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    seed.trash(project)
+    seed.db.flush()
+    client = as_user(admin)
+    response = _purge(client, everything=True, **panel.trash_counts(client))
+    assert response.status_code == 409
+    return response.json()["detail"]
+
+
 @pytest.mark.parametrize(
-    ("status", "deleted", "timeout", "says", "setting"),
+    ("status", "deleted", "timeout", "expected"),
     [
-        ("uploading", False, 24, "still uploading", None),
-        ("uploading", False, 0, "still uploading", "STALE_UPLOAD_TIMEOUT_HOURS"),
-        ("processing", False, 6, "still being processed", None),
-        ("processing", False, 0, "still being processed", "STUCK_PROCESSING_TIMEOUT_HOURS"),
-        ("processing", True, 0, "still being processed", "STUCK_PROCESSING_TIMEOUT_HOURS"),
+        ("uploading", False, 24, f"clip version 1 is still uploading. {_WAIT_UPLOAD}"),
+        ("uploading", False, 0, f"clip version 1 is still uploading. {_WAIT_UPLOAD} {_ABANDONED_UPLOAD}"),
+        ("processing", False, 6, f"clip version 1 is still being processed. {_WAIT_JOB}"),
+        ("processing", False, 0, f"clip version 1 is still being processed. {_WAIT_JOB} {_ABANDONED_JOB}"),
+        ("processing", True, 0, f"clip version 1 is still being processed. {_WAIT_JOB} {_ABANDONED_JOB}"),
     ],
     ids=["a live upload", "an upload with the reaper off", "a live job",
          "a job with the requeue off", "a discarded job with the requeue off"],
 )
 def test_the_in_flight_refusal_fits_the_kind_of_work_and_names_a_disabled_setting(
-    seed, as_user, admin, panel, s3, monkeypatch, status, deleted, timeout, says, setting,
+    seed, as_user, admin, panel, s3, monkeypatch, status, deleted, timeout, expected,
 ):
-    """A timeout of 0 or less means nothing is ever treated as abandoned, so waiting cannot
-    clear the refusal and the text has to say which setting to change instead."""
+    """Work that is alive finishes by waiting; work that was abandoned is only reclaimed once the
+    sweep is on. With the sweep off the text keeps the wait advice and names the setting."""
     from apps.api.models.asset import ProcessingStatus
 
     monkeypatch.setattr(settings, "stale_upload_timeout_hours", timeout)
@@ -1045,13 +1068,43 @@ def test_the_in_flight_refusal_fits_the_kind_of_work_and_names_a_disabled_settin
     client = as_user(admin)
     response = _purge(client, everything=True, **panel.trash_counts(client))
     assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail.startswith(f"clip version 1 is {says}.")
-    others = {"STALE_UPLOAD_TIMEOUT_HOURS", "STUCK_PROCESSING_TIMEOUT_HOURS"} - {setting}
-    assert not any(name in detail for name in others)
-    if setting:
-        assert f"{setting} is 0 or less" in detail
-        assert "Wait" not in detail
-    else:
-        assert detail.endswith("then try again.")
-        assert "_HOURS" not in detail
+    assert response.json()["detail"] == expected
+
+
+@pytest.mark.parametrize(
+    ("versions", "expected"),
+    [
+        (
+            [("a", "uploading"), ("b", "uploading")],
+            f"a version 1, b version 1 are still uploading. {_WAIT_UPLOAD}",
+        ),
+        (
+            [("a", "processing"), ("b", "processing")],
+            f"a version 1, b version 1 are still being processed. {_WAIT_JOB}",
+        ),
+        (
+            [("a", "uploading"), ("b", "processing")],
+            "a version 1 is still uploading. b version 1 is still being processed. "
+            "Wait for the work to finish, then try again.",
+        ),
+    ],
+    ids=["several uploads", "several jobs", "an upload and a job"],
+)
+def test_the_in_flight_refusal_agrees_in_number_and_covers_mixed_work(
+    seed, as_user, admin, panel, s3, versions, expected,
+):
+    assert _in_flight_trashed_project(seed, as_user, admin, panel, versions) == expected
+
+
+def test_the_in_flight_refusal_names_both_settings_for_mixed_work_with_both_sweeps_off(
+    seed, as_user, admin, panel, s3, monkeypatch,
+):
+    monkeypatch.setattr(settings, "stale_upload_timeout_hours", 0)
+    monkeypatch.setattr(settings, "stuck_processing_timeout_hours", 0)
+    detail = _in_flight_trashed_project(
+        seed, as_user, admin, panel, [("a", "uploading"), ("b", "processing")]
+    )
+    assert detail == (
+        "a version 1 is still uploading. b version 1 is still being processed. "
+        f"Wait for the work to finish, then try again. {_ABANDONED_UPLOAD} {_ABANDONED_JOB}"
+    )

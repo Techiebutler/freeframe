@@ -912,14 +912,12 @@ def _in_flight_refusal(in_flight: list[_InFlight]) -> str:
         labels = [f.label for f in in_flight if f.uploading == uploading]
         if labels:
             parts.append(f"{', '.join(labels)} {'is' if len(labels) == 1 else 'are'} {doing}.")
-    waiting = {f.uploading for f in in_flight if f.setting is None}
-    if waiting:
-        what = "the upload" if waiting == {True} else "the job" if waiting == {False} else "the work"
-        parts.append(f"Wait for {what} to finish, then try again.")
+    waiting = {f.uploading for f in in_flight}
+    what = "the upload" if waiting == {True} else "the job" if waiting == {False} else "the work"
+    parts.append(f"Wait for {what} to finish, then try again.")
     for setting, uploading in sorted({(f.setting, f.uploading) for f in in_flight if f.setting}):
         parts.append(
-            f"{setting} is 0 or less, so {'an upload' if uploading else 'a job'} is never treated "
-            "as abandoned and waiting will not clear this. Set it above 0 to reclaim it."
+            f"If {'an upload' if uploading else 'a job'} was abandoned, it stays until {setting} is above 0."
         )
     return " ".join(parts)
 
