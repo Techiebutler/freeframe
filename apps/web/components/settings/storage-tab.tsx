@@ -378,7 +378,11 @@ function TrashList({
       }
     } catch (err: unknown) {
       const message = reason(err, fallback);
-      if (statusOf(err) === 409 && (/^Confirmation is for /.test(message) || message.includes("not in the trash"))) {
+      const stale =
+        (statusOf(err) === 409 && (/^Confirmation is for /.test(message) || message.includes("not in the trash"))) ||
+        // Someone else emptied the bin while the dialog was open: nothing is left to confirm.
+        (statusOf(err) === 400 && message === "The trash is empty.");
+      if (stale) {
         setPurging(null);
         setFailure(message);
       } else {

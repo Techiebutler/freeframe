@@ -576,6 +576,31 @@ describe('review feedback', () => {
     expect(within(row).getByRole('button', { name: /Restore/ })).toBeDisabled()
   })
 
+  it('names the file or project to restore first for a blocked version inside its window', async () => {
+    serve({ bin: trash({ ...FULL_BIN, versions: [{ ...FULL_BIN.versions[0], blocked_by_parent: true, days_left: 12 }] }), storage: overview({ summary: summary({ trash_bytes: GB }) }) })
+    render(<StorageTab />)
+    await openTrash()
+    const row = (await screen.findByText('Hero Cut.mov · version 2')).closest('tr')!
+    expect(within(row).getByText('Restore the file or project above it first')).toBeInTheDocument()
+    expect(within(row).queryByText(/next cleanup pass removes it/)).toBeNull()
+  })
+
+  it('closes the Empty trash dialog and says so when the bin was already emptied elsewhere', async () => {
+    serve({ bin: FULL_BIN, storage: overview({ summary: summary({ trash_bytes: GB }) }) })
+    render(<StorageTab />)
+    await openTrash()
+    fireEvent.click(await screen.findByRole('button', { name: /Empty trash \(2.5 GB\)/ }))
+    await screen.findByText(/cannot be undone/)
+
+    serve({ bin: trash({ total_bytes: 0, projects: [], assets: [], versions: [] }), storage: overview({ summary: summary({ trash_bytes: 0 }) }) })
+    post.mockRejectedValue(Object.assign(new Error('The trash is empty.'), { status: 400 }))
+    await type('DELETE')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }))
+    expect(await screen.findByText('The trash is empty.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['project', 'file', 'version'])('refetches and drops a stale selected %s after a 409', async (level) => {
     serve()
     render(<StorageTab />)

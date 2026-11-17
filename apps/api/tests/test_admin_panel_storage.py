@@ -892,6 +892,8 @@ def test_the_only_nonviewable_version_still_requires_selecting_the_file(seed, as
         ("processing", True, 1, 6, 409),
         ("processing", True, 7, 6, 200),
         ("processing", True, 1000, 0, 409),
+        # No stamp of its own: the requeue sweep still redispatches it under a trashed parent.
+        ("processing", False, 7, 6, 409),
     ],
 )
 def test_purging_a_parent_observes_job_activity_and_disabled_sweeps(
@@ -918,3 +920,138 @@ def test_purging_a_parent_observes_job_activity_and_disabled_sweeps(
         assert seed.db.query(Project).filter(Project.id == project.id).first() is not None
     else:
         assert seed.db.query(Project).filter(Project.id == project.id).first() is None
+
+
+# ── refusal wording: one item, several items ──────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("count", "phrase"),
+    [(1, "This deletes 1 item."), (2, "This deletes 2 items.")],
+)
+def test_the_bulk_delete_428_counts_what_it_would_delete(
+    seed, as_user, admin, monkeypatch, count, phrase,
+):
+    monkeypatch.setattr(admin_panel, "CONFIRM_ABOVE_BYTES", 0)
+    owner = seed.user()
+    project = seed.project(owner)
+    assets = [seed.media(project, owner, name=f"clip {n}", original=1_000, derived=0) for n in range(count)]
+    resp = _delete(
+        as_user(admin), asset_ids=[str(a.id) for a in assets], confirm_count=count,
+    )
+    assert resp.status_code == 428
+    assert resp.json()["detail"].startswith(f"{phrase} Type DELETE")
+
+
+@pytest.mark.parametrize(
+    ("selected", "confirmed", "sentence"),
+    [
+        (2, 1, "Confirmation is for 1 item but 2 are selected."),
+        (1, 2, "Confirmation is for 2 items but 1 is selected."),
+    ],
+)
+def test_the_bulk_delete_409_counts_both_sides_of_the_mismatch(
+    seed, as_user, admin, selected, confirmed, sentence,
+):
+    owner = seed.user()
+    ids = [str(seed.project(owner, name=f"p{n}").id) for n in range(selected)]
+    resp = _delete(as_user(admin), project_ids=ids, confirm_count=confirmed, confirm_text="DELETE")
+    assert resp.status_code == 409
+    assert resp.json()["detail"].startswith(sentence)
+
+
+@pytest.mark.parametrize(
+    ("trashed", "confirmed", "sentence"),
+    [
+        (2, 1, "Confirmation is for 1 item but 2 are in the trash."),
+        (1, 2, "Confirmation is for 2 items but 1 is in the trash."),
+    ],
+)
+def test_the_purge_409_counts_both_sides_of_the_mismatch(
+    seed, as_user, admin, s3, trashed, confirmed, sentence,
+):
+    owner = seed.user()
+    for n in range(trashed):
+        _trashed_project(seed, owner, name=f"binned {n}")
+    resp = _purge(
+        as_user(admin), everything=True, confirm_count=confirmed, confirm_bytes=1_500 * trashed,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"].startswith(sentence)
+
+
+@pytest.mark.parametrize(
+    ("live", "sentence"),
+    [
+        (1, "1 of the selected items is not in the trash."),
+        (2, "2 of the selected items are not in the trash."),
+    ],
+)
+def test_the_purge_refusal_for_live_rows_agrees_with_their_number(
+    seed, as_user, admin, s3, live, sentence,
+):
+    owner = seed.user()
+    ids = [str(seed.project(owner, name=f"in use {n}").id) for n in range(live)]
+    resp = _purge(as_user(admin), project_ids=ids, confirm_count=live, confirm_bytes=0)
+    assert resp.status_code == 409
+    assert resp.json()["detail"].startswith(sentence)
+
+
+@pytest.mark.parametrize(
+    ("trashed", "phrase"),
+    [(1, "permanently remove 1 item."), (2, "permanently remove 2 items.")],
+)
+def test_the_purge_428_counts_what_it_would_remove(
+    seed, as_user, admin, panel, s3, trashed, phrase,
+):
+    owner = seed.user()
+    for n in range(trashed):
+        _trashed_project(seed, owner, name=f"binned {n}")
+    client = as_user(admin)
+    resp = _purge(client, everything=True, confirm_text=None, **panel.trash_counts(client))
+    assert resp.status_code == 428
+    assert resp.json()["detail"].endswith(phrase)
+
+
+@pytest.mark.parametrize(
+    ("status", "deleted", "timeout", "says", "setting"),
+    [
+        ("uploading", False, 24, "still uploading", None),
+        ("uploading", False, 0, "still uploading", "STALE_UPLOAD_TIMEOUT_HOURS"),
+        ("processing", False, 6, "still being processed", None),
+        ("processing", False, 0, "still being processed", "STUCK_PROCESSING_TIMEOUT_HOURS"),
+        ("processing", True, 0, "still being processed", "STUCK_PROCESSING_TIMEOUT_HOURS"),
+    ],
+    ids=["a live upload", "an upload with the reaper off", "a live job",
+         "a job with the requeue off", "a discarded job with the requeue off"],
+)
+def test_the_in_flight_refusal_fits_the_kind_of_work_and_names_a_disabled_setting(
+    seed, as_user, admin, panel, s3, monkeypatch, status, deleted, timeout, says, setting,
+):
+    """A timeout of 0 or less means nothing is ever treated as abandoned, so waiting cannot
+    clear the refusal and the text has to say which setting to change instead."""
+    from apps.api.models.asset import ProcessingStatus
+
+    monkeypatch.setattr(settings, "stale_upload_timeout_hours", timeout)
+    monkeypatch.setattr(settings, "stuck_processing_timeout_hours", timeout)
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.media(project, owner, name="clip", status=ProcessingStatus(status))
+    version = seed.versions_of(asset)[0]
+    version.last_activity_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    seed.trash(project)
+    if deleted:
+        seed.trash(version)
+    seed.db.flush()
+    client = as_user(admin)
+    response = _purge(client, everything=True, **panel.trash_counts(client))
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail.startswith(f"clip version 1 is {says}.")
+    others = {"STALE_UPLOAD_TIMEOUT_HOURS", "STUCK_PROCESSING_TIMEOUT_HOURS"} - {setting}
+    assert not any(name in detail for name in others)
+    if setting:
+        assert f"{setting} is 0 or less" in detail
+        assert "Wait" not in detail
+    else:
+        assert detail.endswith("then try again.")
+        assert "_HOURS" not in detail

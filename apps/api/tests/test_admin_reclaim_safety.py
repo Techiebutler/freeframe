@@ -177,6 +177,8 @@ def test_project_restore_clamps_an_absurd_retention_setting(monkeypatch, mock_db
         (ProcessingStatus.processing, True, 1, 24, 6, True),
         (ProcessingStatus.processing, True, 7, 24, 6, False),
         (ProcessingStatus.processing, True, 1000, 24, 0, True),
+        (ProcessingStatus.processing, False, 7, 24, 6, True),
+        (ProcessingStatus.processing, False, 1000, 24, 0, True),
     ],
 )
 def test_purge_protects_active_jobs_but_not_abandoned_work(
@@ -211,4 +213,4 @@ def test_purge_protects_active_jobs_but_not_abandoned_work(
 
     db.query.side_effect = query
     result = admin_panel._still_being_written(db, [], [uuid.uuid4()], [])
-    assert result == (['Synthetic clip version 1'] if expected else [])
+    assert [f.label for f in result] == (['Synthetic clip version 1'] if expected else [])
