@@ -61,12 +61,7 @@ def _live_owner_ids(db: Session, project_id: uuid.UUID) -> set[uuid.UUID]:
     the project is left with none. The second request now waits for the first
     to commit and counts again, which no longer includes the owner just removed.
     Rows are locked in a fixed order so two such requests cannot deadlock.
-    Only the two member write endpoints (role change, removal) call this, never a read.
-
-    Call it before reading the target's membership, not after: whether the guard
-    applies at all depends on the target's current role, and a role read before the
-    lock can be changed by a request that commits while this one waits. Read after
-    the lock, the role is the one this request's write will replace.
+    Only the two write endpoints that reach the guard call this, never a read.
     """
     return {
         uid
@@ -81,23 +76,8 @@ def _live_owner_ids(db: Session, project_id: uuid.UUID) -> set[uuid.UUID]:
         ).order_by(ProjectMember.id).with_for_update(of=ProjectMember).all()
     }
 
-def _current_member(db: Session, project_id: uuid.UUID, user_id: uuid.UUID) -> ProjectMember | None:
-    """The target's live membership as it is now, read after the owner rows are locked.
-
-    `populate_existing` because the caller's own membership was loaded by the permission
-    check before the lock was taken and sits in the session; for a caller changing their own
-    membership a plain query would hand back that earlier copy, not the committed row.
-    """
-    return db.query(ProjectMember).populate_existing().filter(
-        ProjectMember.project_id == project_id,
-        ProjectMember.user_id == user_id,
-        ProjectMember.deleted_at.is_(None),
-    ).first()
-
-def _refuse_losing_last_owner(owners: set[uuid.UUID], user_id: uuid.UUID) -> None:
+def _refuse_losing_last_owner(db: Session, project_id: uuid.UUID, user_id: uuid.UUID) -> None:
     """Refuse removing or demoting the project's only owner.
-
-    `owners` is what `_live_owner_ids` returned, so the owner rows are already locked.
 
     A project without an owner cannot be managed by any of its own members: every
     membership-editing endpoint here is owner tier, so the people in the project
@@ -108,6 +88,7 @@ def _refuse_losing_last_owner(owners: set[uuid.UUID], user_id: uuid.UUID) -> Non
     superadmin could still reach in and appoint someone, but relying on that
     would make every ownerless project an admin ticket.
     """
+    owners = _live_owner_ids(db, project_id)
     # "Nobody else would be left", not "this is the one live owner": a sole owner
     # who is deactivated is absent from `owners` and still has to be kept.
     if not (owners - {user_id}):
@@ -393,13 +374,11 @@ def add_project_member(project_id: uuid.UUID, body: AddProjectMemberRequest, db:
 def update_project_member(project_id: uuid.UUID, user_id: uuid.UUID, body: UpdateProjectMemberRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     project = _get_project(db, project_id)
     _require_project_owner(db, project_id, current_user, project)
-    # Lock the owner rows before reading the target, so the role below is the current one.
-    owners = _live_owner_ids(db, project_id)
-    member = _current_member(db, project_id, user_id)
+    member = db.query(ProjectMember).filter(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id, ProjectMember.deleted_at.is_(None)).first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
     if member.role == ProjectRole.owner and body.role != ProjectRole.owner:
-        _refuse_losing_last_owner(owners, user_id)
+        _refuse_losing_last_owner(db, project_id, user_id)
     member.role = body.role
     db.commit()
     db.refresh(member)
@@ -409,13 +388,11 @@ def update_project_member(project_id: uuid.UUID, user_id: uuid.UUID, body: Updat
 def remove_project_member(project_id: uuid.UUID, user_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     project = _get_project(db, project_id)
     _require_project_owner(db, project_id, current_user, project)
-    # Lock the owner rows before reading the target, so the role below is the current one.
-    owners = _live_owner_ids(db, project_id)
-    member = _current_member(db, project_id, user_id)
+    member = db.query(ProjectMember).filter(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id, ProjectMember.deleted_at.is_(None)).first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
     if member.role == ProjectRole.owner:
-        _refuse_losing_last_owner(owners, user_id)
+        _refuse_losing_last_owner(db, project_id, user_id)
     member.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
