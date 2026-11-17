@@ -305,6 +305,11 @@
 
 /* Owner workspace: semantic pastel surfaces, readable in either appearance. */
 :root, [data-theme="dark"] {
+  /* AutoReview's own blue (was local to autoreview-setup.module.css); `.ar-blue` turns a page's accent into it. */
+  --ar-blue: oklch(0.78 0.09 250);
+  --ar-blue-hover: oklch(0.86 0.07 250);
+  --ar-blue-muted: oklch(0.70 0.12 250 / .12);
+  --ar-blue-ink: oklch(0.12 0 0);
   --metric-blue: oklch(0.29 0.045 240);
   --metric-blue-ink: oklch(0.91 0.04 240);
   --metric-lilac: oklch(0.30 0.045 300);
@@ -315,6 +320,9 @@
   --text-tertiary: oklch(0.70 0.008 285);
 }
 [data-theme="light"] {
+  --ar-blue: oklch(0.45 0.15 255);
+  --ar-blue-hover: oklch(0.40 0.15 255);
+  --ar-blue-ink: oklch(1 0 0);
   --bg-primary: oklch(0.988 0.003 85);
   --bg-secondary: oklch(1 0 0);
   --metric-blue: oklch(0.94 0.035 240);
@@ -899,3 +907,5 @@ button:not(:disabled), summary { cursor: pointer; }
 }
 @media (prefers-reduced-motion: reduce) { .ep-rec-dot { animation: none; } .ep-bar, .ep-knob, .ep-pill, .ep-cta, .ep-approve, .ep-ib { transition: none; } }
 .ep-comments .px-4 { padding-left: 0; padding-right: 0; }
+
+.ar-blue { --accent: var(--ar-blue); --accent-hover: var(--ar-blue-hover); --accent-muted: var(--ar-blue-muted); --border-focus: var(--ar-blue); --text-inverse: var(--ar-blue-ink); }

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Hand-in signing: before **Sign and send**, the brand's AutoReview rules show as terms (collapsed, blockers first) with one "I've read the brand rules" box and the line "Signing with a known violation forfeits this card's fee."; the signer draws their initials (finger or mouse). The initials (PNG) and the rules shown are kept with the signature (additive migration `ap11`). The page uses AutoReview's blue (`--ar-blue` tokens, shared with the setup screen).
+
 ### Added
 - Hand-in signing (V3 C): an agent prepares a hand-in (`POST /agent/handins`: request, files, client text) and gets a one-time sign link (`/handin/<id>?t=`, 24 h). Signed-in Aditor staff see the videos, the text and the recipient and press **Sign and send**: the hand-in is signed (who, when) and the clean client link is created. Agents get `403 agents_may_not_sign`; an expired or replaced link says so. New table `handin_signs` (additive migration `ap09`).
 

@@ -1,4 +1,4 @@
-.shell { --accent:oklch(0.78 0.09 250); --accent-hover:oklch(0.86 0.07 250); --accent-muted:oklch(0.70 0.12 250 / .12); --text-inverse:oklch(0.12 0 0); --bg-primary:oklch(0.13 0.014 265); --bg-secondary:oklch(0.18 0.018 265); min-height:100vh; padding:32px 20px 48px; color:var(--text-primary); background:radial-gradient(ellipse 160px 340px at -6% 48%,oklch(0.6 0.09 240 / .20),transparent),radial-gradient(ellipse 160px 340px at 106% 58%,oklch(0.6 0.09 240 / .20),transparent),var(--bg-primary); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.shell { --accent:var(--ar-blue); --accent-hover:var(--ar-blue-hover); --accent-muted:var(--ar-blue-muted); --text-inverse:var(--ar-blue-ink); --bg-primary:oklch(0.13 0.014 265); --bg-secondary:oklch(0.18 0.018 265); min-height:100vh; padding:32px 20px 48px; color:var(--text-primary); background:radial-gradient(ellipse 160px 340px at -6% 48%,oklch(0.6 0.09 240 / .20),transparent),radial-gradient(ellipse 160px 340px at 106% 58%,oklch(0.6 0.09 240 / .20),transparent),var(--bg-primary); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
 .wrap { max-width:568px; margin:0 auto; }
 .header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:28px; }
 .wordmark { display:flex; align-items:center; gap:10px; font-size:17px; font-weight:650; letter-spacing:-.035em; }
@@ -63,7 +63,7 @@
 @media(max-width:480px) { .shell { padding:20px 16px 32px; } .card { padding:20px 8px; border-radius:22px; } .header { margin-bottom:24px; } .counter { font-size:11px; max-width:120px; } .scene { height:144px; margin-bottom:20px; } .scene > span:not(.connector) { width:60px; height:80px; } .scene .scan { width:72px; height:94px; } .connector { width:20px; } }
 @media(prefers-reduced-motion:reduce) { .shell *, .shell *::before, .shell *::after { animation:none!important; transition:none!important; } .scan i { display:none; } }
 
-:global([data-theme="light"]) .shell { --accent:oklch(0.45 0.15 255); --accent-hover:oklch(0.40 0.15 255); --text-inverse:oklch(1 0 0); --bg-primary:oklch(.99 .002 265); --bg-secondary:oklch(.97 .004 265); }
+:global([data-theme="light"]) .shell { --bg-primary:oklch(.99 .002 265); --bg-secondary:oklch(.97 .004 265); }
 .briefInput { display:flex; flex-direction:column; gap:4px; }
 .briefDrop { border:1px dashed var(--drop-border); border-radius:20px; background:var(--bg-secondary); overflow:hidden; }
 .briefDropTarget { border:0; background:transparent; padding-bottom:16px; }

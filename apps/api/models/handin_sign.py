@@ -31,4 +31,8 @@ class HandinSign(Base):
     signed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     share_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # The signer's drawn initials (a PNG data URL) and the brand rules they ticked "I've read this" for (V3 C follow-up):
+    # whoever signs with a known violation forfeits the card's fee, so what they were shown is kept with the signature.
+    initials_png: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    terms: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

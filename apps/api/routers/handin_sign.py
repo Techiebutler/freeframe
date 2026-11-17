@@ -6,6 +6,8 @@ GET  /handins/{id}?t=     staff only: what will be handed in (videos, text, reci
 POST /handins/{id}/sign   staff only: signed_by/at + the clean client link (V3 A). Twice = the same link. Agents: 403.
 Sending the link to the client stays a person's job; nothing here talks to the portal.
 """
+import base64
+import binascii
 import hashlib
 import hmac
 import secrets
@@ -13,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -27,7 +29,7 @@ from ..models.project import Project
 from ..models.share import ShareLink, ShareLinkItem, SharePermission
 from ..models.upload_request import UploadRequest
 from ..models.user import User
-from ..services import client_view
+from ..services import client_view, review_bridge
 from ..services.agents import AgentContext
 from ..services.s3_service import generate_presigned_get_url
 
@@ -100,6 +102,40 @@ def _signable(db: Session, handin_id: uuid.UUID, t: Optional[str], user: Optiona
     return h
 
 
+PNG_PREFIX = "data:image/png;base64,"
+MAX_INITIALS_BYTES = 300_000
+
+
+def initials_png(data_url: str) -> Optional[str]:
+    """The drawn initials as a PNG data URL, or None when it is not a real (small) PNG. Pure."""
+    if not isinstance(data_url, str) or not data_url.startswith(PNG_PREFIX) or len(data_url) > MAX_INITIALS_BYTES * 4 // 3 + 64:
+        return None
+    try:
+        raw = base64.b64decode(data_url[len(PNG_PREFIX):], validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return data_url if raw.startswith(b"\x89PNG\r\n\x1a\n") and len(raw) > 64 else None
+
+
+def brand_rules(db: Session, project: Optional[Project]) -> tuple[list[dict], bool]:
+    """The brand's active rules, blockers first, as AutoReview holds them; (rules, reachable)."""
+    if project is None:
+        return [], False
+    from .requests import project_brand
+    r = review_bridge.rules(project_brand(db, project))
+    if r is None:
+        return [], False
+    rows = [x for x in (r.get("rules") or []) if isinstance(x, dict) and x.get("active", True)]
+    rows.sort(key=lambda x: (x.get("severity") != "blocker", str(x.get("name") or "")))
+    return [{"id": str(x.get("id", "")), "name": str(x.get("name") or ""), "what": str(x.get("what") or ""),
+             "severity": str(x.get("severity") or "")} for x in rows], True
+
+
+class Sign(BaseModel):
+    accepted: bool = False
+    initials_png: str = Field(default="", max_length=MAX_INITIALS_BYTES * 2)
+
+
 def _view(db: Session, h: HandinSign) -> dict:
     from .share import _get_latest_media_file
     req = db.get(UploadRequest, h.request_id)
@@ -116,7 +152,8 @@ def _view(db: Session, h: HandinSign) -> dict:
                       "thumbnail_url": generate_presigned_get_url(mf.s3_key_thumbnail) if mf and mf.s3_key_thumbnail else None})
     files.sort(key=lambda f: f["name"])
     signer = db.get(User, h.signed_by) if h.signed_by else None
-    return {"id": str(h.id), "state": "signed" if h.signed_at else "prepared", "title": req.title if req else "",
+    rules, reachable = (h.terms or [], True) if h.signed_at else brand_rules(db, project)
+    return {"rules": rules, "rules_reachable": reachable, "initials_png": h.initials_png,"id": str(h.id), "state": "signed" if h.signed_at else "prepared", "title": req.title if req else "",
             "recipient": project.name if project else "", "client_text": h.client_text, "files": files,
             "signed_by": signer.name if signer else None, "signed_at": h.signed_at.isoformat() if h.signed_at else None,
             "client_url": _client_url(h)}
@@ -129,11 +166,18 @@ def view(handin_id: uuid.UUID, t: Optional[str] = Query(None), db: Session = Dep
 
 
 @router.post("/handins/{handin_id}/sign", dependencies=[Depends(rate_limit("handin_sign", 30, 600))])
-def sign(handin_id: uuid.UUID, t: Optional[str] = Query(None), db: Session = Depends(get_db),
+def sign(handin_id: uuid.UUID, body: Sign = Body(default_factory=Sign), t: Optional[str] = Query(None), db: Session = Depends(get_db),
          user: Optional[User] = Depends(get_optional_user), authorization: Optional[str] = Header(None)):
     h = _signable(db, handin_id, t, user, authorization, lock=True)
     if h.signed_at is None:
+        # The brand rules were shown and ticked ("I've read this"), and the signer drew their initials (Alan 2026-11-17).
+        if not body.accepted:
+            raise HTTPException(400, "accept_terms")
+        png = initials_png(body.initials_png)
+        if png is None:
+            raise HTTPException(400, "initials_required")
         req = db.get(UploadRequest, h.request_id)
+        h.initials_png, h.terms = png, brand_rules(db, db.get(Project, req.project_id))[0]
         link = ShareLink(project_id=req.project_id, token=secrets.token_urlsafe(32), created_by=user.id, title=req.title,
                          permission=SharePermission.comment, visibility="public", allow_download=True)
         db.add(link)
