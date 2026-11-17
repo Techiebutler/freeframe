@@ -88,6 +88,12 @@ def test_unknown_program_is_422(env):
     assert _pair(env, _code(env), program="skynet").status_code == 422
 
 
+def test_gen_program_pairs(env):
+    # unknown programs stay 422 (test_unknown_program_is_422); one pair call here keeps the suite under the 20/10min pair rate limit
+    r = _pair(env, _code(env), program="gen")
+    assert r.status_code == 200
+
+
 def test_bad_or_missing_key_is_401(env):
     assert env.client.get("/agent/me").status_code == 401
     r = env.client.get("/agent/me", headers={"Authorization": "Bearer ara_" + "x" * 40})

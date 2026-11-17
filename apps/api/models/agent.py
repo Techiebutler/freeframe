@@ -12,7 +12,7 @@ try:
 except ImportError:
     from database import Base
 
-PROGRAMS = ("claude-code", "codex", "chatgpt", "cursor", "hermes", "grok", "other")
+PROGRAMS = ("claude-code", "codex", "chatgpt", "cursor", "hermes", "grok", "gen", "other")
 SCOPES = ("read", "deliver")  # read: queue, review, feedback. deliver: read + upload, requests, ack, rule suggestions.
 
 

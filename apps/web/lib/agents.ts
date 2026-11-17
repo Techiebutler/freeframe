@@ -3,7 +3,7 @@ import type { DictationWord } from './dictation-sentences'
 
 // Contract: docs/superpowers/specs/2026-11-04-agent-review-platform-CONTRACT.md
 
-export type AgentProgram = 'claude-code' | 'codex' | 'chatgpt' | 'cursor' | 'hermes' | 'grok' | 'other'
+export type AgentProgram = 'claude-code' | 'codex' | 'chatgpt' | 'cursor' | 'hermes' | 'grok' | 'gen' | 'other'
 export type AgentScope = 'read' | 'deliver'
 
 export const PROGRAM_LABEL: Record<AgentProgram, string> = {
@@ -13,6 +13,7 @@ export const PROGRAM_LABEL: Record<AgentProgram, string> = {
   cursor: 'Cursor',
   hermes: 'Hermes',
   grok: 'Grok',
+  gen: 'Gen',
   other: 'Other',
 }
 

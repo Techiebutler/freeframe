@@ -95,7 +95,7 @@ def create_agent_key(project_id: uuid.UUID, body: KeyBody, db: Session = Depends
 class PairBody(BaseModel):
     code: str = Field(min_length=1, max_length=32)
     agent_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
-    program: Literal["claude-code", "codex", "hermes", "grok", "other"]
+    program: Literal["claude-code", "codex", "hermes", "grok", "gen", "other"]
 
 
 @router.post("/agents/pair", dependencies=[Depends(rate_limit("agent_pair", 20, 600))])

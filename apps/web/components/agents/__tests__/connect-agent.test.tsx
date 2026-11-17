@@ -27,6 +27,19 @@ describe('ConnectAgent', () => {
     expect(screen.getByRole('timer')).toHaveTextContent(/Expires in 1[45]:\d\d/)
   })
 
+  it('copy code writes exactly the 8 characters', async () => {
+    mock()
+    vi.spyOn(api, 'post').mockResolvedValue({ code: 'ABCD2345', expires_at: new Date(Date.now() + 900_000).toISOString() })
+    const write = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText: write } })
+    wrap()
+    fireEvent.click(await screen.findByRole('button', { name: /create pairing code/i }))
+    await screen.findByText('ABCD2345')
+    fireEvent.click(screen.getByRole('button', { name: /^copy code$/i }))
+    await waitFor(() => expect(write).toHaveBeenCalledWith('ABCD2345'))
+    expect(await screen.findByRole('button', { name: /copied/i })).toBeInTheDocument()
+  })
+
   it('copies the one kit line, not the MCP block', async () => {
     mock()
     vi.spyOn(api, 'post').mockResolvedValue({ code: 'ABCD2345', expires_at: new Date(Date.now() + 900_000).toISOString() })
@@ -35,7 +48,7 @@ describe('ConnectAgent', () => {
     wrap()
     fireEvent.click(await screen.findByRole('button', { name: /create pairing code/i }))
     await screen.findByText('ABCD2345')
-    fireEvent.click(screen.getAllByRole('button', { name: /^copy$/i })[0]) // pairing copy comes before the import card's
+    fireEvent.click(screen.getByRole('button', { name: /^copy line$/i }))
     await waitFor(() => expect(write).toHaveBeenCalledWith('Pair with AutoReview: ABCD2345'))
   })
 

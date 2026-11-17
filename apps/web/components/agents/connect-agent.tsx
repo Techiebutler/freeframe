@@ -135,7 +135,6 @@ function PairingCard({ projectId }: { projectId: string }) {
   const [pairing, setPairing] = React.useState<PairingCode | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
-  const [copied, setCopied] = React.useState(false)
   const [now, setNow] = React.useState(() => Date.now())
 
   React.useEffect(() => {
@@ -145,7 +144,7 @@ function PairingCard({ projectId }: { projectId: string }) {
   }, [pairing])
 
   const generate = async () => {
-    setBusy(true); setError(''); setCopied(false)
+    setBusy(true); setError('')
     try { setPairing(await createPairingCode(projectId)); setNow(Date.now()) }
     catch { setError('Could not create a code. Try again.') }
     finally { setBusy(false) }
@@ -154,11 +153,6 @@ function PairingCard({ projectId }: { projectId: string }) {
   const left = pairing ? countdown(pairing.expires_at, now) : null
   const line = pairing ? kitInstruction(pairing.code) : ''
   const mcpBlock = pairing ? `${mcpAddCommand(MCP_URL)}\n${pairInstruction(pairing.code)}` : ''
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(line); setCopied(true); setTimeout(() => setCopied(false), 2000) }
-    catch { setError('Copy failed. Select the text and copy it by hand.') }
-  }
-
   return (
     <details className="group playbook-surface px-5 sm:px-6">
       <summary className="flex min-h-14 cursor-pointer items-center text-sm font-medium text-text-primary">Pair with a code instead</summary>
@@ -176,18 +170,16 @@ function PairingCard({ projectId }: { projectId: string }) {
         </div>
       ) : (
         <div className="mt-4 space-y-3">
-          <div className="flex items-baseline justify-between gap-3">
-            <p className="font-mono text-3xl font-semibold tracking-[0.18em] text-text-primary" aria-label={`Pairing code ${pairing.code.split('').join(' ')}`}>{pairing.code}</p>
-            <p className="text-sm tabular-nums text-text-secondary" role="timer">Expires in {left!.label}</p>
+          <div className="rounded-2xl border border-border bg-bg-secondary p-4 text-center sm:p-5">
+            <p data-testid="pairing-code" className="font-mono text-4xl font-semibold tracking-[0.14em] text-text-primary" aria-label={`Pairing code ${pairing.code.split('').join(' ')}`}>{pairing.code}</p>
+            <p className="mt-1 text-sm tabular-nums text-text-secondary" role="timer">Expires in {left!.label}</p>
+            <div className="mt-3 flex justify-center"><CopyButton text={pairing.code} label="Copy code" primary /></div>
           </div>
-          <p className="text-sm text-text-secondary">Tell Claude Code this line. It needs the <a href={KIT_URL} target="_blank" rel="noreferrer" className="font-medium text-text-primary underline underline-offset-2">AI Builder Starter Kit</a>.</p>
-          <div className="rounded-2xl border border-border bg-bg-secondary p-3">
-            <pre className="whitespace-pre-wrap break-all font-mono text-[0.9375rem] leading-relaxed text-text-primary">{line}</pre>
+          <div className="pt-1">
+            <p className="text-[0.8125rem] text-text-secondary">Or tell Claude Code this line. It needs the <a href={KIT_URL} target="_blank" rel="noreferrer" className="font-medium text-text-primary underline underline-offset-2">AI Builder Starter Kit</a>.</p>
+            <pre className="mt-2 whitespace-pre-wrap break-all rounded-xl border border-border px-3 py-2 font-mono text-[0.8125rem] leading-relaxed text-text-secondary">{line}</pre>
+            <CopyButton text={line} label="Copy line" />
           </div>
-          <button type="button" onClick={copy}
-            className="press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-accent px-5 text-[0.9375rem] font-semibold text-text-inverse hover:bg-accent-hover sm:w-auto">
-            {copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Copied' : 'Copy'}
-          </button>
           <details className="text-[0.8125rem] text-text-secondary">
             <summary className="min-h-11 cursor-pointer content-center font-medium hover:text-text-primary">Codex, Hermes or Claude without the kit</summary>
             <p className="mb-2">Run the first line in the agent&apos;s terminal, then tell the agent the second line.</p>
