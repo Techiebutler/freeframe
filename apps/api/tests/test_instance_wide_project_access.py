@@ -148,6 +148,7 @@ def test_on_reports_the_implicit_role_on_the_project_itself(instance_wide, clien
     project.storage_bytes = 0
     project.member_count = 1
     project.role = None
+    project.autoreview_brand_slug = None
 
     calls = 0
 

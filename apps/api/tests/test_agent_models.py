@@ -24,7 +24,10 @@ def test_agent_tables_and_dedup_key():
     assert {"request_id", "opened_at", "closed_at", "closed_by", "last_activity_at", "acked_at", "rule_suggestions"} <= {c.name for c in FeedbackRound.__table__.c}
 
 
-def test_single_alembic_head_is_ap06():
+def test_single_alembic_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["d3l1v3r1e5"]
+    # The head moves with every migration; what must hold is that there is exactly one.
+    scripts = ScriptDirectory.from_config(cfg)
+    assert len(scripts.get_heads()) == 1
+    assert scripts.get_revision("d3l1v3r1e5") is not None

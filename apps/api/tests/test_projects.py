@@ -33,6 +33,7 @@ def _mock_project(
     p.storage_bytes = 0
     p.member_count = 1
     p.role = None
+    p.autoreview_brand_slug = None
     return p
 
 

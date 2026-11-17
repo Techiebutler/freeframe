@@ -10,7 +10,9 @@ def test_whop_migrations_follow_live_n8n_head_without_branching():
     config.set_main_option("script_location", str(Path(__file__).parents[1] / "alembic"))
     scripts = ScriptDirectory.from_config(config)
     # The head moves with each new migration; the chain below it must stay linear.
-    assert scripts.get_heads() == ["ap05_comment_attachment_upload"]
+    heads = scripts.get_heads()
+    assert len(heads) == 1
+    assert "ap05_comment_attachment_upload" in {r.revision for r in scripts.walk_revisions("base", heads[0])}
     assert scripts.get_revision("ap05_comment_attachment_upload").down_revision == "ap04_agent_key_scope"
     assert scripts.get_revision("ap04_agent_key_scope").down_revision == "ap03_comment_idempotency_key"
     assert scripts.get_revision("ap03_comment_idempotency_key").down_revision == "ap02_request_external_ref"
