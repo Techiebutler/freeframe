@@ -192,6 +192,7 @@ following access checks:
 | `require_project_visible` | visible on any live project, not only a public one |
 | `require_asset_access` | reaches any asset whose project is live, and logs it |
 | `can_access_asset` | the same answer as a boolean, for filtering a list; never logs |
+| `can_access_asset_audited` | the same boolean, and logs an access the Admin role alone allowed; for a request that names the asset ids |
 | `project_events_denial` | may subscribe to any live project's event stream |
 
 No router repeats the rule, so a new endpoint that calls one of these inherits it rather than
