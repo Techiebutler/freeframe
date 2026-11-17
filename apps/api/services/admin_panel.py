@@ -11,6 +11,7 @@ and the retention collector reclaims the bytes.
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
@@ -830,8 +831,21 @@ def restore(
 # trash first and this endpoint second.
 
 
-def _still_being_written(db: Session, project_ids: list, asset_ids: list, version_ids: list) -> list:
-    """Names of versions under this selection that a worker is still writing.
+class _InFlight(NamedTuple):
+    """One version a purge must wait for.
+
+    `setting` is set when no amount of waiting can end it: the sweep that would
+    eventually finish or abandon the work is switched off by that environment
+    variable being 0 or less.
+    """
+
+    label: str
+    uploading: bool
+    setting: str | None = None
+
+
+def _still_being_written(db: Session, project_ids: list, asset_ids: list, version_ids: list) -> list[_InFlight]:
+    """Versions under this selection that a worker is still writing, by name.
 
     The retention window used to keep the cascade away from running jobs: a
     version cannot be a month old and in flight. This endpoint removed the
@@ -869,22 +883,45 @@ def _still_being_written(db: Session, project_ids: list, asset_ids: list, versio
     now = datetime.now(timezone.utc)
     in_flight = set()
     for name, version in rows:
-        if version.processing_status == ProcessingStatus.uploading:
+        label = f"{name} version {version.version_number}"
+        uploading = version.processing_status == ProcessingStatus.uploading
+        if uploading:
             if version.deleted_at is not None:
                 continue
             hours = settings.stale_upload_timeout_hours
+            setting = "STALE_UPLOAD_TIMEOUT_HOURS"
         else:
+            hours = settings.stuck_processing_timeout_hours
+            setting = "STUCK_PROCESSING_TIMEOUT_HOURS"
             if version.deleted_at is None:
                 # Under a trashed parent the requeue sweep still redispatches it.
-                in_flight.add(f"{name} version {version.version_number}")
+                in_flight.add(_InFlight(label, uploading, setting if hours <= 0 else None))
                 continue
-            hours = settings.stuck_processing_timeout_hours
         activity = version.last_activity_at or version.created_at
         if activity.tzinfo is None:
             activity = activity.replace(tzinfo=timezone.utc)
         if hours <= 0 or activity >= now - timedelta(hours=hours):
-            in_flight.add(f"{name} version {version.version_number}")
+            in_flight.add(_InFlight(label, uploading, setting if hours <= 0 else None))
     return sorted(in_flight)
+
+
+def _in_flight_refusal(in_flight: list[_InFlight]) -> str:
+    """The 409 text for versions a purge has to wait for."""
+    parts = []
+    for uploading, doing in ((True, "still uploading"), (False, "still being processed")):
+        labels = [f.label for f in in_flight if f.uploading == uploading]
+        if labels:
+            parts.append(f"{', '.join(labels)} {'is' if len(labels) == 1 else 'are'} {doing}.")
+    waiting = {f.uploading for f in in_flight if f.setting is None}
+    if waiting:
+        what = "the upload" if waiting == {True} else "the job" if waiting == {False} else "the work"
+        parts.append(f"Wait for {what} to finish, then try again.")
+    for setting, uploading in sorted({(f.setting, f.uploading) for f in in_flight if f.setting}):
+        parts.append(
+            f"{setting} is 0 or less, so {'an upload' if uploading else 'a job'} is never treated "
+            "as abandoned and waiting will not clear this. Set it above 0 to reclaim it."
+        )
+    return " ".join(parts)
 
 
 def trash_purge_targets(
@@ -962,8 +999,7 @@ def check_purge_gate(
     if in_flight:
         raise PurgeGate(
             409,
-            f"{', '.join(in_flight)} is still being processed. "
-            "Wait for the job to finish, then try again.",
+            _in_flight_refusal(in_flight),
         )
 
     resolved = len(targets["projects"]) + len(targets["assets"]) + len(targets["versions"])

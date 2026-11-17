@@ -210,4 +210,4 @@ def test_purge_protects_active_jobs_but_not_abandoned_work(
 
     db.query.side_effect = query
     result = admin_panel._still_being_written(db, [], [uuid.uuid4()], [])
-    assert result == (['Synthetic clip version 1'] if expected else [])
+    assert [f.label for f in result] == (['Synthetic clip version 1'] if expected else [])

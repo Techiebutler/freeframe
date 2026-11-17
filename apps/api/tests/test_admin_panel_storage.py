@@ -1010,3 +1010,48 @@ def test_the_purge_428_counts_what_it_would_remove(
     resp = _purge(client, everything=True, confirm_text=None, **panel.trash_counts(client))
     assert resp.status_code == 428
     assert resp.json()["detail"].endswith(phrase)
+
+
+@pytest.mark.parametrize(
+    ("status", "deleted", "timeout", "says", "setting"),
+    [
+        ("uploading", False, 24, "still uploading", None),
+        ("uploading", False, 0, "still uploading", "STALE_UPLOAD_TIMEOUT_HOURS"),
+        ("processing", False, 6, "still being processed", None),
+        ("processing", False, 0, "still being processed", "STUCK_PROCESSING_TIMEOUT_HOURS"),
+        ("processing", True, 0, "still being processed", "STUCK_PROCESSING_TIMEOUT_HOURS"),
+    ],
+    ids=["a live upload", "an upload with the reaper off", "a live job",
+         "a job with the requeue off", "a discarded job with the requeue off"],
+)
+def test_the_in_flight_refusal_fits_the_kind_of_work_and_names_a_disabled_setting(
+    seed, as_user, admin, panel, s3, monkeypatch, status, deleted, timeout, says, setting,
+):
+    """A timeout of 0 or less means nothing is ever treated as abandoned, so waiting cannot
+    clear the refusal and the text has to say which setting to change instead."""
+    from apps.api.models.asset import ProcessingStatus
+
+    monkeypatch.setattr(settings, "stale_upload_timeout_hours", timeout)
+    monkeypatch.setattr(settings, "stuck_processing_timeout_hours", timeout)
+    owner = seed.user()
+    project = seed.project(owner)
+    asset = seed.media(project, owner, name="clip", status=ProcessingStatus(status))
+    version = seed.versions_of(asset)[0]
+    version.last_activity_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    seed.trash(project)
+    if deleted:
+        seed.trash(version)
+    seed.db.flush()
+    client = as_user(admin)
+    response = _purge(client, everything=True, **panel.trash_counts(client))
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail.startswith(f"clip version 1 is {says}.")
+    others = {"STALE_UPLOAD_TIMEOUT_HOURS", "STUCK_PROCESSING_TIMEOUT_HOURS"} - {setting}
+    assert not any(name in detail for name in others)
+    if setting:
+        assert f"{setting} is 0 or less" in detail
+        assert "Wait" not in detail
+    else:
+        assert detail.endswith("then try again.")
+        assert "_HOURS" not in detail
