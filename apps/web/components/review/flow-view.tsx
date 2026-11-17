@@ -14,6 +14,7 @@ import type { Outbox } from '@/lib/outbox'
 import { doneLine, markApproved, markFeedback, sentLine, sessionSummary, unmarkApproved } from '@/lib/flow-session'
 import { Confetti } from './confetti'
 import { EmbedBar, embedKey } from './embed-bar'
+import { ModuleTabs } from '@/components/share/module-tabs'
 import { markHandedOn, type DeliveryRef } from '@/lib/delivery'
 import { InkLayer, type InkReplay } from './ink-layer'
 import { LevelMeter } from './level-meter'
@@ -493,18 +494,9 @@ export function FlowView(p: FlowViewProps) {
       {/* The briefing's files */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border bg-bg-secondary pl-2">
         {p.lead}
-        <nav aria-label="Files in this briefing" className="min-w-0 flex-1">
-          <ul className="flex gap-1 overflow-x-auto py-1">
-            {p.files.map((f, i, all) => (
-              <li key={f.id} className="shrink-0">
-                <button type="button" onClick={() => f.id !== p.currentFileId && p.onSelectFile(f.id)} aria-current={f.id === p.currentFileId ? 'true' : undefined}
-                  title={f.name} className={cn('press min-h-11 max-w-[160px] truncate rounded-full px-4 text-sm font-medium', f.id === p.currentFileId ? 'bg-bg-hover text-text-primary ring-1 ring-text-tertiary' : 'text-text-secondary hover:bg-bg-hover')}>
-                  {tabLabels(all.map(x => x.name))[i]}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </nav>
+        <div className="min-w-0 flex-1 py-1 pr-2">
+          <ModuleTabs nav label="Files in this briefing" items={p.files} names={tabLabels(p.files.map(x => x.name))} selectedId={p.currentFileId} onSelect={id => id !== p.currentFileId && p.onSelectFile(id)} />
+        </div>
         {p.onExit && !p.wide && <button type="button" onClick={p.onExit} className="press min-h-11 shrink-0 px-3 text-sm font-medium text-text-secondary hover:text-text-primary">{p.exitLabel ?? 'Exit'}</button>}
       </div>
 
