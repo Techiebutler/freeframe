@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Clock, Link2, Loader2, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
+import { Check, Clock, Keyboard, Link2, Loader2, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
@@ -372,18 +372,28 @@ export function FlowView(p: FlowViewProps) {
     if (images.length) { setImages([]); setImageNote(null) }
     return true
   }
+  const typedPause = React.useRef(false)
+  const focusTyped = React.useRef(false)
+  React.useEffect(() => { if (!active && focusTyped.current) { focusTyped.current = false; typedRef.current?.focus() } }, [active])
   const dictate_ = (e: DictEvent) => {
     const r = dictStep(dict.current, e)
     dict.current = r.state
-    if (e === 'play' && r.state.mic === 'typing') flushInk()
+    if (e === 'play' && (r.state.mic === 'typing' || typedPause.current)) {
+      // Typing session ends on Play: the typed note (with any ink) is saved, then the video plays.
+      const text = typed.trim()
+      if (text) { if (!flushInk(text)) typeNote(); setTyped('') } else flushInk()
+      typedPause.current = false
+    }
+    if (e === 'type') typedPause.current = true
     for (const fx of r.effects) {
       if (fx === 'start') void startSegment().then(ok => { if (!ok) dictate_('denied') })
-      else if (fx === 'flush') void stopSegment()
+      else if (fx === 'flush') void stopSegment(e === 'type')
       else if (fx === 'close') void stopSegment(true)
       else if (fx === 'discard') cancelRecording()
       else if (fx === 'pause') p.onPause()
       else if (fx === 'hint') { setTyping(true); setMicHint('Microphone not available. Type your note below.') }
       // A phone keyboard would cover the video he is about to draw on: only focus where there is a real keyboard, or when typing is all that is left.
+      else if (fx === 'focus' && e === 'type') focusTyped.current = true // the field mounts once the recording row is gone
       else if (fx === 'focus' && (r.state.mic === 'typing' || (typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches))) typedRef.current?.focus()
     }
   }
@@ -455,8 +465,8 @@ export function FlowView(p: FlowViewProps) {
   const canApprove = p.canApprove ?? true
   const sendLabel = hasNotes ? (p.finishLabel ?? (p.onFinishRound ? 'Send to agent' : 'Done')) : !canApprove ? 'Send' : p.approved ? 'Approved ✓' : 'Approve'
 
-  const typeNote = (e: React.FormEvent) => {
-    e.preventDefault()
+  const typeNote = (e?: React.FormEvent) => {
+    e?.preventDefault()
     const text = typed.trim()
     if (!text) return
     if (flushInk(text)) { setTyped(''); return }
@@ -683,6 +693,7 @@ export function FlowView(p: FlowViewProps) {
                 <span data-testid="rec-timer" className="font-mono tabular-nums text-text-primary">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span>
               </div>
             )}
+            {active && <button type="button" onClick={() => dictate_('type')} aria-label="Type a note instead" className="ep-type-btn press"><Keyboard size={18} aria-hidden="true" />Type</button>}
             {p.canComment && (
               <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} data-recording={active ? '' : undefined} className="ep-cta">
                 {active ? <><Square size={16} aria-hidden="true" />Stop</> : <><Mic size={18} aria-hidden="true" />Comment</>}

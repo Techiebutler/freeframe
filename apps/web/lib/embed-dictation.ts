@@ -9,17 +9,19 @@ export interface DictState {
   mic: 'off' | 'on' | 'typing'
   /** Stop was tapped while paused: stay silent until the video plays again. */
   stopped: boolean
+  /** Typing was chosen (Type button) for this pause only: the next Play drops back to dictation. Denied-mic typing stays. */
+  typeOnce: boolean
 }
-export type DictEvent = 'play' | 'pause' | 'comment' | 'stop' | 'denied'
+export type DictEvent = 'play' | 'pause' | 'comment' | 'stop' | 'denied' | 'type'
 export type DictEffect = 'start' | 'flush' | 'close' | 'discard' | 'pause' | 'focus' | 'hint'
 
-export const dictInitial: DictState = { armed: false, video: 'paused', mic: 'off', stopped: false }
+export const dictInitial: DictState = { armed: false, video: 'paused', mic: 'off', stopped: false, typeOnce: false }
 
 export function dictStep(s: DictState, e: DictEvent): { state: DictState; effects: DictEffect[] } {
   switch (e) {
     case 'play':
       // Resuming closes the segment: it becomes its comment(s), unless nothing was said or drawn.
-      return { state: { armed: true, video: 'playing', mic: s.mic === 'on' ? 'off' : s.mic, stopped: false }, effects: s.mic === 'on' ? ['close'] : [] }
+      return { state: { armed: true, video: 'playing', mic: s.mic === 'on' || s.typeOnce ? 'off' : s.mic, stopped: false, typeOnce: false }, effects: s.mic === 'on' ? ['close'] : [] }
     case 'pause':
       if (!s.armed || s.stopped || s.mic !== 'off') return { state: { ...s, video: 'paused' }, effects: [] }
       return { state: { ...s, video: 'paused', mic: 'on' }, effects: ['start'] }
@@ -32,8 +34,12 @@ export function dictStep(s: DictState, e: DictEvent): { state: DictState; effect
     }
     case 'stop':
       return { state: { ...s, mic: s.mic === 'on' ? 'off' : s.mic, stopped: true }, effects: s.mic === 'on' ? ['discard'] : [] }
+    case 'type':
+      // Only while dictating: flush what was said, then the typing field (focused) takes over until the next Play.
+      if (s.mic !== 'on') return { state: s, effects: [] }
+      return { state: { ...s, mic: 'typing', typeOnce: true }, effects: ['flush', 'focus'] }
     case 'denied':
-      return { state: { ...s, mic: 'typing' }, effects: ['hint', 'focus'] }
+      return { state: { ...s, mic: 'typing', typeOnce: false }, effects: ['hint', 'focus'] }
   }
 }
 

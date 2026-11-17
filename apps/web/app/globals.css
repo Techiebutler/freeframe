@@ -853,7 +853,8 @@ button:not(:disabled), summary { cursor: pointer; }
 .ep-root[data-side] .ep-actions { flex-direction: column; gap: 10px; }
 .ep-root[data-side] .ep-actions:has(.ep-cancel) { flex-direction: row; }
 .ep-actions > * { flex: 1; }
-.ep-actions > .ep-rec { flex: none; }
+.ep-actions > .ep-rec, .ep-actions > .ep-type-btn { flex: none; }
+.ep-type-btn { min-height: 48px; min-width: 48px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
 .ep-cta, .ep-approve { min-height: 48px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 999px; font-size: 14px; font-weight: 600; white-space: nowrap; transition: transform 160ms var(--ease-out), opacity 150ms ease; }
 .ep-cta:active, .ep-approve:active { transform: scale(0.97); }
 .ep-cta { color: oklch(0.99 0.005 250); border: 1px solid oklch(0.85 0.06 250 / 0.65);

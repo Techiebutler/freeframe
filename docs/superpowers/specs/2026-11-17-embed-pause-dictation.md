@@ -38,3 +38,7 @@ Non-embed views, backend, dictation endpoint, outbox, ink format.
 - State machine unit-tested (play/pause/comment/stop/denied, scrub timestamps).
 - FlowView embed tests: pause starts mic, play flushes and saves, silent pause saves nothing, denied -> typing, typed note works.
 - Full web test suite and `next build` green; screenshots at 390x844 and 1280.
+
+## Type instead (addendum)
+
+While dictating, the one row is Cancel, timer, Type, Stop. Type (keyboard icon, "Type a note instead") flushes what was said into its note and opens the typing field focused (also on phones) at the current playhead; ink keeps working. Typing lasts until the next Play, which saves the typed note and plays; the next pause dictates again. A denied mic stays in typing mode (sticky). State machine: event `type`, flag `typeOnce`.
