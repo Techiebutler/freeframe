@@ -29,7 +29,7 @@ import { Button } from '@/components/ui/button'
 import { GuestCommentInput, IdentityForm, loadIdentity, type GuestIdentity } from '@/components/review/guest-comment-input'
 import { FlowView } from '@/components/review/flow-view'
 import { GuestCommentList, type CommentsResponse } from '@/components/share/guest-comments'
-import { EmbedChain, chainOrder } from '@/components/share/embed-chain'
+import { EmbedChain, EmbedTabs, chainOrder, inferRoles } from '@/components/share/embed-chain'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
@@ -1031,7 +1031,7 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
     fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500&embed=true${ss}`)
       .then((r) => (r.ok ? (r.json() as Promise<FolderShareAssetsResponse>) : null))
       .then((data) => {
-        const videos = (data?.assets ?? []).filter((a) => a.asset_type === 'video')
+        const videos = inferRoles((data?.assets ?? []).filter((a) => a.asset_type === 'video'))
         const sorted = chainOrder(videos) ?? videos
         setItems(sorted)
         setIndex(Math.max(0, sorted.findIndex((a) => !a.approved)))
@@ -1047,12 +1047,14 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
     sendToParent({ type: 'ar:asset', asset_id: items[n].id, index: n + 1, count: items.length })
   }
   const parts = items.filter((a) => a.role)
-  const nav = parts.length > 0 && (
+  const nav = parts.length > 0 ? (
     <EmbedChain
       items={parts.map((a) => ({ id: a.id, name: a.name, role: a.role!, order: a.order ?? 0, duration: a.duration_seconds, count: a.comment_count }))}
       selectedId={current.id}
       onSelect={(id) => go(items.findIndex((a) => a.id === id))}
     />
+  ) : items.length > 1 && (
+    <EmbedTabs items={items.map((a) => ({ id: a.id, name: a.name, count: a.comment_count }))} selectedId={current.id} onSelect={(id) => go(items.findIndex((a) => a.id === id))} />
   )
   return (
     <ShareViewer

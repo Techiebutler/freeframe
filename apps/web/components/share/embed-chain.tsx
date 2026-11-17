@@ -24,6 +24,45 @@ export function chainOrder<T extends { role?: string | null; order?: number | nu
   return [...parts, ...rest]
 }
 
+/**
+ * Which part of a module ad a file name says it is (the server only knows this for requests with a manifest).
+ * EN_Hook1_WithoutTwoThings, EN-hook-a, hook1-v2, EN_Body, EN_CTA; "hook1_full" stays a whole ad. Same rules as the feedback agent's moduleRoleOf.
+ */
+export function moduleRoleOf(name: string): { role: 'hook' | 'body' | 'cta'; order: number } | undefined {
+  const base = String(name || '').replace(/\.[a-z0-9]{2,4}$/i, '')
+  if (/(^|[^a-z])cta([^a-z]|$)/i.test(base)) return { role: 'cta', order: 0 }
+  const place = (x?: string) => (!x ? 0 : /^\d+$/.test(x) ? Math.max(0, Number(x) - 1) : /^[a-c]$/i.test(x) ? x.toLowerCase().charCodeAt(0) - 97 : 0)
+  const named = base.match(/(?:^|[^a-z0-9])(hook|body)(\d{1,2})[-_ ][a-z][a-z0-9]*(?:[-_ ][a-z0-9]+)*$/i)
+  if (named && !/full|final|complete/i.test(base)) return { role: named[1].toLowerCase() as 'hook' | 'body', order: place(named[2]) }
+  const m = base.match(/(?:^|[^a-z0-9])(hook|body)(?:(\d{1,2})|[-_ ]([a-c0-9]{1,2}))?(?:[-_ ]v\d+)?$/i)
+  return m ? { role: m[1].toLowerCase() as 'hook' | 'body', order: place(m[2] ?? m[3]) } : undefined
+}
+
+/** Assets without a server-side role get one from their file name, when at least one name is a module part; `order` is the rank within the role. */
+export function inferRoles<T extends { name: string; role?: string | null; order?: number | null }>(assets: T[]): T[] {
+  if (assets.some(a => a.role)) return assets
+  const found = assets.map(a => moduleRoleOf(a.name))
+  if (!found.some(Boolean)) return assets
+  const keyed = assets.map((a, i) => ({ i, f: found[i] })).filter(x => x.f) as { i: number; f: { role: string; order: number } }[]
+  const rank = new Map<number, number>()
+  for (const role of Array.from(new Set(keyed.map(x => x.f.role)))) keyed.filter(x => x.f.role === role).sort((x, y) => x.f.order - y.f.order || x.i - y.i).forEach((x, n) => rank.set(x.i, n))
+  return assets.map((a, i) => (found[i] ? { ...a, role: found[i]!.role, order: rank.get(i) ?? 0 } : a))
+}
+
+/** Plain files (no module parts): their names as tappable chips, the current one highlighted. Never a numeric pager. */
+export function EmbedTabs({ items, selectedId, onSelect }: { items: { id: string; name: string; count?: number }[]; selectedId: string; onSelect: (id: string) => void }) {
+  return (
+    <div className="ep-tabs" role="group" aria-label="Files of this review">
+      {items.map(i => (
+        <button key={i.id} type="button" aria-pressed={i.id === selectedId} title={i.name} onClick={() => onSelect(i.id)} className="ep-pill ep-tab">
+          <span>{i.name.replace(/\.[a-z0-9]{2,4}$/i, '')}</span>
+          {!!i.count && <span className="ep-count" aria-label={`${i.count} comments`}>{i.count}</span>}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 const label = (item: ChainItem, siblings: number) => `${ROLE_LABEL[item.role] ?? item.role}${siblings > 1 ? ` ${item.order + 1}` : ''}`
 /** The pill's width hints at the part's length. */
 const width = (item: ChainItem) => Math.round(76 + Math.min(item.duration ?? 5, 30) * 2)

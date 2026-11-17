@@ -910,7 +910,10 @@ button:not(:disabled), summary { cursor: pointer; }
   /* the chain must fit the panel: compact nodes, no fixed widths */
   .ep-side .ep-chain { gap: 8px; padding: 8px 6px; }
   .ep-side .ep-pill { width: auto !important; padding: 0 6px 0 9px; gap: 4px; font-size: 12px; }
-  .ep-side .ep-count { min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; }
+  .ep-side .ep-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.ep-tab { width: auto; max-width: 100%; }
+.ep-tab span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.ep-count { min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; }
   .ep-root[data-side] .ep-actions { flex-direction: row; }
   .ep-cta, .ep-approve, .ep-type-btn { min-width: 36px; padding: 0 8px; }
   .ep-lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
