@@ -145,7 +145,7 @@ What to rent:
 Log in to the server and run:
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/latest/install.sh)"
+sudo FREEFRAME_CHANNEL=stable bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)"
 ```
 
 The installer is for **Linux servers only**:
@@ -154,7 +154,7 @@ The installer is for **Linux servers only**:
 - **Not macOS or Windows.** On a Mac, use the [manual compose setup](#or-set-it-up-by-hand) with Docker Desktop. On Windows, Ubuntu in WSL2 with systemd switched on works for trying FreeFrame, but it is not something a team should rely on: its address changes when Windows restarts, and it stops when the PC sleeps.
 - **Other Linux distributions:** use the [manual compose setup](#or-set-it-up-by-hand).
 
-The command works from v1.22.0, the first release that has the installer. `latest` is the newest published release; the command will move to `stable` once the first release with the installer has been promoted there. To set a variable, put it after `sudo`: `sudo FREEFRAME_DOMAIN=review.yourstudio.com bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/latest/install.sh)"`. Use this `bash -c` form rather than `curl ... | sudo bash`: on Ubuntu 26.04, whose `sudo` is sudo-rs, a piped script cannot read your answers (the installer notices and shows this command instead). A piped command is fine only for an [unattended install](docs/deployment.md#unattended-installs-cloud-init-ansible) with `--yes`.
+The command installs `stable`, the release we have validated for production, and the server keeps following it: `sudo freeframe update` moves to the next release promoted there. To follow every release as soon as it is published, write `latest` in both places instead (`FREEFRAME_CHANNEL=latest` and `.../latest/install.sh`). To set a variable, put it after `sudo`: `sudo FREEFRAME_CHANNEL=stable FREEFRAME_DOMAIN=review.yourstudio.com bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)"`. Use this `bash -c` form rather than `curl ... | sudo bash`: on Ubuntu 26.04, whose `sudo` is sudo-rs, a piped script cannot read your answers (the installer notices and shows this command instead). A piped command is fine only for an [unattended install](docs/deployment.md#unattended-installs-cloud-init-ansible) with `--yes`.
 
 When it finishes, open the address it prints and sign in with your admin account, then invite your team from the admin area. Without email set up, sign-in codes and invitations are not sent and there is no password reset; invitation links can still be copied from the admin page.
 
@@ -177,7 +177,7 @@ No clone and no build: the server needs only the compose files and your settings
 ```bash
 mkdir freeframe && cd freeframe
 ( set -e; for f in docker-compose.prod.yml docker-compose.images.yml .env.example; do
-    curl -fsSLO "https://raw.githubusercontent.com/Techiebutler/freeframe/latest/$f" \
+    curl -fsSLO "https://raw.githubusercontent.com/Techiebutler/freeframe/stable/$f" \
       || { echo "Could not download $f: check the ref." >&2; exit 1; }
   done ) && cp .env.example .env.prod
 # Edit .env.prod: set your credentials, S3, email config
@@ -186,7 +186,7 @@ mkdir freeframe && cd freeframe
 docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.images.yml up -d
 ```
 
-`latest` is the newest published release. We will switch these commands to `stable`, the release we have validated for production, once the first release containing these files has been promoted there.
+`stable` is the release we have validated for production. To follow every release as soon as it is published, download from `latest` instead.
 
 `docker-compose.images.yml` names the release it belongs to, so downloading the files again from the same ref and running `docker compose pull` then `up -d` is how you update. To pin a version, set `FREEFRAME_VERSION` in `.env.prod`.
 
