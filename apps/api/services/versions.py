@@ -10,7 +10,15 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from ..models.asset import AssetVersion
+from ..models.asset import AssetVersion, ProcessingStatus
+
+#: A version in one of these is not something a viewer can open: it is an upload
+#: in flight or one that died. It is still the newest version by number, which
+#: is why "latest" and "the one to show" are not the same question. It lives
+#: here because the asset listings and the admin storage panel both have to
+#: answer that question the same way: the panel refuses to let the newest
+#: version be deleted on its own, and it has to mean the one people see.
+UNVIEWABLE_STATUSES = (ProcessingStatus.uploading, ProcessingStatus.failed)
 
 
 def next_version_number(db: Session, asset_id: uuid.UUID) -> int:

@@ -27,17 +27,13 @@ from ..schemas.upload import (
     ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
 from ..services.storage import choose_part_size, upload_guard_error
-from ..services.versions import next_version_number
+from ..services.versions import UNVIEWABLE_STATUSES, next_version_number
 from ..services.s3_service import create_multipart_upload
 from .upload import storage_initiate_error
 
 router = APIRouter(tags=["assets"])
 
 
-# A version in one of these is not something a viewer can open: it is an upload in
-# flight or one that died. It is still the newest version by number, which is why
-# "latest" and "the one to show" are not the same question.
-_UNVIEWABLE_STATUSES = (ProcessingStatus.uploading, ProcessingStatus.failed)
 
 
 def _pick_version(db: Session, asset_id: uuid.UUID, preferred) -> AssetVersion | None:
@@ -66,7 +62,7 @@ def _display_version(db: Session, asset_id: uuid.UUID) -> AssetVersion | None:
     being worked on" is true and useful.
     """
     return _pick_version(
-        db, asset_id, AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES)
+        db, asset_id, AssetVersion.processing_status.notin_(UNVIEWABLE_STATUSES)
     )
 
 
@@ -157,7 +153,7 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
             func.max(AssetVersion.version_number).label("max_version"),
         ).filter(AssetVersion.asset_id.in_(asset_ids), AssetVersion.deleted_at.is_(None))
         if viewable_only:
-            q = q.filter(AssetVersion.processing_status.notin_(_UNVIEWABLE_STATUSES))
+            q = q.filter(AssetVersion.processing_status.notin_(UNVIEWABLE_STATUSES))
         subq = q.group_by(AssetVersion.asset_id).subquery()
         return (
             db.query(AssetVersion)

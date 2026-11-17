@@ -85,6 +85,127 @@ export interface InstanceSettings {
   compression_level_effective?: number;
 }
 
+// ─── The admin Storage tab ────────────────────────────────────────────────────
+//
+// One figure per row. `total_bytes` is the originals plus the derived output
+// that has actually been measured (renditions and HLS segments, the single-file
+// download, poster thumbnails, audio waveforms). The split between the two
+// stays on the server: a storage page answers how big a thing is, not how its
+// bytes are apportioned.
+
+export interface StorageSummary {
+  used_bytes: number;
+  /** null when the instance has no storage limit set. There is no capacity to
+   *  read then, so the header says what is used rather than inventing a
+   *  denominator. */
+  capacity_bytes: number | null;
+  free_bytes: number | null;
+  unmeasured_files: number;
+  /** Bytes still held by things in the trash, not yet reclaimed. */
+  trash_bytes: number;
+  retention_days: number;
+}
+
+export interface StorageProjectRow {
+  project_id: string;
+  name: string;
+  total_bytes: number;
+}
+
+export interface StorageOverview {
+  summary: StorageSummary;
+  projects: StorageProjectRow[];
+  /** How many projects hold bytes in total; `projects` is the largest `limit`
+   *  of them. The summary is always instance-wide. */
+  project_count: number;
+  limit: number;
+}
+
+export interface StorageVersionRow {
+  version_id: string;
+  version_number: number;
+  total_bytes: number;
+  /** The file's newest version. It can only be deleted together with the whole
+   *  file; the server refuses it either way, this just lets the row say so. */
+  is_latest: boolean;
+}
+
+export interface StorageAssetRow {
+  asset_id: string;
+  name: string;
+  total_bytes: number;
+  versions: StorageVersionRow[];
+}
+
+export interface StorageProjectFiles {
+  project_id: string;
+  name: string;
+  assets: StorageAssetRow[];
+}
+
+export interface AdminDeleteResponse {
+  deleted_projects: number;
+  deleted_assets: number;
+  deleted_versions: number;
+  freed_bytes: number;
+  retention_days: number;
+  restorable_until: string | null;
+}
+
+export interface TrashProjectRow {
+  project_id: string;
+  name: string;
+  deleted_at: string | null;
+  days_left: number | null;
+  /** What deleting this one entry for good would free. */
+  total_bytes: number | null;
+}
+
+export interface TrashAssetRow {
+  asset_id: string;
+  name: string;
+  project_id: string;
+  project_name: string;
+  deleted_at: string | null;
+  days_left: number | null;
+  blocked_by_project: boolean;
+  /** null while the project above it is in the trash: those bytes are counted
+   *  on the project's row, and this entry has no delete of its own. */
+  total_bytes: number | null;
+}
+
+export interface TrashVersionRow {
+  version_id: string;
+  version_number: number;
+  asset_id: string;
+  asset_name: string;
+  project_id: string;
+  project_name: string;
+  deleted_at: string | null;
+  days_left: number | null;
+  blocked_by_parent: boolean;
+  /** null while a parent is in the trash, for the reason above. */
+  total_bytes: number | null;
+}
+
+export interface TrashOverview {
+  retention_days: number;
+  /** What emptying the whole trash would free. */
+  total_bytes: number;
+  projects: TrashProjectRow[];
+  assets: TrashAssetRow[];
+  versions: TrashVersionRow[];
+}
+
+export interface AdminPurgeResponse {
+  purged_projects: number;
+  purged_assets: number;
+  purged_versions: number;
+  freed_bytes: number;
+  s3_deletes: number;
+  s3_failures: number;
+}
+
 export interface Team {
   id: string;
   org_id: string;

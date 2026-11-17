@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import type { User, UserStatus } from "@/types";
 import { InstanceSettingsTab } from "@/components/settings/instance-settings-tab";
 import { BrandingTab } from "@/components/settings/branding-tab";
+import { StorageTab } from "@/components/settings/storage-tab";
 
 // The API requires a name and the dialog doesn't ask for one, so each invitee
 // is listed under the local part of their address until they accept the invite
@@ -208,10 +209,27 @@ function userStatusBadge(status: UserStatus) {
   );
 }
 
+const TABS = [
+  ["users", "Users"],
+  ["storage", "Storage"],
+  ["instance", "Instance settings"],
+  ["branding", "Branding"],
+] as const;
+
+type AdminTab = (typeof TABS)[number][0];
+
+/** What the header says under the title, one line per tab. */
+const SUBTITLE: Record<AdminTab, string> = {
+  users: "Manage platform users",
+  storage: "See what takes up space, and clear it out",
+  instance: "Configure this instance",
+  branding: "Make this instance look like yours",
+};
+
 export default function AdminPage() {
   const { user, isSuperAdmin } = useAuthStore();
   const router = useRouter();
-  const [tab, setTab] = React.useState<"users" | "instance" | "branding">("users");
+  const [tab, setTab] = React.useState<AdminTab>("users");
 
   const { data: usersResp, isLoading: loadingUsers } = useSWR<User[]>(
     isSuperAdmin ? "/admin/users" : null,
@@ -228,8 +246,8 @@ export default function AdminPage() {
   // Read after mount so the server and client render the same initial markup.
   React.useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested === "instance" || requested === "branding") {
-      setTab(requested);
+    if (TABS.some(([key]) => key === requested)) {
+      setTab(requested as AdminTab);
     }
   }, []);
 
@@ -341,19 +359,13 @@ export default function AdminPage() {
           <h1 className="text-xl font-semibold text-text-primary">
             Admin Dashboard
           </h1>
-          <p className="text-sm text-text-secondary">
-            {tab === "instance"
-              ? "Configure this instance"
-              : tab === "branding"
-                ? "Make this instance look like yours"
-                : "Manage platform users"}
-          </p>
+          <p className="text-sm text-text-secondary">{SUBTITLE[tab]}</p>
         </div>
       </div>
 
       {/* Sub-tabs */}
-      <div className="flex gap-1 border-b border-border">
-        {([["users", "Users"], ["instance", "Instance settings"], ["branding", "Branding"]] as const).map(([key, label]) => (
+      <div className="flex flex-wrap gap-1 border-b border-border">
+        {TABS.map(([key, label]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
@@ -371,6 +383,7 @@ export default function AdminPage() {
 
       {tab === "instance" && <InstanceSettingsTab />}
       {tab === "branding" && <BrandingTab />}
+      {tab === "storage" && <StorageTab />}
 
       {/* User management */}
       {tab === "users" && (

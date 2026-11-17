@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 
+from botocore.exceptions import ClientError
 from sqlalchemy import text, func
 from sqlalchemy.orm import Session
 
@@ -24,7 +25,7 @@ from ..models.activity import Mention, ActivityLog, Notification
 from ..services.owned_keys import is_project_logo_key
 from ..services.s3_service import (
     list_stale_multipart_uploads, abort_multipart_upload, delete_object, delete_prefix, list_keys,
-    head_object_size,
+    head_object_size, UPLOAD_GONE_CODES,
 )
 
 log = logging.getLogger("celery.cleanup")
@@ -61,7 +62,17 @@ def _safe(fn, *args) -> bool:
 
 @dataclass
 class PurgeCounts:
-    """Accumulates what a purge run reclaimed. `retention_days` is filled by `_run_cleanup`."""
+    """Accumulates what a purge run reclaimed. `retention_days` is filled by `_run_cleanup`.
+
+    `s3_deletes` counts object/prefix deletes that **succeeded**, excluding multipart
+    aborts, and `s3_failures` counts reclaim operations that failed, including aborts. These are the ones
+    that were logged and swallowed. It used to count attempts, so a store that was down had
+    the rows go, the objects stay, and the figures report the bytes as reclaimed.
+
+    With `deferred` set to a list the cascade collects its object-store work instead of doing
+    it, so a caller can commit the rows first and reclaim afterwards; `run_deferred` then does
+    it and counts the outcome. `None` (the nightly collector) reclaims inline as before.
+    """
     retention_days: int = 0
     projects: int = 0
     folders: int = 0
@@ -72,6 +83,56 @@ class PurgeCounts:
     share_links: int = 0
     share_links_expired: int = 0
     s3_deletes: int = 0
+    s3_failures: int = 0
+    deferred: list | None = None
+
+
+def _abort_open_upload(key: str, upload_id: str) -> None:
+    """A completed or already reaped multipart has nothing left to abort."""
+    try:
+        abort_multipart_upload(key, upload_id)
+    except ClientError as exc:
+        if str(exc.response.get("Error", {}).get("Code", "")) not in UPLOAD_GONE_CODES:
+            raise
+
+
+def _run_reclaim(counts: PurgeCounts, op: str, args: tuple) -> None:
+    """Do one object-store reclaim now and count whether it worked.
+
+    The function is looked up here rather than held in a table, so a test that
+    replaces this module's `delete_object` replaces what runs.
+    """
+    fn = {
+        "object": delete_object,
+        "prefix": delete_prefix,
+        "abort": _abort_open_upload,
+    }[op]
+    if _safe(fn, *args):
+        if op != "abort":
+            counts.s3_deletes += 1
+    else:
+        counts.s3_failures += 1
+
+
+def _reclaim(counts: PurgeCounts, op: str, *args) -> None:
+    """Reclaim one object, prefix or open upload, or collect it for after the commit."""
+    if counts.deferred is not None:
+        counts.deferred.append((op, args))
+        return
+    _run_reclaim(counts, op, args)
+
+
+def run_deferred(counts: PurgeCounts) -> None:
+    """Reclaim what a deferred cascade collected, after its rows are committed.
+
+    Called by the caller that asked for the deferral, once the deletes are safe.
+    Ordering it this way leaks objects if the process dies in between, where the
+    other order left rows that `/admin/trash/restore` would bring back with
+    their media already gone.
+    """
+    pending, counts.deferred = counts.deferred or [], []
+    for op, args in pending:
+        _run_reclaim(counts, op, args)
 
 
 def _purge_comment(db, comment_id, counts: PurgeCounts) -> None:
@@ -83,8 +144,7 @@ def _purge_comment(db, comment_id, counts: PurgeCounts) -> None:
     for reply in db.query(Comment).filter(Comment.parent_id == comment_id).all():
         _purge_comment(db, reply.id, counts)
     for att in db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment_id).all():
-        _safe(delete_object, att.s3_key)
-        counts.s3_deletes += 1
+        _reclaim(counts, "object", att.s3_key)
     db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment_id).delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.comment_id == comment_id).delete(synchronize_session=False)
     db.query(CommentReaction).filter(CommentReaction.comment_id == comment_id).delete(synchronize_session=False)
@@ -96,21 +156,33 @@ def _purge_comment(db, comment_id, counts: PurgeCounts) -> None:
 
 
 def _reclaim_media_s3(mf, counts: PurgeCounts) -> None:
-    """Best-effort delete of a MediaFile's S3 objects. processed is a prefix (HLS or single key)."""
-    _safe(delete_object, mf.s3_key_raw)
-    counts.s3_deletes += 1
+    """Best-effort delete of a MediaFile's S3 objects. processed is a prefix (HLS or single key).
+
+    Deletes by key, with no check that another live row points at the same
+    object, and that is safe only because of an invariant this app holds today:
+    every media file gets its own keys, derived from its own version id, at
+    upload and at transcode. Nothing copies, duplicates or re-parents a
+    `media_files` row onto an existing key.
+
+    **If that ever changes** -- a duplicate-asset feature, a cheap "copy to
+    another project", an import that reuses an existing object -- this function
+    becomes a way to delete somebody else's media. A reference check belongs
+    here then, and it is not a one-liner: the equality cases (`s3_key_raw`,
+    `s3_key_download`, `s3_key_thumbnail`) are easy, but `s3_key_processed` is a
+    *prefix* delete, and a prefix cannot be cleared by asking whether another
+    row holds the same string. It has to ask whether any live row's keys fall
+    under it.
+    """
+    _reclaim(counts, "object", mf.s3_key_raw)
     if mf.s3_key_processed:
-        _safe(delete_prefix, mf.s3_key_processed)
-        counts.s3_deletes += 1
+        _reclaim(counts, "prefix", mf.s3_key_processed)
     if mf.s3_key_download:
         # Written under the processed prefix, so the sweep above reclaims it in
         # practice. Named anyway: the download rung is a whole rendition, and
         # its reclamation must not rest on the two keys happening to be related.
-        _safe(delete_object, mf.s3_key_download)
-        counts.s3_deletes += 1
+        _reclaim(counts, "object", mf.s3_key_download)
     if mf.s3_key_thumbnail:
-        _safe(delete_object, mf.s3_key_thumbnail)
-        counts.s3_deletes += 1
+        _reclaim(counts, "object", mf.s3_key_thumbnail)
 
 
 def _purge_version(db, version_id, counts: PurgeCounts) -> None:
@@ -122,6 +194,11 @@ def _purge_version(db, version_id, counts: PurgeCounts) -> None:
     db.query(CarouselItem).filter(CarouselItem.version_id == version_id).delete(synchronize_session=False)
     media = db.query(MediaFile).filter(MediaFile.version_id == version_id).all()
     for mf in media:
+        # An upload still open leaks its parts if only the keys go: the parts are
+        # not reachable by key and no listing finds them on every backend. Same
+        # call `_dispose_version_files` makes when a user discards an upload.
+        if v.upload_id and v.processing_status == ProcessingStatus.uploading:
+            _reclaim(counts, "abort", mf.s3_key_raw, v.upload_id)
         _reclaim_media_s3(mf, counts)
     counts.media_files += len(media)
     db.query(MediaFile).filter(MediaFile.version_id == version_id).delete(synchronize_session=False)
@@ -227,15 +304,13 @@ def _purge_project(db, project_id, counts: PurgeCounts) -> None:
         # that was checked can name any object in the bucket, another project's
         # media included, and purging this project must not take it with it.
         if is_project_logo_key(project_id, branding.logo_s3_key):
-            _safe(delete_object, branding.logo_s3_key)
-            counts.s3_deletes += 1
+            _reclaim(counts, "object", branding.logo_s3_key)
         db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).delete(synchronize_session=False)
     db.query(WatermarkSettings).filter(WatermarkSettings.project_id == project_id).delete(synchronize_session=False)
     db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(synchronize_session=False)
     db.query(ActivityLog).filter(ActivityLog.project_id == project_id).delete(synchronize_session=False)
     if p.poster_s3_key:
-        _safe(delete_object, p.poster_s3_key)
-        counts.s3_deletes += 1
+        _reclaim(counts, "object", p.poster_s3_key)
     db.query(Project).filter(Project.id == project_id).delete(synchronize_session=False)
     counts.projects += 1
     db.flush()

@@ -13,8 +13,8 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
  *
  * Typing the project's name is the confirmation, so the target is explicit.
  * The copy says what really happens: the project goes from the app at once,
- * its data is purged after the instance's retention period, and the app has
- * no way to bring it back in between.
+ * its data is purged after the instance's retention period, and until then
+ * only an instance admin can bring it back, from the Admin dashboard.
  */
 export function ProjectDangerTab({ projectId, projectName }: { projectId: string; projectName: string }) {
   const router = useRouter()
@@ -48,7 +48,8 @@ export function ProjectDangerTab({ projectId, projectName }: { projectId: string
             <span className="font-medium text-text-primary">{projectName}</span> and everything in
             it (folders, assets, versions, comments and share links) disappear for everyone right
             away, and its share links stop working. The data is permanently deleted after the
-            retention period. It cannot be restored from the app.
+            retention period. Until then an instance admin can restore it, which brings the share
+            links back with it; there is no way back from here.
           </p>
         </div>
       </div>
@@ -70,7 +71,7 @@ export function ProjectDangerTab({ projectId, projectName }: { projectId: string
         open={open}
         onOpenChange={setOpen}
         title={`Delete "${projectName}"?`}
-        description="It disappears now and is permanently deleted after the retention period. It cannot be restored from the app."
+        description="It disappears now and is permanently deleted after the retention period. Until then an instance admin can restore it; there is no way back from here."
         confirmLabel="Delete project"
         variant="danger"
         confirmDisabled={!matches}
