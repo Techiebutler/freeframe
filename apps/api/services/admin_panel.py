@@ -834,9 +834,9 @@ def restore(
 class _InFlight(NamedTuple):
     """One version a purge must wait for.
 
-    `setting` is set when no amount of waiting can end it: the sweep that would
-    eventually finish or abandon the work is switched off by that environment
-    variable being 0 or less.
+    `setting` is set when the sweep that would reclaim abandoned work is switched
+    off by that environment variable being 0 or less. Live work still finishes
+    by waiting; only abandoned work stays.
     """
 
     label: str
@@ -858,9 +858,15 @@ def _still_being_written(db: Session, project_ids: list, asset_ids: list, versio
     Explicitly discarded uploads can go. A processing version without its own
     stamp is always in flight: deleting an asset or a project stamps only the
     parent, and the stuck-processing requeue sweep keeps redispatching such a
-    version under it. Only a version stamped itself is skipped by that sweep,
-    so only it can go once it is older than the requeue window. A disabled
-    sweep provides no age at which work is known to be abandoned.
+    version under it. That refusal ends only when the job reaches `ready` or
+    `failed`, or when the retention collector takes the parent. A job that never
+    finishes (a hung or poison file) therefore keeps Empty trash and that row
+    refused until the collector runs, which it never does at
+    `SOFT_DELETE_RETENTION_DAYS=0`. A version stamped itself is skipped by that
+    sweep and goes once its last upload activity is older than the requeue
+    window; that age is not refreshed by a job already re-sent before the stamp,
+    so it does not prove no job is running. A disabled sweep provides no age at
+    which work is known to be abandoned.
     """
     if not project_ids and not asset_ids and not version_ids:
         return []
