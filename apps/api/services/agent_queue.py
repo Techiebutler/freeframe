@@ -66,6 +66,9 @@ def queue(db: Session, project_id: uuid.UUID, state: Optional[str] = None) -> li
     stats = review_bridge.asset_stats([str(a.id) for items in assets.values() for a in items])
     reviewer = db.query(GuestUser).filter(GuestUser.email == r.REVIEWER_EMAIL).first()
     owner_id = db.get(Project, project_id).created_by
+    from . import board_lifecycle as board
+    now = datetime.now(timezone.utc)
+    info = board.activity(db, reqs, assets)
     out = []
     for q in reqs:
         reviews = r._review_assets(db, q, assets[q.id], reviewer, stats, include_media=False)
@@ -77,7 +80,10 @@ def queue(db: Session, project_id: uuid.UUID, state: Optional[str] = None) -> li
         stage = stage_of("live", len(assets[q.id]), gate["status"])
         if state and stage != state:
             continue
+        life = board.lifecycle(now, last_activity=info[q.id]["last_activity"], last_agent_activity=info[q.id]["last_agent_activity"],
+                               approved=False, delivered=False, stage=stage, is_agent=info[q.id]["is_agent"])
         out.append({"request_id": str(q.id), "title": q.title, "folder_id": str(q.folder_id), "stage": stage,
+                    "stale_agent": life["stale_agent"], "agent_silent_since": life["agent_silent_since"],
                     "upload_token": q.token, "review_url": review_url(q),
                     "embed_url": embed_url(db, q, owner_id) if assets[q.id] else None, "review_phase": phase_of_reviews(db, reviews),
                     "assets": [{"asset_id": a["asset_id"], "name": a["name"], "version_id": a["version_id"],

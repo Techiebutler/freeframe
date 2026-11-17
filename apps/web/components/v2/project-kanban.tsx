@@ -2,20 +2,20 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { CheckCheck, FileVideo, PencilLine, ScanLine, Share2, Upload } from 'lucide-react'
-import type { FileRequest } from '@/lib/platform'
+import { Bot, CheckCheck, ExternalLink, FileVideo, PencilLine, ScanLine, Share2, Upload } from 'lucide-react'
+import { genCardHref, sinceLabel, type FileRequest } from '@/lib/platform'
 import { FolderArt } from './folder-art'
 
 const STAGES = [
-  { id: 'ready', label: 'Ready to go', icon: CheckCheck },
-  { id: 'corrections', label: 'Corrections', icon: PencilLine },
-  { id: 'review', label: 'In review', icon: ScanLine },
-  { id: 'editor', label: 'With editor', icon: Upload },
+  { id: 'ready', label: 'Waiting for you', icon: CheckCheck },
+  { id: 'corrections', label: 'Agent fixing', icon: PencilLine },
+  { id: 'review', label: 'Checking', icon: ScanLine },
+  { id: 'editor', label: 'Agent working', icon: Upload },
 ] as const
 type Stage = typeof STAGES[number]['id']
 
 function stageOf(r: FileRequest): Stage | 'closed' {
-  if (r.delivered_at) return 'closed'
+  if (r.delivered_at || r.done_reason) return 'closed'
   if (r.state !== 'live') return 'closed'
   if (r.review_phase === 'self_review') return 'review'
   if (r.review_phase === 'agent_stuck') return 'corrections'
@@ -41,7 +41,7 @@ export function ProjectKanban({ requests, paused, onShare, onDone, focusReady = 
   const positions = React.useRef(new Map<string, Position>())
   const animations = React.useRef<Animation[]>([])
   const [announcement, setAnnouncement] = React.useState('')
-  const closed = requests.filter(r => r.state !== 'live' && !r.delivered_at)
+  const closed = requests.filter(r => (r.state !== 'live' || !!r.done_reason) && !r.delivered_at)
   // Approved and handed on (share link copied): off the board, still one tap away.
   const delivered = requests.filter(r => !!r.delivered_at)
   // Done is a small celebration: the cards glow, burst and lift away, then leave the board
@@ -104,7 +104,7 @@ export function ProjectKanban({ requests, paused, onShare, onDone, focusReady = 
         </section>
       })}
     </div>
-    <p className="mt-3 text-sm text-text-secondary">Ready to go means the current videos passed review with no required changes. Brand approval is a separate decision in FreeFrame.</p>
+    <p className="mt-3 text-sm text-text-secondary">Waiting for you means the current videos passed review with no required changes. Brand approval is a separate decision in FreeFrame.</p>
     {!!delivered.length && <details className="mt-4 rounded-2xl border border-border px-4">
       <summary className="min-h-11 cursor-pointer py-3 text-[0.8125rem] text-text-secondary"><span>Delivered</span> <span className="kanban-done-count ml-1">{delivered.length}</span></summary>
       <ul className="grid gap-3 pb-4 sm:grid-cols-2 lg:grid-cols-4">{delivered.map(r => <ProjectCard key={r.id} request={r} stage="closed" onShare={() => onShare(r)} />)}</ul>
@@ -123,7 +123,7 @@ const DONE_MS = 700
 const STAGGER_MS = 70
 
 function ProjectCard({ request: r, stage, onShare, onDone, leaving }: { request: FileRequest; stage: Stage | 'closed'; onShare: () => void; onDone?: () => void; leaving?: number }) {
-  const label = r.delivered_at ? 'Delivered' : r.state === 'live' && r.review_phase === 'self_review' ? `Self-review · ${r.last_uploader_name || 'agent'}` : r.state === 'live' && r.review_phase === 'agent_stuck' ? 'Agent stuck · needs you' : r.status === 'unavailable' ? 'Review unavailable' : stage === 'editor' ? 'Waiting for files' : stage === 'review' ? 'Reviewing files' : stage === 'corrections' ? r.open_must_fixes > 0 ? `${r.open_must_fixes} ${r.open_must_fixes === 1 ? 'fix' : 'fixes'} to make` : 'With editor for updates' : stage === 'ready' ? 'Ready to go' : r.state === 'revoked' ? 'Closed' : 'Expired'
+  const label = r.delivered_at ? 'Delivered' : r.state === 'live' && r.review_phase === 'self_review' ? `Self-review · ${r.last_uploader_name || 'agent'}` : r.state === 'live' && r.review_phase === 'agent_stuck' ? 'Agent stuck · needs you' : r.status === 'unavailable' ? 'Review unavailable' : stage === 'editor' ? 'Agent working' : stage === 'review' ? 'Checking files' : stage === 'corrections' ? r.open_must_fixes > 0 ? `${r.open_must_fixes} ${r.open_must_fixes === 1 ? 'fix' : 'fixes'} to make` : 'With editor for updates' : stage === 'ready' ? 'Ready for your call' : r.done_reason === 'approved' ? 'Approved' : r.done_reason === 'stale' ? 'Done · no activity for 14 days' : r.state === 'revoked' ? 'Closed' : 'Expired'
   return <li className="kanban-card" data-request-id={r.id} data-stage={stage} data-leaving={leaving !== undefined || undefined} style={leaving !== undefined ? { '--i': leaving } as React.CSSProperties : undefined}>
     <div className="flex items-start justify-between gap-2">
       <div className="kanban-art" aria-hidden="true"><FolderArt size={36} label="" />{stage === 'review' && <span className="kanban-scan" />}{stage === 'corrections' && <PencilLine className="kanban-pencil" size={19} />}{stage === 'ready' && <span className="kanban-check"><CheckCheck size={13} /></span>}</div>
@@ -132,8 +132,11 @@ function ProjectCard({ request: r, stage, onShare, onDone, leaving }: { request:
     <Link href={reviewHref(r)} className="kanban-title">{r.title}</Link>
     <p className="kanban-brand">{r.project_name}</p>
     <div className="kanban-card-status"><span className="kanban-status-dot" aria-hidden="true" />{leaving !== undefined ? 'Done' : label}</div>
+    {r.stale_agent && r.agent_silent_since && !r.done_reason && <p className="kanban-silent" role="status"><Bot size={13} aria-hidden="true" /> Agent silent since {sinceLabel(r.agent_silent_since)}</p>}
+    {r.done_reason === 'stale' && <p className="kanban-silent">Reopens on any new activity</p>}
+    {r.gen_card_key && <a href={genCardHref(r.gen_card_key)} target="_blank" rel="noopener noreferrer" className="kanban-gen-link">Gen Desk card <ExternalLink size={12} aria-hidden="true" /></a>}
     {r.state === 'live' && r.checklist?.status === 'failed' && OWNER_ACTIONABLE.has(r.checklist.error_code ?? '') && <button type="button" onClick={onShare} aria-label={`Briefing needs attention: ${r.title}`} className="press mt-2 min-h-11 text-left text-sm font-medium text-status-error underline underline-offset-4">Briefing needs attention</button>}
     {stage === 'ready' && <div className="mt-3 flex gap-2"><Link href={reviewHref(r)} aria-label={`Review ${r.title}`} className="press flex min-h-11 flex-1 items-center justify-center rounded-full border border-border text-[0.8125rem] font-medium hover:bg-bg-hover">Review</Link>{onDone && <button type="button" onClick={onDone} aria-label={`Mark ${r.title} done`} className="press kanban-done flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent-muted text-[0.8125rem] font-medium text-accent"><span className="kanban-done-icon"><CheckCheck size={14} /></span>Done<span className="kanban-burst" aria-hidden="true">{Array.from({ length: 10 }, (_, i) => <span key={i} style={{ '--a': `${i * 36}deg` } as React.CSSProperties} />)}</span></button>}</div>}
-    <div className="kanban-card-footer"><span className="inline-flex items-center gap-1.5"><FileVideo size={13} />{r.assets} {r.assets === 1 ? 'file' : 'files'}</span>{r.last_uploader_name && <span className="kanban-editor" title={r.last_uploader_name}><span aria-hidden="true" className="kanban-avatar">{r.last_uploader_name.charAt(0)}</span><span>{r.last_uploader_name}</span></span>}</div>
+    <div className="kanban-card-footer"><span className="inline-flex items-center gap-1.5"><FileVideo size={13} />{r.assets} {r.assets === 1 ? 'file' : 'files'}</span>{(r.worker?.name || r.last_uploader_name) && <span className="kanban-editor" title={r.worker?.name || r.last_uploader_name || ''}><span aria-hidden="true" className="kanban-avatar">{(r.worker?.name || r.last_uploader_name || '').charAt(0)}</span><span>{r.worker?.name || r.last_uploader_name}{r.worker?.program && r.worker.program !== r.worker.name ? ` · ${r.worker.program}` : ''}</span></span>}</div>
   </li>
 }

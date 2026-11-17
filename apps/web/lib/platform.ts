@@ -36,6 +36,15 @@ export interface FileRequest {
   created_at: string | null
   /** The reviewer copied the delivery link: the request sits in the Delivered archive. */
   delivered_at?: string | null
+  /** Server-side lifecycle (computed on read): approved/delivered at once, stale after 14 quiet days; any new activity reopens. */
+  done_reason?: 'approved' | 'delivered' | 'stale' | null
+  /** An agent lane card whose agent has been quiet for 24 h. */
+  stale_agent?: boolean
+  agent_silent_since?: string | null
+  last_activity_at?: string | null
+  worker?: { name: string; program: string | null; kind: 'agent' | 'human' } | null
+  /** Gen card key when the request was filed by a Gen card (external_ref "gen:<key>"). */
+  gen_card_key?: string | null
   checklist_binding_id?: string | null
   checklist?: import('./checklist').ChecklistState | null
 }
@@ -393,4 +402,13 @@ export async function uploadToRequest(
     throw e
   }
   return { asset_id: init.asset_id, version_number: init.version_number }
+}
+
+/** Deep link back to the Gen Desk card (gen-aditor AgentStudio: ?card=<key>). */
+export const genCardHref = (key: string) => `https://gen.aditor.ai/?card=${encodeURIComponent(key)}#agent-studio`
+
+/** "3 h ago" / "2 d ago" for the agent-silent line. */
+export function sinceLabel(iso: string, now = Date.now()): string {
+  const h = Math.max(1, Math.floor((now - new Date(iso).getTime()) / 3_600_000))
+  return h < 48 ? `${h} h ago` : `${Math.floor(h / 24)} d ago`
 }

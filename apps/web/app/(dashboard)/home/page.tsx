@@ -32,7 +32,7 @@ export default function HomePage() {
   })
   const { data: saved, error: savedError } = useSWR('/insights/time-saved?30', () => getTimeSaved(30), { shouldRetryOnError: false })
   const { data: performance, error: editorError, mutate: refreshEditors } = useSWR('/insights/editors', getEditors, { refreshInterval: 30000, shouldRetryOnError: false })
-  const live = (requests || []).filter(r => r.state === 'live' && !r.delivered_at)
+  const live = (requests || []).filter(r => r.state === 'live' && !r.delivered_at && !r.done_reason)
   const ready = live.filter(r => r.assets > 0 && r.status === 'clear')
   const filtered = (filter === 'Ready' ? ready : requests || [])
     .filter(r => `${r.title} ${r.project_name} ${r.last_uploader_name || ''}`.toLowerCase().includes(query.toLowerCase().trim()))
@@ -55,7 +55,7 @@ export default function HomePage() {
 
       <section aria-label="At a glance" className="overview-metrics mt-8 grid gap-4">
         <button type="button" onClick={() => { setFilter('Ready'); setQuery('') }} className="metric-card metric-ready text-left" aria-label="Show ready requests">
-          <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[0.875rem] font-medium"><CheckCheck size={17} /> Ready to go</span><ArrowUpRight size={17} /></div>
+          <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[0.875rem] font-medium"><CheckCheck size={17} /> Waiting for you</span><ArrowUpRight size={17} /></div>
           <p className="metric-number mt-6">{requests ? ready.length.toString().padStart(2, '0') : '—'}</p>
           <p className="mt-2 text-[0.8125rem]">{error ? 'Requests unavailable' : 'Open ready files'}</p>
         </button>
@@ -88,7 +88,7 @@ export default function HomePage() {
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              {filter === 'Ready' && <button type="button" onClick={() => setFilter('All')} className="press inline-flex min-h-11 items-center gap-2 rounded-full bg-accent-muted px-3 text-[0.8125rem] font-medium text-accent">Ready to go <X size={14} /><span className="sr-only">Show all stages</span></button>}
+              {filter === 'Ready' && <button type="button" onClick={() => setFilter('All')} className="press inline-flex min-h-11 items-center gap-2 rounded-full bg-accent-muted px-3 text-[0.8125rem] font-medium text-accent">Waiting for you <X size={14} /><span className="sr-only">Show all stages</span></button>}
               <button type="button" aria-pressed={motionPaused} onClick={() => setMotionPaused(p => !p)} aria-label={motionPaused ? 'Resume motion' : 'Pause motion'} title={motionPaused ? 'Resume motion' : 'Pause motion'} className="press kanban-motion grid h-11 w-11 place-items-center rounded-full text-text-secondary hover:bg-bg-hover">{motionPaused ? <Play size={14} /> : <Pause size={14} />}</button>
             </div>
             <label className="flex h-11 w-full items-center gap-2 rounded-full border border-border bg-bg-secondary px-3 sm:w-44"><Search size={16} className="shrink-0 text-text-secondary" /><input aria-label="Search requests" value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a project" className="min-w-0 w-full bg-transparent text-[0.8125rem] outline-none" /></label>

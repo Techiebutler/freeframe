@@ -366,11 +366,18 @@ def list_requests(project_id: Optional[uuid.UUID] = Query(None), db: Session = D
     delivered: dict = {}
     for d in db.query(Delivery).filter(Delivery.request_id.in_([r.id for r in reqs]), Delivery.handed_on_at.isnot(None)).all():
         delivered[d.request_id] = max(d.handed_on_at, delivered.get(d.request_id, d.handed_on_at))
+    from ..services import board_lifecycle as board
+    now = datetime.now(timezone.utc)
+    info = board.activity(db, reqs, assets)
+    all_reviews = {r.id: _review_assets(db, r, assets[r.id], reviewer, stats, include_media=False) for r in reqs}
+    approved = board.approved_requests(db, all_reviews)
     out = []
     for r in reqs:
-        reviews = _review_assets(db, r, assets[r.id], reviewer, stats, include_media=False)
+        reviews = all_reviews[r.id]
         gate = {**_request_gate(reviews, statuses.get(r.review_share_token)), "review_phase": phase_of_reviews(db, reviews)}
-        out.append(_request_out(r, projects.get(r.project_id), gate, len(assets[r.id]), bindings.get(r.id), delivered.get(r.id)))
+        lane = board.lane_of(request_state(r, now), len(assets[r.id]), gate["status"], gate["review_phase"])
+        out.append({**_request_out(r, projects.get(r.project_id), gate, len(assets[r.id]), bindings.get(r.id), delivered.get(r.id)),
+                    **board.board_fields(now, r, info[r.id], lane, r.id in approved, r.id in delivered)})
     db.commit()  # Persist observed campaign usage after assembling the response.
     return out
 
