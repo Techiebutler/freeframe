@@ -49,6 +49,15 @@ def admin_membership(project_id: uuid.UUID, user: User) -> ProjectMember:
     return ProjectMember(project_id=project_id, user_id=user.id, role=ProjectRole.owner)
 
 
+def is_stored_membership(member: "ProjectMember | None") -> bool:
+    """Whether `member` is a real membership row rather than `admin_membership`'s stand-in.
+
+    A row's id is assigned when it is flushed and the stand-in never is, so a stand-in
+    has no id. For a caller that reports the caller's own membership, as `role` does.
+    """
+    return member is not None and member.id is not None
+
+
 # The action string for an administrator acting on a project they are not a
 # member of. `payload.via = "superadmin"` is what separates these rows from the
 # same action taken by a member.

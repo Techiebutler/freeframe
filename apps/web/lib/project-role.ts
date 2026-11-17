@@ -7,10 +7,10 @@
  *
  * `role` is deliberately not that answer. It says what the caller's own
  * membership is, so the member list, the member count and the project's emails
- * keep saying the admin is not a member, and `GET /projects?scope=all` leaves
- * it null for a project the admin is not in. A screen that reads `role` alone
- * therefore offers a non-member admin viewer controls, or refuses a settings
- * page the server would accept every save on.
+ * keep saying the admin is not a member, and both `GET /projects/{id}` and
+ * `GET /projects?scope=all` leave it null for a project the admin is not in.
+ * A screen that reads `role` alone therefore offers a non-member admin viewer
+ * controls, or refuses a settings page the server would accept every save on.
  *
  * One helper and one signal (`isSuperAdmin`, off `GET /auth/me`), so no screen
  * has to infer it from `role` again. `role` is taken and returned as the API

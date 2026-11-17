@@ -16,6 +16,7 @@ from ..services.storage import project_storage_used_bytes, project_storage_used_
 from ..services.activity_service import log_activity
 from ..services.permissions import (
     is_instance_admin,
+    is_stored_membership,
     require_project_role,
     require_project_visible,
 )
@@ -198,7 +199,9 @@ def get_project(project_id: uuid.UUID, db: Session = Depends(get_db), current_us
     member = require_project_visible(db, project_id, current_user, project)
     resp = ProjectResponse.model_validate(project)
     resp.poster_url = _resolve_poster_url(project)
-    if member:
+    # `role` is the caller's own membership. An admin who is not in a private
+    # project gets a transient stand-in from the gate, which is not one.
+    if is_stored_membership(member):
         resp.role = member.role
     # Calculate storage, asset count, member count
     resp.asset_count = db.query(func.count(Asset.id)).filter(

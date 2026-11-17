@@ -509,9 +509,10 @@ def test_the_event_stream_and_a_share_link_follow_the_same_rules(seed, who, bump
 
 @pytest.mark.parametrize("caller", ["admin", "outsider", "outsider on a public project"])
 def test_who_opens_a_project_and_its_member_list_uninvited(seed, as_user, caller):
-    """Owner-equivalent for an admin, so the UI enables the actions the access actually
-    allows; the member list only ever holds the real member. A public project is readable
-    by anyone, but who can reach it never is."""
+    """An admin reaches the project and its member list; the member list only ever holds the
+    real member, and `role` stays the caller's own membership (null for an admin who is not
+    in the project), which is what the web's `effectiveProjectRole` expects. A public
+    project is readable by anyone, but who can reach it never is."""
     owner = seed.user()
     public = caller.endswith("public project")
     project = seed.project(owner, name="theirs", public=public)
@@ -522,11 +523,40 @@ def test_who_opens_a_project_and_its_member_list_uninvited(seed, as_user, caller
     assert members.status_code == (200 if is_admin else 403)
     if is_admin:
         assert body.json()["name"] == "theirs"
-        assert body.json()["role"] == "owner"
+        assert body.json()["role"] is None
         assert [m["user_id"] for m in members.json()] == [str(owner.id)]
     elif not public:
         assert body.status_code == 403
         assert body.json()["detail"] == "Not a project member"
+
+
+@pytest.mark.parametrize(
+    "caller, expected",
+    [
+        ("owner", "owner"),
+        ("viewer", "viewer"),
+        ("admin who is a viewer", "viewer"),
+        ("admin who is not a member", None),
+        ("admin who is not a member of a public project", None),
+    ],
+)
+def test_the_role_of_a_project_is_only_ever_a_stored_membership(seed, as_user, caller, expected):
+    """`GET /projects/{id}` says what the caller's own membership is. The owner-equivalent
+    stand-in that lets an admin through a private project is never stored, so it must not
+    show up as `role`: the answer is the same null as on a public project and in
+    `scope=all`. Members, and an admin's own row, still report their role."""
+    owner = seed.user()
+    public = caller.endswith("public project")
+    project = seed.project(owner, public=public)
+    if caller == "owner":
+        user = owner
+    else:
+        user = seed.user(superadmin=caller.startswith("admin"))
+        if caller.endswith("viewer"):
+            seed.member(project, user, ProjectRole.viewer)
+    body = as_user(user).get(f"/projects/{project.id}")
+    assert body.status_code == 200
+    assert body.json()["role"] == expected
 
 
 def test_scope_all_shows_every_project_to_a_superadmin_and_to_nobody_else(seed, as_user):
