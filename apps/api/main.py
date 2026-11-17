@@ -104,6 +104,8 @@ from .routers import share_approval
 app.include_router(share_approval.router)
 from .routers import deliveries as deliveries_api
 app.include_router(deliveries_api.router)
+from .routers import handin_sign as handin_sign_api
+app.include_router(handin_sign_api.router)
 
 @app.get("/health")
 def health():

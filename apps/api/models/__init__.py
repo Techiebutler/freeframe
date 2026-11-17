@@ -16,3 +16,4 @@ from .campaign_review import CampaignReview
 from .checklist_binding import ChecklistBinding
 from .agent import AgentKey, AgentPairingCode, FeedbackRound
 from .delivery import Delivery
+from .handin_sign import HandinSign
