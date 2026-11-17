@@ -918,3 +918,93 @@ def test_purging_a_parent_observes_job_activity_and_disabled_sweeps(
         assert seed.db.query(Project).filter(Project.id == project.id).first() is not None
     else:
         assert seed.db.query(Project).filter(Project.id == project.id).first() is None
+
+
+# ── refusal wording: one item, several items ──────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("count", "phrase"),
+    [(1, "This deletes 1 item."), (2, "This deletes 2 items.")],
+)
+def test_the_bulk_delete_428_counts_what_it_would_delete(
+    seed, as_user, admin, monkeypatch, count, phrase,
+):
+    monkeypatch.setattr(admin_panel, "CONFIRM_ABOVE_BYTES", 0)
+    owner = seed.user()
+    project = seed.project(owner)
+    assets = [seed.media(project, owner, name=f"clip {n}", original=1_000, derived=0) for n in range(count)]
+    resp = _delete(
+        as_user(admin), asset_ids=[str(a.id) for a in assets], confirm_count=count,
+    )
+    assert resp.status_code == 428
+    assert resp.json()["detail"].startswith(f"{phrase} Type DELETE")
+
+
+@pytest.mark.parametrize(
+    ("selected", "confirmed", "sentence"),
+    [
+        (2, 1, "Confirmation is for 1 item but 2 are selected."),
+        (1, 2, "Confirmation is for 2 items but 1 is selected."),
+    ],
+)
+def test_the_bulk_delete_409_counts_both_sides_of_the_mismatch(
+    seed, as_user, admin, selected, confirmed, sentence,
+):
+    owner = seed.user()
+    ids = [str(seed.project(owner, name=f"p{n}").id) for n in range(selected)]
+    resp = _delete(as_user(admin), project_ids=ids, confirm_count=confirmed, confirm_text="DELETE")
+    assert resp.status_code == 409
+    assert resp.json()["detail"].startswith(sentence)
+
+
+@pytest.mark.parametrize(
+    ("trashed", "confirmed", "sentence"),
+    [
+        (2, 1, "Confirmation is for 1 item but 2 are in the trash."),
+        (1, 2, "Confirmation is for 2 items but 1 is in the trash."),
+    ],
+)
+def test_the_purge_409_counts_both_sides_of_the_mismatch(
+    seed, as_user, admin, s3, trashed, confirmed, sentence,
+):
+    owner = seed.user()
+    for n in range(trashed):
+        _trashed_project(seed, owner, name=f"binned {n}")
+    resp = _purge(
+        as_user(admin), everything=True, confirm_count=confirmed, confirm_bytes=1_500 * trashed,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"].startswith(sentence)
+
+
+@pytest.mark.parametrize(
+    ("live", "sentence"),
+    [
+        (1, "1 of the selected items is not in the trash."),
+        (2, "2 of the selected items are not in the trash."),
+    ],
+)
+def test_the_purge_refusal_for_live_rows_agrees_with_their_number(
+    seed, as_user, admin, s3, live, sentence,
+):
+    owner = seed.user()
+    ids = [str(seed.project(owner, name=f"in use {n}").id) for n in range(live)]
+    resp = _purge(as_user(admin), project_ids=ids, confirm_count=live, confirm_bytes=0)
+    assert resp.status_code == 409
+    assert resp.json()["detail"].startswith(sentence)
+
+
+@pytest.mark.parametrize(
+    ("trashed", "phrase"),
+    [(1, "permanently remove 1 item."), (2, "permanently remove 2 items.")],
+)
+def test_the_purge_428_counts_what_it_would_remove(
+    seed, as_user, admin, panel, s3, trashed, phrase,
+):
+    owner = seed.user()
+    for n in range(trashed):
+        _trashed_project(seed, owner, name=f"binned {n}")
+    client = as_user(admin)
+    resp = _purge(client, everything=True, confirm_text=None, **panel.trash_counts(client))
+    assert resp.status_code == 428
+    assert resp.json()["detail"].endswith(phrase)

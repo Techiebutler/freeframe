@@ -366,6 +366,11 @@ def latest_version_ids(db: Session, asset_ids: list) -> dict:
     return {asset_id: version_id for asset_id, (version_id, _) in newest.items()}
 
 
+def _items(n: int) -> str:
+    """'1 item' or 'N items', for messages a person reads."""
+    return f"{n} item" if n == 1 else f"{n} items"
+
+
 def needs_typed_confirmation(project_count: int, bytes_total: int) -> bool:
     """Does this selection have to be typed out before it runs?"""
     return project_count > CONFIRM_ABOVE_PROJECTS or bytes_total > CONFIRM_ABOVE_BYTES
@@ -400,7 +405,7 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
     if confirm_count != resolved:
         raise DeleteGate(
             409,
-            f"Confirmation is for {confirm_count} items but {resolved} are selected. "
+            f"Confirmation is for {_items(confirm_count)} but {resolved} {'is' if resolved == 1 else 'are'} selected. "
             "Reload the list and select again.",
         )
 
@@ -424,7 +429,7 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
     if needs_typed_confirmation(len(targets["projects"]), targets["bytes"]):
         if (confirm_text or "").strip() not in _ACCEPTED:
             raise DeleteGate(
-                428, f"This deletes {resolved} {'item' if resolved == 1 else 'items'}. Type {CONFIRM_WORD} to confirm."
+                428, f"This deletes {_items(resolved)}. Type {CONFIRM_WORD} to confirm."
             )
 
 
@@ -941,7 +946,8 @@ def check_purge_gate(
     if targets["missing"]:
         raise PurgeGate(
             409,
-            f"{len(targets['missing'])} of the selected items are not in the trash. "
+            f"{len(targets['missing'])} of the selected items "
+            f"{'is' if len(targets['missing']) == 1 else 'are'} not in the trash. "
             "Only things already deleted can be removed for good. Reload and try again.",
         )
 
@@ -959,7 +965,7 @@ def check_purge_gate(
     if confirm_count != resolved:
         raise PurgeGate(
             409,
-            f"Confirmation is for {confirm_count} items but {resolved} are in the trash. "
+            f"Confirmation is for {_items(confirm_count)} but {resolved} {'is' if resolved == 1 else 'are'} in the trash. "
             "Reload and try again.",
         )
     if confirm_bytes != targets["bytes"]:
@@ -972,7 +978,7 @@ def check_purge_gate(
         raise PurgeGate(
             428,
             f"This cannot be undone. Type {CONFIRM_WORD} to permanently remove "
-            f"{resolved} items.",
+            f"{_items(resolved)}.",
         )
 
 
