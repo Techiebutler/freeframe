@@ -576,6 +576,15 @@ describe('review feedback', () => {
     expect(within(row).getByRole('button', { name: /Restore/ })).toBeDisabled()
   })
 
+  it('names the file or project to restore first for a blocked version inside its window', async () => {
+    serve({ bin: trash({ ...FULL_BIN, versions: [{ ...FULL_BIN.versions[0], blocked_by_parent: true, days_left: 12 }] }), storage: overview({ summary: summary({ trash_bytes: GB }) }) })
+    render(<StorageTab />)
+    await openTrash()
+    const row = (await screen.findByText('Hero Cut.mov · version 2')).closest('tr')!
+    expect(within(row).getByText('Restore the file or project above it first')).toBeInTheDocument()
+    expect(within(row).queryByText(/next cleanup pass removes it/)).toBeNull()
+  })
+
   it('closes the Empty trash dialog and says so when the bin was already emptied elsewhere', async () => {
     serve({ bin: FULL_BIN, storage: overview({ summary: summary({ trash_bytes: GB }) }) })
     render(<StorageTab />)
