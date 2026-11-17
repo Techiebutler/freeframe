@@ -1048,10 +1048,11 @@ def purge_from_trash(db: Session, targets: dict, actor: User) -> dict:
             cascade(db, root["id"], counts)
     db.flush()
 
-    # project_id is null because the project row has already been purged and
-    # cannot be referenced by a foreign key. admin_trash_purge is a retained
-    # audit action. Keep ids and names in the payload because the source rows
-    # are gone, and an id alone does not describe what was destroyed.
+    # project_id is null because one purge can span several projects, and a
+    # purged project's row is gone and cannot be referenced by a foreign key.
+    # admin_trash_purge is a retained audit action. Keep ids and names in the
+    # payload because the source rows are gone, and an id alone does not
+    # describe what was destroyed.
     audit = log_activity(
         db,
         "admin_trash_purge",
