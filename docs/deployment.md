@@ -26,7 +26,7 @@ Any provider works: Hetzner, DigitalOcean, AWS, Google Cloud, Azure, Hostinger, 
 Log in to the server and run:
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/latest/install.sh)"
+sudo FREEFRAME_CHANNEL=stable bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)"
 ```
 
 The installer is for **Linux servers only**:
@@ -37,18 +37,18 @@ The installer is for **Linux servers only**:
 
 This downloads a small script and runs it as the administrator (`sudo`). The script runs `freeframe install`, which checks the server first and changes nothing if a check fails. You can read the script before running it: it is [`install.sh`](../install.sh) in this repository.
 
-The command works from v1.22.0, the first release that has the installer. `latest` is the newest published release. We will switch this command to `stable`, the release we have validated for production, once the first release containing the installer has been promoted there.
+The command installs `stable`, the release we have validated for production, and the server keeps following it: `sudo freeframe update` moves to the next release promoted there. To follow every release as soon as it is published, write `latest` in both places instead (`FREEFRAME_CHANNEL=latest` and `.../latest/install.sh`). The installer is in every release from v1.22.0.
 
 If you need to set a variable (see [Unattended installs](#unattended-installs-cloud-init-ansible) below), put it after `sudo`, because `sudo` drops variables set before it:
 
 ```bash
-sudo FREEFRAME_DOMAIN=review.yourstudio.com bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/latest/install.sh)"
+sudo FREEFRAME_CHANNEL=stable FREEFRAME_DOMAIN=review.yourstudio.com bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)"
 ```
 
 To give answers as options instead, write `install` after the closing quote, then the options. With `bash -c`, the first word after the script is only its name, so `install` must be there:
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/latest/install.sh)" install --domain review.yourstudio.com
+sudo FREEFRAME_CHANNEL=stable bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)" install --domain review.yourstudio.com
 ```
 
 **Why `bash -c` and not `curl ... | sudo bash`?** Ubuntu 26.04's `sudo` is sudo-rs, which cannot pass your keyboard to a script that arrives through a pipe: the first question would freeze. The installer notices this before it downloads anything, and shows the `bash -c` command to use instead. The `bash -c` form works with every `sudo`. A piped command is still fine for [unattended installs](#unattended-installs-cloud-init-ansible), which ask nothing.
@@ -209,7 +209,7 @@ Docker and its images, NVIDIA's container toolkit, the apt sources, the swap fil
 ```bash
 sudo mkdir -p /opt/freeframe
 sudo install -m 600 /root/freeframe-removed-<date>-<time>/.env.prod /opt/freeframe/.env.prod
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/latest/install.sh)"
+sudo FREEFRAME_CHANNEL=stable bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)"
 ```
 
 Without the settings file the installer refuses the kept volumes (they look like a FreeFrame set up by hand) and points at the saved settings. If the volumes are gone, the same steps give an empty FreeFrame; then `sudo freeframe restore /root/freeframe-removed-<date>-<time>/freeframe-<date>-<time>.dump` puts the final backup back. A backup holds the database only, not footage kept on the server.
@@ -240,7 +240,8 @@ For a script with nobody at the keyboard, give every answer ahead of time. This 
 Example, as cloud-init runs it (as root, so no `sudo`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/latest/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh | \
+  FREEFRAME_CHANNEL=stable \
   FREEFRAME_YES=1 \
   FREEFRAME_DOMAIN=review.yourstudio.com \
   FREEFRAME_ADMIN_EMAIL=you@yourstudio.com \
@@ -357,7 +358,7 @@ These are the manual ways, fully supported next to the [installer](#install-on-a
 
 ### Run the published images
 
-This works from v1.22.0, the first release that has these compose files. You need only the compose files and your settings; download them from the ref you want to follow (`latest`, or a pinned `vX.Y.Z` from v1.22.0 on). `latest` is the newest published release. We will switch these commands to `stable`, the release we have validated for production, once the first release containing these files has been promoted there.
+This works from v1.22.0, the first release that has these compose files. You need only the compose files and your settings; download them from the ref you want to follow: `stable`, the release we have validated for production, as below; `latest`, the newest published release; or a pinned `vX.Y.Z` from v1.22.0 on.
 
 ```bash
 mkdir freeframe && cd freeframe
@@ -365,7 +366,7 @@ mkdir freeframe && cd freeframe
 # actual credentials. Nothing after the download runs unless every file arrived.
 # At minimum: change passwords, set FRONTEND_URL to your https:// URL, configure S3, email, and JWT_SECRET
 ( set -e; for f in docker-compose.prod.yml docker-compose.images.yml .env.example; do
-    curl -fsSLO "https://raw.githubusercontent.com/Techiebutler/freeframe/latest/$f" \
+    curl -fsSLO "https://raw.githubusercontent.com/Techiebutler/freeframe/stable/$f" \
       || { echo "Could not download $f: check the ref." >&2; exit 1; }
   done ) \
   && cp .env.example .env.prod \
@@ -947,7 +948,7 @@ Your media files are already in S3. For redundancy:
 ```bash
 cd freeframe
 ( set -e; for f in docker-compose.prod.yml docker-compose.images.yml; do
-    curl -fsSLO "https://raw.githubusercontent.com/Techiebutler/freeframe/latest/$f" \
+    curl -fsSLO "https://raw.githubusercontent.com/Techiebutler/freeframe/stable/$f" \
       || { echo "Could not download $f: check the ref." >&2; exit 1; }
   done ) \
   && docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.images.yml pull \
