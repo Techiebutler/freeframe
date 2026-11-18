@@ -92,3 +92,6 @@ class NotificationResponse(BaseModel):
     actor_is_guest: bool = False
     comment_preview: Optional[str] = None
     project_id: Optional[uuid.UUID] = None
+    # What the actor did, for a notification that has one (a verdict: "approved",
+    # "changes_requested" or "rejected"). Null on every other type.
+    detail: Optional[str] = None

@@ -1,8 +1,13 @@
 {% extends "email/base.html" %}
 
 {% block content %}
+{% if status == 'changes_requested' %}
+<h2>Changes needed on {{ asset_name }}</h2>
+<p><strong>{{ reviewer_name }}</strong> <strong>asked for changes</strong> on your asset.</p>
+{% else %}
 <h2>{{ asset_name }} has been {{ status }}</h2>
 <p><strong>{{ reviewer_name }}</strong> has <strong>{{ status }}</strong> your asset.</p>
+{% endif %}
 {% if note %}
 <p><strong>Note:</strong></p>
 <div class="quote">{{ note }}</div>

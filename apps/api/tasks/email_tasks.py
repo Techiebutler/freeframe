@@ -235,14 +235,19 @@ def send_approval_email(
     to_email: str,
     reviewer_name: str,
     asset_name: str,
-    status: str,  # "approved" or "rejected"
+    status: str,  # "approved", "changes_requested" or "rejected"
     asset_link: str,
     note: Optional[str] = None,
 ):
-    """Send approval/rejection notification email."""
+    """Send approval, changes-needed or rejection notification email."""
     try:
-        status_emoji = "✅" if status == "approved" else "❌"
-        subject = f"{status_emoji} {asset_name} has been {status}"
+        if status == "changes_requested":
+            subject = f"✏️ Changes needed on {asset_name}"
+            verdict_text = f"asked for changes on {asset_name}"
+        else:
+            status_emoji = "✅" if status == "approved" else "❌"
+            subject = f"{status_emoji} {asset_name} has been {status}"
+            verdict_text = f"{status} {asset_name}"
         html_body = render_template(
             "email/approval.html",
             subject=subject,
@@ -252,7 +257,7 @@ def send_approval_email(
             asset_link=asset_link,
             note=note,
         )
-        text_body = f"{reviewer_name} {status} {asset_name}.{' Note: ' + note if note else ''}\n\nView: {asset_link}"
+        text_body = f"{reviewer_name} {verdict_text}.{' Note: ' + note if note else ''}\n\nView: {asset_link}"
         
         success = _send_email(to_email, subject, html_body, text_body)
         if not success:
