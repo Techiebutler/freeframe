@@ -91,7 +91,10 @@ const EXPIRY_SKEW_MS = 10_000
 // other reason means access itself was taken away.
 const TOKEN_REASONS = new Set(['token_expired', 'token_revoked'])
 
-function isExpiringSoon(token: string): boolean {
+/** True when a JWT's `exp` is within the skew of now. A token it cannot decode
+ *  is not ours to judge: false, and the server answers for it. Also decides
+ *  whether a share page sends its bearer (`lib/share-request.ts`). */
+export function isExpiringSoon(token: string): boolean {
   try {
     const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
     const { exp } = JSON.parse(atob(part)) as { exp?: number }

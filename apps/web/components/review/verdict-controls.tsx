@@ -98,11 +98,61 @@ export function VerdictControls(props: VerdictControlsProps) {
 function VerdictControlsFor({ assetId, versionId, role, variant = 'toolbar' }: VerdictControlsProps) {
   const key = verdictsKey(assetId, versionId)
   const { data, mutate } = useSWR<Verdict[]>(key, () => api.get<Verdict[]>(key))
+
+  return (
+    <VerdictControlsView
+      verdicts={data}
+      canGive={role !== null && GIVING_ROLES.includes(role)}
+      canRemove={role !== null && REMOVING_ROLES.includes(role)}
+      variant={variant}
+      give={(status, note) =>
+        api.put(`/assets/${assetId}/verdict`, { version_id: versionId, status, ...(note ? { note } : {}) })
+      }
+      clear={() => api.delete(`/assets/${assetId}/verdict?version_id=${versionId}`)}
+      remove={(id) => api.delete(`/assets/${assetId}/verdicts/${id}`)}
+      revalidate={() => mutate()}
+    />
+  )
+}
+
+export interface VerdictControlsViewProps {
+  /** `undefined` while the first load is out. */
+  verdicts: Verdict[] | undefined
+  canGive: boolean
+  canRemove: boolean
+  variant?: 'toolbar' | 'row'
+  /** Gives or changes the caller's verdict. A blank note is passed as `undefined`. */
+  give: (status: VerdictValue, note?: string) => Promise<unknown>
+  /** Clears the caller's own verdict. */
+  clear: () => Promise<unknown>
+  /** Removes anyone's verdict; only called when `canRemove`. */
+  remove?: (id: string) => Promise<unknown>
+  /** Refetches the list; awaited after every successful write. */
+  revalidate: () => Promise<unknown>
+  /**
+   * Runs before a press does anything, and a `false` stops it quietly: no
+   * request, no note box. The share page asks a guest who they are here.
+   */
+  beforePress?: () => Promise<boolean>
+}
+
+/**
+ * The buttons, the note box and the error line, for whoever supplies the
+ * calls: the team's asset page and a share link both render this.
+ */
+export function VerdictControlsView({
+  verdicts: data,
+  canGive,
+  canRemove,
+  variant = 'toolbar',
+  give,
+  clear,
+  remove,
+  revalidate,
+  beforePress,
+}: VerdictControlsViewProps) {
   const verdicts = data ?? []
   const mine = verdicts.find((v) => v.is_mine)
-
-  const canGive = role !== null && GIVING_ROLES.includes(role)
-  const canRemove = role !== null && REMOVING_ROLES.includes(role)
 
   const [busy, setBusy] = React.useState(false)
   // The state is for rendering; the ref is what stops a second press that lands
@@ -131,25 +181,40 @@ function VerdictControlsFor({ assetId, versionId, role, variant = 'toolbar' }: V
       setError(failureMessage(err))
     }
     // Held until the list is back, so the pressed button never shows the old state.
-    if (ok) await mutate().catch(() => undefined)
+    if (ok) await revalidate().catch(() => undefined)
     inFlight.current = false
     setBusy(false)
     return ok
   }
 
-  const press = (status: VerdictValue, asksForNote: boolean, from: HTMLButtonElement) => {
+  // A press waiting on `beforePress` (the share page's identity prompt), so a
+  // second tap in that moment does not ask twice.
+  const gating = React.useRef(false)
+
+  const press = async (status: VerdictValue, asksForNote: boolean, from: HTMLButtonElement) => {
+    if (gating.current) return
+    if (beforePress) {
+      gating.current = true
+      let go = false
+      try {
+        go = await beforePress()
+      } finally {
+        gating.current = false
+      }
+      if (!go) return
+    }
     lastPressed.current = from
     setError(null)
 
     // The pressed button, pressed again, is the undo.
     if (mine?.status === status) {
       setAsking(null)
-      void run(() => api.delete(`/assets/${assetId}/verdict?version_id=${versionId}`))
+      void run(clear)
       return
     }
     if (!asksForNote) {
       setAsking(null)
-      void run(() => api.put(`/assets/${assetId}/verdict`, { version_id: versionId, status }))
+      void run(() => give(status))
       return
     }
     // A second press on the button whose box is open puts the box away.
@@ -166,13 +231,7 @@ function VerdictControlsFor({ assetId, versionId, role, variant = 'toolbar' }: V
     if (asking === null) return
     const status = asking
     const trimmed = note.trim()
-    const sent = await run(() =>
-      api.put(`/assets/${assetId}/verdict`, {
-        version_id: versionId,
-        status,
-        ...(trimmed ? { note: trimmed } : {}),
-      }),
-    )
+    const sent = await run(() => give(status, trimmed || undefined))
     if (sent) {
       setAsking(null)
       setNote('')
@@ -198,7 +257,7 @@ function VerdictControlsFor({ assetId, versionId, role, variant = 'toolbar' }: V
           <VerdictIndicator
             verdicts={verdicts}
             canRemove={canRemove}
-            onRemove={(id) => void run(() => api.delete(`/assets/${assetId}/verdicts/${id}`))}
+            onRemove={(id) => void run(() => remove?.(id) ?? Promise.resolve())}
           />
 
           {showsEmptyLine && <span className="text-xs text-text-tertiary">No verdicts yet</span>}
@@ -215,7 +274,7 @@ function VerdictControlsFor({ assetId, versionId, role, variant = 'toolbar' }: V
                     aria-label={label}
                     title={label}
                     disabled={busy}
-                    onClick={(event) => press(status, asksForNote, event.currentTarget)}
+                    onClick={(event) => void press(status, asksForNote, event.currentTarget)}
                     className={cn(
                       'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border text-xs font-medium',
                       variant === 'toolbar' ? 'w-8' : 'px-2',

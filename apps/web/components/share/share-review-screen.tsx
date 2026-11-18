@@ -22,6 +22,7 @@ import type { SharePermission } from '@/types'
 import { fetchShareDownloadOptions, handleDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
 import { ShareBrandMark } from './share-brand-mark'
+import { ShareVerdictControls } from './share-verdict-controls'
 
 /** Signed in, or a guest who has already given a name and email. */
 function hasIdentity(): boolean {
@@ -118,6 +119,18 @@ function ShareReviewInner({
   const isWide = useMediaQuery('(min-width: 768px)')
   const isLandscape = useMediaQuery('(orientation: landscape)')
   const useSheet = !isWide && !isLandscape
+  // Where the verdict buttons go, by the asset page's rule: the top bar from
+  // `lg` up, and below that a row of their own under it. Clients often approve
+  // from a phone, and the top bar there is already full.
+  const verdictsInTopBar = useMediaQuery('(min-width: 1024px)')
+  const canComment = permission === 'comment' || permission === 'approve'
+  const versionReady = currentVersion?.processing_status === 'ready'
+  // Only on a version the link shows (the API answers 404 for one still
+  // processing), and only once the store holds this asset's version: in the
+  // folder viewer it can briefly hold the previous asset's after a switch.
+  const showsVerdicts =
+    permission === 'approve' && !!asset && versionReady && currentVersion?.asset_id === asset.id
+  const showsVerdictRow = showsVerdicts && !verdictsInTopBar
   const [sheetState, setSheetState] = React.useState<SheetState>('peek')
   const [sheetHeight, setSheetHeight] = React.useState(PEEK_PX)
   // One expression for the top-bar toggle's icon and its label, so the two
@@ -156,7 +169,9 @@ function ShareReviewInner({
     }
     const available = root.clientHeight - sheetHeight - 60
     root.style.setProperty('--ff-stage-max', `${Math.max(80, available)}px`)
-  }, [useSheet, sheetHeight])
+    // The verdict row changes `root.clientHeight`, and it arrives after the
+    // layout (it waits on the version), so it is measured again.
+  }, [useSheet, sheetHeight, showsVerdictRow])
 
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
@@ -172,8 +187,6 @@ function ShareReviewInner({
     })
   }, [])
 
-  const canComment = permission === 'comment' || permission === 'approve'
-  const versionReady = currentVersion?.processing_status === 'ready'
 
   // Guest identity flow for non-authenticated users
   const [guestIdentity, setGuestIdentity] = React.useState<{ name: string; email: string } | null>(null)
@@ -193,6 +206,28 @@ function ShareReviewInner({
     } catch {}
   }, [])
   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
+
+  // A verdict asks who the guest is through the same prompt a comment does.
+  // The press waits on this promise: the prompt's Continue resolves it with the
+  // identity just saved, its Cancel with null, which sends nothing.
+  const identityResolver = React.useRef<((identity: { name: string; email: string } | null) => void) | null>(null)
+  const [promptPurpose, setPromptPurpose] = React.useState<'comment' | 'verdict'>('comment')
+  const settleIdentity = React.useCallback((identity: { name: string; email: string } | null) => {
+    const resolve = identityResolver.current
+    identityResolver.current = null
+    resolve?.(identity)
+  }, [])
+  const requestIdentity = React.useCallback(() => {
+    // Only one prompt at a time: an older ask is answered "cancelled".
+    settleIdentity(null)
+    return new Promise<{ name: string; email: string } | null>((resolve) => {
+      identityResolver.current = resolve
+      setPromptPurpose('verdict')
+      setShowGuestPrompt(true)
+    })
+  }, [settleIdentity])
+  // A press still waiting when the screen goes is let go, not left hanging.
+  React.useEffect(() => () => settleIdentity(null), [settleIdentity])
 
   const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
     const payload: CreateCommentPayload = { body }
@@ -225,6 +260,8 @@ function ShareReviewInner({
     setGuestIdentity(identity)
     localStorage.setItem('ff_guest_identity', JSON.stringify(identity))
     setShowGuestPrompt(false)
+    setPromptPurpose('comment')
+    settleIdentity(identity)
 
     // Auto-submit the pending comment
     if (pendingCommentRef.current) {
@@ -236,7 +273,7 @@ function ShareReviewInner({
           .catch((e) => settle?.reject(e instanceof Error ? e : new Error('Failed to post comment')))
       }, 50)
     }
-  }, [submitComment])
+  }, [submitComment, settleIdentity])
 
   if (isLoading || !asset) {
     return <div className="flex items-center justify-center h-dvh bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
@@ -290,6 +327,21 @@ function ShareReviewInner({
     />
   ) : null
 
+  // Always names the asset: a folder or project link has no other way to say
+  // which one the verdict is about.
+  const verdictControls = (variant: 'toolbar' | 'row') =>
+    currentVersion ? (
+      <ShareVerdictControls
+        token={token}
+        assetId={asset.id}
+        versionId={currentVersion.id}
+        shareSession={shareSession}
+        guestIdentity={guestIdentity}
+        requestIdentity={requestIdentity}
+        variant={variant}
+      />
+    ) : null
+
   return (
     <div className="flex flex-col h-dvh bg-bg-primary text-text-primary pl-safe pr-safe">
       {/* Top bar — same style as project review */}
@@ -308,6 +360,7 @@ function ShareReviewInner({
           <span className="text-[13px] font-medium text-text-primary truncate min-w-[4rem]">{assetName}</span>
         </div>
         <div className="flex items-center gap-2">
+          {showsVerdicts && verdictsInTopBar && verdictControls('toolbar')}
           {showVersions && VersionSwitcher && versions.length > 0 && (
             <VersionSwitcher versions={versions} />
           )}
@@ -327,6 +380,17 @@ function ShareReviewInner({
           </button>
         </div>
       </div>
+
+      {/* Verdicts on a phone or a narrow window: a row of their own, a fixed
+          height whatever the data, so nothing in it can move the media. */}
+      {showsVerdictRow && (
+        <div
+          data-testid="share-verdict-row"
+          className="flex h-10 shrink-0 items-center overflow-x-auto border-b border-border bg-bg-secondary px-3"
+        >
+          {verdictControls('row')}
+        </div>
+      )}
 
       {/* Main: viewer + sidebar */}
       {/* pb-14 reserves the sheet's peek band so the player's own transport
@@ -414,9 +478,12 @@ function ShareReviewInner({
       {/* Guest identity prompt */}
       {showGuestPrompt && (
         <GuestIdentityPrompt
+          purpose={promptPurpose}
           onSave={handleGuestIdentitySave}
           onCancel={() => {
             setShowGuestPrompt(false)
+            setPromptPurpose('comment')
+            settleIdentity(null)
             // A quiet abort: the reply box keeps its text and shows no error.
             pendingCommentRef.current?.settle?.reject(new Error(''))
             pendingCommentRef.current = null
@@ -429,15 +496,20 @@ function ShareReviewInner({
 
 // ─── Guest Identity Prompt ───────────────────────────────────────────────────
 
-function GuestIdentityPrompt({ onSave, onCancel }: { onSave: (name: string, email: string) => void; onCancel: () => void }) {
+const PROMPT_COPY = {
+  comment: { title: 'Leave a comment', body: 'Enter your name and email to comment on this shared asset.' },
+  verdict: { title: 'Give your verdict', body: 'Enter your name and email so the team knows who this verdict is from.' },
+} as const
+
+function GuestIdentityPrompt({ purpose = 'comment', onSave, onCancel }: { purpose?: keyof typeof PROMPT_COPY; onSave: (name: string, email: string) => void; onCancel: () => void }) {
   const [name, setName] = React.useState('')
   const [email, setEmail] = React.useState('')
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-5 shadow-xl">
-        <h3 className="text-sm font-semibold text-text-primary mb-1">Leave a comment</h3>
-        <p className="text-xs text-text-tertiary mb-4">Enter your name and email to comment on this shared asset.</p>
+        <h3 className="text-sm font-semibold text-text-primary mb-1">{PROMPT_COPY[purpose].title}</h3>
+        <p className="text-xs text-text-tertiary mb-4">{PROMPT_COPY[purpose].body}</p>
         <div className="space-y-3">
           <input
             type="text"
