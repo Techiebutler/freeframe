@@ -19,14 +19,18 @@ const two = (n: number) => (n < 10 ? '0' : '') + n
 
 async function load(token: string): Promise<Delivery> {
   const res = await fetch(`${API_URL}/deliveries/${token}`)
-  if (!res.ok) throw new Error(String(res.status))
+  if (!res.ok) {
+    const body = res.status === 409 ? await res.json().catch(() => null) : null
+    const d = body?.detail
+    throw Object.assign(new Error(String(res.status)), d?.error === 'parts_open' ? { partsOpen: { approved: Number(d.approved), total: Number(d.total) } } : {})
+  }
   return res.json()
 }
 
 /** Videos of a delivery: the streamed one first, then any other video file. */
 function clipsOf(d: Delivery): Clip[] {
   const videos = d.files.filter(f => f.mime_type.startsWith('video/'))
-  const out: Clip[] = videos.map((f, i) => ({ name: f.name, src: i === 0 && d.video_url ? d.video_url : f.url, file: f }))
+  const out: Clip[] = videos.map((f, i) => ({ name: f.name.replace(/\.[a-z0-9]{2,4}$/i, ''), src: i === 0 && d.video_url ? d.video_url : f.url, file: f }))
   if (!out.length && d.video_url) out.push({ name: d.title, src: d.video_url, file: null })
   return out
 }
@@ -66,6 +70,8 @@ export default function DeliveryPage({ params: { token } }: { params: { token: s
   }, [cur, go])
 
   if (error) {
+    const open = (error as { partsOpen?: { approved: number; total: number } }).partsOpen
+    if (open) return <Notice title={`${open.approved} of ${open.total} videos approved`} text="Your link will appear here as soon as every video is approved." />
     const gone = String((error as Error).message) === '404'
     return <Notice title={gone ? 'This link is no longer available' : "We couldn't load this page"} text={gone ? 'It may have expired or been replaced. Please ask your contact at Aditor for a fresh link.' : 'Please check your connection and reload.'} />
   }

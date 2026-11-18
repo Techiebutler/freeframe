@@ -23,4 +23,8 @@ describe('delivery page', () => {
     show({ ok: false, status: 404 })
     await waitFor(() => expect(screen.getByText(/no longer available/i)).toBeInTheDocument())
   })
+  it('shows n of m while parts are open', async () => {
+    show({ ok: false, status: 409, json: async () => ({ detail: { error: 'parts_open', approved: 2, total: 3 } }) })
+    await screen.findByText('2 of 3 videos approved')
+  })
 })
