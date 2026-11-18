@@ -944,7 +944,7 @@ export default function ProjectDetailPage() {
                     <>
                       <Button variant="secondary" size="sm" asChild>
                         <Link
-                          href={`/projects/${projectId}/settings?tab=people`}
+                          href={`/settings/projects/${projectId}?tab=people`}
                           aria-label="Members"
                           title="Members"
                         >
@@ -953,7 +953,7 @@ export default function ProjectDetailPage() {
                       </Button>
                       <Button variant="secondary" size="sm" asChild>
                         <Link
-                          href={`/projects/${projectId}/settings`}
+                          href={`/settings/projects/${projectId}`}
                           aria-label="Project settings"
                           title="Project settings"
                         >

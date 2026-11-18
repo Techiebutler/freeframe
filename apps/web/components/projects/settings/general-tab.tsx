@@ -314,7 +314,7 @@ export function ProjectGeneralTab({ project }: { project: Project }) {
         void save()
       }}
     >
-      <div className="grid gap-6 lg:grid-cols-2 items-start">
+      <div className="grid gap-6 xl:grid-cols-2 items-start">
         <ProjectCard
           projectId={projectId}
           details={details}

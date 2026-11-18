@@ -251,8 +251,8 @@ export function BrandingTab() {
   }
 
   return (
-    // No heading of its own: this renders under the Admin Dashboard header as a
-    // sub-tab, the same way InstanceSettingsTab does.
+    // No heading of its own: the Instance page above it names the section, the
+    // same way it does for InstanceSettingsTab.
     <div className="max-w-5xl space-y-10">
       <BrandingPreview />
 

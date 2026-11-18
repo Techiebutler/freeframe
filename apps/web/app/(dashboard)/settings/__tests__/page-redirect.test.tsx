@@ -31,10 +31,10 @@ describe('SettingsPage index redirect', () => {
   it('sends a superadmin to the admin dashboard', () => {
     h.auth = { user: { id: 'u1' }, isSuperAdmin: true }
     render(<SettingsPage />)
-    expect(h.replace).toHaveBeenCalledWith('/settings/admin')
+    expect(h.replace).toHaveBeenCalledWith('/settings/instance/users')
   })
 
-  it('sends a normal user to appearance — they cannot open /settings/admin', () => {
+  it('sends a normal user to appearance, they cannot open /settings/instance', () => {
     h.auth = { user: { id: 'u2' }, isSuperAdmin: false }
     render(<SettingsPage />)
     expect(h.replace).toHaveBeenCalledWith('/settings/appearance')

@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 /**
- * The Danger tab of project settings: deleting the project.
+ * The Delete project row at the end of General in project settings: deleting
+ * the project.
  *
  * Typing the project's name is the confirmation, so the target is explicit.
  * The copy says what really happens: the project goes from the app at once,

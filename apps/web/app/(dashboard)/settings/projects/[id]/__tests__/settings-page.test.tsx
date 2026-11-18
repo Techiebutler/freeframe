@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { SWRConfig } from 'swr'
 import type { Project, ProjectBranding } from '@/types'
 
 const { api, nav } = vi.hoisted(() => ({
   api: { get: vi.fn(), patch: vi.fn(), put: vi.fn(), post: vi.fn(), delete: vi.fn(), upload: vi.fn() },
-  nav: { search: '', replace: vi.fn(), push: vi.fn() },
+  nav: { id: 'p1', search: '', replace: vi.fn(), push: vi.fn() },
 }))
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<typeof import('@/lib/api')>()), api }))
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ id: 'p1' }),
+  useParams: () => ({ id: nav.id }),
   useRouter: () => ({ push: nav.push, replace: nav.replace }),
   useSearchParams: () => new URLSearchParams(nav.search),
 }))
@@ -26,7 +26,12 @@ globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {
 
 // Project settings is the owner's page: the API refuses everyone else's saves
 // on it, so they get a short card instead of forms. Each tab is reachable as
-// ?tab=, and a draft on General survives a visit to another tab.
+// ?tab=, and a draft on General survives a visit to another tab. An instance
+// admin who is not a member is told so, and Delete project is a collapsed row
+// at the end of General.
+
+const NOTICE =
+  'You are not a member of this project. You are managing it as an instance admin, and this access is written to the activity log.'
 
 const PROJECT: Project = {
   id: 'p1',
@@ -49,6 +54,7 @@ const BRANDING: ProjectBranding = {
 
 let project: Project | Error = PROJECT
 let members: unknown = [{ id: 'm1', project_id: 'p1', user_id: 'u1', role: 'owner', invited_at: '2026-01-02T00:00:00Z' }]
+const SECOND: Project = { ...PROJECT, id: 'p2', name: 'Second film' }
 
 function renderPage() {
   return render(
@@ -60,16 +66,22 @@ function renderPage() {
 
 beforeEach(() => {
   project = PROJECT
+  nav.id = 'p1'
   nav.search = ''
   nav.replace.mockReset()
   nav.push.mockReset()
-  useAuthStore.setState({ user: { id: 'u1', name: 'Owner', email: 'o@example.com' } as never })
+  useAuthStore.setState({
+    user: { id: 'u1', name: 'Owner', email: 'o@example.com' } as never,
+    isSuperAdmin: false,
+  })
   api.get.mockReset().mockImplementation(async (url: string) => {
     if (url === '/projects/p1') {
       if (project instanceof Error) throw project
       return project
     }
+    if (url === '/projects/p2') return SECOND
     if (url === '/projects/p1/branding') return BRANDING
+    if (url === '/projects/p2/branding') return { ...BRANDING, id: 'b2', project_id: 'p2' }
     if (url === '/projects/p1/members') return members
     if (url.startsWith('/users?ids=')) return [{ id: 'u1', name: 'Owner', email: 'o@example.com' }]
     throw new Error(`unexpected GET ${url}`)
@@ -78,15 +90,15 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  useAuthStore.setState({ user: null } as never)
+  useAuthStore.setState({ user: null, isSuperAdmin: false } as never)
   useBrandingStore.setState({ loaded: false, poweredByFreeframe: true })
 })
 
 describe('who sees the settings', () => {
-  it('shows the owner three tabs', async () => {
+  it('shows the owner two tabs', async () => {
     renderPage()
     const tabs = await screen.findAllByRole('tab')
-    expect(tabs.map((t) => t.textContent)).toEqual(['General', 'People', 'Danger'])
+    expect(tabs.map((t) => t.textContent)).toEqual(['General', 'People'])
     expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true')
   })
 
@@ -124,7 +136,7 @@ describe('who sees the settings', () => {
 describe('deep links', () => {
   it.each([
     ['people', 'People'],
-    ['danger', 'Danger'],
+    ['danger', 'General'],
     ['general', 'General'],
     ['branding', 'General'],
     ['nonsense', 'General'],
@@ -156,7 +168,7 @@ describe('deep links', () => {
   it('choosing a tab puts it in the URL', async () => {
     renderPage()
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'People' }))
-    expect(nav.replace).toHaveBeenCalledWith('/projects/p1/settings?tab=people', { scroll: false })
+    expect(nav.replace).toHaveBeenCalledWith('/settings/projects/p1?tab=people', { scroll: false })
   })
 })
 
@@ -183,20 +195,27 @@ describe('the end of a tab under the floating credit', () => {
   // The shell floats "Powered by FreeFrame" 1rem above the window's bottom
   // edge, on the right. Measured in Chromium at 375x740 with four members,
   // the last row's Remove button was under it at the end of the scroll:
-  // `elementFromPoint` returned the badge's span. People and Danger end in
-  // that corner, so they leave room below their content while the badge is
-  // shown. General needs none: its save bar reserves the corner itself.
+  // `elementFromPoint` returned the badge's span. People and the Delete project
+  // row end in that corner, so they leave room below their content while the
+  // badge is shown. General's save bar reserves the corner itself.
   const RESERVE = 'pb-[calc(3.5rem+env(safe-area-inset-bottom))]'
   // General stays mounted behind the others, so there are two panels.
   const activePanel = () =>
     screen.getAllByRole('tabpanel').find((p) => p.getAttribute('data-state') === 'active') as HTMLElement
 
-  it.each([['people'], ['danger']])('the %s tab can scroll its last control clear of the badge', async (tab) => {
+  it('the People tab can scroll its last control clear of the badge', async () => {
     useBrandingStore.setState({ loaded: true, poweredByFreeframe: true })
-    nav.search = `tab=${tab}`
+    nav.search = 'tab=people'
     renderPage()
-    await screen.findByRole('tab', { name: tab === 'people' ? 'People' : 'Danger' })
+    await screen.findByRole('tab', { name: 'People' })
     expect(activePanel().className.split(/\s+/)).toContain(RESERVE)
+  })
+
+  it('the Delete project row carries the reserve at the end of General', async () => {
+    useBrandingStore.setState({ loaded: true, poweredByFreeframe: true })
+    renderPage()
+    const row = (await screen.findByRole('button', { name: 'Delete project' })).parentElement as HTMLElement
+    expect(row.className.split(/\s+/)).toContain(RESERVE)
   })
 
   it('reserves nothing when "Powered by FreeFrame" is turned off', async () => {
@@ -205,5 +224,135 @@ describe('the end of a tab under the floating credit', () => {
     renderPage()
     await screen.findByRole('tab', { name: 'People' })
     expect(activePanel().className).not.toContain('safe-area-inset-bottom')
+  })
+})
+
+describe('the instance admin notice', () => {
+  it.each([
+    ['an admin that is not a member', true, null, true],
+    ['an admin that is only an editor', true, 'editor', false],
+    ['an admin that is also an owner', true, 'owner', false],
+    ['a plain owner', false, 'owner', false],
+  ] as const)('for %s', async (_name, isSuperAdmin, role, shown) => {
+    useAuthStore.setState({ isSuperAdmin })
+    project = { ...PROJECT, role }
+    renderPage()
+    await screen.findByLabelText('Name')
+    if (shown) expect(screen.getByRole('note')).toHaveTextContent(NOTICE)
+    else expect(screen.queryByText(NOTICE)).toBeNull()
+  })
+
+  it('shows on People as well', async () => {
+    useAuthStore.setState({ isSuperAdmin: true })
+    project = { ...PROJECT, role: null }
+    nav.search = 'tab=people'
+    renderPage()
+    expect(await screen.findByRole('note')).toHaveTextContent(NOTICE)
+  })
+
+  it('is decided without the member list: the page never asks for it before People opens', async () => {
+    useAuthStore.setState({ isSuperAdmin: true })
+    project = { ...PROJECT, role: null }
+    renderPage()
+    await screen.findByLabelText('Name')
+    expect(screen.getByRole('note')).toBeInTheDocument()
+    expect(api.get).not.toHaveBeenCalledWith('/projects/p1/members')
+  })
+})
+
+describe('the Delete project row', () => {
+  const toggle = () => screen.getByRole('button', { name: 'Delete project' })
+
+  it('starts collapsed and opens on a click', async () => {
+    renderPage()
+    await screen.findByLabelText('Name')
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Delete this project')).toBeNull()
+
+    fireEvent.click(toggle())
+    expect(screen.getByText('Delete this project')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Delete project' })[0]).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('?tab=danger opens it at once', async () => {
+    nav.search = 'tab=danger'
+    renderPage()
+    await screen.findByLabelText('Name')
+    expect(screen.getAllByRole('button', { name: 'Delete project' })[0]).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Delete this project')).toBeInTheDocument()
+  })
+
+  it('?tab=danger scrolls the row into view, and a plain visit does not', async () => {
+    // jsdom has no scrollIntoView; the page calls it only when it exists.
+    const proto = Element.prototype as { scrollIntoView?: unknown }
+    const scroll = vi.fn()
+    proto.scrollIntoView = scroll
+    try {
+      renderPage()
+      await screen.findByLabelText('Name')
+      expect(scroll).not.toHaveBeenCalled()
+      cleanup()
+
+      nav.search = 'tab=danger'
+      renderPage()
+      await screen.findByLabelText('Name')
+      expect(scroll).toHaveBeenCalledWith({ block: 'center' })
+    } finally {
+      delete proto.scrollIntoView
+    }
+  })
+
+  it('opens when the query changes to danger on the mounted page', async () => {
+    const view = renderPage()
+    await screen.findByLabelText('Name')
+    expect(screen.queryByText('Delete this project')).toBeNull()
+
+    nav.search = 'tab=danger'
+    view.rerender(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0, shouldRetryOnError: false }}>
+        <ProjectSettingsPage />
+      </SWRConfig>,
+    )
+    expect(await screen.findByText('Delete this project')).toBeInTheDocument()
+  })
+})
+
+describe('the phone layout', () => {
+  it('has a project picker that links to the list, and hides the tab list from md', async () => {
+    renderPage()
+    await screen.findByLabelText('Name')
+    const picker = screen.getByRole('link', { name: 'Choose project' })
+    expect(picker).toHaveAttribute('href', '/settings/projects')
+    expect(picker.className.split(/\s+/)).toContain('md:hidden')
+    expect(picker).toHaveTextContent('Launch film')
+    expect(screen.getByRole('tablist').className.split(/\s+/)).toContain('md:hidden')
+  })
+})
+
+describe('moving to another project', () => {
+  // The rail keeps this page mounted when another project is picked. A project
+  // opened before is already in the SWR cache, so nothing swaps in a loading
+  // state in between: the form has to be remounted by the project's id.
+  it('shows the new project, not the draft of the one before', async () => {
+    const cache = new Map()
+    // A new element each time: React skips a render for an identical one.
+    const page = () => (
+      <SWRConfig value={{ provider: () => cache, dedupingInterval: 0, shouldRetryOnError: false }}>
+        <ProjectSettingsPage />
+      </SWRConfig>
+    )
+
+    nav.id = 'p2'
+    const first = render(page())
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Second film'))
+    first.unmount()
+
+    nav.id = 'p1'
+    const view = render(page())
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Unsaved name' } })
+
+    nav.id = 'p2'
+    view.rerender(page())
+    expect(screen.getByLabelText('Name')).toHaveValue('Second film')
   })
 })

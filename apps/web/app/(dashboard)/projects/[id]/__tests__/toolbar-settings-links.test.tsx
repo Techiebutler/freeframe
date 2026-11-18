@@ -101,8 +101,8 @@ beforeEach(() => {
 describe('the project toolbar', () => {
   it("links the owner's Members button to the People tab, and Settings to the page", () => {
     renderPage()
-    expect(screen.getByRole('link', { name: 'Members' })).toHaveAttribute('href', '/projects/p1/settings?tab=people')
-    expect(screen.getByRole('link', { name: 'Project settings' })).toHaveAttribute('href', '/projects/p1/settings')
+    expect(screen.getByRole('link', { name: 'Members' })).toHaveAttribute('href', '/settings/projects/p1?tab=people')
+    expect(screen.getByRole('link', { name: 'Project settings' })).toHaveAttribute('href', '/settings/projects/p1')
   })
 
   it('shows neither to anyone else', () => {
