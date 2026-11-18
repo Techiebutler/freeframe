@@ -1838,6 +1838,14 @@ def get_share_asset_versions(
     asset = _get_asset(db, asset_id)
     validate_asset_in_share(db, link, asset)
 
+    return shown_versions(db, link, asset)
+
+
+def shown_versions(db: Session, link: ShareLink, asset: Asset) -> list[AssetVersion]:
+    """The versions of `asset` a holder of `link` may see, newest first: every ready
+    version when the link has "Show all versions" on, otherwise only the latest
+    ready one. The share versions listing and the share verdict routes both go by
+    this, so a guest can only judge a version they can open."""
     versions = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset.id,
         AssetVersion.deleted_at.is_(None),

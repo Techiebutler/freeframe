@@ -13,7 +13,9 @@ from ..models.project import ProjectRole
 from ..schemas.approval import ApprovalCreate, ApprovalResponse
 from ..schemas.verdict import VerdictResponse, VerdictSet
 from ..services.permissions import require_asset_access, require_live_project, require_project_role
-from ..services.verdicts import Actor, clear_verdict, list_verdicts, remove_verdict, set_verdict
+from ..services.verdicts import (
+    Actor, clean_note, clear_verdict, list_verdicts, remove_verdict, set_verdict,
+)
 
 router = APIRouter(tags=["approvals"])
 
@@ -39,13 +41,6 @@ def _live_version(db: Session, asset: Asset, version_id: uuid.UUID) -> AssetVers
     return version
 
 
-def _clean_note(note: Optional[str]) -> Optional[str]:
-    """What is stored for a note: trimmed, and nothing at all when it was only space."""
-    if note is None:
-        return None
-    return note.strip() or None
-
-
 def _give(
     db: Session,
     asset_id: uuid.UUID,
@@ -60,7 +55,7 @@ def _give(
     # reviewer or above can give a verdict
     require_project_role(db, asset.project_id, user, ProjectRole.reviewer)
     version = _live_version(db, asset, version_id)
-    approval = set_verdict(db, asset, version, Actor(user=user), verdict, _clean_note(note))
+    approval = set_verdict(db, asset, version, Actor(user=user), verdict, clean_note(note))
     return asset, approval
 
 

@@ -68,6 +68,13 @@ class Actor:
         return self.user is None and self.guest is not None
 
 
+def clean_note(note: Optional[str]) -> Optional[str]:
+    """What is stored for a note: trimmed, and nothing at all when it was only space."""
+    if note is None:
+        return None
+    return note.strip() or None
+
+
 def _require_one_actor(actor: Actor) -> None:
     if (actor.user is None) == (actor.guest is None):
         raise ValueError("A verdict needs exactly one of a user or a guest")
