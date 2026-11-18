@@ -34,23 +34,30 @@ export interface ShareGuest {
  */
 const refusedBearers = new Set<string>()
 
-/** Set by "Continue as guest": a lapsed or refused sign-in reads and writes as
- *  the guest. A usable bearer still wins. */
-let choseGuest = false
+/**
+ * The sign-ins "Continue as guest" was chosen over, by token string. The
+ * choice covers only the token it was made for: a different one in storage
+ * (signed in again, here or in another tab, even if it has since lapsed too)
+ * is refreshed and used as normal, never quietly turned into the guest.
+ */
+const guestChosenOver = new Set<string>()
 
-/** The person chose "Continue as guest" over signing in again. */
+/** The person chose "Continue as guest" over the sign-in stored now. */
 export function continueAsGuest(): void {
-  choseGuest = true
+  const stored = storedAccessToken()
+  if (stored) guestChosenOver.add(stored)
 }
 
+/** Whether "Continue as guest" covers the sign-in stored now. */
 export function hasChosenGuest(): boolean {
-  return choseGuest
+  const stored = storedAccessToken()
+  return !!stored && guestChosenOver.has(stored)
 }
 
-/** For tests: forget refused bearers and the guest choice. */
+/** For tests: forget refused bearers and guest choices. */
 export function resetShareRequestState(): void {
   refusedBearers.clear()
-  choseGuest = false
+  guestChosenOver.clear()
 }
 
 function storedAccessToken(): string | null {
@@ -87,7 +94,7 @@ export function hasUsableToken(): boolean {
  */
 export function shareCallerKey(guest: ShareGuest | null | undefined): string {
   if (usableAccessToken()) return 'bearer'
-  if (storedAccessToken() && !choseGuest) return 'lapsed'
+  if (storedAccessToken() && !hasChosenGuest()) return 'lapsed'
   return guest ? `guest:${guest.email}` : 'nobody'
 }
 
@@ -104,16 +111,17 @@ type Caller =
  * shown) as a guest's:
  * - No token stored: the guest.
  * - A usable token: it.
- * - Otherwise, unless they chose "Continue as guest", one quiet refresh. A new
- *   token is used. A refused one marks the stale token refused, so it is not
- *   refreshed again. Then a read goes as nobody, and a write fails.
+ * - "Continue as guest" chosen over this very token: the guest.
+ * - Otherwise one quiet refresh. A new token is used. A refused one marks the
+ *   stale token refused, so it is not refreshed again. Then a read goes as
+ *   nobody, and a write fails.
  */
 async function resolveCaller(): Promise<Caller> {
   const stored = storedAccessToken()
   if (!stored) return { kind: 'guest' }
   const usable = usableAccessToken()
   if (usable) return { kind: 'bearer', token: usable }
-  if (choseGuest) return { kind: 'guest' }
+  if (hasChosenGuest()) return { kind: 'guest' }
   if (refusedBearers.has(stored)) return { kind: 'failed', why: 'refused' }
 
   const outcome = await refreshAccessTokenQuietly()
@@ -233,7 +241,7 @@ export async function shareRequest<T>(
  */
 export async function prepareShareWrite(): Promise<'refreshed' | 'unchanged'> {
   const stored = storedAccessToken()
-  if (!stored || usableAccessToken() || choseGuest || refusedBearers.has(stored)) return 'unchanged'
+  if (!stored || usableAccessToken() || hasChosenGuest() || refusedBearers.has(stored)) return 'unchanged'
   const caller = await resolveCaller()
   return caller.kind === 'bearer' ? 'refreshed' : 'unchanged'
 }

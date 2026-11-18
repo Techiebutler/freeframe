@@ -393,6 +393,59 @@ describe('ShareVerdictControls', () => {
       await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
     })
 
+    // Fix round 2, issue 2: the press was decided against their own list
+    // (Approve was theirs, so it was a clear). As the guest it is decided
+    // again, against the guest's list, rather than re-sending that clear.
+    it('"Continue as guest" re-reads as the guest and decides the press again', async () => {
+      refreshAnswer = { status: 401, body: {} }
+      const theirApproval = makeVerdict({ id: 'u1', status: 'approved', is_mine: true })
+      listedFor = (call) => (call.headers.Authorization ? [theirApproval] : [])
+      render(ui({ guestIdentity: dana }))
+      await waitFor(() => expect(button('Approve')).toHaveAttribute('aria-pressed', 'true'))
+
+      await userEvent.click(button('Approve'))
+      await screen.findByRole('alert')
+      expect(writes()[0].method).toBe('DELETE')
+      expect(writes()[0].headers.Authorization).toBeDefined()
+
+      const getsBefore = gets().length
+      await userEvent.click(button('Continue as guest'))
+
+      await waitFor(() => expect(writes()).toHaveLength(2))
+      // Read again as the guest, before deciding.
+      const guestRead = gets().slice(getsBefore).find((c) => c.url.searchParams.get('guest_email'))
+      expect(guestRead).toBeDefined()
+      // The guest had no verdict, so pressing Approve gives one; it does not clear.
+      expect(writes()[1].method).toBe('PUT')
+      expect(writes()[1].headers.Authorization).toBeUndefined()
+      expect(writes()[1].body).toMatchObject({ status: 'approved', guest_email: 'dana@client.example' })
+    })
+
+    // Fix round 2, issue 1, through the controls.
+    it('after the choice, a new token that lapses is refreshed and the press goes as them', async () => {
+      refreshAnswer = { status: 401, body: {} }
+      render(ui({ guestIdentity: dana }))
+      await userEvent.click(button('Approve'))
+      await screen.findByRole('alert')
+      await userEvent.click(button('Continue as guest'))
+      await waitFor(() => expect(writes()).toHaveLength(2))
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+
+      // Signed in again in another tab, and that token has lapsed too.
+      localStorage.setItem('ff_access_token', jwt(-60))
+      localStorage.setItem('ff_refresh_token', 'another-refresh-token')
+      // Not the refused token's twin: jwt() of the same expiry in the same second is.
+      const fresh = jwt(7200)
+      refreshAnswer = { status: 200, body: { access_token: fresh, refresh_token: 'rotated' } }
+
+      await userEvent.click(button('Reject'))
+      await userEvent.click(await screen.findByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(writes()).toHaveLength(3))
+      expect(writes()[2].headers.Authorization).toBe(`Bearer ${fresh}`)
+      expect(writes()[2].body).not.toHaveProperty('guest_email')
+    })
+
     it('is refreshed and retried once, and the verdict lands under the new bearer', async () => {
       const fresh = jwt(7200)
       refreshAnswer = { status: 200, body: { access_token: fresh, refresh_token: 'rotated' } }
@@ -414,6 +467,29 @@ describe('ShareVerdictControls', () => {
     await screen.findByRole('alert')
     expect(screen.queryByRole('link', { name: 'Sign in' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Continue as guest' })).toBeNull()
+  })
+
+  // Fix round 2, root cause: the list on screen was read as one caller, and
+  // another is pressing now (here, signed in in another tab). The press is
+  // decided against the presser's own list, read again as them.
+  it('re-reads as whoever is pressing now when that is not who the list was read as', async () => {
+    const theirApproval = makeVerdict({ id: 'u1', status: 'approved', is_mine: true })
+    listedFor = (call) => (call.headers.Authorization ? [theirApproval] : [])
+    writeAnswer = { status: 204 }
+    render(ui({ guestIdentity: dana }))
+    await waitFor(() => expect(gets()).toHaveLength(1))
+    expect(gets()[0].url.searchParams.get('guest_email')).toBe('dana@client.example')
+    expect(button('Approve')).toHaveAttribute('aria-pressed', 'false')
+
+    const token = jwt(3600)
+    localStorage.setItem('ff_access_token', token)
+    await userEvent.click(button('Approve'))
+
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(gets().some((c) => c.headers.Authorization === `Bearer ${token}`)).toBe(true)
+    // Their own Approve was already given, so the press is the undo, as them.
+    expect(writes()[0].method).toBe('DELETE')
+    expect(writes()[0].headers.Authorization).toBe(`Bearer ${token}`)
   })
 
   it('Changes needed asks for identity before its note box opens, and sends the note', async () => {

@@ -78,7 +78,8 @@ function ShareVerdictControlsFor({
   // Who the read goes as is part of the key (`shareCallerKey`): the list is
   // scoped to the caller, so naming yourself, a sign-in refreshing or lapsing,
   // or choosing to go on as a guest, reads it again.
-  const key = shareVerdictsKey(token, assetId, versionId, shareSession, shareCallerKey(guestIdentity))
+  const readAs = shareCallerKey(guestIdentity)
+  const key = shareVerdictsKey(token, assetId, versionId, shareSession, readAs)
   const { data } = useSWR<Verdict[]>(key, () => readList(guestIdentity))
 
   const { mutate } = useSWRConfig()
@@ -104,25 +105,26 @@ function ShareVerdictControlsFor({
   // Only someone with neither is asked for a name first, and a cancelled
   // prompt sends nothing.
   //
-  // A lapsed sign-in is refreshed here, before the press decides anything: the
-  // list on screen was read as nobody, and whether this press clears or gives
-  // must be decided against the person's own verdict, read again as them.
+  // Then clear-or-give must be decided against the presser's own verdict. The
+  // list on screen was read as whoever `readAs` was at that render; a lapse, a
+  // refresh, a sign-in or sign-out in another tab, naming yourself, or choosing
+  // to go on as a guest can each have changed that since. So a lapsed sign-in
+  // is refreshed now, and if the caller is no longer who the list was read as,
+  // it is read again as them and the press decides against that.
   const beforePress = async (): Promise<boolean | Verdict[]> => {
-    if (hasStoredToken()) {
-      if ((await prepareShareWrite()) === 'unchanged') return true
-      const fresh = await readList(sendAs()).catch(() => null)
-      void revalidate()
-      return fresh ?? true
-    }
-    if (sendAs()) return true
-    return askWhoTheyAre()
+    if (!hasStoredToken() && !sendAs() && !(await askWhoTheyAre())) return false
+    await prepareShareWrite()
+    if (shareCallerKey(sendAs()) === readAs) return true
+    const fresh = await readList(sendAs()).catch(() => null)
+    void revalidate()
+    return fresh ?? true
   }
 
   // A lapsed sign-in that would not refresh (or a bearer the server could not
   // resolve): the person chooses, rather than being made a guest for them.
   const errorActions = (
     error: unknown,
-    { retry, dismiss }: { retry: () => Promise<boolean>; dismiss: () => void },
+    { redo, dismiss }: { redo: () => Promise<void>; dismiss: () => void },
   ) => {
     if (!isSignInExpired(error)) return null
     const from = currentAppPath()
@@ -149,7 +151,9 @@ function ShareVerdictControlsFor({
             }
             continueAsGuest()
             setGuestChosen(true)
-            await retry()
+            // The press again, as the guest: re-read as them and decided
+            // afresh, never the old request decided for the signed-in list.
+            await redo()
           }}
           className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium text-text-secondary
             outline-none hover:bg-bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"

@@ -211,6 +211,34 @@ describe('shareRequest', () => {
     expect(lastCall().body).toEqual({ status: 'approved', guest_name: 'Dana', guest_email: 'dana@client.example' })
   })
 
+  // Fix round 2, issue 1: the choice covers the refused token only. Someone
+  // who signs in again (another tab) and lets that token lapse too is
+  // refreshed, not filed as the guest.
+  it('a guest choice does not cover a different token that lapses later: it is refreshed and used', async () => {
+    localStorage.setItem('ff_access_token', jwt(3600))
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    respond(401, { detail: SIGN_IN_EXPIRED })
+    respond(401, {})
+    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SIGN_IN_EXPIRED)
+    continueAsGuest()
+    expect(shareCallerKey(guest)).toBe('guest:dana@client.example')
+
+    // Signed in again elsewhere; that token has lapsed by now too.
+    localStorage.setItem('ff_access_token', jwt(-60))
+    localStorage.setItem('ff_refresh_token', 'another-refresh-token')
+    expect(shareCallerKey(guest)).toBe('lapsed')
+
+    // Not the refused token's twin: jwt() of the same expiry in the same second is.
+    const fresh = jwt(7200)
+    respond(200, { access_token: fresh, refresh_token: 'rotated' })
+    respond(200, {})
+    await shareRequest('tok', '/verdict', { method: 'PUT', body: { status: 'approved' }, guest })
+
+    expect(String(fetchMock.mock.calls.at(-2)![0])).toBe(`${API}/auth/refresh`)
+    expect(lastCall().headers.Authorization).toBe(`Bearer ${fresh}`)
+    expect(lastCall().body).toEqual({ status: 'approved' })
+  })
+
   it('a new token in storage still wins over a refused one, guest chosen or not', async () => {
     localStorage.setItem('ff_access_token', jwt(3600))
     localStorage.setItem('ff_refresh_token', 'the-refresh-token')

@@ -133,16 +133,26 @@ export interface VerdictControlsViewProps {
    * Runs before a press does anything, and a `false` stops it quietly: no
    * request, no note box. The share page asks a guest who they are here. A
    * list instead of `true` goes on, deciding clear-or-give against that list:
-   * the share page re-reads after a refreshed sign-in changes who is pressing.
+   * the share page re-reads when who is pressing is not who the list on
+   * screen was read as.
    */
   beforePress?: () => Promise<boolean | Verdict[]>
   /**
    * Extra actions under a failure's message, given the error the call threw.
-   * `retry` runs the failed call again (closing the note box once it lands);
+   * `redo` makes the failed press again from the start: `beforePress`, then
+   * clear-or-give decided afresh (a note already typed is kept). It never
+   * re-sends the old request, which was decided for whoever pressed then.
    * `dismiss` puts the message away. The share page offers "Sign in" and
    * "Continue as guest" here for a lapsed sign-in.
    */
-  errorActions?: (error: unknown, controls: { retry: () => Promise<boolean>; dismiss: () => void }) => React.ReactNode
+  errorActions?: (error: unknown, controls: { redo: () => Promise<void>; dismiss: () => void }) => React.ReactNode
+}
+
+/** What a press asked for. `note` is set only when it came from the note box,
+ *  which always gives (a note is never an undo). */
+interface Intent {
+  status: VerdictValue
+  note?: string
 }
 
 /**
@@ -172,9 +182,9 @@ export function VerdictControlsView({
   const [asking, setAsking] = React.useState<VerdictValue | null>(null)
   const [note, setNote] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
-  // What the failed call threw, for `errorActions`, and the call itself, to retry.
+  // What the failed call threw, for `errorActions`, and what was asked for, to redo.
   const [failure, setFailure] = React.useState<unknown>(null)
-  const [lastRequest, setLastRequest] = React.useState<(() => Promise<unknown>) | null>(null)
+  const [lastIntent, setLastIntent] = React.useState<Intent | null>(null)
   const rootRef = React.useRef<HTMLDivElement>(null)
   // Where focus goes back to when the note box or the error is put away.
   const lastPressed = React.useRef<HTMLButtonElement | null>(null)
@@ -184,7 +194,6 @@ export function VerdictControlsView({
   const run = async (request: () => Promise<unknown>): Promise<boolean> => {
     if (inFlight.current) return false
     inFlight.current = true
-    setLastRequest(() => request)
     setBusy(true)
     setError(null)
     setFailure(null)
@@ -207,53 +216,80 @@ export function VerdictControlsView({
   // second tap in that moment does not ask twice.
   const gating = React.useRef(false)
 
-  const press = async (status: VerdictValue, asksForNote: boolean, from: HTMLButtonElement) => {
-    if (gating.current) return
-    let current = mine
-    if (beforePress) {
-      gating.current = true
-      let gate: boolean | Verdict[] = false
-      try {
-        gate = await beforePress()
-      } finally {
-        gating.current = false
-      }
-      if (gate === false) return
-      if (Array.isArray(gate)) current = gate.find((v) => v.is_mine)
+  /**
+   * Runs `beforePress`. Null stops the press; otherwise the caller's own
+   * verdict to decide against: from the list it handed back, or the one shown.
+   */
+  const gate = async (): Promise<{ current: Verdict | undefined } | null> => {
+    if (!beforePress) return { current: mine }
+    if (gating.current) return null
+    gating.current = true
+    let answer: boolean | Verdict[] = false
+    try {
+      answer = await beforePress()
+    } finally {
+      gating.current = false
     }
-    lastPressed.current = from
-    setError(null)
+    if (answer === false) return null
+    return { current: Array.isArray(answer) ? answer.find((v) => v.is_mine) : mine }
+  }
 
-    // The pressed button, pressed again, is the undo.
+  /** Gives with a note, and puts the note box away once it lands. */
+  const giveWithNote = async (status: VerdictValue, note: string) => {
+    const sent = await run(() => give(status, note || undefined))
+    if (sent) {
+      setAsking(null)
+      setNote('')
+    }
+  }
+
+  /**
+   * Clear or give, decided against `current`. Called with a note it always
+   * gives. The pressed button, pressed again, is the undo. A verdict that asks
+   * for a note opens the box rather than sending.
+   */
+  const decide = (intent: Intent, current: Verdict | undefined) => {
+    const { status, note } = intent
+    setLastIntent(intent)
+    if (note !== undefined) {
+      void giveWithNote(status, note)
+      return
+    }
     if (current?.status === status) {
       setAsking(null)
       void run(clear)
       return
     }
-    if (!asksForNote) {
+    if (!BUTTONS.find((b) => b.status === status)?.asksForNote) {
       setAsking(null)
       void run(() => give(status))
-      return
-    }
-    // A second press on the button whose box is open puts the box away.
-    if (asking === status) {
-      setAsking(null)
       return
     }
     setNote('')
     setAsking(status)
   }
 
+  const press = async (status: VerdictValue, from: HTMLButtonElement) => {
+    if (gating.current) return
+    const gated = await gate()
+    if (!gated) return
+    lastPressed.current = from
+    setError(null)
+    // A second press on the button whose box is open puts the box away, unless
+    // it is the pressed one, whose press is the undo.
+    if (asking === status && gated.current?.status !== status) {
+      setAsking(null)
+      return
+    }
+    decide({ status }, gated.current)
+  }
+
   const sendWithNote = async (event: React.FormEvent) => {
     event.preventDefault()
     if (asking === null) return
-    const status = asking
-    const trimmed = note.trim()
-    const sent = await run(() => give(status, trimmed || undefined))
-    if (sent) {
-      setAsking(null)
-      setNote('')
-    }
+    const intent = { status: asking, note: note.trim() }
+    setLastIntent(intent)
+    await giveWithNote(intent.status, intent.note)
   }
 
   const putAway = () => {
@@ -261,14 +297,14 @@ export function VerdictControlsView({
     setError(null)
   }
 
-  const retry = async (): Promise<boolean> => {
-    if (!lastRequest) return false
-    const ok = await run(lastRequest)
-    if (ok) {
-      setAsking(null)
-      setNote('')
-    }
-    return ok
+  /** The failed press again, from the start, as whoever is pressing now. */
+  const redo = async () => {
+    if (!lastIntent || inFlight.current) return
+    setError(null)
+    setFailure(null)
+    const gated = await gate()
+    if (!gated) return
+    decide(lastIntent, gated.current)
   }
 
   const open = asking !== null || error !== null
@@ -292,7 +328,7 @@ export function VerdictControlsView({
 
           {canGive && (
             <div role="group" aria-label="Your verdict" className="flex items-center gap-1.5">
-              {BUTTONS.map(({ status, label, Icon, asksForNote, pressedClass }) => {
+              {BUTTONS.map(({ status, label, Icon, pressedClass }) => {
                 const pressed = mine?.status === status
                 return (
                   <button
@@ -302,7 +338,7 @@ export function VerdictControlsView({
                     aria-label={label}
                     title={label}
                     disabled={busy}
-                    onClick={(event) => void press(status, asksForNote, event.currentTarget)}
+                    onClick={(event) => void press(status, event.currentTarget)}
                     className={cn(
                       'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border text-xs font-medium',
                       variant === 'toolbar' ? 'w-8' : 'px-2',
@@ -399,7 +435,7 @@ export function VerdictControlsView({
                   {error}
                 </p>
                 {errorActions && (
-                  <ErrorActionsSlot render={errorActions} error={failure} retry={retry} dismiss={putAway} />
+                  <ErrorActionsSlot render={errorActions} error={failure} redo={redo} dismiss={putAway} />
                 )}
               </div>
               {asking === null && (
@@ -424,7 +460,7 @@ type ErrorActionsRender = NonNullable<VerdictControlsViewProps['errorActions']>
 /** Calls `errorActions` as its own element, so the handlers it is given are
  *  props (read when clicked), not values read while the controls render. */
 function ErrorActionsSlot({
-  render, error, retry, dismiss,
-}: { render: ErrorActionsRender; error: unknown; retry: () => Promise<boolean>; dismiss: () => void }) {
-  return <>{render(error, { retry, dismiss })}</>
+  render, error, redo, dismiss,
+}: { render: ErrorActionsRender; error: unknown; redo: () => Promise<void>; dismiss: () => void }) {
+  return <>{render(error, { redo, dismiss })}</>
 }
