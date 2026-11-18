@@ -22,6 +22,7 @@ from apps.api.tests.test_share_links_trashed_content import (  # noqa: F401  (fi
     _auth, _seed, client, db,
 )
 
+from apps.api.config import settings
 from apps.api.models.activity import ActivityLog, Notification, NotificationType
 from apps.api.models.approval import Approval, ApprovalStatus
 from apps.api.models.asset import AssetVersion, ProcessingStatus
@@ -567,10 +568,14 @@ def test_creator_is_notified_with_actor_and_detail(db, client, mocks):
     args, kwargs = mocks.send.call_args
     assert args == (send_approval_email,)
     assert kwargs["to_email"] == w.owner.email
-    assert kwargs["reviewer_name"] == "Dana"
+    # The email names a guest exactly as the drawer does, and says which link.
+    assert kwargs["reviewer_name"] == "Dana (guest)"
+    assert kwargs["via_link"] == "Client review"
     assert kwargs["status"] == "approved" and kwargs["note"] == "love it"
     assert kwargs["asset_name"] == w.A.name
-    assert str(w.A.id) in kwargs["asset_link"]
+    # The page that exists: /assets/{id} alone is not a route.
+    assert kwargs["asset_link"] == (
+        f"{settings.frontend_url}/projects/{w.project.id}/assets/{w.A.id}")
 
     mocks.publish.assert_called_once_with(w.project.id, "approval_updated", {
         "asset_id": str(w.A.id), "version_id": str(v.id), "status": "approved",
@@ -592,19 +597,78 @@ def test_a_team_member_is_named_without_the_guest_suffix(db, client, mocks):
     assert (n.actor_name, n.detail) == ("editor", "changes_requested")
     assert mocks.send.call_args.kwargs["status"] == "changes_requested"
     assert mocks.send.call_args.kwargs["reviewer_name"] == "editor"
+    assert mocks.send.call_args.kwargs["via_link"] is None
 
     r = client.get("/me/notifications", headers=_auth(w.owner))
     [shown] = [x for x in r.json() if x["asset_id"] == str(w.A.id)]
     assert (shown["actor_name"], shown["detail"]) == ("editor", "changes_requested")
 
 
-def test_a_long_guest_name_still_fits_the_notification_column(db):
+def test_a_long_guest_name_still_fits_the_notification_column(db, mocks):
     w = _seed(db)
     long_name = "D" * 255  # GuestUser.name allows 255
     set_verdict(db, w.A, _v1(w), Actor(guest=_guest(db, long_name)), "approved", None)
 
     [n] = db.query(Notification).filter(Notification.asset_id == w.A.id).all()
     assert len(n.actor_name) <= 255 and n.actor_name.endswith(" (guest)")
+    # One helper names the actor for both, so the email cannot drift from the drawer.
+    assert mocks.send.call_args.kwargs["reviewer_name"] == n.actor_name
+
+
+def test_a_signed_in_non_member_is_tagged_like_a_guest_in_both_places(db, client, mocks):
+    """`creator` has an account but is not a member of the project: to the asset's
+    creator they are as outside as a guest, and must read that way."""
+    w = _seed(db)
+    link = _link(db, w, title="Client review")
+
+    set_verdict(db, w.A, _v1(w), Actor(user=w.creator, share_link=link), "rejected", "no")
+
+    [n] = db.query(Notification).filter(Notification.asset_id == w.A.id).all()
+    assert (n.actor_name, n.detail) == ("creator (guest)", "rejected")
+    kwargs = mocks.send.call_args.kwargs
+    assert kwargs["reviewer_name"] == "creator (guest)"
+    assert kwargs["via_link"] == "Client review"
+
+    r = client.get("/me/notifications", headers=_auth(w.owner))
+    [shown] = [x for x in r.json() if x["asset_id"] == str(w.A.id)]
+    assert shown["actor_name"] == "creator (guest)"
+
+
+def test_a_former_member_is_tagged_because_team_means_a_live_membership(db, mocks):
+    from datetime import datetime, timezone
+    w = _seed(db)
+    member = db.query(ProjectMember).filter(ProjectMember.user_id == w.editor.id).one()
+    member.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+
+    set_verdict(db, w.A, _v1(w), Actor(user=w.editor), "approved", None)
+
+    [n] = db.query(Notification).filter(Notification.asset_id == w.A.id).all()
+    assert n.actor_name == "editor (guest)"
+    assert mocks.send.call_args.kwargs["reviewer_name"] == "editor (guest)"
+
+
+def test_a_team_member_is_untagged_even_through_a_share_link(db, mocks):
+    w = _seed(db)
+    link = _link(db, w, title="Client review")
+
+    set_verdict(db, w.A, _v1(w), Actor(user=w.editor, share_link=link), "approved", None)
+
+    [n] = db.query(Notification).filter(Notification.asset_id == w.A.id).all()
+    assert n.actor_name == "editor"
+    kwargs = mocks.send.call_args.kwargs
+    assert kwargs["reviewer_name"] == "editor"
+    # Still says which link: the creator would want to know where it came from.
+    assert kwargs["via_link"] == "Client review"
+
+
+def test_a_link_with_no_title_is_not_named_in_the_email(db, mocks):
+    w = _seed(db)
+    link = _link(db, w, title="")
+
+    set_verdict(db, w.A, _v1(w), Actor(guest=_guest(db, "Dana"), share_link=link), "approved", None)
+
+    assert mocks.send.call_args.kwargs["via_link"] is None
 
 
 def test_changing_a_verdict_notifies_again(db, mocks):
@@ -777,3 +841,22 @@ def test_the_approved_and_rejected_emails_read_as_before(monkeypatch):
     subject, html, text = _send_email_with(monkeypatch, status="rejected")
     assert subject == "❌ Cut.mov has been rejected"
     assert "has been rejected" in html and text.startswith("Dana rejected Cut.mov.")
+
+
+def test_the_email_says_which_link_the_verdict_came_through(monkeypatch):
+    subject, html, text = _send_email_with(monkeypatch, reviewer_name="Dana (guest)",
+                                           via_link="Client <review>")
+    assert "Dana (guest)" in html
+    assert "via the share link <strong>Client &lt;review&gt;</strong>" in html  # escaped
+    assert text.startswith("Dana (guest) approved Cut.mov via the share link Client <review>.")
+
+    subject, html, text = _send_email_with(monkeypatch, status="changes_requested",
+                                           via_link="Client review")
+    assert "via the share link <strong>Client review</strong>" in html
+    assert "asked for changes on Cut.mov via the share link Client review." in text
+
+
+def test_the_email_without_a_link_reads_as_before(monkeypatch):
+    subject, html, text = _send_email_with(monkeypatch)
+    assert "share link" not in html and "share link" not in text
+    assert text.startswith("Dana approved Cut.mov.")

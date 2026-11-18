@@ -238,6 +238,7 @@ def send_approval_email(
     status: str,  # "approved", "changes_requested" or "rejected"
     asset_link: str,
     note: Optional[str] = None,
+    via_link: Optional[str] = None,  # title of the share link it came through, if any
 ):
     """Send approval, changes-needed or rejection notification email."""
     try:
@@ -248,6 +249,8 @@ def send_approval_email(
             status_emoji = "✅" if status == "approved" else "❌"
             subject = f"{status_emoji} {asset_name} has been {status}"
             verdict_text = f"{status} {asset_name}"
+        if via_link:
+            verdict_text += f" via the share link {via_link}"
         html_body = render_template(
             "email/approval.html",
             subject=subject,
@@ -256,6 +259,7 @@ def send_approval_email(
             status=status,
             asset_link=asset_link,
             note=note,
+            via_link=via_link,
         )
         text_body = f"{reviewer_name} {verdict_text}.{' Note: ' + note if note else ''}\n\nView: {asset_link}"
         

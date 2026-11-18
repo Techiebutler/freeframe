@@ -128,13 +128,19 @@ def _log_payload(version_id: uuid.UUID, actor: Actor) -> dict:
     }
 
 
-def _notification_actor_name(actor: Actor) -> str:
-    """How the creator's drawer names the actor. A guest is tagged, and the name is
-    clipped so the tag still fits the column."""
+def _creator_facing_name(db: Session, project_id: uuid.UUID, actor: Actor) -> str:
+    """How the asset's creator is told who acted, in the drawer and in the email.
+
+    The one place that decides it, so the two cannot drift. Anyone who is not a live
+    member of the project is outside the team, and is tagged: a guest, and a signed-in
+    person with no membership alike, since the name is whatever they typed or signed up
+    with and must not read like a colleague. A team member is named as they are.
+    The name is clipped so the tag still fits the notification's column.
+    """
     name = actor.display_name
-    if actor.is_guest:
-        return name[:_NOTIFICATION_NAME_LIMIT - len(_GUEST_SUFFIX)] + _GUEST_SUFFIX
-    return name[:_NOTIFICATION_NAME_LIMIT]
+    if actor.user is not None and actor.user.id in _live_member_user_ids(db, project_id):
+        return name[:_NOTIFICATION_NAME_LIMIT]
+    return name[:_NOTIFICATION_NAME_LIMIT - len(_GUEST_SUFFIX)] + _GUEST_SUFFIX
 
 
 def _publish(project_id: uuid.UUID, payload: dict) -> None:
@@ -220,22 +226,25 @@ def set_verdict(
     acted_as_creator = actor.user is not None and actor.user.id == creator_id
     email = None
     if not acted_as_creator:
+        creator_facing_name = _creator_facing_name(db, project_id, actor)
         db.add(Notification(
             user_id=creator_id,
             type=NotificationType.approval,
             asset_id=asset_id,
-            actor_name=_notification_actor_name(actor),
+            actor_name=creator_facing_name,
             detail=value,
         ))
         creator = db.get(User, creator_id)
         if creator is not None and creator.email:
             email = dict(
                 to_email=creator.email,
-                reviewer_name=actor.display_name,
+                reviewer_name=creator_facing_name,
                 asset_name=asset_name,
                 status=value,
-                asset_link=f"{settings.frontend_url}/assets/{asset_id}",
+                asset_link=f"{settings.frontend_url}/projects/{project_id}/assets/{asset_id}",
                 note=note,
+                # An untitled link is not named, as the drawer does not name it.
+                via_link=(link.title or None) if link is not None else None,
             )
 
     db.commit()

@@ -3,10 +3,10 @@
 {% block content %}
 {% if status == 'changes_requested' %}
 <h2>Changes needed on {{ asset_name }}</h2>
-<p><strong>{{ reviewer_name }}</strong> <strong>asked for changes</strong> on your asset.</p>
+<p><strong>{{ reviewer_name }}</strong> <strong>asked for changes</strong> on your asset{% if via_link %} via the share link <strong>{{ via_link }}</strong>{% endif %}.</p>
 {% else %}
 <h2>{{ asset_name }} has been {{ status }}</h2>
-<p><strong>{{ reviewer_name }}</strong> has <strong>{{ status }}</strong> your asset.</p>
+<p><strong>{{ reviewer_name }}</strong> has <strong>{{ status }}</strong> your asset{% if via_link %} via the share link <strong>{{ via_link }}</strong>{% endif %}.</p>
 {% endif %}
 {% if note %}
 <p><strong>Note:</strong></p>
