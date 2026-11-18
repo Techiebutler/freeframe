@@ -278,8 +278,11 @@ function VerdictControlsFor({ assetId, versionId, role, variant = 'toolbar' }: V
                 // Read-only rather than disabled while sending: focus stays put.
                 readOnly={busy}
                 placeholder={BUTTONS.find((b) => b.status === asking)?.placeholder}
-                className="w-full resize-none rounded-md border border-border bg-bg-primary px-2.5 py-2 text-sm text-text-primary
-                  outline-none placeholder:text-text-tertiary focus-visible:ring-2 focus-visible:ring-accent"
+                // 16px on a touch screen: iOS Safari zooms into any field under
+                // that when it takes focus, and this one is focused as it opens.
+                // The compact size is for mice only, as in the comment composer.
+                className="w-full resize-none rounded-md border border-border bg-bg-primary px-2.5 py-2 text-[16px]
+                  [@media(hover:hover)]:text-[13px] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:ring-2 focus-visible:ring-accent"
               />
               <div className="flex justify-end gap-2">
                 <button

@@ -198,6 +198,20 @@ describe('VerdictControls', () => {
       await waitFor(() => expect(screen.queryByRole('textbox')).not.toBeInTheDocument())
     })
 
+    it('keeps the note at 16px on a touch screen, so iOS Safari does not zoom in on focus', async () => {
+      const user = userEvent.setup()
+      renderControls()
+
+      // Radix focuses the box as it opens, and iOS zooms into any field under 16px.
+      await user.click(button('Reject'))
+
+      const classes = screen.getByRole('textbox').className.split(/\s+/)
+      expect(classes).toContain('text-[16px]')
+      // Mice get the compact size, as the comment composer does.
+      expect(classes).toContain('[@media(hover:hover)]:text-[13px]')
+      expect(classes).not.toContain('text-sm')
+    })
+
     it('limits the note to what the API accepts', async () => {
       const user = userEvent.setup()
       renderControls()
