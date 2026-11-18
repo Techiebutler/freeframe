@@ -99,6 +99,26 @@ def _own_row(actor: Actor):
     return Approval.guest_user_id == actor.guest.id
 
 
+def _own_verdict(db: Session, version: AssetVersion, actor: Actor) -> Optional[Approval]:
+    return db.query(Approval).filter(
+        Approval.version_id == version.id,
+        Approval.deleted_at.is_(None),
+        _own_row(actor),
+    ).first()
+
+
+def verdict_unchanged(
+    db: Session, version: AssetVersion, actor: Actor, status: str, note: Optional[str],
+) -> bool:
+    """Whether giving `status` with `note` would repeat the actor's current verdict
+    exactly. `set_verdict` treats such a repeat as no change; a caller that records
+    something of its own per verdict (the share route's link activity) asks first."""
+    _require_one_actor(actor)
+    value = _coerce_status(status)
+    row = _own_verdict(db, version, actor)
+    return row is not None and row.status.value == value and row.note == note
+
+
 def _log_payload(version_id: uuid.UUID, actor: Actor) -> dict:
     return {
         "version_id": str(version_id),
@@ -134,12 +154,24 @@ def set_verdict(
     An upsert on (version, actor). The link and its title are rewritten on every
     write, so a person who moves from a share page to the project does not keep a
     stale origin. Notifies the asset's creator unless the actor is the creator.
+
+    Repeating the actor's current verdict exactly (same status, same note) is no
+    change: only the link is refreshed, and nothing is logged, notified, emailed or
+    published. Otherwise anyone holding an approve link could send the creator an
+    email per request by pressing the same button again.
     """
     value = _coerce_status(status)
     _require_one_actor(actor)
     _require_version_of(asset, version)
 
     link = actor.share_link
+    existing = _own_verdict(db, version, actor)
+    if existing is not None and existing.status.value == value and existing.note == note:
+        existing.share_link_id = link.id if link is not None else None
+        existing.via_link_title = link.title if link is not None else None
+        db.commit()
+        return existing
+
     asset_id, project_id, version_id = asset.id, asset.project_id, version.id
     asset_name, creator_id = asset.name, asset.created_by
 

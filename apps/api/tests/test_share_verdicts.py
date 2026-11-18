@@ -529,6 +529,29 @@ def test_a_share_verdict_records_link_activity(client, db):
     assert len(rows) == 3
 
 
+def test_pressing_the_same_verdict_again_notifies_and_records_once(client, db, mocks):
+    w = _world(db)
+    link, version = w.links["asset"], _v(w)
+
+    for _ in range(3):
+        r = _put(client, link, version, "approved", note="ship it", **GUEST)
+        assert r.status_code == 200, r.text
+        assert (r.json()["status"], r.json()["note"]) == ("approved", "ship it")
+    # The note is compared as stored: the same words with stray space are no change.
+    assert _put(client, link, version, "approved", note="  ship it ", **GUEST).status_code == 200
+
+    notes = db.query(Notification).filter(Notification.asset_id == w.A.id).all()
+    assert len(notes) == 1
+    assert mocks.send.call_count == 1
+    assert [a.action for a in _activity(db, link)] == [ShareActivityAction.approved]
+
+    # A new note on the same verdict is a change, and is told and recorded.
+    assert _put(client, link, version, "approved", note="ship it today", **GUEST).status_code == 200
+    assert db.query(Notification).filter(Notification.asset_id == w.A.id).count() == 2
+    assert mocks.send.call_count == 2
+    assert len(_activity(db, link)) == 2
+
+
 def test_a_refused_verdict_records_no_link_activity(client, db):
     w = _world(db)
     link, version = w.links["asset"], _v(w)

@@ -31,6 +31,7 @@ from apps.api.models.user import GuestUser
 from apps.api.services import event_service
 from apps.api.services.verdicts import (
     Actor, clear_verdict, list_verdicts, remove_verdict, set_verdict, verdict_summaries,
+    verdict_unchanged,
 )
 from apps.api.tasks.email_tasks import send_approval_email
 
@@ -615,6 +616,74 @@ def test_changing_a_verdict_notifies_again(db, mocks):
     notes = db.query(Notification).filter(Notification.asset_id == w.A.id).all()
     assert sorted(n.detail for n in notes) == ["approved", "rejected"]
     assert mocks.send.call_count == 2 and mocks.publish.call_count == 2
+
+
+def _side_effects(db, asset, mocks):
+    notes = db.query(Notification).filter(Notification.asset_id == asset.id).count()
+    logs = db.query(ActivityLog).filter(ActivityLog.asset_id == asset.id).count()
+    return notes, logs, mocks.send.call_count, mocks.publish.call_count
+
+
+@pytest.mark.parametrize("note", [None, "looks good"])
+def test_repeating_the_same_verdict_and_note_sends_nothing(db, mocks, note):
+    """The same button pressed again is no change: anyone with an approve link can
+    press it, and each press used to email the creator."""
+    w = _seed(db)
+    v = _v1(w)
+    guest = _guest(db)
+    actor = Actor(guest=guest, share_link=_link(db, w))
+
+    first = set_verdict(db, w.A, v, actor, "approved", note)
+    assert _side_effects(db, w.A, mocks) == (1, 1, 1, 1)
+
+    again = set_verdict(db, w.A, v, actor, "approved", note)
+    assert again.id == first.id
+    assert _side_effects(db, w.A, mocks) == (1, 1, 1, 1)
+    [row] = _rows(db, v)
+    assert (row.status, row.note) == (ApprovalStatus.approved, note)
+
+
+def test_the_same_status_with_a_new_note_notifies(db, mocks):
+    w = _seed(db)
+    v = _v1(w)
+    actor = Actor(user=w.editor)
+
+    set_verdict(db, w.A, v, actor, "changes_requested", None)
+    set_verdict(db, w.A, v, actor, "changes_requested", "the audio drifts at 0:42")
+    set_verdict(db, w.A, v, actor, "changes_requested", "the audio drifts at 0:43")
+
+    assert _side_effects(db, w.A, mocks) == (3, 3, 3, 3)
+    [row] = _rows(db, v)
+    assert row.note == "the audio drifts at 0:43"
+
+
+def test_a_repeat_through_another_link_moves_the_origin_quietly(db, mocks):
+    w = _seed(db)
+    v = _v1(w)
+    guest = _guest(db)
+    set_verdict(db, w.A, v, Actor(guest=guest, share_link=_link(db, w, "First")), "approved", None)
+    second = _link(db, w, "Second")
+
+    set_verdict(db, w.A, v, Actor(guest=guest, share_link=second), "approved", None)
+
+    [row] = _rows(db, v)
+    db.refresh(row)
+    assert (row.share_link_id, row.via_link_title) == (second.id, "Second")
+    assert _side_effects(db, w.A, mocks) == (1, 1, 1, 1)
+
+
+def test_verdict_unchanged_compares_status_and_note(db):
+    w = _seed(db)
+    v = _v1(w)
+    actor = Actor(user=w.editor)
+    assert verdict_unchanged(db, v, actor, "approved", None) is False
+
+    set_verdict(db, w.A, v, actor, "approved", "ok")
+    assert verdict_unchanged(db, v, actor, "approved", "ok") is True
+    assert verdict_unchanged(db, v, actor, "approved", None) is False
+    assert verdict_unchanged(db, v, actor, "rejected", "ok") is False
+    # Someone else's identical verdict is not theirs to repeat.
+    assert verdict_unchanged(db, v, Actor(user=w.owner), "approved", "ok") is False
 
 
 def test_no_notification_when_actor_is_creator(db, mocks):

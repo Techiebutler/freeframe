@@ -47,6 +47,7 @@ from ..schemas.comment import (
 )
 from ..services import s3_service
 from ..services import comment_export
+from ..services.guests import resolve_guest
 from ..services.permissions import (
     require_asset_access, can_access_asset, can_access_asset_audited,
     validate_share_link_with_session, validate_asset_in_share,
@@ -1222,17 +1223,13 @@ def guest_comment(
     # Determine author: logged-in user or guest
     author_id = None
     guest_author_id = None
+    guest = None
     if current_user:
         author_id = current_user.id
     else:
-        if not body.guest_email or not body.guest_name:
+        guest = resolve_guest(db, body.guest_email, body.guest_name)
+        if guest is None:
             raise HTTPException(status_code=400, detail="guest_email and guest_name required for anonymous comments")
-        guest_email = body.guest_email.lower()
-        guest = db.query(GuestUser).filter(GuestUser.email == guest_email).first()
-        if not guest:
-            guest = GuestUser(email=guest_email, name=body.guest_name)
-            db.add(guest)
-            db.flush()
         guest_author_id = guest.id
 
     comment = Comment(
@@ -1281,7 +1278,7 @@ def guest_comment(
     db.refresh(comment)
 
     # Log share link activity
-    actor_email = current_user.email if current_user else (body.guest_email or "anonymous")
+    actor_email = current_user.email if current_user else guest.email
     actor_name = current_user.name if current_user else body.guest_name
     activity = ShareLinkActivity(
         share_link_id=link.id,

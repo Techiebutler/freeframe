@@ -30,12 +30,15 @@ from ..middleware.auth import get_optional_user, optional_bearer_scheme
 from ..models.asset import Asset, AssetVersion
 from ..models.project import ProjectRole
 from ..models.share import ShareActivityAction, ShareLink, ShareLinkActivity, SharePermission
-from ..models.user import GuestUser, User
+from ..models.user import User
 from ..schemas.verdict import ShareVerdictSet, VerdictResponse
+from ..services.guests import find_guest, normalize_guest_email, resolve_guest
 from ..services.permissions import (
     get_project_member, validate_asset_in_share, validate_share_link_with_session,
 )
-from ..services.verdicts import Actor, clean_note, clear_verdict, list_verdicts, set_verdict
+from ..services.verdicts import (
+    Actor, clean_note, clear_verdict, list_verdicts, set_verdict, verdict_unchanged,
+)
 from .share import _get_asset, shown_versions
 
 router = APIRouter(tags=["share"])
@@ -91,12 +94,6 @@ def _shown_version(db: Session, link: ShareLink, asset: Asset, version_id: uuid.
     raise HTTPException(status_code=404, detail="Version not found")
 
 
-def _find_guest(db: Session, guest_email: Optional[str]) -> Optional[GuestUser]:
-    if not guest_email:
-        return None
-    return db.query(GuestUser).filter(GuestUser.email == guest_email.lower()).first()
-
-
 def _share_actor(
     db: Session,
     link: ShareLink,
@@ -114,7 +111,7 @@ def _share_actor(
     A project member is held to their project role when writing: the link does not
     raise it. A signed-in non-member acts as themselves, as an external.
 
-    Anyone else is a guest, found by lowercased email as guest comments do. Only
+    Anyone else is a guest, resolved by `services.guests` as guest comments are. Only
     giving a verdict (`create_guest`) may create one, and it needs both fields.
     Clearing needs the email; an email nobody has used yields an actor with no one
     in it, which clears nothing and owns nothing.
@@ -128,19 +125,14 @@ def _share_actor(
         return Actor(user=current_user, share_link=link)
 
     if create_guest:
-        name = (guest_name or "").strip()
-        if not guest_email or not name:
-            raise HTTPException(status_code=400, detail="guest_email and guest_name required")
-        guest = _find_guest(db, guest_email)
+        guest = resolve_guest(db, guest_email, guest_name)
         if guest is None:
-            guest = GuestUser(email=guest_email.lower(), name=name)
-            db.add(guest)
-            db.flush()
+            raise HTTPException(status_code=400, detail="guest_email and guest_name required")
         return Actor(guest=guest, share_link=link)
 
-    if writing and not guest_email:
+    if writing and not normalize_guest_email(guest_email):
         raise HTTPException(status_code=400, detail="guest_email required")
-    return Actor(guest=_find_guest(db, guest_email), share_link=link)
+    return Actor(guest=find_guest(db, guest_email), share_link=link)
 
 
 @router.put("/share/{token}/verdict", response_model=VerdictResponse)
@@ -160,16 +152,20 @@ def put_share_verdict(
     actor = _share_actor(db, link, asset, current_user, body.guest_name, body.guest_email,
                          writing=True, create_guest=True)
 
-    # Added before the service's single commit, so it lands with the verdict or not at all.
-    db.add(ShareLinkActivity(
-        share_link_id=link.id,
-        action=ShareActivityAction(body.status),
-        actor_email=actor.user.email if actor.user is not None else actor.guest.email,
-        actor_name=actor.display_name,
-        asset_id=asset.id,
-        asset_name=asset.name,
-    ))
-    approval = set_verdict(db, asset, version, actor, body.status, clean_note(body.note))
+    note = clean_note(body.note)
+    # Pressing the same verdict again changes nothing, so it is not link activity
+    # either. Otherwise the activity row is added before the service's single
+    # commit, so it lands with the verdict or not at all.
+    if not verdict_unchanged(db, version, actor, body.status, note):
+        db.add(ShareLinkActivity(
+            share_link_id=link.id,
+            action=ShareActivityAction(body.status),
+            actor_email=actor.user.email if actor.user is not None else actor.guest.email,
+            actor_name=actor.display_name,
+            asset_id=asset.id,
+            asset_name=asset.name,
+        ))
+    approval = set_verdict(db, asset, version, actor, body.status, note)
 
     given = next((v for v in list_verdicts(db, asset, version.id, me=actor, guest_scope_link_id=link.id)
                   if v.id == approval.id), None)
