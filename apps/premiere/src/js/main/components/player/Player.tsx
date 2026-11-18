@@ -82,6 +82,7 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(
     const scrubRef = useRef<HTMLDivElement>(null);
     const previewRef = useRef<HTMLVideoElement>(null);
     const previewHls = useRef<{ destroy: () => void } | null>(null);
+    const previewGeneration = useRef(0);
     const hlsRef = useRef<HlsController | null>(null);
     const previewAttached = useRef(false);
     const lastPreviewSeek = useRef(0);
@@ -290,7 +291,11 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(
         node.src = src;
         return;
       }
+      const generation = previewGeneration.current;
       import("hls.js").then(({ default: Hls }) => {
+        // The source changed or the player unmounted while hls.js loaded:
+        // creating it now would leak a stream nobody destroys.
+        if (generation !== previewGeneration.current) return;
         if (!previewRef.current || !Hls.isSupported()) return;
         // Lowest rendition is plenty for a 160px-wide thumbnail.
         const hls = new Hls({ enableWorker: false, startLevel: 0, capLevelToPlayerSize: true });
@@ -339,6 +344,7 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(
       previewAttached.current = false;
       setPreviewReady(false);
       return () => {
+        previewGeneration.current += 1;
         previewHls.current?.destroy();
         previewHls.current = null;
       };

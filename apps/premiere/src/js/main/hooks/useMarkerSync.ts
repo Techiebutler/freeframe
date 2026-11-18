@@ -37,7 +37,8 @@ export const useMarkerSync = ({
         );
         return null;
       }
-      await refreshHost();
+      // Only re-read the host when markers actually changed.
+      if (result.added || result.removed) await refreshHost();
       return result;
     },
     [offsetSeconds, fps, includeResolved, refreshHost, onError]

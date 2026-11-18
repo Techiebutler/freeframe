@@ -152,9 +152,22 @@ export const watchHost = (
 ): (() => void) => {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
+  let lastKey = "";
   const tick = async () => {
     if (stopped) return;
-    callback(await getHostInfo());
+    const info = await getHostInfo();
+    // Every tick returns a fresh object, so passing it straight to setState
+    // re-rendered the whole panel every 1.5s. Only report real changes (the
+    // playhead at 0.1s resolution is enough for placing a comment).
+    const key = JSON.stringify({
+      ...info,
+      playheadSeconds:
+        typeof info?.playheadSeconds === "number" ? Math.round(info.playheadSeconds * 10) : null,
+    });
+    if (key !== lastKey) {
+      lastKey = key;
+      callback(info);
+    }
     if (!stopped) timer = setTimeout(tick, intervalMs);
   };
   tick();

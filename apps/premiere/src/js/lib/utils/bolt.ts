@@ -77,10 +77,7 @@ export const evalTS = <
 ): Promise<ReturnType<Func>> => {
   return new Promise(function (resolve, reject) {
     const formattedArgs = args
-      .map((arg) => {
-        console.log(JSON.stringify(arg));
-        return `${JSON.stringify(arg)}`;
-      })
+      .map((arg) => `${JSON.stringify(arg)}`)
       .join(",");
     csi.evalScript(
       `try{

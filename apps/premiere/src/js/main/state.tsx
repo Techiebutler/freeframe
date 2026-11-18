@@ -170,22 +170,41 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   const { jobs, startExport, cancelExport } = useExportJobs(api, rememberExport);
 
-  const value: AppState = {
-    settings,
-    updateSettings,
-    api,
-    user,
-    status,
-    authError,
-    login,
-    adoptSession,
-    logout,
-    host,
-    refreshHost,
-    exportJobs: jobs,
-    startExport,
-    cancelExport,
-  };
+  // Memoised so consumers re-render only when something in it changed.
+  const value: AppState = useMemo(
+    () => ({
+      settings,
+      updateSettings,
+      api,
+      user,
+      status,
+      authError,
+      login,
+      adoptSession,
+      logout,
+      host,
+      refreshHost,
+      exportJobs: jobs,
+      startExport,
+      cancelExport,
+    }),
+    [
+      settings,
+      updateSettings,
+      api,
+      user,
+      status,
+      authError,
+      login,
+      adoptSession,
+      logout,
+      host,
+      refreshHost,
+      jobs,
+      startExport,
+      cancelExport,
+    ]
+  );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 };

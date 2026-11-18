@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state";
 import type { Asset, AssetVersion, Comment } from "../../lib/freeframe/types";
+import { copyText } from "../../lib/freeframe/clipboard";
 import { buildCommentNumbers } from "../../lib/freeframe/comment-numbers";
 import {
   uploadCommentAttachment,
@@ -349,6 +350,10 @@ export const AssetView = ({
   // changes whenever search, status, author, attachment, or annotation filters
   // change the visible comment set.
   const markerSignature = markerSignatureFor(visible);
+  // Read the latest list from a ref: `visible` gets a new identity on every
+  // comment poll, which re-sent every marker to ExtendScript each time.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
   useEffect(() => {
     // Marker visibility is global to the extension, but the active sequence
@@ -356,10 +361,10 @@ export const AssetView = ({
     // Without this guard, posting on an unrelated asset could write markers
     // into whichever Premiere sequence happens to be open.
     if (!isLinked || !markersOn || !host.ok) return;
-    pushMarkers(visible);
+    pushMarkers(visibleRef.current);
     // `markerSignature` includes the current comment filters as well as the
     // comment content, so markers disappear and return with the list.
-  }, [markerSignature, visible, isLinked, markersOn, host.sequenceId, offset]);
+  }, [markerSignature, isLinked, markersOn, host.sequenceId, offset]);
 
   /**
    * In/Out exports are already linked when their upload completes, without a
@@ -368,10 +373,10 @@ export const AssetView = ({
    */
   useEffect(() => {
     if (!segmentLink || !host.ok || markersOn || !comments.length) return;
-    pushMarkers(visible).then((result) => {
+    pushMarkers(visibleRef.current).then((result) => {
       if (result) updateSettings({ markersVisible: true });
     });
-  }, [segmentLink?.id, markerSignature, visible, host.ok, host.sequenceId, offset]);
+  }, [segmentLink?.id, markerSignature, host.ok, host.sequenceId, offset]);
 
   const toggleMarkers = async () => {
     if (!host.ok) {
@@ -741,7 +746,7 @@ export const AssetView = ({
                   label="Copy Asset URL"
                   onSelect={() => {
                     close();
-                    navigator.clipboard?.writeText(assetUrl());
+                    void copyText(assetUrl());
                   }}
                 />
                 <MenuAction

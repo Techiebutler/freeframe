@@ -154,7 +154,9 @@ export const getHostInfo = (): HostInfo => {
     durationSeconds: isNaN(end) ? 0 : end / TICKS_PER_SECOND,
     playheadSeconds:
       seq.getPlayerPosition().seconds - zeroPointTicks(seq) / TICKS_PER_SECOND,
-    markerCount: allMarkers(seq).length,
+    // numMarkers is a property read; walking every marker each 1.5s poll cost
+    // Premiere main-thread time on marker-heavy sequences.
+    markerCount: seq.markers ? seq.markers.numMarkers : 0,
   };
 };
 
