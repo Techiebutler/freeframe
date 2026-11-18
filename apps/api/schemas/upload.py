@@ -52,6 +52,8 @@ class InitiateUploadRequest(BaseModel):
     # For new version of existing asset
     asset_id: uuid.UUID | None = None
     folder_id: uuid.UUID | None = None
+    # Only when the human asked for changes to an approved version
+    reopen: bool = False
 
 class InitiateUploadResponse(BaseModel):
     upload_id: str

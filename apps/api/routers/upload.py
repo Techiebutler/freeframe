@@ -21,6 +21,7 @@ from ..schemas.upload import (
     CompleteUploadRequest, CompleteUploadResponse, AbortUploadRequest,
     ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
+from ..services import approval_lock
 from ..services.storage import upload_guard_error
 
 from ..services.iteration_requests import components, require_unmanaged, require_unmanaged_destination
@@ -67,6 +68,7 @@ def initiate_upload(
         require_unmanaged(asset)
         if asset.project_id != body.project_id:
             raise HTTPException(status_code=400, detail="Asset does not belong to the specified project")
+        approval_lock.guard(db, asset.id, body.reopen)
     else:
         # Validate the target folder for a new asset: it must exist, belong to this project, and not
         # be soft-deleted -- otherwise a live asset could be placed under a trashed folder and later

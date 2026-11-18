@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..models.approval import Approval, ApprovalStatus
 from ..models.agent import AgentKey, FeedbackRound
 from ..models.asset import Asset, AssetVersion, MediaFile
 from ..models.comment import Annotation, Comment, CommentAttachment
@@ -218,13 +219,35 @@ def close_round(db: Session, rnd: FeedbackRound, by: str, now: datetime) -> Feed
     waiting = images_pending(db, round_comments(db, rnd, db.get(UploadRequest, rnd.request_id)), now)
     if waiting:
         raise ImagesPending(waiting)
+    req = db.get(UploadRequest, rnd.request_id)
+    void_approvals_commented_after(db, round_comments(db, rnd, req))  # before the agent can see the round
     rnd.closed_at, rnd.closed_by = now, by
     db.flush()
-    req = db.get(UploadRequest, rnd.request_id)
     flat = [{"comment_id": str(c.id), "t_start": c.timecode_start, "text": c.body} for c in round_comments(db, rnd, req)]
     rnd.rule_suggestions = rule_candidates(rnd.id, flat)
     db.commit()
     return rnd
+
+
+def void_approvals_commented_after(db: Session, comments: list[Comment]) -> None:
+    """A closed round of human comments on a version that was approved earlier takes that approval back (the same
+    undo as a person's: unsent deliveries go, a link already handed on stays). Comments older than the approval
+    do not count: approving after commenting is the person saying the comments are settled."""
+    try:
+        from ..routers.approvals import remove_approval
+        newest: dict[tuple, datetime] = {}
+        for c in comments:
+            key = (c.asset_id, c.version_id)
+            newest[key] = max(newest.get(key, c.created_at), c.created_at)
+        for (asset_id, version_id), commented_at in newest.items():
+            asset = db.get(Asset, asset_id)
+            held = db.query(Approval).filter(Approval.version_id == version_id, Approval.status == ApprovalStatus.approved,
+                                             Approval.deleted_at.is_(None), Approval.created_at < commented_at).all()
+            for user_id in {a.user_id for a in held}:
+                remove_approval(db, asset, user_id, version_id)
+    except Exception:  # noqa: BLE001 - the round is closed either way; the lock then simply asks for reopen=true
+        db.rollback()
+        logger.warning("voiding approvals after round close failed", exc_info=True)
 
 
 def close_idle(db: Session, now: datetime) -> int:

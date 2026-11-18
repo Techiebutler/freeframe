@@ -65,6 +65,8 @@ app.add_middleware(
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SetupGuardMiddleware)
 
+from .services import approval_lock
+app.add_exception_handler(approval_lock.AlreadyApproved, approval_lock.handler)
 app.include_router(product_feedback.router)
 app.include_router(auth.router)
 app.include_router(users.router)

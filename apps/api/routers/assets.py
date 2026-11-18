@@ -18,6 +18,7 @@ from ..services.permissions import require_project_role, require_asset_access, c
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from .hls_proxy import create_hls_token
 from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, mime_to_asset_type
+from ..services import approval_lock
 from ..services.storage import upload_guard_error
 from ..services.s3_service import create_multipart_upload
 
@@ -308,6 +309,7 @@ def initiate_new_version(
     guard_error = upload_guard_error(db, body.file_size_bytes)
     if guard_error:
         raise HTTPException(status_code=400, detail=guard_error)
+    approval_lock.guard(db, asset_id, body.reopen)
 
     last_version = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset_id,

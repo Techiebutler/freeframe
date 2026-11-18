@@ -40,7 +40,7 @@ from ..models.folder import Folder
 from ..models.project import Project, ProjectMember, ProjectRole
 from ..models.share import ShareLink, SharePermission
 from ..models.branding import ProjectBranding
-from ..services import s3_service
+from ..services import approval_lock, s3_service
 from ..models.upload_request import RequestUpload, UploadRequest
 from ..models.user import GuestUser, User
 from ..schemas.upload import ALLOWED_MIME_TYPES, mime_to_asset_type
@@ -583,6 +583,7 @@ class GuestIdentity(BaseModel):
 class GuestInitiate(GuestIdentity):
     slot_id: Optional[str] = Field(default=None,max_length=80)
     asset_id: Optional[uuid.UUID] = None
+    reopen: bool = False
     original_filename: str = Field(min_length=1, max_length=500)
     mime_type: str
     file_size_bytes: int = Field(gt=0)
@@ -620,7 +621,9 @@ def guest_initiate(token: str, body: GuestInitiate, db: Session = Depends(get_db
     else:
         asset = db.query(Asset).filter(Asset.folder_id == req.folder_id, Asset.name == name,
                                        Asset.deleted_at.is_(None)).first()
-    if not asset:
+    if asset:
+        approval_lock.guard(db, asset.id, body.reopen)
+    else:
         asset = Asset(project_id=req.project_id, name=name, asset_type=mime_to_asset_type(body.mime_type),
                       created_by=req.created_by, folder_id=req.folder_id, iteration_source=bool(slot))
         db.add(asset)
