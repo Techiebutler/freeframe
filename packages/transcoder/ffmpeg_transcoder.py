@@ -42,6 +42,23 @@ FFMPEG_ENCODE_TIMEOUT_SECONDS = max(600, int(os.getenv("FFMPEG_ENCODE_TIMEOUT_SE
 FFMPEG_ENCODE_TIMEOUT_MAX_SECONDS = 14400
 
 
+# Review proxy rung: the embed/share player starts here (see apps/web/lib/hls-review.ts).
+PROXY_QUALITY = "540p"
+PROXY_SHORT_SIDE = 540
+PROXY_MAXRATE = "2000k"
+PROXY_BUFSIZE = "4000k"
+# The same rung as ONE faststart MP4 next to the HLS output. The embed plays it with plain range
+# requests: one connection instead of a segment round trip every 2 s (the measured bottleneck).
+REVIEW_PROXY_NAME = "review_540.mp4"
+
+
+def _scale_filter(quality: str, box: str) -> str:
+    """The older rungs fit a landscape box; the proxy fixes the short side at 540."""
+    if quality == PROXY_QUALITY:
+        return f"scale='if(gt(iw,ih),-2,{PROXY_SHORT_SIDE})':'if(gt(iw,ih),{PROXY_SHORT_SIDE},-2)'"
+    return f"scale={box}:force_original_aspect_ratio=decrease"
+
+
 def encode_timeout_seconds(duration_seconds: Optional[float]) -> int:
     """Whole-encode timeout for a video of this length: 4x its duration, within [floor, 4 h]."""
     scaled = int(4 * (duration_seconds or 0))
@@ -182,15 +199,20 @@ class FFmpegTranscoder(BaseTranscoder):
             QUALITY_MAP = {
                 "1080p": ("1920:1080", 20),
                 "720p": ("1280:720", 22),
+                "540p": ("960:540", 23),
                 "360p": ("640:360", 26),
             }
             # qualities = [q for q in job.qualities if q in QUALITY_MAP]
             requested = [q for q in job.qualities if q in QUALITY_MAP]
             source_height = meta.height if meta else 0
 
+            # 540p is sized by its SHORT side (a 9:16 ad becomes 540x960, not 304x540), so it is
+            # eligible by the source's short side; the older rungs keep their height rule.
+            source_short = min(meta.width, meta.height) if meta else 0
             qualities = [
                 q for q in requested
-                if int(QUALITY_MAP[q][0].split(":")[1]) <= source_height
+                if (source_short >= PROXY_SHORT_SIDE if q == PROXY_QUALITY
+                    else int(QUALITY_MAP[q][0].split(":")[1]) <= source_height)
             ]
             if not qualities and requested:
                 qualities = [min(requested, key=lambda q: int(QUALITY_MAP[q][0].split(":")[1]))]
@@ -203,7 +225,7 @@ class FFmpegTranscoder(BaseTranscoder):
             split_outputs = "".join(f"[v{i}]" for i in range(len(qualities)))
             filter_complex = f"[v:0]split={len(qualities)}{split_outputs};"
             filter_complex += ";".join(
-                f"[v{i}]scale={QUALITY_MAP[q][0]}:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2[{q}]"
+                f"[v{i}]{_scale_filter(q, QUALITY_MAP[q][0])},pad=ceil(iw/2)*2:ceil(ih/2)*2[{q}]"
                 for i, q in enumerate(qualities)
             )
 
@@ -226,6 +248,16 @@ class FFmpegTranscoder(BaseTranscoder):
                     f"-threads:v:{i}", str(FFMPEG_THREADS),
                     "-force_key_frames", "expr:gte(t,n_forced*2)",
                 ]
+                if quality == PROXY_QUALITY:
+                    # Review proxy: ~2 Mbit/s cap and a keyframe every second, so a scrub lands
+                    # within a second of any point and the player never decodes a long GOP.
+                    fps_gop = str(max(1, round(meta.fps))) if meta and meta.fps else "30"
+                    ffmpeg_cmd += [
+                        f"-maxrate:v:{i}", PROXY_MAXRATE, f"-bufsize:v:{i}", PROXY_BUFSIZE,
+                        f"-g:v:{i}", fps_gop, f"-keyint_min:v:{i}", fps_gop, f"-sc_threshold:v:{i}", "0",
+                        f"-force_key_frames:v:{i}", "expr:gte(t,n_forced*1)",
+                        f"-b:a:{i}", "128k",
+                    ]
 
             segment_dir = hls_dir / "%v"
             ffmpeg_cmd += [
@@ -305,6 +337,26 @@ class FFmpegTranscoder(BaseTranscoder):
                     "ai_proxy remux failed for %s, continuing without it: %s",
                     job.output_s3_prefix, proxy_exc,
                 )
+
+            # 4.6. The 540p review proxy as a progressive MP4 (container remux, no re-encode).
+            # Best-effort like the AI proxy: without it the player falls back to the HLS ladder.
+            if PROXY_QUALITY in qualities:
+                try:
+                    playlist = hls_dir / str(qualities.index(PROXY_QUALITY)) / "playlist.m3u8"
+                    review_path = work_dir / REVIEW_PROXY_NAME
+                    self._run(
+                        ["ffmpeg", "-y", "-i", str(playlist), "-c", "copy", "-movflags", "+faststart", str(review_path)],
+                        timeout=300, label="ffmpeg",
+                    )
+                    self.s3.upload_file(
+                        str(review_path), self.bucket, f"{job.output_s3_prefix}/{REVIEW_PROXY_NAME}",
+                        ExtraArgs={"ContentType": "video/mp4", "CacheControl": "max-age=86400"},
+                    )
+                except Exception as proxy_exc:
+                    logger.warning(
+                        "review proxy remux failed for %s, continuing without it: %s",
+                        job.output_s3_prefix, proxy_exc,
+                    )
 
             # 5. Generate and upload thumbnail (using streaming URL).
             # Best-effort: the HLS renditions are already uploaded, so a poster
