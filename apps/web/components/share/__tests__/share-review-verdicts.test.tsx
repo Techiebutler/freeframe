@@ -104,6 +104,14 @@ describe('ShareReviewScreen verdicts', () => {
     expect(within(row).getByRole('button', { name: 'Reject' })).toBeInTheDocument()
   })
 
+  it('makes that row a size container, which the buttons\' labels are hidden against', async () => {
+    phone = true
+    renderScreen('approve')
+    await waitFor(() => expect(screen.getByTestId('share-verdict-row')).toBeInTheDocument(), { timeout: 3000 })
+
+    expect(screen.getByTestId('share-verdict-row').className.split(/\s+/)).toContain('[container-type:inline-size]')
+  })
+
   it('the first Approve opens the identity prompt; saving it stores the guest and sends the PUT', async () => {
     renderScreen('approve')
     await loaded()

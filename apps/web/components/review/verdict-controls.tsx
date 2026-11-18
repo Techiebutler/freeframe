@@ -21,6 +21,20 @@ const REMOVING_ROLES: readonly ProjectRole[] = ['editor', 'owner']
 const GENERIC_FAILURE = "Couldn't save your verdict. Try again."
 
 /**
+ * The phone row's classes, for whoever renders `variant="row"`. The row is a
+ * size container (`container-type: inline-size`) because the buttons choose
+ * between words and icons by how much room the row itself has, which is not a
+ * function of the viewport: the asset page's rail takes 52px of a phone's width
+ * and the share page has none. Without a container the query never matches and
+ * the labels stay, so a row that forgets the class is wide, not broken.
+ *
+ * The height is fixed on purpose: the page re-measures `--ff-stage-max` when the
+ * row appears and nothing in it may change that.
+ */
+export const VERDICT_ROW_CLASS =
+  'flex h-10 shrink-0 items-center overflow-x-auto border-b border-border bg-bg-secondary px-3 [container-type:inline-size]'
+
+/**
  * The buttons say what to do (Approve), the verdicts say what was done
  * (Approved), so these are not `VERDICT_LABEL`.
  */
@@ -78,7 +92,9 @@ export interface VerdictControlsProps {
   /**
    * `toolbar` sits in the asset page's top bar, which has no room for words:
    * the buttons are icons there, named by `aria-label` and `title`. `row` is
-   * the layout under it, a bar of its own, where the labels fit and always show.
+   * the layout under it, a bar of its own, where the labels show while they fit
+   * and fold back to the same icons when the row (a `VERDICT_ROW_CLASS`
+   * container) has under 380px inside its padding, as on a phone.
    */
   variant?: 'toolbar' | 'row'
 }
@@ -346,7 +362,14 @@ export function VerdictControlsView({
                     onClick={(event) => void press(status, event.currentTarget)}
                     className={cn(
                       'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border text-xs font-medium',
-                      variant === 'toolbar' ? 'w-8' : 'px-2',
+                      // The row's buttons are square, like the toolbar's, once the
+                      // row has no room for words. Whole class strings, for Tailwind;
+                      // the 380px matches the label's below. The labeled row with an
+                      // indicator needs about 350px, so this leaves room for a
+                      // two-digit count and for the font rendering a little wider.
+                      variant === 'toolbar'
+                        ? 'w-8'
+                        : 'px-2 [@container(max-width:380px)]:w-8 [@container(max-width:380px)]:px-0',
                       'outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent',
                       'disabled:cursor-not-allowed disabled:opacity-50',
                       pressed
@@ -355,7 +378,8 @@ export function VerdictControlsView({
                     )}
                   >
                     <Icon aria-hidden className="h-3.5 w-3.5" />
-                    {variant === 'row' && <span>{label}</span>}
+                    {/* Hidden, not removed: the name is `aria-label` either way. */}
+                    {variant === 'row' && <span className="[@container(max-width:380px)]:hidden">{label}</span>}
                   </button>
                 )
               })}

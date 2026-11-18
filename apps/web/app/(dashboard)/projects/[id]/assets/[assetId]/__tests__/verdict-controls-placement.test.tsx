@@ -199,6 +199,12 @@ describe('the verdict controls on the asset page', () => {
       expect(classes).toContain('shrink-0')
     })
 
+    it('make the row a size container, which the buttons\' labels are hidden against', () => {
+      renderPage()
+
+      expect(screen.getByTestId('verdict-row').className.split(/\s+/)).toContain('[container-type:inline-size]')
+    })
+
     it('are there for a viewer too, who has only the indicator to show', () => {
       screenState.role = 'viewer'
       renderPage()

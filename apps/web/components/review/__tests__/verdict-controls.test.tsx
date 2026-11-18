@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SWRConfig } from 'swr'
-import { VerdictControls } from '../verdict-controls'
+import { VerdictControls, VERDICT_ROW_CLASS } from '../verdict-controls'
 import { ApiError } from '@/lib/api'
 import type { ProjectRole, Verdict } from '@/types'
 
@@ -527,6 +527,54 @@ describe('VerdictControls', () => {
       // Still named for assistive tech and as a tooltip, with no words in the bar.
       expect(button('Changes needed').textContent).toBe('')
       expect(button('Changes needed')).toHaveAttribute('title', 'Changes needed')
+    })
+
+    // jsdom has no layout, so a container query cannot be run here: these pin
+    // the classes that carry it, and the real widths were measured in a browser.
+    describe('when the row has no room for words', () => {
+      const NARROW = '[@container(max-width:380px)]'
+
+      it('hides each label by the row\'s own width, and squares the button, without renaming it', async () => {
+        served[KEY_V1] = [myApproval]
+        renderControls({ variant: 'row' })
+        await waitFor(() => expect(button('Approve')).toHaveAttribute('aria-pressed', 'true'))
+
+        for (const name of ['Approve', 'Changes needed', 'Reject']) {
+          const btn = button(name)
+          // The label is still in the tree, so the name does not depend on it.
+          const label = within(btn).getByText(name)
+          expect(label).toHaveClass(`${NARROW}:hidden`)
+          expect(btn).toHaveAccessibleName(name)
+          expect(btn).toHaveAttribute('title', name)
+          // At least 32px tall always, and 32px wide once the label is gone.
+          expect(btn).toHaveClass('h-8', `${NARROW}:w-8`, `${NARROW}:px-0`)
+        }
+      })
+
+      it('keeps what is pressed, pressed', async () => {
+        served[KEY_V1] = [myChanges]
+        renderControls({ variant: 'row' })
+
+        await waitFor(() => expect(button('Changes needed')).toHaveAttribute('aria-pressed', 'true'))
+        expect(button('Approve')).toHaveAttribute('aria-pressed', 'false')
+        expect(button('Reject')).toHaveAttribute('aria-pressed', 'false')
+      })
+
+      it('puts nothing for the query on the top bar, which is icons already', () => {
+        renderControls({ variant: 'toolbar' })
+
+        for (const name of ['Approve', 'Changes needed', 'Reject']) {
+          expect(button(name).className).not.toContain('@container')
+        }
+      })
+
+      it('is asked of the row, which is a size container and keeps its one fixed height', () => {
+        const classes = VERDICT_ROW_CLASS.split(/\s+/)
+
+        expect(classes).toContain('[container-type:inline-size]')
+        expect(classes).toContain('h-10')
+        expect(classes).toContain('shrink-0')
+      })
     })
   })
 })

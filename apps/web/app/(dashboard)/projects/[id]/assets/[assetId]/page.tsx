@@ -15,7 +15,7 @@ import { AnnotationOverlay } from '@/components/review/annotation-overlay'
 import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
 import { VersionSwitcher } from '@/components/review/version-switcher'
-import { VerdictControls } from '@/components/review/verdict-controls'
+import { VERDICT_ROW_CLASS, VerdictControls } from '@/components/review/verdict-controls'
 import { ShareDialog } from '@/components/review/share-dialog'
 import { CompareOverlay } from '@/components/review/compare/compare-overlay'
 import { useReviewStore } from '@/stores/review-store'
@@ -745,7 +745,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       {showsVerdictRow && (
         <div
           data-testid="verdict-row"
-          className="flex h-10 shrink-0 items-center overflow-x-auto border-b border-border bg-bg-secondary px-3"
+          className={VERDICT_ROW_CLASS}
         >
           {verdictControls}
         </div>

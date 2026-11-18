@@ -22,6 +22,7 @@ import type { SharePermission } from '@/types'
 import { fetchShareDownloadOptions, handleDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
 import { ShareBrandMark } from './share-brand-mark'
+import { VERDICT_ROW_CLASS } from '@/components/review/verdict-controls'
 import { ShareVerdictControls } from './share-verdict-controls'
 
 /** Signed in, or a guest who has already given a name and email. */
@@ -386,7 +387,7 @@ function ShareReviewInner({
       {showsVerdictRow && (
         <div
           data-testid="share-verdict-row"
-          className="flex h-10 shrink-0 items-center overflow-x-auto border-b border-border bg-bg-secondary px-3"
+          className={VERDICT_ROW_CLASS}
         >
           {verdictControls('row')}
         </div>
