@@ -92,7 +92,7 @@ describe('refreshAccessTokenQuietly', () => {
   it.each([401, 403])('keeps the tokens and stays on the page when the refresh is refused (%i)', async (status) => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status })))
 
-    await expect(quietly()).resolves.toBeNull()
+    await expect(quietly()).resolves.toEqual({ failed: 'refused' })
     expect(sessionSurvived()).toBe(true)
     expect(store['ff_access_token']).toBe('old-access')
     expect(location.href).toBe('')
@@ -103,7 +103,7 @@ describe('refreshAccessTokenQuietly', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(quietly()).resolves.toBeNull()
+    await expect(quietly()).resolves.toEqual({ failed: 'refused' })
     expect(fetchMock).not.toHaveBeenCalled()
     expect(store['ff_access_token']).toBe('old-access')
     expect(location.href).toBe('')
@@ -112,7 +112,15 @@ describe('refreshAccessTokenQuietly', () => {
   it('stays on the page offline', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
 
-    await expect(quietly()).resolves.toBeNull()
+    await expect(quietly()).resolves.toEqual({ failed: 'transient' })
+    expect(sessionSurvived()).toBe(true)
+    expect(location.href).toBe('')
+  })
+
+  it.each([500, 502, 429])('calls a %i transient, and keeps the session', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status })))
+
+    await expect(quietly()).resolves.toEqual({ failed: 'transient' })
     expect(sessionSurvived()).toBe(true)
     expect(location.href).toBe('')
   })
@@ -123,7 +131,7 @@ describe('refreshAccessTokenQuietly', () => {
       json: async () => ({ access_token: 'fresh', refresh_token: 'rotated' }),
     })))
 
-    await expect(quietly()).resolves.toBe('fresh')
+    await expect(quietly()).resolves.toEqual({ token: 'fresh' })
     expect(store['ff_access_token']).toBe('fresh')
     expect(store['ff_refresh_token']).toBe('rotated')
   })

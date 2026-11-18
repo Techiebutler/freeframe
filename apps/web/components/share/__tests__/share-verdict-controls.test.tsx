@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SWRConfig } from 'swr'
 import { ShareVerdictControls } from '../share-verdict-controls'
+import { resetShareRequestState } from '@/lib/share-request'
 import type { Verdict } from '@/types'
 
 const { signInAgain } = vi.hoisted(() => ({ signInAgain: vi.fn() }))
@@ -44,12 +45,21 @@ let writeAnswer: { status: number; body?: unknown }
 let listed: Verdict[]
 /** What POST /auth/refresh answers; `null` is no network. */
 let refreshAnswer: { status: number; body?: unknown } | null
+/** Answers used, in order, before `refreshAnswer` / `writeAnswer`. */
+let refreshQueue: Array<{ status: number; body?: unknown } | null>
+let writeQueue: Array<{ status: number; body?: unknown }>
+/** When set, GET answers by who asked, as the server scopes it. */
+let listedFor: ((call: Call) => Verdict[]) | null
 
 beforeEach(() => {
   localStorage.clear()
   calls = []
   refreshes = 0
   listed = []
+  refreshQueue = []
+  writeQueue = []
+  listedFor = null
+  resetShareRequestState()
   writeAnswer = { status: 200, body: {} }
   refreshAnswer = { status: 401, body: { detail: 'Invalid refresh token' } }
   signInAgain.mockClear()
@@ -59,17 +69,23 @@ beforeEach(() => {
       const method = init.method ?? 'GET'
       if (input.endsWith('/auth/refresh')) {
         refreshes += 1
-        if (!refreshAnswer) throw new TypeError('Failed to fetch')
-        const answer = refreshAnswer
+        const answer = refreshQueue.length ? refreshQueue.shift() : refreshAnswer
+        if (!answer) throw new TypeError('Failed to fetch')
         return { ok: answer.status === 200, status: answer.status, json: async () => answer.body }
       }
-      calls.push({
+      const call: Call = {
         method,
         url: new URL(input),
         headers: (init.headers ?? {}) as Record<string, string>,
         body: typeof init.body === 'string' ? JSON.parse(init.body) : null,
-      })
-      const answer = method === 'GET' ? { status: 200, body: listed } : writeAnswer
+      }
+      calls.push(call)
+      const answer =
+        method === 'GET'
+          ? { status: 200, body: listedFor ? listedFor(call) : listed }
+          : writeQueue.length
+            ? writeQueue.shift()!
+            : writeAnswer
       return {
         ok: answer.status >= 200 && answer.status < 300,
         status: answer.status,
@@ -214,11 +230,7 @@ describe('ShareVerdictControls', () => {
       expect(writes()[0].body).not.toHaveProperty('guest_name')
     })
 
-    it.each([
-      ['refused', { status: 401, body: { detail: 'Invalid refresh token' } }],
-      ['offline', null],
-    ])('that will not refresh (%s) sends nothing and says so, with a stored guest', async (_, answer) => {
-      refreshAnswer = answer
+    it('that is refused sends nothing and says so, with a stored guest', async () => {
       const requestIdentity = vi.fn(async () => null)
       render(ui({ guestIdentity: dana, requestIdentity }))
 
@@ -233,6 +245,60 @@ describe('ShareVerdictControls', () => {
         'href',
         `/login?from=${encodeURIComponent(window.location.pathname + window.location.search)}`,
       )
+    })
+
+    // A refresh that got no answer is a "try again", not a "sign in again".
+    it('whose refresh gets no answer says to try again, with no sign-in choice and the tokens untouched', async () => {
+      const stale = localStorage.getItem('ff_access_token')
+      refreshAnswer = null
+      render(ui({ guestIdentity: dana }))
+
+      await userEvent.click(button('Approve'))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't reach the server. Try again.")
+      expect(writes()).toHaveLength(0)
+      expect(screen.queryByRole('link', { name: 'Sign in' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Continue as guest' })).toBeNull()
+      expect(localStorage.getItem('ff_access_token')).toBe(stale)
+      expect(localStorage.getItem('ff_refresh_token')).toBe('the-refresh-token')
+    })
+
+    // Fix round 1, issue 2: the stored guest's verdict must not show as this
+    // signed-in person's, or pressing it would clear their own instead.
+    it('that will not refresh reads as nobody: no bearer, no guest email, nothing pressed', async () => {
+      const guestsApproval = makeVerdict({ id: 'g1', status: 'approved', is_mine: true })
+      listedFor = (call) => (call.url.searchParams.get('guest_email') ? [guestsApproval] : [])
+      render(ui({ guestIdentity: dana }))
+
+      await waitFor(() => expect(gets()).toHaveLength(1))
+      const get = gets()[0]
+      expect(get.headers.Authorization).toBeUndefined()
+      expect(get.url.searchParams.has('guest_email')).toBe(false)
+      expect(button('Approve')).toHaveAttribute('aria-pressed', 'false')
+    })
+
+    it('refreshed at the press decides clear-or-give against their own verdict, not the list read before', async () => {
+      // The page's read got no answer from /auth/refresh, so it read as nobody;
+      // the press's refresh works, and they had already approved.
+      refreshQueue = [null]
+      const fresh = jwt(3600)
+      refreshAnswer = { status: 200, body: { access_token: fresh, refresh_token: 'rotated' } }
+      const theirApproval = makeVerdict({ id: 'u1', status: 'approved', is_mine: true })
+      const guestsRejection = makeVerdict({ id: 'g1', status: 'rejected', is_mine: true })
+      listedFor = (call) =>
+        call.headers.Authorization ? [theirApproval] : call.url.searchParams.get('guest_email') ? [guestsRejection] : []
+      writeAnswer = { status: 204 }
+      render(ui({ guestIdentity: dana }))
+      await waitFor(() => expect(gets()).toHaveLength(1))
+      expect(button('Approve')).toHaveAttribute('aria-pressed', 'false')
+
+      await userEvent.click(button('Approve'))
+
+      // Approve was theirs already, so pressing it is the undo, as them.
+      await waitFor(() => expect(writes()).toHaveLength(1))
+      expect(writes()[0].method).toBe('DELETE')
+      expect(writes()[0].headers.Authorization).toBe(`Bearer ${fresh}`)
+      expect(writes()[0].url.searchParams.has('guest_email')).toBe(false)
     })
 
     it('"Continue as guest" then sends the stored guest with no Authorization', async () => {
@@ -301,20 +367,44 @@ describe('ShareVerdictControls', () => {
     })
   })
 
-  // A bearer the server could not resolve (revoked, say) gets the same choice.
-  it('offers the same choice when the server answers the stale sign-in 401', async () => {
-    localStorage.setItem('ff_access_token', jwt(3600))
-    writeAnswer = {
-      status: 401,
-      body: { detail: 'Your sign-in has expired. Sign in again or continue as a guest.' },
-    }
-    render(ui({ guestIdentity: dana }))
+  // A bearer the server could not resolve (revoked, say) gets the same choice,
+  // once a refresh and a retry have not fixed it.
+  describe('a bearer the server refuses', () => {
+    beforeEach(() => {
+      localStorage.setItem('ff_access_token', jwt(3600))
+      localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+      writeQueue = [{ status: 401, body: { detail: 'Your sign-in has expired. Sign in again or continue as a guest.' } }]
+    })
 
-    await userEvent.click(button('Approve'))
+    // Fix round 1, issue 1: this used to send the same bearer again, forever.
+    it('"Continue as guest" then really goes as the guest: guest fields, no Authorization', async () => {
+      refreshAnswer = { status: 403, body: { detail: 'User is deactivated' } }
+      render(ui({ guestIdentity: dana }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Your sign-in has expired.')
-    expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument()
-    expect(button('Continue as guest')).toBeInTheDocument()
+      await userEvent.click(button('Approve'))
+      expect(await screen.findByRole('alert')).toHaveTextContent('Your sign-in has expired.')
+      expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument()
+
+      await userEvent.click(button('Continue as guest'))
+
+      await waitFor(() => expect(writes()).toHaveLength(2))
+      expect(writes()[1].headers.Authorization).toBeUndefined()
+      expect(writes()[1].body).toMatchObject({ guest_name: 'Dana', guest_email: 'dana@client.example' })
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    })
+
+    it('is refreshed and retried once, and the verdict lands under the new bearer', async () => {
+      const fresh = jwt(7200)
+      refreshAnswer = { status: 200, body: { access_token: fresh, refresh_token: 'rotated' } }
+      render(ui({ guestIdentity: dana }))
+
+      await userEvent.click(button('Approve'))
+
+      await waitFor(() => expect(writes()).toHaveLength(2))
+      expect(writes()[1].headers.Authorization).toBe(`Bearer ${fresh}`)
+      expect(writes()[1].body).not.toHaveProperty('guest_email')
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
   })
 
   it('offers no sign-in actions for any other failure', async () => {

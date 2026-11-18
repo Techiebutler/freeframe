@@ -131,9 +131,11 @@ export interface VerdictControlsViewProps {
   revalidate: () => Promise<unknown>
   /**
    * Runs before a press does anything, and a `false` stops it quietly: no
-   * request, no note box. The share page asks a guest who they are here.
+   * request, no note box. The share page asks a guest who they are here. A
+   * list instead of `true` goes on, deciding clear-or-give against that list:
+   * the share page re-reads after a refreshed sign-in changes who is pressing.
    */
-  beforePress?: () => Promise<boolean>
+  beforePress?: () => Promise<boolean | Verdict[]>
   /**
    * Extra actions under a failure's message, given the error the call threw.
    * `retry` runs the failed call again (closing the note box once it lands);
@@ -207,21 +209,23 @@ export function VerdictControlsView({
 
   const press = async (status: VerdictValue, asksForNote: boolean, from: HTMLButtonElement) => {
     if (gating.current) return
+    let current = mine
     if (beforePress) {
       gating.current = true
-      let go = false
+      let gate: boolean | Verdict[] = false
       try {
-        go = await beforePress()
+        gate = await beforePress()
       } finally {
         gating.current = false
       }
-      if (!go) return
+      if (gate === false) return
+      if (Array.isArray(gate)) current = gate.find((v) => v.is_mine)
     }
     lastPressed.current = from
     setError(null)
 
     // The pressed button, pressed again, is the undo.
-    if (mine?.status === status) {
+    if (current?.status === status) {
       setAsking(null)
       void run(clear)
       return

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ShareReviewScreen } from '../share-review-screen'
+import { resetShareRequestState } from '@/lib/share-request'
 import type { SharePermission } from '@/types'
 
 // Where the client gives a verdict from a share link: the screen mounts the
@@ -15,6 +16,7 @@ let phone = false
 
 beforeEach(() => {
   localStorage.clear()
+  resetShareRequestState()
   calls = []
   phone = false
   vi.stubGlobal(

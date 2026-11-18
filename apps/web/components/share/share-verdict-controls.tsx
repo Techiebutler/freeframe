@@ -6,7 +6,8 @@ import { VerdictControlsView } from '@/components/review/verdict-controls'
 import { signInAgain } from '@/lib/auth'
 import { withBasePath } from '@/lib/base-path'
 import {
-  hasStoredToken, hasUsableToken, isSignInExpired, shareRequest, type ShareGuest,
+  continueAsGuest, hasChosenGuest, hasStoredToken, isSignInExpired, prepareShareWrite, shareCallerKey,
+  shareRequest, type ShareGuest,
 } from '@/lib/share-request'
 import type { Verdict, VerdictValue } from '@/types'
 
@@ -62,21 +63,23 @@ function ShareVerdictControlsFor({
   // on the next render (the screen stores what was saved), but the press that
   // asked is already running with the old one.
   const named = React.useRef<ShareGuest | null>(null)
-  // Set by "Continue as guest": with no usable sign-in, the writes go as the
-  // guest instead of refreshing. A usable bearer still wins (`shareRequest`).
-  const asGuest = React.useRef(false)
+  // Mirrors `hasChosenGuest()` (page-wide, in `lib/share-request`) so that
+  // choosing it renders again and the read below moves to the guest's key.
+  const [, setGuestChosen] = React.useState(hasChosenGuest)
 
-  const signedIn = hasUsableToken()
-  const key = shareVerdictsKey(
-    token, assetId, versionId, shareSession, signedIn ? 'bearer' : guestIdentity?.email ?? null,
-  )
-  const { data } = useSWR<Verdict[]>(key, () =>
-    shareRequest<Verdict[]>(
-      token,
-      `/verdicts?asset_id=${encodeURIComponent(assetId)}&version_id=${encodeURIComponent(versionId)}`,
-      { method: 'GET', shareSession, guest: guestIdentity },
-    ),
-  )
+  /** The guest to send as, read at call time so a just-saved identity counts. */
+  const sendAs = () => guestIdentity ?? named.current
+
+  const listPath =
+    `/verdicts?asset_id=${encodeURIComponent(assetId)}&version_id=${encodeURIComponent(versionId)}`
+  const readList = (guest: ShareGuest | null) =>
+    shareRequest<Verdict[]>(token, listPath, { method: 'GET', shareSession, guest })
+
+  // Who the read goes as is part of the key (`shareCallerKey`): the list is
+  // scoped to the caller, so naming yourself, a sign-in refreshing or lapsing,
+  // or choosing to go on as a guest, reads it again.
+  const key = shareVerdictsKey(token, assetId, versionId, shareSession, shareCallerKey(guestIdentity))
+  const { data } = useSWR<Verdict[]>(key, () => readList(guestIdentity))
 
   const { mutate } = useSWRConfig()
   // Every identity's key for this version, not only the one this render read:
@@ -86,9 +89,6 @@ function ShareVerdictControlsFor({
       (k) =>
         Array.isArray(k) && k[0] === SHARE_VERDICTS && k[1] === token && k[2] === assetId && k[3] === versionId,
     )
-
-  /** The guest to send as, read at call time so a just-saved identity counts. */
-  const sendAs = () => guestIdentity ?? named.current
 
   /** Asks for a guest identity; false when the prompt was cancelled. */
   const askWhoTheyAre = async (): Promise<boolean> => {
@@ -103,8 +103,18 @@ function ShareVerdictControlsFor({
   // quietly turned into a guest's. So does a guest who has named themselves.
   // Only someone with neither is asked for a name first, and a cancelled
   // prompt sends nothing.
-  const beforePress = async (): Promise<boolean> => {
-    if (hasStoredToken() || sendAs()) return true
+  //
+  // A lapsed sign-in is refreshed here, before the press decides anything: the
+  // list on screen was read as nobody, and whether this press clears or gives
+  // must be decided against the person's own verdict, read again as them.
+  const beforePress = async (): Promise<boolean | Verdict[]> => {
+    if (hasStoredToken()) {
+      if ((await prepareShareWrite()) === 'unchanged') return true
+      const fresh = await readList(sendAs()).catch(() => null)
+      void revalidate()
+      return fresh ?? true
+    }
+    if (sendAs()) return true
     return askWhoTheyAre()
   }
 
@@ -137,7 +147,8 @@ function ShareVerdictControlsFor({
               dismiss()
               if (!(await askWhoTheyAre())) return
             }
-            asGuest.current = true
+            continueAsGuest()
+            setGuestChosen(true)
             await retry()
           }}
           className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium text-text-secondary
@@ -163,14 +174,13 @@ function ShareVerdictControlsFor({
           body: { version_id: versionId, asset_id: assetId, status, ...(note ? { note } : {}) },
           shareSession,
           guest: sendAs(),
-          asGuest: asGuest.current,
         })
       }
       clear={() =>
         shareRequest(
           token,
           `/verdict?version_id=${encodeURIComponent(versionId)}&asset_id=${encodeURIComponent(assetId)}`,
-          { method: 'DELETE', shareSession, guest: sendAs(), asGuest: asGuest.current },
+          { method: 'DELETE', shareSession, guest: sendAs() },
         )
       }
       revalidate={revalidate}

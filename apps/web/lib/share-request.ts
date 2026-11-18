@@ -9,7 +9,10 @@ const FALLBACK_DETAIL = 'Request failed'
  *  for the same case when the client finds out first. */
 export const SIGN_IN_EXPIRED = 'Your sign-in has expired. Sign in again or continue as a guest.'
 
-/** A write refused (or never sent) because the sign-in has lapsed. */
+/** A refresh that got no answer worth acting on: nothing to sign in again for. */
+export const SERVER_UNREACHABLE = "Couldn't reach the server. Try again."
+
+/** A write refused (or never sent) because the sign-in has lapsed for good. */
 export function isSignInExpired(err: unknown): boolean {
   return (err as { status?: unknown } | null | undefined)?.status === 401
 }
@@ -17,6 +20,37 @@ export function isSignInExpired(err: unknown): boolean {
 export interface ShareGuest {
   name: string
   email: string
+}
+
+// ─── Who a share request goes out as ────────────────────────────────────────
+//
+// Module state, so it holds for the page: every verdict control on it, and
+// every version, agrees on it.
+
+/**
+ * Bearers the server refused even after a refresh, by token string. Such a
+ * token is never sent again and never refreshed again. Only that token: a new
+ * one in storage (signed in again, in this tab or another) is used as normal.
+ */
+const refusedBearers = new Set<string>()
+
+/** Set by "Continue as guest": a lapsed or refused sign-in reads and writes as
+ *  the guest. A usable bearer still wins. */
+let choseGuest = false
+
+/** The person chose "Continue as guest" over signing in again. */
+export function continueAsGuest(): void {
+  choseGuest = true
+}
+
+export function hasChosenGuest(): boolean {
+  return choseGuest
+}
+
+/** For tests: forget refused bearers and the guest choice. */
+export function resetShareRequestState(): void {
+  refusedBearers.clear()
+  choseGuest = false
 }
 
 function storedAccessToken(): string | null {
@@ -27,10 +61,10 @@ function storedAccessToken(): string | null {
   }
 }
 
-/** The stored access token, when there is one and it has not run out. */
+/** The stored access token, when it is unexpired and not known to be refused. */
 function usableAccessToken(): string | null {
   const token = storedAccessToken()
-  return token && !isExpiringSoon(token) ? token : null
+  return token && !isExpiringSoon(token) && !refusedBearers.has(token) ? token : null
 }
 
 /**
@@ -42,33 +76,78 @@ export function hasStoredToken(): boolean {
   return !!storedAccessToken()
 }
 
-/**
- * Whether a share request will go out as the signed-in user. The one rule for
- * both "do I send the bearer?" and "do I need to ask who this is?", so the two
- * cannot disagree: a lapsed login is not a sign-in, and a guest identity left
- * in storage must never stand in for a login that is still good.
- */
+/** Whether a share request would go out with the stored bearer as it stands. */
 export function hasUsableToken(): boolean {
   return usableAccessToken() !== null
 }
 
 /**
+ * Who a read would go as right now, for a cache key: `bearer`, the guest's
+ * email, `lapsed` (a sign-in that is not usable: read as nobody), or `nobody`.
+ */
+export function shareCallerKey(guest: ShareGuest | null | undefined): string {
+  if (usableAccessToken()) return 'bearer'
+  if (storedAccessToken() && !choseGuest) return 'lapsed'
+  return guest ? `guest:${guest.email}` : 'nobody'
+}
+
+type Caller =
+  | { kind: 'bearer'; token: string }
+  | { kind: 'guest' }
+  /** A lapsed sign-in reading: no bearer, and not the guest either. */
+  | { kind: 'nobody' }
+  | { kind: 'failed'; why: 'refused' | 'transient' }
+
+/**
+ * Who this request goes as. A lapsed sign-in is never turned into a guest
+ * behind the person's back, so a team member's verdict is never counted (or
+ * shown) as a guest's:
+ * - No token stored: the guest.
+ * - A usable token: it.
+ * - Otherwise, unless they chose "Continue as guest", one quiet refresh. A new
+ *   token is used. A refused one marks the stale token refused, so it is not
+ *   refreshed again. Then a read goes as nobody, and a write fails.
+ */
+async function resolveCaller(): Promise<Caller> {
+  const stored = storedAccessToken()
+  if (!stored) return { kind: 'guest' }
+  const usable = usableAccessToken()
+  if (usable) return { kind: 'bearer', token: usable }
+  if (choseGuest) return { kind: 'guest' }
+  if (refusedBearers.has(stored)) return { kind: 'failed', why: 'refused' }
+
+  const outcome = await refreshAccessTokenQuietly()
+  if ('token' in outcome && !refusedBearers.has(outcome.token)) return { kind: 'bearer', token: outcome.token }
+  if ('token' in outcome || outcome.failed === 'refused') {
+    refusedBearers.add(stored)
+    return { kind: 'failed', why: 'refused' }
+  }
+  return { kind: 'failed', why: 'transient' }
+}
+
+function failure(why: 'refused' | 'transient'): Error {
+  return why === 'refused'
+    ? Object.assign(new Error(SIGN_IN_EXPIRED), { status: 401, detail: SIGN_IN_EXPIRED })
+    : Object.assign(new Error(SERVER_UNREACHABLE), { detail: SERVER_UNREACHABLE })
+}
+
+/**
  * One call to a share-link route, `/share/{token}{path}`.
  *
- * The bearer goes only when it is present and unexpired. Only without it do
- * the guest's fields go: name and email in the body of a PUT, the email alone
- * in the query of a GET or DELETE. A failure throws the server's string
+ * The bearer goes only when it is usable (`resolveCaller`). Only the guest
+ * sends the guest's fields: name and email in the body of a PUT, the email
+ * alone in the query of a GET or DELETE. A failure throws the server's string
  * `detail` (as `message` and `detail`), or "Request failed".
  *
- * A lapsed sign-in is never turned into a guest behind the person's back (a
- * team member's verdict must not be counted as a guest's):
- * - A write (PUT, DELETE) first refreshes the sign-in, quietly, without
- *   leaving the page. If that works it goes with the new bearer. If not,
- *   nothing is sent and it throws `SIGN_IN_EXPIRED` with status 401, and the
- *   caller asks them to sign in again or continue as a guest.
- * - `asGuest` is that explicit choice: with no usable bearer, go as the guest
- *   without trying to refresh. A usable bearer still wins.
- * - A read goes as the guest, with no refresh and no question.
+ * - A write whose sign-in has lapsed and will not refresh sends nothing. It
+ *   throws `SIGN_IN_EXPIRED` (status 401) when the refresh was refused, so the
+ *   caller can offer "Sign in" or "Continue as guest". It throws
+ *   `SERVER_UNREACHABLE` when the refresh got no answer.
+ * - A write the server answers 401 for a bearer (expired by the server's
+ *   clock, a deactivated user, a rotated secret) refreshes once and retries
+ *   once. If that does not work, that bearer is remembered as refused.
+ * - A read never asks. With a lapsed sign-in that will not refresh, it goes as
+ *   nobody: neither the bearer nor the guest's email, so nothing reads as theirs.
  */
 export async function shareRequest<T>(
   token: string,
@@ -78,36 +157,56 @@ export async function shareRequest<T>(
     body?: object
     shareSession?: string | null
     guest?: ShareGuest | null
-    /** They chose "Continue as guest" over signing in again. */
-    asGuest?: boolean
   },
 ): Promise<T> {
-  let bearer = usableAccessToken()
-  if (!bearer && hasStoredToken() && init.method !== 'GET' && !init.asGuest) {
-    bearer = await refreshAccessTokenQuietly()
-    if (!bearer) {
-      throw Object.assign(new Error(SIGN_IN_EXPIRED), { status: 401, detail: SIGN_IN_EXPIRED })
+  const isRead = init.method === 'GET'
+  const caller = await resolveCaller()
+  if (caller.kind === 'failed' && !isRead) throw failure(caller.why)
+
+  const send = (bearer: string | null) => {
+    const guest = caller.kind === 'guest' ? init.guest ?? null : null
+
+    const url = new URL(`${API_URL}/share/${encodeURIComponent(token)}${path}`)
+    if (init.shareSession) url.searchParams.set('share_session', init.shareSession)
+    if (guest && init.method !== 'PUT') url.searchParams.set('guest_email', guest.email)
+
+    const headers: Record<string, string> = {}
+    if (bearer) headers.Authorization = `Bearer ${bearer}`
+
+    let body: string | undefined
+    if (init.method === 'PUT') {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify({
+        ...(init.body ?? {}),
+        ...(guest ? { guest_name: guest.name, guest_email: guest.email } : {}),
+      })
+    }
+    return fetch(url.toString(), { method: init.method, headers, body })
+  }
+
+  const bearer = caller.kind === 'bearer' ? caller.token : null
+  let res = await send(bearer)
+
+  if (res.status === 401 && bearer && !isRead) {
+    // The server's clock, not ours, says when a token has expired, and a token
+    // can be refused before then. /auth/refresh does not look at the access
+    // token, so one refresh and one retry recovers the first; anything else
+    // marks this bearer refused, and "Continue as guest" can then drop it.
+    const outcome = await refreshAccessTokenQuietly()
+    if ('token' in outcome && outcome.token !== bearer && !refusedBearers.has(outcome.token)) {
+      res = await send(outcome.token)
+      if (res.status === 401) {
+        refusedBearers.add(bearer)
+        refusedBearers.add(outcome.token)
+        throw failure('refused')
+      }
+    } else if ('failed' in outcome && outcome.failed === 'transient') {
+      throw failure('transient')
+    } else {
+      refusedBearers.add(bearer)
+      throw failure('refused')
     }
   }
-  const guest = bearer ? null : init.guest ?? null
-
-  const url = new URL(`${API_URL}/share/${encodeURIComponent(token)}${path}`)
-  if (init.shareSession) url.searchParams.set('share_session', init.shareSession)
-  if (guest && init.method !== 'PUT') url.searchParams.set('guest_email', guest.email)
-
-  const headers: Record<string, string> = {}
-  if (bearer) headers.Authorization = `Bearer ${bearer}`
-
-  let body: string | undefined
-  if (init.method === 'PUT') {
-    headers['Content-Type'] = 'application/json'
-    body = JSON.stringify({
-      ...(init.body ?? {}),
-      ...(guest ? { guest_name: guest.name, guest_email: guest.email } : {}),
-    })
-  }
-
-  const res = await fetch(url.toString(), { method: init.method, headers, body })
 
   if (!res.ok) {
     let detail: string | null = null
@@ -124,4 +223,17 @@ export async function shareRequest<T>(
 
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
+}
+
+/**
+ * Before a write: if the stored sign-in has lapsed, refresh it now. Says
+ * `refreshed` when the caller is now someone other than whoever the last read
+ * went as, so the clear-or-give decision can be made again against a fresh
+ * read of their own verdicts. Never asks and never throws.
+ */
+export async function prepareShareWrite(): Promise<'refreshed' | 'unchanged'> {
+  const stored = storedAccessToken()
+  if (!stored || usableAccessToken() || choseGuest || refusedBearers.has(stored)) return 'unchanged'
+  const caller = await resolveCaller()
+  return caller.kind === 'bearer' ? 'refreshed' : 'unchanged'
 }

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { hasStoredToken, hasUsableToken, isSignInExpired, shareRequest, SIGN_IN_EXPIRED } from '../share-request'
+import {
+  continueAsGuest, hasStoredToken, hasUsableToken, isSignInExpired, prepareShareWrite, resetShareRequestState,
+  SERVER_UNREACHABLE, shareCallerKey, shareRequest, SIGN_IN_EXPIRED,
+} from '../share-request'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -39,6 +42,7 @@ function respond(status: number, body?: unknown) {
 
 beforeEach(() => {
   localStorage.clear()
+  resetShareRequestState()
   fetchMock = vi.fn()
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -109,14 +113,11 @@ describe('shareRequest', () => {
     expect(body).toEqual({ version_id: 'v1', status: 'approved' })
   })
 
-  // ...and when it cannot, sends nothing and says so, rather than going as the guest.
-  it.each([
-    ['refused', () => respond(401, { detail: 'Invalid refresh token' })],
-    ['offline', () => fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))],
-  ])('with an expired token whose refresh is %s, sends nothing and throws the sign-in message', async (_, answer) => {
+  // ...and when it is refused, sends nothing and says so, rather than going as the guest.
+  it('with an expired token whose refresh is refused, sends nothing and throws the sign-in message', async () => {
     localStorage.setItem('ff_access_token', jwt(-60))
     localStorage.setItem('ff_refresh_token', 'the-refresh-token')
-    answer()
+    respond(401, { detail: 'Invalid refresh token' })
 
     const err = await shareRequest('tok', '/verdict', {
       method: 'PUT',
@@ -132,6 +133,29 @@ describe('shareRequest', () => {
     expect(String(fetchMock.mock.calls[0][0])).toBe(`${API}/auth/refresh`)
     // And the page is not left, nor the tokens dropped.
     expect(localStorage.getItem('ff_refresh_token')).toBe('the-refresh-token')
+
+    // Refused is remembered: the next write does not refresh again.
+    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SIGN_IN_EXPIRED)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  // A refresh that got no answer is not a reason to sign in again.
+  it.each([
+    ['offline', () => fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))],
+    ['a 502', () => respond(502)],
+  ])('with an expired token whose refresh is %s, says to try again, with the tokens untouched', async (_, answer) => {
+    const stale = jwt(-60)
+    localStorage.setItem('ff_access_token', stale)
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    answer()
+
+    const err = await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest }).catch((e: unknown) => e)
+
+    expect((err as Error).message).toBe(SERVER_UNREACHABLE)
+    expect(isSignInExpired(err)).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('ff_access_token')).toBe(stale)
+    expect(localStorage.getItem('ff_refresh_token')).toBe('the-refresh-token')
   })
 
   it('with an expired token and no refresh token, sends nothing either', async () => {
@@ -143,16 +167,16 @@ describe('shareRequest', () => {
   })
 
   // "Continue as guest" is the explicit choice that makes the guest fields go.
-  it('with an expired token and asGuest, sends the guest fields with no Authorization and no refresh', async () => {
+  it('with an expired token after "Continue as guest", sends the guest fields with no Authorization and no refresh', async () => {
     localStorage.setItem('ff_access_token', jwt(-60))
     localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    continueAsGuest()
     respond(200, { id: 'v' })
 
     await shareRequest('tok', '/verdict', {
       method: 'PUT',
       body: { version_id: 'v1', status: 'approved' },
       guest,
-      asGuest: true,
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -161,28 +185,123 @@ describe('shareRequest', () => {
     expect(body).toEqual({ version_id: 'v1', status: 'approved', guest_name: 'Dana', guest_email: 'dana@client.example' })
   })
 
-  it('asGuest does not override a usable bearer', async () => {
-    const token = jwt(3600)
-    localStorage.setItem('ff_access_token', token)
+  // Fix round 1, issue 1: the server refused a bearer the client thought good
+  // (clock skew, a deactivated user, a rotated secret, an undecodable token).
+  // "Continue as guest" must really drop it, not send it again.
+  it.each([
+    ['unexpired', () => jwt(3600)],
+    ['undecodable', () => 'not-a-jwt'],
+  ])('after the server refuses an %s bearer and the refresh is refused, "Continue as guest" drops it', async (_, make) => {
+    const bearer = make()
+    localStorage.setItem('ff_access_token', bearer)
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    respond(401, { detail: SIGN_IN_EXPIRED }) // PUT
+    respond(403, { detail: 'User is deactivated' }) // /auth/refresh
+
+    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SIGN_IN_EXPIRED)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(hasUsableToken()).toBe(false)
+
+    continueAsGuest()
     respond(200, {})
-    await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest, asGuest: true })
-    expect(lastCall().headers.Authorization).toBe(`Bearer ${token}`)
+    await shareRequest('tok', '/verdict', { method: 'PUT', body: { status: 'approved' }, guest })
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(lastCall().headers.Authorization).toBeUndefined()
+    expect(lastCall().body).toEqual({ status: 'approved', guest_name: 'Dana', guest_email: 'dana@client.example' })
+  })
+
+  it('a new token in storage still wins over a refused one, guest chosen or not', async () => {
+    localStorage.setItem('ff_access_token', jwt(3600))
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    respond(401, { detail: SIGN_IN_EXPIRED })
+    respond(401, {})
+    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SIGN_IN_EXPIRED)
+    continueAsGuest()
+
+    // Signed in again, here or in another tab.
+    const fresh = jwt(7200)
+    localStorage.setItem('ff_access_token', fresh)
+    respond(200, {})
+    await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })
+    expect(lastCall().headers.Authorization).toBe(`Bearer ${fresh}`)
     expect(lastCall().body).toEqual({})
   })
 
-  // Reads never ask and never refresh: they go as the guest.
-  it('reads with an expired token as the guest, with no refresh', async () => {
+  // Clock skew: the server's clock says expired, ours does not. /auth/refresh
+  // ignores the access token, so one refresh and one retry recovers it.
+  it('after a server 401, refreshes and retries once with the new bearer', async () => {
+    const old = jwt(3600)
+    localStorage.setItem('ff_access_token', old)
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    const fresh = jwt(7200)
+    respond(401, { detail: SIGN_IN_EXPIRED }) // PUT with the old bearer
+    respond(200, { access_token: fresh, refresh_token: 'rotated' }) // /auth/refresh
+    respond(200, { id: 'v' }) // PUT with the new one
+
+    await expect(
+      shareRequest('tok', '/verdict', { method: 'PUT', body: { status: 'approved' }, guest }),
+    ).resolves.toEqual({ id: 'v' })
+
+    const puts = fetchMock.mock.calls.filter(([, init]) => (init as RequestInit).method === 'PUT')
+    expect(puts).toHaveLength(2)
+    expect(((puts[0][1] as RequestInit).headers as Record<string, string>).Authorization).toBe(`Bearer ${old}`)
+    expect(((puts[1][1] as RequestInit).headers as Record<string, string>).Authorization).toBe(`Bearer ${fresh}`)
+    expect(lastCall().body).toEqual({ status: 'approved' })
+  })
+
+  it('after a server 401 whose refresh gets no answer, says to try again and keeps the bearer', async () => {
+    const bearer = jwt(3600)
+    localStorage.setItem('ff_access_token', bearer)
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    respond(401, { detail: SIGN_IN_EXPIRED })
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SERVER_UNREACHABLE)
+    expect(hasUsableToken()).toBe(true)
+    expect(localStorage.getItem('ff_access_token')).toBe(bearer)
+  })
+
+  // Reads never ask. A lapsed sign-in refreshes once; if that fails the read
+  // goes as nobody, so the stored guest's verdict never shows as theirs.
+  it('reads with an expired token that refreshes, with the new bearer', async () => {
     localStorage.setItem('ff_access_token', jwt(-60))
     localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    const fresh = jwt(3600)
+    respond(200, { access_token: fresh, refresh_token: 'rotated' })
     respond(200, [])
 
     await shareRequest('tok', '/verdicts?version_id=v1', { method: 'GET', guest })
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastCall().headers.Authorization).toBe(`Bearer ${fresh}`)
+    expect(lastCall().url.searchParams.has('guest_email')).toBe(false)
+  })
+
+  it.each([
+    ['refused', () => respond(401, {})],
+    ['offline', () => fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))],
+  ])('reads with an expired token whose refresh is %s as nobody: no bearer, no guest email', async (_, answer) => {
+    localStorage.setItem('ff_access_token', jwt(-60))
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    answer()
+    respond(200, [])
+
+    await shareRequest('tok', '/verdicts?version_id=v1', { method: 'GET', guest })
+
     const { url, headers } = lastCall()
     expect(url.pathname).toBe('/share/tok/verdicts')
     expect(headers.Authorization).toBeUndefined()
-    expect(url.searchParams.get('guest_email')).toBe('dana@client.example')
+    expect(url.searchParams.has('guest_email')).toBe(false)
+  })
+
+  it('reads as the guest once "Continue as guest" is chosen', async () => {
+    localStorage.setItem('ff_access_token', jwt(-60))
+    continueAsGuest()
+    respond(200, [])
+    await shareRequest('tok', '/verdicts?version_id=v1', { method: 'GET', guest })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(lastCall().url.searchParams.get('guest_email')).toBe('dana@client.example')
   })
 
   it('with no token at all, sends the guest fields as before', async () => {
@@ -283,5 +402,38 @@ describe('shareRequest', () => {
 
     respond(502)
     await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {} })).rejects.toThrow('Request failed')
+  })
+})
+
+describe('shareCallerKey', () => {
+  it('names who a read goes as', () => {
+    expect(shareCallerKey(guest)).toBe('guest:dana@client.example')
+    expect(shareCallerKey(null)).toBe('nobody')
+    localStorage.setItem('ff_access_token', jwt(3600))
+    expect(shareCallerKey(guest)).toBe('bearer')
+    localStorage.setItem('ff_access_token', jwt(-60))
+    expect(shareCallerKey(guest)).toBe('lapsed')
+    continueAsGuest()
+    expect(shareCallerKey(guest)).toBe('guest:dana@client.example')
+  })
+})
+
+describe('prepareShareWrite', () => {
+  it('refreshes a lapsed sign-in and says so', async () => {
+    localStorage.setItem('ff_access_token', jwt(-60))
+    localStorage.setItem('ff_refresh_token', 'r')
+    respond(200, { access_token: jwt(3600), refresh_token: 'r2' })
+    await expect(prepareShareWrite()).resolves.toBe('refreshed')
+  })
+
+  it('is unchanged for a usable token, no token, or a refused refresh', async () => {
+    await expect(prepareShareWrite()).resolves.toBe('unchanged')
+    localStorage.setItem('ff_access_token', jwt(3600))
+    await expect(prepareShareWrite()).resolves.toBe('unchanged')
+    expect(fetchMock).not.toHaveBeenCalled()
+    localStorage.setItem('ff_access_token', jwt(-60))
+    localStorage.setItem('ff_refresh_token', 'r')
+    respond(401, {})
+    await expect(prepareShareWrite()).resolves.toBe('unchanged')
   })
 })

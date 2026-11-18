@@ -125,7 +125,7 @@ let _refreshPromise: Promise<string | null> | null = null
 export async function refreshAccessToken(): Promise<string | null> {
   if (_refreshPromise) return _refreshPromise
 
-  _refreshPromise = _doRefresh(true)
+  _refreshPromise = _doRefresh(true).then((outcome) => ('token' in outcome ? outcome.token : null))
   try {
     return await _refreshPromise
   } finally {
@@ -133,18 +133,25 @@ export async function refreshAccessToken(): Promise<string | null> {
   }
 }
 
-let _quietRefreshPromise: Promise<string | null> | null = null
+/**
+ * How a refresh ended. `refused`: the server will not refresh this session (401
+ * or 403, no refresh token, or another tab ended it meanwhile). `transient`: no
+ * answer worth acting on (no network, a 5xx, a proxy error); try again later.
+ */
+export type RefreshOutcome = { token: string } | { failed: 'refused' | 'transient' }
+
+let _quietRefreshPromise: Promise<RefreshOutcome> | null = null
 
 /**
  * `refreshAccessToken` for a page that must not be left: it never clears the
- * tokens and never navigates, whatever the answer. A refused refresh, no
- * refresh token, or no network is just null, and the caller decides what to
- * ask. A share page uses it, where /login would lose the review on screen.
+ * tokens and never navigates, whatever the answer. It says how it ended, so the
+ * caller can tell "sign in again" (refused) from "try again" (transient). A
+ * share page uses it, where /login would lose the review on screen.
  *
  * Its own dedup, so a page-leaving refresh never joins a quiet one (or the
  * other way round) and inherits the wrong handling of a refusal.
  */
-export async function refreshAccessTokenQuietly(): Promise<string | null> {
+export async function refreshAccessTokenQuietly(): Promise<RefreshOutcome> {
   if (_quietRefreshPromise) return _quietRefreshPromise
 
   _quietRefreshPromise = _doRefresh(false)
@@ -164,18 +171,20 @@ export async function refreshAccessTokenQuietly(): Promise<string | null> {
  * same account, another tab refreshed it or signed it in again, and its access
  * token is the answer; otherwise null, "could not refresh".
  */
-function sessionMovedOn(sentRefreshToken: string): string | null {
+function sessionMovedOn(sentRefreshToken: string): RefreshOutcome {
   const access = getAccessToken()
   const sub = subjectOf(access)
-  return sub !== null && sub === subjectOf(sentRefreshToken) ? access : null
+  return sub !== null && sub === subjectOf(sentRefreshToken) && access
+    ? { token: access }
+    : { failed: 'refused' }
 }
 
 /** `endsSession`: whether a refusal (or nothing to send) ends the session. */
-async function _doRefresh(endsSession: boolean): Promise<string | null> {
+async function _doRefresh(endsSession: boolean): Promise<RefreshOutcome> {
   const refreshToken = getRefreshToken()
   if (!refreshToken) {
     if (endsSession) clearTokens()
-    return null
+    return { failed: 'refused' }
   }
 
   try {
@@ -192,10 +201,11 @@ async function _doRefresh(endsSession: boolean): Promise<string | null> {
       // Anything else -- a 502 from a proxy mid-deploy, a 500, a rate limit --
       // is the server being briefly unavailable, and signing the user out for
       // it loses whatever they had open.
-      if (endsSession && (response.status === 401 || response.status === 403)) {
-        clearTokens()
+      if (response.status === 401 || response.status === 403) {
+        if (endsSession) clearTokens()
+        return { failed: 'refused' }
       }
-      return null
+      return { failed: 'transient' }
     }
 
     const data = await response.json()
@@ -204,7 +214,7 @@ async function _doRefresh(endsSession: boolean): Promise<string | null> {
     const newRefreshToken: string = data.refresh_token ?? refreshToken
 
     setTokens(newAccessToken, newRefreshToken)
-    return newAccessToken
+    return { token: newAccessToken }
   } catch {
     // `fetch` rejects only on a transport failure; an HTTP error status
     // resolves and is handled above. So reaching here means the request never
@@ -215,6 +225,6 @@ async function _doRefresh(endsSession: boolean): Promise<string | null> {
     // Callers treat null as "could not refresh" and let the original failure
     // surface, so keeping the tokens costs nothing and the session survives
     // until the network comes back.
-    return null
+    return { failed: 'transient' }
   }
 }
