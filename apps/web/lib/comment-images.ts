@@ -46,3 +46,15 @@ export async function uploadImages(route: ImageRoute, images: File[]): Promise<v
     await postJson(`${route.base}/${slot.attachment_id}/complete${q}`, who, route.headers)
   }
 }
+
+/** The dictation's recording, attached to the comment of its first sentence (kind dictation_audio). The recorder's
+ *  `audio/webm;codecs=opus` is sent as plain `audio/webm`: the signed upload must match the stored type. */
+export async function uploadDictationAudio(route: ImageRoute, audio: Blob, duration_s: number): Promise<void> {
+  const who = route.guestEmail ? { guest_email: route.guestEmail } : {}
+  const q = route.query ?? ''
+  const type = (audio.type || 'audio/webm').split(';')[0].trim() || 'audio/webm'
+  const slot = await postJson(`${route.base}${q}`, { file_name: 'dictation.webm', file_size: audio.size, content_type: type, kind: 'dictation_audio', duration_s: Math.round(duration_s * 100) / 100, ...who }, route.headers)
+  const put = await fetch(slot.upload_url, { method: 'PUT', headers: { 'Content-Type': type }, body: audio })
+  if (!put.ok) throw new Error(`audio_put_${put.status}`)
+  await postJson(`${route.base}/${slot.attachment_id}/complete${q}`, who, route.headers)
+}

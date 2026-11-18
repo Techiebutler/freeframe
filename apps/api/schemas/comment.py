@@ -44,6 +44,30 @@ class HumanCommentPayload(BaseModel):
             raise ValueError("Review provenance can only be set by the review bridge")
         return values
 
+class DictationWordIn(BaseModel):
+    w: str = Field(max_length=100)
+    start_s: float
+    end_s: float
+
+
+class DictationSegmentIn(BaseModel):
+    text: str = Field(max_length=4000)
+    start_s: float
+    end_s: float
+    video_t: Optional[float] = None  # video time of the segment start (same clock as marks[].t and t_start)
+    segment_index: int = Field(ge=0, le=200)  # the comment (within the dictation) this sentence became
+
+
+class DictationIn(BaseModel):
+    """One spoken dictation, sent with every comment it became so they share it. Times: seconds since the recording start."""
+    id: uuid.UUID
+    text: str = Field(max_length=20000)
+    raw_text: Optional[str] = Field(default=None, max_length=20000)
+    lang: Optional[str] = Field(default=None, max_length=8)
+    words: list[DictationWordIn] = Field(default_factory=list, max_length=6000)
+    segments: list[DictationSegmentIn] = Field(default_factory=list, max_length=200)
+
+
 class AnnotationData(BaseModel):
     drawing_data: dict  # Fabric.js canvas JSON
     frame_number: Optional[int] = None
@@ -58,7 +82,9 @@ class CommentCreate(HumanCommentPayload):
     visibility: Optional[str] = "public"  # "public" or "internal"
     annotation: Optional[AnnotationData] = None
     mention_user_ids: list[uuid.UUID] = []  # Explicit mention IDs from frontend
-    attachments_expected: int = Field(default=0, ge=0, le=4)  # images that follow this comment
+    attachments_expected: int = Field(default=0, ge=0, le=6)  # images (and the dictation audio) that follow this comment
+    dictation: Optional[DictationIn] = None
+    segment_index: Optional[int] = Field(default=None, ge=0, le=200)
 
 class GuestCommentCreate(HumanCommentPayload):
     idempotency_key: Optional[str] = Field(default=None, min_length=1, max_length=128)
@@ -71,7 +97,9 @@ class GuestCommentCreate(HumanCommentPayload):
     annotation: Optional[AnnotationData] = None
     guest_email: Optional[str] = None  # Not needed if user is logged in
     guest_name: Optional[str] = None
-    attachments_expected: int = Field(default=0, ge=0, le=4)  # images that follow this comment
+    attachments_expected: int = Field(default=0, ge=0, le=6)  # images (and the dictation audio) that follow this comment
+    dictation: Optional[DictationIn] = None
+    segment_index: Optional[int] = Field(default=None, ge=0, le=200)
 
 class CommentUpdate(HumanCommentPayload):
     body: str
@@ -107,6 +135,8 @@ class AttachmentUploadRequest(BaseModel):
     file_name: str = Field(min_length=1, max_length=200)
     file_size: int
     content_type: str
+    kind: Literal["reference_image", "dictation_audio"] = "reference_image"
+    duration_s: Optional[float] = Field(default=None, ge=0, le=3600)  # dictation_audio: length of the recording
     guest_email: Optional[str] = None  # share route: the guest who wrote the comment
 
 class AttachmentComplete(BaseModel):

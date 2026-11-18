@@ -65,6 +65,16 @@ def test_a_replacement_spanning_two_segments_is_skipped():
     assert dictation.apply_fixes("Rice Mushroom ist gut", "Ryze ist gut", segs) == segs
 
 
+def test_apply_fixes_patches_the_words_too_and_keeps_their_times():
+    words = [{"start": 0.0, "end": 0.4, "word": "Rice"}, {"start": 0.4, "end": 0.9, "word": "Mushroom"}, {"start": 0.9, "end": 1.1, "word": "ist"}, {"start": 1.1, "end": 1.4, "word": "gut"}]
+    segs = [{"start": 0.0, "end": 1.4, "text": "Rice Mushroom ist gut"}]
+    dictation.apply_fixes("Rice Mushroom ist gut", "Ryze ist gut", segs, words)
+    assert [w["word"] for w in words] == ["Ryze", "ist", "gut"] and (words[0]["start"], words[0]["end"]) == (0.0, 0.9)   # two words became one and span both
+    words2 = [{"start": 0, "end": 1, "word": "Chatsuki"}, {"start": 1, "end": 2, "word": "gut"}]
+    dictation.apply_fixes("Chatsuki gut", "ChatGPT gut", [], words2)
+    assert [w["word"] for w in words2] == ["ChatGPT", "gut"]
+
+
 def _whisper(segments, text=None, status=200):
     w = MagicMock(status_code=status)
     w.json.return_value = {"text": text if text is not None else " ".join(s["text"] for s in segments), "segments": segments}

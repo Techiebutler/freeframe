@@ -369,6 +369,31 @@ describe('FlowView', () => {
     expect(sent[1].annotation).toBeNull()
   })
 
+  it('keeps the words and the recording: both sentence-notes share one dictation, the recording goes up with the first', async () => {
+    const words = [{ start: 0, end: 0.6, word: 'Hook' }, { start: 4, end: 4.4, word: 'Cut.' }]
+    const dictate = vi.fn().mockResolvedValue({ text: 'Hook slow. Cut.', raw_text: 'Hook slow Cut', segments: [{ start: 0, end: 2, text: 'Hook slow.' }, { start: 4, end: 6, text: 'Cut.' }], words })
+    const { send } = setup({ dictate })
+    await record()
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2))
+    const [a, b] = send.mock.calls.map(c => c[0]) as { dictation: { id: string; raw_text: string; words: unknown[]; segments: { segment_index: number }[] }; segmentIndex: number; dictationAudio?: { blob: Blob; duration_s: number } }[]
+    expect(a.dictation.id).toBe(b.dictation.id)
+    expect(a.dictation.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect([a.segmentIndex, b.segmentIndex]).toEqual([0, 1])
+    expect(a.dictation.raw_text).toBe('Hook slow Cut')
+    expect(a.dictation.words).toHaveLength(2)
+    expect(a.dictation.segments.map(x => x.segment_index)).toEqual([0, 1])
+    expect(a.dictationAudio?.blob).toBe(audio)
+    expect(a.dictationAudio?.duration_s).toBeGreaterThanOrEqual(4.4)   // never shorter than the last word
+    expect(b.dictationAudio).toBeUndefined()
+  })
+
+  it('a typed note carries no dictation', async () => {
+    const { send } = setup({ dictate: vi.fn().mockResolvedValue({ text: '', segments: [] }) })
+    await record()
+    await new Promise(r => setTimeout(r, 30))
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ dictation: expect.anything() }), expect.anything())
+  })
+
   it('a drawing carries the video time it was drawn at, even after the video paused mid-recording', async () => {
     let video!: HTMLVideoElement
     const state = { currentTime: 3.2, paused: false, playbackRate: 1 }

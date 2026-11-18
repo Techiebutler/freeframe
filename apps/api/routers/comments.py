@@ -22,7 +22,7 @@ from ..middleware.auth import get_current_user, get_optional_user
 from ..middleware.share_auth import get_share_link
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
-from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction
+from ..models.comment import Annotation, Comment, CommentAttachment, CommentDictation, CommentReaction
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
 from ..models.user import User, GuestUser
 from ..models.share import ShareLink, ShareLinkActivity, ShareActivityAction, SharePermission
@@ -43,7 +43,7 @@ from ..schemas.comment import (
     ReviewCommentCreate,
     public_review_source,
 )
-from ..services import brand_loop, client_view, feedback_rounds, s3_service
+from ..services import brand_loop, client_view, dictations, feedback_rounds, s3_service
 from ..services import comment_export
 from ..services import comment_attachments as images
 from ..services.permissions import (
@@ -125,6 +125,7 @@ def _build_comment_response(
     # Load attachments
     attachments_raw = db.query(CommentAttachment).filter(
         CommentAttachment.comment_id == comment.id, CommentAttachment.uploaded_at.isnot(None),
+        CommentAttachment.kind == "reference_image",  # frame_png / dictation_audio are for agents (feedback.v1)
     ).all()
     attachments = [_build_attachment_response(a) for a in attachments_raw]
 
@@ -223,7 +224,7 @@ def _build_comment_responses_batched(
         for a in db.query(Annotation).filter(Annotation.comment_id.in_(ids)).all()
     }
     attachments_map: dict[uuid.UUID, list[CommentAttachment]] = defaultdict(list)
-    for a in db.query(CommentAttachment).filter(CommentAttachment.comment_id.in_(ids), CommentAttachment.uploaded_at.isnot(None)).all():
+    for a in db.query(CommentAttachment).filter(CommentAttachment.comment_id.in_(ids), CommentAttachment.uploaded_at.isnot(None), CommentAttachment.kind == "reference_image").all():
         attachments_map[a.comment_id].append(a)
     reactions_map: dict[uuid.UUID, list[CommentReaction]] = defaultdict(list)
     for r in db.query(CommentReaction).filter(CommentReaction.comment_id.in_(ids)).all():
@@ -414,6 +415,7 @@ def create_comment(
     )
     db.add(comment)
     db.flush()
+    dictations.attach(db, comment, body.dictation, body.segment_index)
 
     if body.annotation:
         annotation = Annotation(
@@ -441,6 +443,7 @@ def create_comment(
 
     db.commit()
     db.refresh(comment)
+    dictations.queue_render(db, comment, bool(body.annotation))
     feedback_rounds.on_comment(db, comment.id)
     brand_loop.queue_comment(background_tasks, db, comment, asset, author_email=current_user.email)
     # A logged-in client (non-staff account) commenting in the app routes to the responsible editor,
@@ -602,21 +605,28 @@ def _put_url(key: str, content_type: str) -> str:
 
 
 def _issue_attachment(db: Session, comment: Comment, body: AttachmentUploadRequest) -> AttachmentUploadResponse:
-    reason = images.check_file(body.content_type, body.file_size)
+    audio = body.kind == "dictation_audio"
+    reason = images.check_file(body.content_type, body.file_size, body.kind)
     if reason:
         raise HTTPException(status_code=422, detail=reason)
+    if audio and comment.dictation_id is None:
+        raise HTTPException(status_code=422, detail="This comment has no dictation.")
+    content_type = images.base_type(body.content_type) if audio else body.content_type.lower()
     # A resend of the same file (outbox retry after a lost response) reuses its row: never a second image.
     same = db.query(CommentAttachment).filter(
         CommentAttachment.comment_id == comment.id, CommentAttachment.uploaded_at.is_(None),
         CommentAttachment.original_filename == body.file_name, CommentAttachment.file_size_bytes == body.file_size).first()
     if same is not None:
         return AttachmentUploadResponse(upload_url=_put_url(same.s3_key, same.file_type), attachment_id=same.id, key=same.s3_key)
-    if db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment.id).count() >= images.MAX_PER_COMMENT:
+    if not audio and db.query(CommentAttachment).filter(CommentAttachment.comment_id == comment.id,
+                                                        CommentAttachment.kind == "reference_image").count() >= images.MAX_PER_COMMENT:
         raise HTTPException(status_code=422, detail=f"Up to {images.MAX_PER_COMMENT} images per comment.")
-    name = re.sub(r"[^A-Za-z0-9._-]+", "-", body.file_name)[-120:] or "image"
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", body.file_name)[-120:] or ("dictation.webm" if audio else "image")
     key = f"comment-attachments/{comment.id}/{uuid.uuid4()}/{name}"
-    attachment = CommentAttachment(comment_id=comment.id, file_type=body.content_type.lower(), s3_key=key,
-                                   original_filename=body.file_name, file_size_bytes=body.file_size)
+    attachment = CommentAttachment(comment_id=comment.id, file_type=content_type, s3_key=key,
+                                   original_filename=body.file_name, file_size_bytes=body.file_size,
+                                   **({"kind": "dictation_audio", "version_id": comment.version_id,
+                                       "meta": {"dictation_id": str(comment.dictation_id), "duration_s": body.duration_s}} if audio else {}))
     db.add(attachment)
     db.commit()
     db.refresh(attachment)
@@ -641,6 +651,10 @@ def _complete(db: Session, comment: Comment, attachment_id: uuid.UUID) -> Attach
         if size != a.file_size_bytes or (ctype or "").lower() != a.file_type:
             raise HTTPException(status_code=409, detail="The uploaded file does not match. Upload it again.")
         a.uploaded_at = datetime.now(timezone.utc)
+        if a.kind == "dictation_audio" and comment.dictation_id is not None:
+            d = db.get(CommentDictation, comment.dictation_id)
+            if d is not None:
+                d.audio_attachment_id = a.id
         db.commit()
     return _build_attachment_response(a)
 
@@ -660,7 +674,8 @@ def _send_without_missing(db: Session, comment: Comment) -> dict:
     for a in missing:
         db.delete(a)
     comment.attachments_expected = db.query(CommentAttachment).filter(
-        CommentAttachment.comment_id == comment.id, CommentAttachment.uploaded_at.isnot(None)).count()
+        CommentAttachment.comment_id == comment.id, CommentAttachment.uploaded_at.isnot(None),
+        CommentAttachment.kind != "frame_png").count()  # server-rendered frames were never announced
     db.commit()
     return {"attachments_expected": comment.attachments_expected, "removed": len(missing)}
 
@@ -1230,6 +1245,7 @@ def guest_comment(
         comment.id = comment_id
     db.add(comment)
     db.flush()
+    dictations.attach(db, comment, body.dictation, body.segment_index)
 
     # Parse mentions (guest can mention registered users)
     emails = _parse_mentions(body.body)
@@ -1258,6 +1274,7 @@ def guest_comment(
 
     db.commit()
     db.refresh(comment)
+    dictations.queue_render(db, comment, bool(body.annotation))
 
     # Log share link activity
     actor_email = current_user.email if current_user else (body.guest_email or "anonymous")
