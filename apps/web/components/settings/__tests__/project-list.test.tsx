@@ -14,6 +14,7 @@ vi.mock('next/navigation', () => ({
 
 import { SettingsProjectList } from '../project-list'
 import { useAuthStore } from '@/stores/auth-store'
+import { useBrandingStore } from '@/stores/branding-store'
 
 // The list is what a person can manage: every live project for an Admin, the
 // projects they own for everyone else. The chip says how they get there.
@@ -231,20 +232,75 @@ describe('the selected project', () => {
 })
 
 describe('the open project', () => {
-  it('scrolls its row into view once the list has loaded', async () => {
-    const scrolled: Element[] = []
+  // Records each scrollIntoView call with the row it moved and its options.
+  function recordScrolls() {
+    const calls: { el: Element; opts: unknown }[] = []
     const original = Element.prototype.scrollIntoView
-    Element.prototype.scrollIntoView = function (this: Element) {
-      scrolled.push(this)
+    Element.prototype.scrollIntoView = function (this: Element, opts?: unknown) {
+      calls.push({ el: this, opts })
     }
+    return { calls, restore: () => { Element.prototype.scrollIntoView = original } }
+  }
+
+  it('centres its row once the list has loaded, as a deep link lands', async () => {
+    const { calls, restore } = recordScrolls()
     try {
       signIn(true)
       renderList('p1')
       await screen.findByRole('list')
-      await waitFor(() => expect(scrolled).toHaveLength(1))
-      expect(within(scrolled[0] as HTMLElement).getByRole('link', { name: /^Spring Campaign/ })).toBeInTheDocument()
+      await waitFor(() => expect(calls).toHaveLength(1))
+      expect(within(calls[0].el as HTMLElement).getByRole('link', { name: /^Spring Campaign/ })).toBeInTheDocument()
+      expect(calls[0].opts).toEqual({ block: 'center' })
     } finally {
-      Element.prototype.scrollIntoView = original
+      restore()
     }
+  })
+
+  it('moves only as far as needed for a later pick, so the list stays under the pointer', async () => {
+    const { calls, restore } = recordScrolls()
+    try {
+      signIn(true)
+      const cache = new Map()
+      const list = (id: string) => (
+        <SWRConfig value={{ provider: () => cache, dedupingInterval: 0, shouldRetryOnError: false }}>
+          <SettingsProjectList selectedId={id} />
+        </SWRConfig>
+      )
+      const view = render(list('p1'))
+      await screen.findByRole('list')
+      await waitFor(() => expect(calls).toHaveLength(1))
+
+      view.rerender(list('p2'))
+      await waitFor(() => expect(calls).toHaveLength(2))
+      expect(within(calls[1].el as HTMLElement).getByRole('link', { name: /^Brand Film 2026/ })).toBeInTheDocument()
+      expect(calls[1].opts).toEqual({ block: 'nearest' })
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe('the end of the list under the floating credit', () => {
+  // On a phone the list is the whole page and ends in the corner where the
+  // shell floats "Powered by FreeFrame", so it leaves room to scroll clear.
+  const RESERVE = 'pb-[calc(3.5rem+env(safe-area-inset-bottom))]'
+  const wrapper = () => screen.getByRole('list').parentElement as HTMLElement
+
+  it('reserves room on a phone while the credit is shown, and none from md', async () => {
+    useBrandingStore.setState({ loaded: true, poweredByFreeframe: true })
+    signIn(true)
+    renderList()
+    await screen.findByRole('list')
+    const classes = wrapper().className.split(/\s+/)
+    expect(classes).toContain(RESERVE)
+    expect(classes).toContain('md:pb-2')
+  })
+
+  it('reserves nothing when "Powered by FreeFrame" is turned off', async () => {
+    useBrandingStore.setState({ loaded: true, poweredByFreeframe: false })
+    signIn(true)
+    renderList()
+    await screen.findByRole('list')
+    expect(wrapper().className).not.toContain('safe-area-inset-bottom')
   })
 })

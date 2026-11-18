@@ -90,17 +90,23 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
   const needle = query.trim().toLowerCase()
   const shown = needle ? rows.filter((p) => p.name.toLowerCase().includes(needle)) : rows
 
-  // The list is sorted by name and can hold hundreds of rows, so the open
-  // project is often below the fold; bring its row and its tab links into view.
   // On a phone the list is the whole page, and its last row ends in the corner
   // where the shell floats "Powered by FreeFrame"; leave room to scroll it clear.
   const { poweredByFreeframe } = useBranding()
   const clearBadge = poweredByFreeframe ? 'pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-2' : undefined
 
+  // The list is sorted by name and can hold hundreds of rows, so on a deep link
+  // the open project is often below the fold: centre it once when the list
+  // arrives. A later pick is a click on a row already in view, so it only moves
+  // as far as needed and the list stays under the pointer.
   const selectedRow = React.useRef<HTMLLIElement>(null)
+  const centred = React.useRef(false)
   const listReady = rows.length > 0
   React.useEffect(() => {
-    selectedRow.current?.scrollIntoView?.({ block: 'center' })
+    const row = selectedRow.current
+    if (!row) return
+    row.scrollIntoView?.({ block: centred.current ? 'nearest' : 'center' })
+    centred.current = true
   }, [selectedId, listReady])
 
   if (error && !data) {
