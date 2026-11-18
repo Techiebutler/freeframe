@@ -1,9 +1,10 @@
 'use client'
 
 import * as React from 'react'
+import { Check } from 'lucide-react'
 import { chainOrder, partLabel } from './embed-chain'
 
-export interface TabItem { id: string; name: string; role?: string | null; order?: number | null; count?: number }
+export interface TabItem { id: string; name: string; role?: string | null; order?: number | null; count?: number; approved?: boolean }
 
 /** What a segment says: "Hook 2", "Body", "CTA" for the parts of a module ad, else the file's own name. */
 export function tabName(item: TabItem, items: TabItem[]) {
@@ -25,6 +26,7 @@ export function ModuleTabs({ items, selectedId, onSelect, label = 'Files of this
       {ordered.map((i, n) => (
         <button key={i.id} ref={i.id === selectedId ? cur : undefined} type="button" aria-pressed={nav ? undefined : i.id === selectedId} aria-current={nav && i.id === selectedId ? 'true' : undefined} title={i.name} onClick={() => onSelect(i.id)} className="ep-seg-btn">
           {names?.[n] ?? tabName(i, ordered)}
+          {i.approved && <Check size={12} strokeWidth={3} className="ep-tick" aria-label="approved" />}
           {!!i.count && <span className="ep-count" aria-label={`${i.count} comments`}>{i.count}</span>}
         </button>
       ))}

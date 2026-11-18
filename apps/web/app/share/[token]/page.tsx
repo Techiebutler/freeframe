@@ -806,7 +806,7 @@ interface ShareViewerProps {
   /** The upload request behind this share link; the embed names it in its hand-off events. */
   requestId?: string | null
   /** Folder embed: this asset's place in the folder, the stepper, and what the approve acts on. */
-  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** Parts approved so far, and the comments no Send has closed yet (all parts). */ approvedCount?: number; unsent?: number; onNoteSaved?: () => void; onSentAll?: () => void; /** The segmented file switcher (components/share/module-tabs.tsx). */ nav?: React.ReactNode }
+  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** Parts approved so far, and the comments no Send has closed yet (all parts). */ approvedCount?: number; partsTotal?: number; onParts?: (p: { approved: number; total: number }) => void; unsent?: number; onNoteSaved?: () => void; onSentAll?: () => void; /** The segmented file switcher (components/share/module-tabs.tsx). */ nav?: React.ReactNode }
 }
 
 function ShareViewer({
@@ -884,7 +884,7 @@ function ShareViewer({
   const send = (m: EmbedMessage) => sendToParent({ ...m, asset_id: asset.id })
   const handoff = (event: 'round_sent' | 'approved') => { if (requestId) sendAutoreviewEvent({ event, request_id: requestId, asset_id: asset.id }) }
   const flowApprove = async () => {
-    const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession, headers: authHeaders(await getUsableAccessToken()) })
+    const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession, headers: authHeaders(await getUsableAccessToken()), onParts: folder?.onParts })
     setFlowApproved(true)
     folder?.onApproved(true)
     // The request is approved only when every part is: until the server hands back the delivery, nothing leaves the embed.
@@ -937,7 +937,7 @@ function ShareViewer({
           onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id, { shareSession: folder?.shareSession }); setFlowApproved(false); folder?.onApproved(false) }}
           sessionKey={token}
           approved={flowApproved}
-          parts={folder ? { approved: folder.approvedCount ?? 0, total: folder.count } : undefined}
+          parts={folder ? { approved: folder.approvedCount ?? 0, total: folder.partsTotal ?? folder.count } : undefined}
           unsentFeedback={folder?.unsent}
           hasNext={!!folder && folder.index < folder.count - 1}
           onNext={() => folder?.onStep(1)}
@@ -1065,6 +1065,8 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
   const [items, setItems] = React.useState<FolderShareAssetItem[] | null>(null)
   const [index, setIndex] = React.useState(0)
   const [unsent, setUnsent] = React.useState(0)
+  // The request's own count of parts (every asset in the folder, whatever its type), then the server's answer after each approve.
+  const [parts, setParts] = React.useState<{ approved: number; total: number } | null>(null)
   React.useEffect(() => {
     const ss = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
     fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500&embed=true${ss}`)
@@ -1072,6 +1074,8 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
       .then((data) => {
         const videos = inferRoles((data?.assets ?? []).filter((a) => a.asset_type === 'video'))
         const sorted = chainOrder(videos) ?? videos
+        const all = data?.assets ?? []
+        setParts({ approved: all.filter((a) => a.approved).length, total: all.length })
         setItems(sorted)
         setIndex(Math.max(0, sorted.findIndex((a) => !a.approved)))
         setUnsent(sorted.reduce((n, a) => n + (a.comment_count || 0), 0))
@@ -1087,7 +1091,7 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
     sendToParent({ type: 'ar:asset', asset_id: items[n].id, index: n + 1, count: items.length })
   }
   const nav = items.length > 1 && (
-    <ModuleTabs items={items.map((a) => ({ id: a.id, name: a.name, role: a.role, order: a.order, count: a.comment_count }))} selectedId={current.id} onSelect={(id) => go(items.findIndex((a) => a.id === id))} />
+    <ModuleTabs items={items.map((a) => ({ id: a.id, name: a.name, role: a.role, order: a.order, count: a.comment_count, approved: !!a.approved }))} selectedId={current.id} onSelect={(id) => go(items.findIndex((a) => a.id === id))} />
   )
   return (
     <ShareViewer
@@ -1099,8 +1103,8 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
       permission={permission}
       allowDownload={false}
       branding={branding}
-      folder={{ index, count: items.length, approved: !!current.approved, approvedCount: items.filter((a) => a.approved).length, unsent, onNoteSaved: () => setUnsent((n) => n + 1), onSentAll: () => setUnsent(0), shareSession, onStep: (d) => go(index + d), nav: nav || undefined,
-        onApproved: (v) => setItems((prev) => prev && prev.map((a) => (a.id === current.id ? { ...a, approved: v } : a))) }}
+      folder={{ index, count: items.length, approved: !!current.approved, approvedCount: parts?.approved ?? items.filter((a) => a.approved).length, partsTotal: parts?.total ?? items.length, onParts: setParts, unsent, onNoteSaved: () => setUnsent((n) => n + 1), onSentAll: () => setUnsent(0), shareSession, onStep: (d) => go(index + d), nav: nav || undefined,
+        onApproved: (v) => { setItems((prev) => prev && prev.map((a) => (a.id === current.id ? { ...a, approved: v } : a))); if (!v) setParts((p) => p && { ...p, approved: Math.max(0, p.approved - 1) }) } }}
     />
   )
 }

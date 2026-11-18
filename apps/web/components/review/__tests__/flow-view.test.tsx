@@ -720,4 +720,15 @@ describe('FlowView embed: per-part approve, share link only when every part is a
     await waitFor(() => expect(onApprove).toHaveBeenCalledTimes(1))
     expect(onSent).not.toHaveBeenCalled()
   })
+
+  it('an approved part reads "Approved" with one check, not two', () => {
+    embed({ parts: { approved: 1, total: 5 }, approved: true })
+    expect(screen.getByRole('button', { name: 'Approved' }).textContent).not.toContain('✓')
+  })
+
+  it('with open comments Send feedback is the filled primary and Comment steps back', () => {
+    embed({ parts: { approved: 1, total: 5 }, unsentFeedback: 2 })
+    expect(screen.getByRole('button', { name: 'Send feedback' })).toHaveAttribute('data-primary')
+    expect(screen.getByRole('button', { name: 'Comment' })).toHaveAttribute('data-secondary')
+  })
 })

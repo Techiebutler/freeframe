@@ -474,7 +474,7 @@ export function FlowView(p: FlowViewProps) {
   )
 
   const canApprove = p.canApprove ?? true
-  const sendLabel = hasNotes ? (p.finishLabel ?? (p.onFinishRound ? 'Send to agent' : 'Done')) : !canApprove ? 'Send' : p.approved ? 'Approved ✓' : 'Approve'
+  const sendLabel = hasNotes ? (p.finishLabel ?? (p.onFinishRound ? 'Send to agent' : 'Done')) : !canApprove ? 'Send' : p.approved ? 'Approved' : 'Approve'
 
   const typeNote = (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -707,7 +707,7 @@ export function FlowView(p: FlowViewProps) {
               </div>
             )}
             {p.canComment && (
-              <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} data-recording={active ? '' : undefined} className="ep-cta">
+              <button type="button" onClick={tapComment} aria-label={active ? 'Stop recording' : 'Comment'} data-recording={active ? '' : undefined} data-secondary={sendMode && !active ? '' : undefined} className="ep-cta">
                 {active ? <><Square size={16} aria-hidden="true" /><span className="ep-lbl">Stop</span></> : <><Mic size={18} aria-hidden="true" /><span className="ep-lbl">Comment</span></>}
               </button>
             )}
@@ -715,7 +715,7 @@ export function FlowView(p: FlowViewProps) {
               <button type="button" onClick={() => dictate_('type')} aria-label="Type a note" aria-pressed={typing} title="Type a note" className="ep-type-btn press"><Keyboard size={20} aria-hidden="true" /></button>
             )}
             {!active && (
-              <button type="button" onClick={finish} disabled={sending || (sendMode ? blocked : (!!p.approved || !canApprove))} aria-label={sendMode || inkPending ? 'Send feedback' : sendLabel} className="ep-approve glass">
+              <button type="button" onClick={finish} disabled={sending || (sendMode ? blocked : (!!p.approved || !canApprove))} aria-label={sendMode || inkPending ? 'Send feedback' : sendLabel} data-primary={sendMode || inkPending ? '' : undefined} className="ep-approve glass">
                 {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : sendMode || inkPending ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span className="ep-lbl">{sendMode || inkPending ? 'Send feedback' : sendLabel}</span>
               </button>
             )}

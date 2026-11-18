@@ -55,7 +55,7 @@ export async function guestDictate(token: string, audio: Blob, shareSession?: st
 export async function approveSharedAsset(
   token: string,
   assetId: string,
-  opts: { identity?: GuestIdentity | null; shareSession?: string | null; versionId?: string; headers?: Record<string, string> } = {},
+  opts: { identity?: GuestIdentity | null; shareSession?: string | null; versionId?: string; headers?: Record<string, string>; /** The server's count of approved parts of the request. */ onParts?: (p: { approved: number; total: number }) => void } = {},
 ): Promise<DeliveryRef | null> {
   const body: Record<string, unknown> = {}
   if (opts.versionId) body.version_id = opts.versionId
@@ -66,7 +66,10 @@ export async function approveSharedAsset(
     body: JSON.stringify(body),
   })
   if (!res.ok) await fail(res, 'Failed to approve')
-  return deliveryOf(await res.json().catch(() => null))
+  const out = await res.json().catch(() => null)
+  const parts = out?.parts
+  if (parts && typeof parts.approved === 'number' && typeof parts.total === 'number') opts.onParts?.({ approved: parts.approved, total: parts.total })
+  return deliveryOf(out)
 }
 
 /** The file tab after `currentId`, or null at the end of the briefing. */
