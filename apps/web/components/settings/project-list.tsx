@@ -103,9 +103,9 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
   const centred = React.useRef(false)
   const listReady = rows.length > 0
   React.useEffect(() => {
-    const row = selectedRow.current
-    if (!row) return
-    row.scrollIntoView?.({ block: centred.current ? 'nearest' : 'center' })
+    if (!listReady) return
+    selectedRow.current?.scrollIntoView?.({ block: centred.current ? 'nearest' : 'center' })
+    // Also when nothing is open yet: the first pick from the index is a click too.
     centred.current = true
   }, [selectedId, listReady])
 

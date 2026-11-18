@@ -278,6 +278,28 @@ describe('the open project', () => {
       restore()
     }
   })
+
+  it('treats the first pick from the projects index as a click, not a deep link', async () => {
+    const { calls, restore } = recordScrolls()
+    try {
+      signIn(true)
+      const cache = new Map()
+      const list = (id?: string) => (
+        <SWRConfig value={{ provider: () => cache, dedupingInterval: 0, shouldRetryOnError: false }}>
+          <SettingsProjectList selectedId={id} />
+        </SWRConfig>
+      )
+      const view = render(list())
+      await screen.findByRole('list')
+      expect(calls).toHaveLength(0)
+
+      view.rerender(list('p2'))
+      await waitFor(() => expect(calls).toHaveLength(1))
+      expect(calls[0].opts).toEqual({ block: 'nearest' })
+    } finally {
+      restore()
+    }
+  })
 })
 
 describe('the end of the list under the floating credit', () => {
