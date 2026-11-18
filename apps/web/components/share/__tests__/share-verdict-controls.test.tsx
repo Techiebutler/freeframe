@@ -210,7 +210,7 @@ describe('ShareVerdictControls', () => {
     expect(writes()[0].body).not.toHaveProperty('guest_email')
   })
 
-  // Ruling R15: a lapsed sign-in is refreshed or asked about, never quietly
+  // A lapsed sign-in is refreshed or asked about, never quietly
   // turned into a guest. Someone signed in is never asked for a guest name.
   describe('a lapsed sign-in', () => {
     beforeEach(() => {
@@ -267,7 +267,7 @@ describe('ShareVerdictControls', () => {
       expect(localStorage.getItem('ff_refresh_token')).toBe('the-refresh-token')
     })
 
-    // Fix round 1, issue 2: the stored guest's verdict must not show as this
+    // The stored guest's verdict must not show as this
     // signed-in person's, or pressing it would clear their own instead.
     it('that will not refresh reads as nobody: no bearer, no guest email, nothing pressed', async () => {
       const guestsApproval = makeVerdict({ id: 'g1', status: 'approved', is_mine: true })
@@ -380,7 +380,7 @@ describe('ShareVerdictControls', () => {
       writeQueue = [{ status: 401, body: { detail: 'Your sign-in has expired. Sign in again or continue as a guest.' } }]
     })
 
-    // Fix round 1, issue 1: this used to send the same bearer again, forever.
+    // Regression: this used to send the same bearer again, forever.
     it('"Continue as guest" then really goes as the guest: guest fields, no Authorization', async () => {
       refreshAnswer = { status: 403, body: { detail: 'User is deactivated' } }
       render(ui({ guestIdentity: dana }))
@@ -397,7 +397,7 @@ describe('ShareVerdictControls', () => {
       await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
     })
 
-    // Fix round 2, issue 2: the press was decided against their own list
+    // The press was decided against their own list
     // (Approve was theirs, so it was a clear). As the guest it is decided
     // again, against the guest's list, rather than re-sending that clear.
     it('"Continue as guest" re-reads as the guest and decides the press again', async () => {
@@ -425,8 +425,7 @@ describe('ShareVerdictControls', () => {
       expect(writes()[1].body).toMatchObject({ status: 'approved', guest_email: 'dana@client.example' })
     })
 
-    // Fix round 2, issue 1, through the controls.
-    // Fix round 3, issue 2: the guest's list could not be read, so there is
+    // Through the controls: the guest's list could not be read, so there is
     // nothing to decide against. The press stops; it is not decided against
     // the signed-in list still on screen.
     it('"Continue as guest" whose re-read as the guest fails sends nothing and says to try again', async () => {
@@ -494,7 +493,7 @@ describe('ShareVerdictControls', () => {
     expect(screen.queryByRole('button', { name: 'Continue as guest' })).toBeNull()
   })
 
-  // Fix round 2, root cause: the list on screen was read as one caller, and
+  // The list on screen was read as one caller, and
   // another is pressing now (here, signed in in another tab). The press is
   // decided against the presser's own list, read again as them.
   it('re-reads as whoever is pressing now when that is not who the list was read as', async () => {
@@ -517,7 +516,7 @@ describe('ShareVerdictControls', () => {
     expect(writes()[0].headers.Authorization).toBe(`Bearer ${token}`)
   })
 
-  // Fix round 3, issue 2, the other way round: read as the guest, signed in
+  // The other way round: read as the guest, signed in
   // elsewhere, and their own list cannot be read. Nothing is sent.
   it('a re-read as a newly signed-in person that fails sends nothing and says to try again', async () => {
     const theirApproval = makeVerdict({ id: 'u1', status: 'approved', is_mine: true })
@@ -533,7 +532,7 @@ describe('ShareVerdictControls', () => {
     expect(writes()).toHaveLength(0)
   })
 
-  // Fix round 3, issue 3: another account signed in in another tab. Its press
+  // Another account signed in in another tab. Its press
   // is decided against its own list, read again as it, not the first one's.
   it('re-reads as the account now signed in when it is not the one the list was read as', async () => {
     const alice = jwt(3600, 'alice')

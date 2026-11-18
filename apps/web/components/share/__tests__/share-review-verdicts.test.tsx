@@ -159,7 +159,7 @@ describe('ShareReviewScreen verdicts', () => {
     expect(puts()[0].body).toMatchObject({ guest_email: 'dana@client.example' })
   })
 
-  // Ruling R15 through the real screen: a lapsed sign-in that will not refresh
+  // Through the real screen: a lapsed sign-in that will not refresh
   // is asked about, and "Continue as guest" opens the same prompt.
   it('a lapsed sign-in that will not refresh asks, and Continue as guest goes through the prompt', async () => {
     const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')

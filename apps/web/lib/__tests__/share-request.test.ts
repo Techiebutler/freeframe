@@ -70,7 +70,7 @@ describe('hasStoredToken', () => {
 })
 
 describe('shareRequest', () => {
-  // Review Focus 1 and ruling R15: a signed-in client whose login has lapsed
+  // A signed-in client whose login has lapsed
   // must not have their verdict filed under whatever guest identity is left in
   // storage. The write refreshes the sign-in first...
   it('with an expired token, refreshes and sends the new bearer and no guest fields', async () => {
@@ -168,7 +168,7 @@ describe('shareRequest', () => {
     expect(body).toEqual({ version_id: 'v1', status: 'approved', guest_name: 'Dana', guest_email: 'dana@client.example' })
   })
 
-  // Fix round 1, issue 1: the server refused a bearer the client thought good
+  // Regression: the server refused a bearer the client thought good
   // (clock skew, a deactivated user, a rotated secret, an undecodable token).
   // "Continue as guest" must really drop it, not send it again.
   it.each([
@@ -195,7 +195,7 @@ describe('shareRequest', () => {
     expect(lastCall().body).toEqual({ status: 'approved', guest_name: 'Dana', guest_email: 'dana@client.example' })
   })
 
-  // Fix round 2, issue 1: the choice covers the refused token only. Someone
+  // The choice covers the refused token only. Someone
   // who signs in again (another tab) and lets that token lapse too is
   // refreshed, not filed as the guest.
   it('a guest choice does not cover a different token that lapses later: it is refreshed and used', async () => {
@@ -223,7 +223,7 @@ describe('shareRequest', () => {
     expect(lastCall().body).toEqual({ status: 'approved' })
   })
 
-  // Fix round 3, issue 1: the choice binds the refused token, never whatever
+  // The choice binds the refused token, never whatever
   // storage holds when the button is pressed. Here another tab signed in (T2)
   // while the message was up; T2 is not bound, so when it lapses it is
   // refreshed and used, not turned into the guest.
@@ -474,10 +474,17 @@ describe('shareCallerKey', () => {
     continueAsGuest(await refusedWrite())
     expect(shareCallerKey(guest)).toBe('guest:dana@client.example')
   })
+
+  it('treats a token expiring within the 10 second skew as lapsed', () => {
+    localStorage.setItem('ff_access_token', jwt(5))
+    expect(shareCallerKey(guest)).toBe('lapsed')
+    localStorage.setItem('ff_access_token', jwt(60))
+    expect(shareCallerKey(guest)).toBe('bearer:u1')
+  })
 })
 
 describe('shareCallerKey across accounts', () => {
-  // Fix round 3, issue 3: another account signed in in another tab is a
+  // Another account signed in in another tab is a
   // different caller, so its press is never decided against the first one's list.
   it('differs between two accounts', () => {
     const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')

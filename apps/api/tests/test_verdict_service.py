@@ -1,7 +1,7 @@
 """The verdict service: the one place every verdict write goes through.
 
 Real Postgres, through the real app where a route is involved. `db` is a session
-whose commits land in a SAVEPOINT, so the service can commit (it must: Task 4
+whose commits land in a SAVEPOINT, so the service can commit (it must: the share route
 relies on its single commit to persist the ShareLinkActivity row it added) and
 the outer transaction still rolls back.
 
@@ -162,7 +162,7 @@ def test_the_display_name_is_the_users_or_the_guests(db):
 # ── clear and remove ──────────────────────────────────────────────────────────
 
 def test_clear_then_set_again_succeeds(db):
-    """Review Focus 3. Give, clear, give: the second give must not meet the first row."""
+    """Give, clear, give: the second give must not meet the first row."""
     w = _seed(db)
     v = _v1(w)
     guest = _guest(db)
@@ -200,7 +200,7 @@ def test_clearing_only_touches_the_callers_own_verdict(db):
 
 
 def _clear_with_a_caller_row(db, w, actor):
-    """Clear as Task 4 does: the caller adds a ShareLinkActivity row to the session first
+    """Clear as the share route does: the caller adds a ShareLinkActivity row to the session first
     and relies on the service's one commit to persist it. Returns (result, commit count)."""
     from apps.api.models.share import ShareActivityAction, ShareLinkActivity
 
@@ -226,7 +226,7 @@ def _cleared_logs(db, w):
 
 def test_clearing_with_nothing_to_clear_commits_but_logs_and_publishes_nothing(db, mocks):
     """A no-op clear changes nothing, so it writes no log and wakes nobody. It still commits,
-    because Task 4 adds a ShareLinkActivity row before calling and relies on that commit."""
+    because the share route adds a ShareLinkActivity row before calling and relies on that commit."""
     w = _seed(db)
 
     result, commits, persisted = _clear_with_a_caller_row(db, w, Actor(user=w.editor))
@@ -413,7 +413,7 @@ def test_a_signed_in_non_member_keeps_their_own_row_in_scope(db):
 
 
 def test_a_non_member_turns_team_once_added(db):
-    """Review Focus 4. A verdict given as external reads as team once its giver is a member."""
+    """A verdict given as external reads as team once its giver is a member."""
     w = _seed(db)
     v = _v1(w)
     link = _link(db, w)
@@ -787,7 +787,7 @@ def test_the_verdict_is_written_to_the_activity_log(db):
 
 
 def test_one_commit_persists_what_the_caller_added_to_the_session(db):
-    """Task 4 adds a ShareLinkActivity row, then calls set_verdict and relies on its commit."""
+    """The share route adds a ShareLinkActivity row, then calls set_verdict and relies on its commit."""
     from apps.api.models.share import ShareActivityAction, ShareLinkActivity
 
     w = _seed(db)

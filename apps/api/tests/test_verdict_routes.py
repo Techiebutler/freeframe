@@ -99,7 +99,7 @@ def _notifications(db, asset):
 
 
 def _guest_verdict(db, w, name="Dana", status=ApprovalStatus.rejected, asset=None):
-    """A verdict from a share-link guest, written the way Task 4's route will."""
+    """A verdict from a share-link guest, written the way the share route writes it."""
     asset = asset or w.A
     guest = GuestUser(email=f"{name.lower()}-{uuid.uuid4().hex[:8]}@client.test", name=name)
     db.add(guest)

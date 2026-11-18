@@ -6,7 +6,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 const FALLBACK_DETAIL = 'Request failed'
 
-/** The server's own words for a bearer it could not resolve (ruling R8), used
+/** The server's own words for a bearer it could not resolve used
  *  for the same case when the client finds out first. */
 export const SIGN_IN_EXPIRED = 'Your sign-in has expired. Sign in again or continue as a guest.'
 
