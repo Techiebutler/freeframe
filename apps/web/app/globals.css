@@ -839,23 +839,22 @@ button:not(:disabled), summary { cursor: pointer; }
    Blue glass: the gradients are the ones of `.owner-overview .metric-ready` and the rim/blur of `.glass`. */
 .ep-root { position: relative; display: flex; flex-direction: column; gap: 16px; height: 100%; min-height: 0; background: #000; color: var(--text-primary); outline: none; container: ep / size; }
 .ep-root[data-side] { flex-direction: row; align-items: center; justify-content: center; }
-.ep-video { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; background: #000; container-type: inline-size; }
-.ep-root[data-side] .ep-video { flex: none; height: 100%; }
+.ep-stage { --ratio: 0.5625; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; background: #000; container-type: inline-size; }
+.ep-video { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; background: #000; }
+/* beside the column: the stage is as wide as the picture the frame's height allows (52 px = the playbar under it) */
+.ep-root[data-side] .ep-stage { flex: none; height: 100%; width: calc((100cqh - 52px) * var(--ratio)); }
 .ep-side { display: flex; flex-direction: column; gap: 12px; min-height: 0; padding: 0 12px calc(12px + env(safe-area-inset-bottom, 0px)); container: epside / inline-size; }
 /* beside the player: the panel is centred in the free space, a 16 px gap away from the video, never taller than the frame */
 .ep-root[data-side] .ep-side { flex: 1 1 0; min-width: 0; max-width: 440px; max-height: 100%; padding: 12px 16px 12px 0; gap: 14px; }
 .ep-comments { display: none; min-height: 0; flex-direction: column; overflow: hidden; }
 .ep-comments[data-open] { display: flex; max-height: 28dvh; }
-.ep-root[data-side] .ep-comments { display: flex; flex: 1 1 auto; max-height: none; }
+.ep-root[data-side] .ep-comments[data-open] { flex: 1 1 auto; max-height: none; }
 .ep-comments-list { mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent); -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent); }
 .ep-comments-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 8px; font-size: 12px; font-weight: 500; color: var(--text-secondary); }
-.ep-comments-toggle { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--glass-border); background: var(--glass-bg); color: var(--text-primary); font-size: 14px; font-weight: 500; }
+.ep-comments-toggle { display: none; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--glass-border); background: var(--glass-bg); color: var(--text-primary); font-size: 14px; font-weight: 500; }
 .ep-root[data-side] .ep-comments-toggle { display: none; }
 .ep-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
-.ep-root[data-side] .ep-actions { flex-direction: column; gap: 10px; }
 .ep-actions[data-dictating], .ep-root[data-side] .ep-actions[data-dictating] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 14rem) minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; column-gap: 12px; row-gap: 6px; }
-.ep-root[data-side] .ep-actions:not([data-dictating]) { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
-.ep-root[data-side] .ep-actions:not([data-dictating]) > .ep-approve { grid-column: 1 / -1; }
 .ep-actions[data-dictating] > * { min-width: 0; }
 .ep-actions[data-dictating] > .ep-cancel { grid-area: 1 / 1; justify-self: start; }
 .ep-actions[data-dictating] > .ep-cta { grid-area: 1 / 2; min-height: 64px; font-size: 17px; animation: ep-rec-glow 1.6s ease-in-out infinite; }
@@ -906,15 +905,16 @@ button:not(:disabled), summary { cursor: pointer; }
   .ep-side .ep-chain { padding: 8px; gap: 14px; }
   .ep-side .ep-col { gap: 6px; }
 }
-@container epside (max-width: 240px) {
-  /* the chain must fit the panel: compact nodes, no fixed widths */
-  .ep-side .ep-chain { gap: 8px; padding: 8px 6px; }
-  .ep-side .ep-pill { width: auto !important; padding: 0 6px 0 9px; gap: 4px; font-size: 12px; }
-  .ep-side .ep-count { min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; }
-  .ep-root[data-side] .ep-actions { flex-direction: row; }
+@container epside (max-width: 300px) {
   .ep-cta, .ep-approve, .ep-type-btn { min-width: 36px; padding: 0 8px; }
   .ep-lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
+.ep-seg { display: flex; gap: 2px; padding: 3px; border-radius: 14px; background: oklch(0.25 0.018 255 / 0.9); border: 1px solid var(--glass-border); overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; flex: none; }
+.ep-seg::-webkit-scrollbar { display: none; }
+.ep-seg-btn { flex: 1 0 auto; min-width: max-content; min-height: 38px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 11px; font-size: 13px; font-weight: 500; white-space: nowrap; color: var(--text-secondary); scroll-snap-align: center; transition: background 150ms, color 150ms; }
+@media (hover: hover) and (pointer: fine) { .ep-seg-btn:hover { color: var(--text-primary); } }
+.ep-seg-btn[aria-pressed="true"], .ep-seg-btn[aria-current="true"] { color: oklch(0.99 0.005 250); background: linear-gradient(135deg, oklch(0.52 0.19 258), oklch(0.40 0.16 265)); box-shadow: inset 0 1px 0 oklch(0.97 0.01 250 / 0.4); }
+@container ep (max-width: 400px) and (max-height: 560px) { .ep-seg-btn { min-height: 32px; padding: 0 10px; font-size: 12px; } }
 
 /* chain of files */
 .ep-chain-wrap { overflow-x: auto; overflow-y: hidden; border-radius: 18px; border: 1px solid var(--glass-border); background: linear-gradient(145deg, oklch(0.8 0.025 255 / 0.10), transparent 65%), oklch(0.25 0.018 255 / 0.88); box-shadow: inset 0 1px 0 oklch(0.8 0.03 255 / 0.20); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); scrollbar-width: none; flex: none; }
@@ -935,10 +935,7 @@ button:not(:disabled), summary { cursor: pointer; }
 /* the glass bar */
 /* The bar scales with the video's own width (container query on .ep-video): --ib is the button/track height. Single row always,
    so it stays well under ~12% of the video height; targets 44 from phone width up, 32 in tiles. */
-.ep-bar { --ib: 36px; position: absolute; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 0 4px; padding: 3px 6px; border-radius: 16px; border: 1px solid rgb(255 255 255 / 0.16); color: #fff;
-  background: linear-gradient(145deg, oklch(0.8 0.025 255 / 0.16), transparent 60%), oklch(0.22 0.02 255 / 0.55); -webkit-backdrop-filter: saturate(180%) blur(24px); backdrop-filter: saturate(180%) blur(24px); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 32px -12px rgb(0 0 0 / 0.7);
-  transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out); }
-.ep-bar[data-hidden] { opacity: 0; transform: translateY(6px); pointer-events: none; }
+.ep-bar { --ib: 36px; flex: none; display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 0 4px; padding: 2px 6px; border-top: 1px solid rgb(255 255 255 / 0.08); color: #fff; background: oklch(0.2 0.02 255); }
 .ep-ib { width: var(--ib); height: var(--ib); display: grid; place-items: center; border-radius: 12px; color: #fff; transition: background 150ms, transform 160ms var(--ease-out); }
 .ep-ib svg { width: calc(var(--ib) * 0.5); height: calc(var(--ib) * 0.5); }
 @media (hover: hover) and (pointer: fine) { .ep-ib:hover { background: rgb(255 255 255 / 0.12); } }

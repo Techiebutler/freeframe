@@ -21,15 +21,14 @@ import {
   Image as ImageIcon,
   Video,
   Music,
-  ChevronLeft,
-  ChevronRight,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { GuestCommentInput, IdentityForm, loadIdentity, type GuestIdentity } from '@/components/review/guest-comment-input'
 import { FlowView } from '@/components/review/flow-view'
 import { GuestCommentList, type CommentsResponse } from '@/components/share/guest-comments'
-import { EmbedChain, chainOrder } from '@/components/share/embed-chain'
+import { chainOrder, inferRoles } from '@/components/share/embed-chain'
+import { ModuleTabs } from '@/components/share/module-tabs'
 import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
@@ -769,7 +768,7 @@ interface ShareViewerProps {
   /** The upload request behind this share link; the embed names it in its hand-off events. */
   requestId?: string | null
   /** Folder embed: this asset's place in the folder, the stepper, and what the approve acts on. */
-  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** The file chain of a module request; without it the plain 1 / N stepper. */ nav?: React.ReactNode }
+  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** The segmented file switcher (components/share/module-tabs.tsx). */ nav?: React.ReactNode }
 }
 
 function ShareViewer({
@@ -869,13 +868,7 @@ function ShareViewer({
       <div className="absolute inset-0 overflow-hidden bg-black text-white">
         <FlowView
           embed
-          embedNav={folder && folder.count > 1 && (folder.nav ?? (
-            <div className="flex items-center gap-1 self-center rounded-full bg-white/10 text-white" role="group" aria-label="Videos in this review">
-              <button type="button" onClick={() => folder.onStep(-1)} disabled={folder.index === 0} aria-label="Previous video" className="press grid h-11 w-11 place-items-center rounded-full disabled:opacity-40"><ChevronLeft size={20} aria-hidden="true" /></button>
-              <span className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums" aria-live="polite">{folder.index + 1} / {folder.count}</span>
-              <button type="button" onClick={() => folder.onStep(1)} disabled={folder.index === folder.count - 1} aria-label="Next video" className="press grid h-11 w-11 place-items-center rounded-full disabled:opacity-40"><ChevronRight size={20} aria-hidden="true" /></button>
-            </div>
-          ))}
+          embedNav={folder && folder.count > 1 ? folder.nav : undefined}
           embedComments={(show) => (
             <GuestCommentList token={token} refreshKey={commentKey} assetId={folder ? asset.id : undefined}
               onLoaded={(list) => setCommentTimes(list.map((c) => c.timecode_start).filter((t): t is number => typeof t === 'number'))}
@@ -1031,7 +1024,7 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
     fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500&embed=true${ss}`)
       .then((r) => (r.ok ? (r.json() as Promise<FolderShareAssetsResponse>) : null))
       .then((data) => {
-        const videos = (data?.assets ?? []).filter((a) => a.asset_type === 'video')
+        const videos = inferRoles((data?.assets ?? []).filter((a) => a.asset_type === 'video'))
         const sorted = chainOrder(videos) ?? videos
         setItems(sorted)
         setIndex(Math.max(0, sorted.findIndex((a) => !a.approved)))
@@ -1046,13 +1039,8 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
     setIndex(n)
     sendToParent({ type: 'ar:asset', asset_id: items[n].id, index: n + 1, count: items.length })
   }
-  const parts = items.filter((a) => a.role)
-  const nav = parts.length > 0 && (
-    <EmbedChain
-      items={parts.map((a) => ({ id: a.id, name: a.name, role: a.role!, order: a.order ?? 0, duration: a.duration_seconds, count: a.comment_count }))}
-      selectedId={current.id}
-      onSelect={(id) => go(items.findIndex((a) => a.id === id))}
-    />
+  const nav = items.length > 1 && (
+    <ModuleTabs items={items.map((a) => ({ id: a.id, name: a.name, role: a.role, order: a.order, count: a.comment_count }))} selectedId={current.id} onSelect={(id) => go(items.findIndex((a) => a.id === id))} />
   )
   return (
     <ShareViewer
