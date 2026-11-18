@@ -296,6 +296,17 @@ def _frame(db: Session, comment: Comment, atts: list[CommentAttachment], now: da
     return thumb, ("thumbnail" if thumb else None), state
 
 
+def _drawing(note: Annotation, frame_url, frame_source, frame_status, *, extended: bool) -> dict:
+    """`drawing` as it always was (drawing_data, frame_url, mark_offset_ms). Once the comment has something that refers to
+    its strokes - a server frame, a client frame, or a dictation - the strokes are named (`mark_id`) and the frame is labelled."""
+    dd = note.drawing_data
+    out = {"drawing_data": with_mark_ids(dd) if extended else dd, "frame_url": frame_url,
+           "mark_offset_ms": dd.get("mark_offset_ms") if isinstance(dd, dict) else None}
+    if extended:
+        out.update(frame_source=frame_source, frame_status=frame_status)
+    return out
+
+
 def _attachment_json(a: CommentAttachment, version_id: uuid.UUID) -> dict:
     meta = a.meta or {}
     out = {"attachment_id": str(a.id), "kind": a.kind or "reference_image", "file_name": a.original_filename,
@@ -341,9 +352,7 @@ def feedback_v1(db: Session, rnd: FeedbackRound) -> dict:
             "dictation_id": str(c.dictation_id) if c.dictation_id else None,
             "segment_index": c.segment_index if c.dictation_id else None,
             "segments": own,
-            "drawing": {"drawing_data": with_mark_ids(note.drawing_data), "frame_url": frame_url, "frame_source": frame_source,
-                        "frame_status": frame_status,
-                        "mark_offset_ms": note.drawing_data.get("mark_offset_ms") if isinstance(note.drawing_data, dict) else None} if note else None,
+            "drawing": _drawing(note, frame_url, frame_source, frame_status, extended=bool(c.dictation_id) or frame_status in ("ready", "pending", "failed") or frame_source in ("server", "client")) if note else None,
             "attachments": [_attachment_json(a, c.version_id) for a in atts if not _is_client_frame(a)],
             "author": name, "author_kind": kind})
     dictations = []
