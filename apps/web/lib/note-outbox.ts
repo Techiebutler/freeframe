@@ -3,7 +3,7 @@ import { api } from './api'
 import { getUsableAccessToken } from './auth'
 import { authHeaders } from './auth-headers'
 import { createOutbox, idbStore, statusLine, summarize, type Outbox, type OutboxEntry } from './outbox'
-import { uploadImages, type ImageRoute } from './comment-images'
+import { uploadDictationAudio, uploadImages, type ImageRoute } from './comment-images'
 import { postGuestNote, sessionQuery, type GuestIdentity } from './share-flow'
 
 const API_URL = () => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -11,7 +11,9 @@ const API_URL = () => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 /** images: reference screenshots that belong to THIS comment (kept as Files, IndexedDB stores them as is). */
 export interface NoteBody { text: string; t: number; annotation: Record<string, unknown> | null; images?: File[]; dropMissingImages?: boolean
   /** drawn-frame.jpg: the video frame with the ink on it. Never blocks the comment: see uploadDrawnFrame. */
-  drawnFrame?: File }
+  drawnFrame?: File
+  /** Spoken note: the whole dictation (shared by its sentence-notes), this note's number in it, and - on the first note only - the recording. */
+  dictation?: unknown; segmentIndex?: number; dictationAudio?: { blob: Blob; duration_s: number } }
 /** Everything a note needs to be sent later, from any screen: it must not depend on component state. */
 export type NotePayload =
   | ({ kind: 'project'; assetId: string; versionId: string } & NoteBody)
@@ -27,6 +29,14 @@ export async function uploadDrawnFrame(route: ImageRoute, file: File, release: (
   await release().catch(() => undefined)
 }
 
+/** The recording is a bonus for the agent: one retry, and if it still fails the round is released without it (never blocks the words). */
+async function uploadAudioOrRelease(route: ImageRoute, a: { blob: Blob; duration_s: number }, release: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { await uploadDictationAudio(route, a.blob, a.duration_s); return } catch (e) { console.warn('dictation audio: upload failed', attempt ? '(giving up)' : '(retrying)', e) }
+  }
+  await release().catch(() => undefined)
+}
+
 /** Classic comment box: the comment is already saved; the picture follows in the background (fire and forget). */
 export async function sendDrawnFrame(commentId: string, file: File): Promise<void> {
   const token = await getUsableAccessToken().catch(() => null)
@@ -37,11 +47,12 @@ export async function sendDrawnFrame(commentId: string, file: File): Promise<voi
 export async function sendNotePayload(p: NotePayload, idempotencyKey: string): Promise<void> {
   const headers = { 'Idempotency-Key': idempotencyKey }
   const images = p.images ?? []
-  const expected = images.length + (p.drawnFrame ? 1 : 0)
+  const expected = images.length + (p.drawnFrame ? 1 : 0) + (p.dictationAudio ? 1 : 0)
   const token = await getUsableAccessToken().catch(() => null)
   if (p.kind === 'project') {
     const body: Record<string, unknown> = { body: p.text, version_id: p.versionId, timecode_start: Math.round(p.t * 1000) / 1000 }
     if (p.annotation) body.annotation = { drawing_data: p.annotation }
+    if (p.dictation) { body.dictation = p.dictation; body.segment_index = p.segmentIndex ?? 0 }
     if (expected) body.attachments_expected = expected
     const c = await api.post<{ id: string }>(`/assets/${p.assetId}/comments`, body, { headers })
     const release = () => withoutMissing(`${API_URL()}/comments/${c.id}/attachments/send-without-missing`, {}, authHeaders(token))
@@ -49,12 +60,13 @@ export async function sendNotePayload(p: NotePayload, idempotencyKey: string): P
     if (p.dropMissingImages) await release()
     else {
       if (images.length) await uploadImages(route, images)
+      if (p.dictationAudio) await uploadAudioOrRelease(route, p.dictationAudio, release)
       if (p.drawnFrame) await uploadDrawnFrame(route, p.drawnFrame, release)
     }
     return
   }
   const identity = token ? null : p.identity
-  const id = await postGuestNote(p.token, { text: p.text, t: p.t, annotation: p.annotation, attachmentsExpected: expected }, {
+  const id = await postGuestNote(p.token, { text: p.text, t: p.t, annotation: p.annotation, attachmentsExpected: expected, dictation: p.dictation, segmentIndex: p.segmentIndex }, {
     identity, shareSession: p.shareSession, assetId: p.assetId, versionId: p.versionId,
     headers: { ...authHeaders(token), ...headers },
   })
@@ -65,6 +77,7 @@ export async function sendNotePayload(p: NotePayload, idempotencyKey: string): P
   if (p.dropMissingImages) await release()
   else {
     if (images.length) await uploadImages(route, images)
+    if (p.dictationAudio) await uploadAudioOrRelease(route, p.dictationAudio, release)
     if (p.drawnFrame) await uploadDrawnFrame(route, p.drawnFrame, release)
   }
 }

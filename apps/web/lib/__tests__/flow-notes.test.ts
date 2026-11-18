@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { videoTimeAt, type TimelinePoint } from '../rec-timeline'
-import { notesFromDictation, notesReducer, sendable, sendBlocked, type FlowNote } from '../flow-notes'
+import { dictationPayload, notesFromDictation, notesReducer, sendable, sendBlocked, type FlowNote } from '../flow-notes'
 
 const blob = new Blob(['x'])
 const add = (s: FlowNote[], id: string, t: number) => notesReducer(s, { type: 'add', id, t })
@@ -113,5 +113,66 @@ describe('notesFromDictation', () => {
   it('splits a note in the reducer and keeps order', () => {
     const s = notesReducer(add([], 'a', 10), { type: 'split', id: 'a', parts: [{ id: 'a', t: 10, text: 'One.', marks: [] }, { id: 'b', t: 13.5, text: 'Two.', marks: [] }] })
     expect(s.map(n => [n.id, n.status])).toEqual([['a', 'ready'], ['b', 'ready']])
+  })
+})
+
+// The BOF case (spec 2026-11-18 T6): the stroke began 30 ms BEFORE the first word of the next sentence. The sentence that was
+// ongoing (cut by a pause, no punctuation) got the stroke and a late video time; the sentence after it sat on the same frame.
+describe('notesFromDictation - one dictation, no orphan fragment (BOF)', () => {
+  // video: playing from 10.4 s; at 4 s into the recording the reviewer seeks back and the video sits at 5.6+rec
+  const tl: TimelinePoint[] = [{ rec_ms: 0, video_t: 10.4, playing: true, rate: 1 }, { rec_ms: 4000, video_t: 5.6, playing: true, rate: 1 }]
+  const timeAt = (ms: number) => videoTimeAt(tl, ms)
+  const segs = [{ start: 2, end: 3.1, text: 'Mach das hier' }, { start: 6.1, end: 7.6, text: 'so likeable wie möglich.' }]
+  const stroke = { k: 'stroke' as const, points: [[0.4, 0.4], [0.6, 0.6]] as [number, number][], t: 0, offset_ms: 6070 }
+
+  it('reproduces the premise: first sentence at 12.4 s, its stroke on frame 7.67, the second sentence at 7.7 s', () => {
+    expect(timeAt(2000)).toBe(12.4)
+    expect(timeAt(6070)).toBeCloseTo(7.67, 3)
+    expect(timeAt(6100)).toBeCloseTo(7.7, 3)
+  })
+
+  it('a pause-cut fragment whose stroke sits on the next sentence joins it: one note on the stroke frame, nothing orphaned', () => {
+    const parts = notesFromDictation(timeAt, 'x', segs, [stroke])
+    expect(parts).toHaveLength(1)
+    expect(parts[0].text).toBe('Mach das hier so likeable wie möglich.')
+    expect(parts[0].t).toBeCloseTo(7.7, 3)
+    expect(parts[0].marks.map(m => m.t.toFixed(2))).toEqual(['7.67'])
+    expect(parts[0].segments.map(s => [s.text, s.start_s, +s.video_t.toFixed(2)])).toEqual([['Mach das hier', 2, 12.4], ['so likeable wie möglich.', 6.1, 7.7]])
+  })
+
+  it('a sentence that ends in . ? ! is never glued to its neighbour just because a stroke is near', () => {
+    const parts = notesFromDictation(timeAt, 'x', [{ start: 2, end: 3, text: 'Mach das hier.' }, segs[1]], [stroke])
+    expect(parts.map(p => p.text)).toEqual(['Mach das hier.', 'so likeable wie möglich.'])
+  })
+
+  it('a pause-cut fragment far from every stroke and from the next sentence stays its own note', () => {
+    const parts = notesFromDictation(timeAt, 'x', segs, [])
+    expect(parts.map(p => [p.text, +p.t.toFixed(1)])).toEqual([['Mach das hier', 12.4], ['so likeable wie möglich.', 7.7]])
+  })
+
+  it('every note carries the sentences it was made of, with times on the recording clock', () => {
+    const [a, b] = notesFromDictation(timeAt, 'x', segs, [])
+    expect(a.segments).toHaveLength(1)
+    expect(a.segments[0]).toMatchObject({ text: 'Mach das hier', start_s: 2 })
+    expect(a.segments[0].end_s).toBeGreaterThan(2.5)
+    expect(a.segments[0].end_s).toBeLessThanOrEqual(3.1)
+    expect(a.segments[0].video_t).toBeCloseTo(12.4, 3)
+    expect(b.segments[0]).toMatchObject({ start_s: 6.1 })
+    expect(b.segments[0].end_s).toBeLessThanOrEqual(7.6)
+  })
+})
+
+describe('dictationPayload', () => {
+  const play = (ms: number) => ms / 1000
+  it('shares one id, keeps raw text and words in the server clock, and numbers the notes', () => {
+    const segs = [{ start: 0, end: 1, text: 'Eins.' }, { start: 3, end: 4, text: 'Zwei.' }]
+    const words = [{ start: 0, end: 0.5, word: 'Eins.' }, { start: 3, end: 3.4, word: 'Zwei.' }]
+    const parts = notesFromDictation(play, 'Eins. Zwei.', segs, [], words)
+    const d = dictationPayload('11111111-1111-4111-8111-111111111111', { text: 'Eins. Zwei.', raw_text: 'Eins Zwei', segments: segs, words }, parts)
+    expect(d).toEqual({
+      id: '11111111-1111-4111-8111-111111111111', text: 'Eins. Zwei.', raw_text: 'Eins Zwei',
+      words: [{ w: 'Eins.', start_s: 0, end_s: 0.5 }, { w: 'Zwei.', start_s: 3, end_s: 3.4 }],
+      segments: [{ text: 'Eins.', start_s: 0, end_s: 0.5, video_t: 0, segment_index: 0 }, { text: 'Zwei.', start_s: 3, end_s: 3.4, video_t: 3, segment_index: 1 }],
+    })
   })
 })

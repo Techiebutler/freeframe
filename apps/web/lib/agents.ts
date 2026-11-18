@@ -99,14 +99,14 @@ export const acceptRuleSuggestion = (roundId: string, suggestionId: string) =>
 
 export const linkTelegram = () => api.post<{ url: string }>('/me/telegram/link')
 export interface DictationSegment { start: number; end: number; text: string }
-export interface DictationResult { text: string; segments: DictationSegment[]; words?: DictationWord[] }
+export interface DictationResult { text: string; segments: DictationSegment[]; words?: DictationWord[]; /** Whisper's own text, present only when the vocabulary fix changed it. */ raw_text?: string }
 /** `lang` defaults to German on the server; pass 'en' or 'auto' to change it. */
 export async function dictate(audio: Blob, lang?: 'de' | 'en' | 'auto'): Promise<DictationResult> {
   const fd = new FormData()
   fd.append('audio', audio, 'dictation.webm')
   if (lang) fd.append('lang', lang)
-  const r = await api.upload<{ text: string; segments?: DictationSegment[]; words?: DictationWord[] }>('/dictate', fd)
-  return { text: r.text, segments: r.segments ?? [], ...(r.words?.length ? { words: r.words } : {}) }
+  const r = await api.upload<{ text: string; segments?: DictationSegment[]; words?: DictationWord[]; raw_text?: string }>('/dictate', fd)
+  return { text: r.text, segments: r.segments ?? [], ...(r.words?.length ? { words: r.words } : {}), ...(r.raw_text ? { raw_text: r.raw_text } : {}) }
 }
 
 export function countdown(expiresAt: string, now: number): { label: string; expired: boolean } {

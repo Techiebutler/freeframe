@@ -5,7 +5,7 @@ import { Check, Clock, Keyboard, Link2, Loader2, Mic, Paperclip, RotateCcw, Send
 import { cn } from '@/lib/utils'
 import { timecode } from '@/lib/platform'
 import { dictate as dictateApi, type DictationResult } from '@/lib/agents'
-import { notesFromDictation, notesReducer, sendBlocked, sendable, type FlowNote } from '@/lib/flow-notes'
+import { dictationPayload, notesFromDictation, notesReducer, sendBlocked, sendable, type FlowNote } from '@/lib/flow-notes'
 import { drawnFrameFile, nearestShot, snapshotVideo, type FrameShot } from '@/lib/drawn-frame'
 import { buildDrawingData, isInk, splitDeictic, type InkMark } from '@/lib/ink'
 import { getNoteOutbox, useNoteOutbox, type NoteBody, type NotePayload } from '@/lib/note-outbox'
@@ -85,6 +85,8 @@ export interface FlowViewProps {
 
 let seq = 0
 const newId = () => `note-${Date.now()}-${seq++}`
+/** A UUID: the API keeps one dictation row for all the sentence-notes that share it. */
+const newDictationId = (): string => globalThis.crypto?.randomUUID?.() ?? 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16))
 
 const stamp = (t: number) => `${timecode(t)}.${Math.floor((t % 1) * 10)}`
 
@@ -282,7 +284,8 @@ export function FlowView(p: FlowViewProps) {
     for (const n of notes) {
       if (n.status !== 'ready' || !n.text.trim() || ob.byId(n.id)) continue
       if (!canSave) { onNeedSave.current?.(); continue }
-      const note = { text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []), ...(n.images?.length ? { images: n.images } : {}) }
+      const note = { text: n.text.trim(), t: n.t, annotation: buildDrawingData(n.marks ?? []), ...(n.images?.length ? { images: n.images } : {}),
+        ...(n.dictation ? { dictation: n.dictation, segmentIndex: n.segment_index ?? 0, ...(n.dictationAudio ? { dictationAudio: n.dictationAudio } : {}) } : {}) }
       if (framing.current.has(n.id)) continue
       framing.current.add(n.id)
       // Ink: render the drawn frame first (milliseconds), then queue; no frame (tainted, no video) = ink only. One chain keeps note order.
@@ -294,7 +297,7 @@ export function FlowView(p: FlowViewProps) {
     }
   }, [notes, canSave, ob.entries]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const transcribe = async (n: { id: string; t: number; marks?: InkMark[] }, audio: Blob) => {
+  const transcribe = async (n: { id: string; t: number; marks?: InkMark[] }, audio: Blob, recordedMs?: number) => {
     const { id } = n
     dispatch({ type: 'transcribing', id, audio })
     setMessages(m => { const { [id]: _, ...rest } = m; return rest })
@@ -304,7 +307,12 @@ export function FlowView(p: FlowViewProps) {
       const points = timelines.current.get(id) ?? []
       const timeAt = points.length ? (ms: number) => videoTimeAt(points, ms) : (ms: number) => Math.round((n.t + ms / 1000) * 1000) / 1000
       const parts = notesFromDictation(timeAt, r.text, r.segments ?? [], n.marks ?? [], r.words ?? [])
-      dispatch({ type: 'split', id, parts: parts.map((part, i) => ({ ...part, id: i === 0 ? id : newId() })) })
+      // The words and the recording stay with the notes (spec 2026-11-18): one dictation id for all its sentence-notes.
+      const dictation = r.text.trim() && parts.length ? dictationPayload(newDictationId(), r, parts) : undefined
+      const lastWord = r.words?.length ? r.words[r.words.length - 1].end : 0
+      const duration_s = Math.max((recordedMs ?? 0) / 1000, lastWord)
+      dispatch({ type: 'split', id, parts: parts.map((part, i) => ({ ...part, id: i === 0 ? id : newId(), segment_index: i })), dictation,
+        ...(dictation && audio.size > 0 ? { audio: { blob: audio, duration_s } } : {}) })
     }
     catch (e) { dispatch({ type: 'failed', id }); setMessages(m => ({ ...m, [id]: dictationMessage(e) })) }
   }
@@ -335,7 +343,7 @@ export function FlowView(p: FlowViewProps) {
     tracker.current = null
     if (dropEmpty && !keepSegment(Date.now() - startedAt, drawn.length)) { rec.cancel(); timelines.current.delete(id); dispatch({ type: 'remove', id }); return }
     dispatch({ type: 'marks', id, marks: drawn })
-    await transcribe({ id, t, marks: drawn }, await rec.stop())
+    await transcribe({ id, t, marks: drawn }, await rec.stop(), Date.now() - startedAt)
   }
 
   /** Starts a recording at the playhead. Resolves false when there is no microphone (the note is dropped). */

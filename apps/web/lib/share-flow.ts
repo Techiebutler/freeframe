@@ -5,7 +5,7 @@ import type { SharePermission } from '@/types'
 const API_URL = () => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export interface GuestIdentity { name: string; email: string }
-export interface GuestNote { text: string; t: number; annotation: Record<string, unknown> | null; attachmentsExpected?: number }
+export interface GuestNote { text: string; t: number; annotation: Record<string, unknown> | null; attachmentsExpected?: number; dictation?: unknown; segmentIndex?: number }
 
 export class ShareFlowError extends Error {
   status: number
@@ -29,6 +29,7 @@ export async function postGuestNote(
   const body: Record<string, unknown> = { body: note.text, timecode_start: Math.round(note.t * 1000) / 1000 }
   if (note.annotation) body.annotation = { drawing_data: note.annotation }
   if (note.attachmentsExpected) body.attachments_expected = note.attachmentsExpected
+  if (note.dictation) { body.dictation = note.dictation; body.segment_index = note.segmentIndex ?? 0 }
   if (opts.identity) { body.guest_name = opts.identity.name; body.guest_email = opts.identity.email }
   if (opts.assetId) body.asset_id = opts.assetId
   if (opts.versionId) body.version_id = opts.versionId
@@ -48,7 +49,7 @@ export async function guestDictate(token: string, audio: Blob, shareSession?: st
   const res = await fetch(`${API_URL()}/share/${token}/dictate${sessionQuery(shareSession)}`, { method: 'POST', body: fd })
   if (!res.ok) await fail(res, 'dictation_unavailable')
   const r = await res.json()
-  return { text: r.text, segments: r.segments ?? [], ...(r.words?.length ? { words: r.words } : {}) }
+  return { text: r.text, segments: r.segments ?? [], ...(r.words?.length ? { words: r.words } : {}), ...(r.raw_text ? { raw_text: r.raw_text } : {}) }
 }
 
 /** Approve one asset through a folder share link: POST /share/{token}/assets/{asset_id}/approve (Lane A). */
