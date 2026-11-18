@@ -80,6 +80,10 @@ export default function ProjectDetailPage() {
   const [currentFolderId, setCurrentFolderId] = React.useState<string | null>(
     searchParams.get("folder") || null,
   );
+  const folderFromUrl = searchParams.get("folder") || null;
+  React.useEffect(() => {
+    setCurrentFolderId(folderFromUrl);
+  }, [folderFromUrl]);
   const [showTrash, setShowTrash] = React.useState(false);
   const [showShareLinks, setShowShareLinks] = React.useState(false);
   const [selectedShareLink, setSelectedShareLink] = React.useState<
