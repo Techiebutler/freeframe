@@ -3,8 +3,11 @@ import os
 import re
 import threading
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from .config import settings
 from .routers import auth, users, projects, upload, events, assets, me, comments, approvals, share, metadata, branding, instance_branding, notifications, admin, setup, folders, hls_proxy, instance_settings
 from .services.s3_service import run_startup_bucket_setup
@@ -88,6 +91,40 @@ if settings.cors_allows_any_origin:
     _cors_origin_kwargs = {"allow_origin_regex": ".*"}
 else:
     _cors_origin_kwargs = {"allow_origins": settings.cors_origins}
+
+# Routes whose whole body is a password check: a body that is not an object at
+# all (a bare string) fails at loc ("body",) and would be echoed back whole.
+_PASSWORD_BODY_ROUTES = frozenset({"/share/{token}/verify"})
+
+
+def _names_a_password(loc) -> bool:
+    return any(isinstance(part, str) and "password" in part.lower() for part in loc)
+
+
+def _without_password_input(request: Request, errors: list) -> list:
+    """FastAPI's 422 detail echoes each failing value as `input`. Drop it (and
+    `ctx`, which can repeat it) for errors about a password field, and for a
+    non-object body on a password route, so a password is never sent back in
+    an error. Every other error is passed through untouched."""
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    cleaned = []
+    for error in errors:
+        loc = tuple(error.get("loc", ()))
+        if _names_a_password(loc) or (loc == ("body",) and route_path in _PASSWORD_BODY_ROUTES):
+            error = {k: v for k, v in error.items() if k not in ("input", "ctx")}
+        cleaned.append(error)
+    return cleaned
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # The same response as FastAPI's default handler, minus echoed passwords.
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(_without_password_input(request, exc.errors()))},
+    )
+
 
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SetupGuardMiddleware)

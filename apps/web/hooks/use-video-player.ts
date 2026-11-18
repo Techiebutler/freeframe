@@ -85,6 +85,11 @@ export function useVideoPlayer(
   // Loading a new source resets the element to its default rate without a
   // `ratechange` the label could follow, so the chosen rate is put back on it.
   const playbackRateRef = useRef(1)
+  // When the frame clock last wrote the display, as a `performance.now()`
+  // stamp. `timeupdate` reads it to tell a running clock from a stalled one.
+  // -Infinity until the first frame, so a clock that has never run never looks
+  // alive, whatever the page's clock reads.
+  const lastFrameRef = useRef(Number.NEGATIVE_INFINITY)
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([])
   const [currentQuality, setCurrentQuality] = useState(-1) // -1 = no active rung reported
   const [selectedQuality, setSelectedQuality] = useState(-1) // -1 = auto
@@ -117,6 +122,50 @@ export function useVideoPlayer(
       if (syncIntervalRef.current) clearInterval(syncIntervalRef.current)
     }
   }, [setPlayheadTime, detached])
+
+  // Follow the picture frame by frame while playing. `timeupdate` alone fires
+  // only every 250-330 ms in Chrome (7-8 frames at 25 fps), so the timecode
+  // moved in steps and jumped when the final update on pause caught up.
+  // requestVideoFrameCallback reports each presented frame; requestAnimationFrame
+  // is the fallback where it is missing.
+  //
+  // A detached pane is skipped: no compare code reads its time, so the clock
+  // would re-render both panes once per frame for nothing.
+  useEffect(() => {
+    if (!isPlaying || detached) return
+    const video = videoRef.current as (HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number
+      cancelVideoFrameCallback?: (handle: number) => void
+    }) | null
+    if (!video) return
+    let stopped = false
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      let handle = 0
+      const onFrame = (_now: number, meta: { mediaTime: number }) => {
+        if (stopped) return
+        lastFrameRef.current = performance.now()
+        setCurrentTime(meta.mediaTime)
+        handle = video.requestVideoFrameCallback!(onFrame)
+      }
+      handle = video.requestVideoFrameCallback(onFrame)
+      return () => {
+        stopped = true
+        video.cancelVideoFrameCallback?.(handle)
+      }
+    }
+    let raf = 0
+    const tick = () => {
+      if (stopped) return
+      lastFrameRef.current = performance.now()
+      setCurrentTime(video.currentTime)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => {
+      stopped = true
+      cancelAnimationFrame(raf)
+    }
+  }, [isPlaying, detached])
 
   // React to external seek requests (e.g. clicking comment timecode)
   useEffect(() => {
@@ -195,7 +244,17 @@ export function useVideoPlayer(
     }
 
     const onTimeUpdate = () => {
-      setCurrentTime(video.currentTime)
+      // Two writers would otherwise set the same display: the frame clock
+      // writes the presented frame's `mediaTime`, and `video.currentTime` here
+      // can be up to a frame behind it, so the label stepped back on screen.
+      // While the clock is running this only skips the display; `timeupdate`
+      // stays the writer whenever the clock cannot run. `video.paused` covers
+      // the reverse shuttle, which walks `currentTime` on a paused element,
+      // and the 300 ms threshold covers a hidden tab, where neither
+      // requestVideoFrameCallback nor requestAnimationFrame fires.
+      if (video.paused || performance.now() - lastFrameRef.current > 300) {
+        setCurrentTime(video.currentTime)
+      }
       // Update buffered end
       if (video.buffered.length > 0) {
         setBuffered(video.buffered.end(video.buffered.length - 1))
@@ -203,7 +262,15 @@ export function useVideoPlayer(
     }
 
     const onPlay = () => { setIsPlaying(true); if (!detached) setActiveAnnotation(null) }
-    const onPause = () => setIsPlaying(false)
+    // Settle the display AND the store on the paused position at once, within
+    // a frame of the picture, so a comment written now is anchored there
+    // rather than wherever a later update lands. The player's own store sync
+    // is throttled and can drop this last value.
+    const onPause = () => {
+      setIsPlaying(false)
+      setCurrentTime(video.currentTime)
+      if (!detached) setPlayheadTime(video.currentTime)
+    }
     const onWaiting = () => setIsLoading(true)
     const onCanPlay = () => setIsLoading(false)
     const onVolumeChange = () => {

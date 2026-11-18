@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   formatTime,
   formatTimecode,
+  formatFrames,
   formatBytes,
   formatRelativeTime,
   formatTimeLeft,
@@ -50,6 +51,23 @@ describe('formatTimecode', () => {
 
   it('formats with custom fps', () => {
     expect(formatTimecode(1, 30)).toBe('00:00:01:00')
+  })
+
+  it('labels a frame by its own start time, not the frame before', () => {
+    // 1.16 * 25 is 28.999… in floating point; a plain floor shows frame 28.
+    expect(formatTimecode(1.16, 25)).toBe('00:00:01:04')
+    expect(formatFrames(2.28, 25)).toBe('57')
+  })
+
+  it('names every frame of an hour exactly once, at 24 and 25 fps', () => {
+    const misses: string[] = []
+    for (const fps of [24, 25]) {
+      for (let k = 0; k < fps * 3600; k += 1) {
+        const t = Math.round((k / fps) * 1e6) / 1e6 // a presentation time as the browser reports it
+        if (Number(formatFrames(t, fps)) !== k) misses.push(`${fps}fps frame ${k}`)
+      }
+    }
+    expect(misses).toEqual([])
   })
 })
 
