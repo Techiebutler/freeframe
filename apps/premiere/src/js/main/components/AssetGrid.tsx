@@ -1,7 +1,9 @@
 /** Second browse screen: folders and assets of one project, as cards. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { useApp } from "../state";
 import type { Asset, FolderNode, Project } from "../../lib/freeframe/types";
+import { copyText } from "../../lib/freeframe/clipboard";
+import type { UploadLocation } from "./LocationPicker";
 import { formatDuration, shortDate } from "../../lib/freeframe/format";
 import { Dropdown, MenuAction } from "./Dropdown";
 import { AppearanceMenu, SortedByMenu, cardMinWidth } from "./BrowseControls";
@@ -21,6 +23,7 @@ import { CollectionShareDialog } from "./share/CollectionShareDialog";
 import { ShareDialog } from "./share/ShareDialog";
 import { ScrubThumb } from "./ScrubThumb";
 import {
+  IconCheck,
   IconCloudUpload,
   IconClose,
   IconComment,
@@ -34,6 +37,7 @@ import {
   IconMore,
   IconTrash,
   IconFolder,
+  IconFolderFilled,
   IconHome,
   IconPlus,
   IconRefresh,
@@ -58,6 +62,17 @@ interface Crumb {
   name: string;
 }
 
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+/** "3 items · 2 folders", or "Empty". */
+const folderSummary = (folder: FolderNode) => {
+  const parts = [
+    folder.item_count ? plural(folder.item_count, "item") : "",
+    folder.children?.length ? plural(folder.children.length, "folder") : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "Empty";
+};
+
 const findNode = (nodes: FolderNode[], id: string): FolderNode | null => {
   for (const node of nodes) {
     if (node.id === id) return node;
@@ -81,7 +96,8 @@ export const AssetGrid = ({
   project: Project;
   onBack: () => void;
   onOpenAsset: (asset: Asset) => void;
-  onExport: () => void;
+  /** Opens the export dialog; passes the folder being browsed as the default destination. */
+  onExport: (location?: UploadLocation) => void;
   /** The asset bound to the sequence open in Premiere, if it is in this grid. */
   link: AssetLink | null;
   onLinkChange: (link: AssetLink | null) => void;
@@ -105,11 +121,28 @@ export const AssetGrid = ({
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderBusy, setFolderBusy] = useState(false);
   const [folderError, setFolderError] = useState("");
-  const [movingAsset, setMovingAsset] = useState<Asset | null>(null);
+  const [movingAssets, setMovingAssets] = useState<Asset[]>([]);
+  // Multi-select: Ctrl/Cmd-click toggles, Shift-click selects a range, and the
+  // hover checkbox starts a selection without a modifier key.
+  const [selected, setSelected] = useState<string[]>([]);
+  const [anchorId, setAnchorId] = useState<string | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveError, setMoveError] = useState("");
 
   const folderId = crumbs[crumbs.length - 1].id;
+
+  // A selection belongs to one folder listing.
+  useEffect(() => {
+    setSelected([]);
+    setAnchorId(null);
+  }, [folderId]);
+  const exportHere = () =>
+    onExport({
+      projectId: project.id,
+      projectName: project.name,
+      folderId,
+      folderName: crumbs[crumbs.length - 1].name,
+    });
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -271,12 +304,16 @@ export const AssetGrid = ({
   };
 
   const onMoveAsset = async (targetFolderId: string | null) => {
-    if (!movingAsset || targetFolderId === movingAsset.folder_id) return;
+    const toMove = movingAssets.filter((asset) => asset.folder_id !== targetFolderId);
+    if (!toMove.length) return;
     setMoveBusy(true);
     setMoveError("");
     try {
-      await api.moveAsset(movingAsset.id, targetFolderId);
-      setMovingAsset(null);
+      for (const asset of toMove) {
+        await api.moveAsset(asset.id, targetFolderId);
+      }
+      setMovingAssets([]);
+      setSelected([]);
       await load(true);
     } catch (e) {
       setMoveError(e instanceof Error ? e.message : String(e));
@@ -285,7 +322,7 @@ export const AssetGrid = ({
     }
   };
 
-  const onDelete = async (asset: Asset) => {
+  const onDelete = async (asset: Asset, reload = true) => {
     try {
       await api.deleteAsset(asset.id);
       if (link?.assetId === asset.id) {
@@ -301,10 +338,68 @@ export const AssetGrid = ({
           await refreshHost();
         }
       }
-      await load(true);
+      if (reload) await load(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  const selectedAssets = useMemo(
+    () => visible.filter((asset) => selected.includes(asset.id)),
+    [visible, selected]
+  );
+
+  const toggleSelected = (asset: Asset) => {
+    setSelected((current) =>
+      current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id]
+    );
+    setAnchorId(asset.id);
+  };
+
+  const onCardClick = (asset: Asset, event: ReactMouseEvent | ReactKeyboardEvent) => {
+    if (event.shiftKey && anchorId) {
+      const ids = visible.map((entry) => entry.id);
+      const from = ids.indexOf(anchorId);
+      const to = ids.indexOf(asset.id);
+      if (from !== -1 && to !== -1) {
+        const range = ids.slice(Math.min(from, to), Math.max(from, to) + 1);
+        setSelected((current) => [...new Set([...current, ...range])]);
+        return;
+      }
+    }
+    if (event.ctrlKey || event.metaKey || selected.length > 0) {
+      toggleSelected(asset);
+      return;
+    }
+    onOpenAsset(asset);
+  };
+
+  useEffect(() => {
+    if (!selected.length) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea")) return;
+      if (event.key === "Escape") setSelected([]);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [selected.length]);
+
+  const deleteSelected = () => {
+    const targets = selectedAssets;
+    if (!targets.length) return;
+    const plural = targets.length === 1 ? "" : "s";
+    setConfirming({
+      title: `Delete ${targets.length} asset${plural}`,
+      body: `${targets.length} asset${plural} will move to the project trash. You can restore them from the FreeFrame web app.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: async () => {
+        for (const asset of targets) await onDelete(asset, false);
+        setSelected([]);
+        await load(true);
+      },
+    });
   };
 
   return (
@@ -327,17 +422,20 @@ export const AssetGrid = ({
           }}
         />
       )}
-      {movingAsset && (
+      {movingAssets.length > 0 && (
         <MoveAssetDialog
-          assetName={movingAsset.name}
+          assetName={
+            movingAssets.length === 1 ? movingAssets[0].name : `${movingAssets.length} assets`
+          }
+          count={movingAssets.length}
           tree={tree}
-          currentFolderId={movingAsset.folder_id}
+          currentFolderId={movingAssets[0].folder_id}
           busy={moveBusy}
           error={moveError}
           onMove={onMoveAsset}
           onClose={() => {
             if (!moveBusy) {
-              setMovingAsset(null);
+              setMovingAssets([]);
               setMoveError("");
             }
           }}
@@ -395,7 +493,7 @@ export const AssetGrid = ({
         </button>
         <button
           className="primary icon-btn"
-          onClick={onExport}
+          onClick={exportHere}
           title="Export the active sequence here"
         >
           <IconPlus width={15} height={15} />
@@ -403,7 +501,36 @@ export const AssetGrid = ({
       </nav>
 
       <div className="view-bar">
-        {searching ? (
+        {selected.length > 0 ? (
+          <div className="selection-bar">
+            <strong>{selected.length} selected</strong>
+            <span className="spacer" />
+            <button
+              className="chip"
+              onClick={() => setSelected(visible.map((asset) => asset.id))}
+              disabled={selected.length === visible.length}
+            >
+              Select all
+            </button>
+            <button
+              className="chip with-icon"
+              onClick={() => {
+                setMoveError("");
+                setMovingAssets(selectedAssets);
+              }}
+            >
+              <IconFolder width={13} height={13} />
+              Move
+            </button>
+            <button className="chip with-icon danger" onClick={deleteSelected}>
+              <IconTrash width={13} height={13} />
+              Delete
+            </button>
+            <button className="icon-btn" title="Clear selection (Esc)" onClick={() => setSelected([])}>
+              <IconClose width={15} height={15} />
+            </button>
+          </div>
+        ) : searching ? (
           <>
             <div className="field">
               <IconSearch />
@@ -456,16 +583,21 @@ export const AssetGrid = ({
       {loading && <p className="muted">Loading…</p>}
 
       {childFolders.length > 0 && (
-        <div className="folder-row">
+        <div className="folder-grid">
           {childFolders.map((folder) => (
             <button
               key={folder.id}
-              className="folder-chip"
+              className="folder-tile"
+              title={folder.name}
               onClick={() => setCrumbs([...crumbs, { id: folder.id, name: folder.name }])}
             >
-              <IconFolder width={14} height={14} />
-              <span>{folder.name}</span>
-              {!!folder.item_count && <em>{folder.item_count}</em>}
+              <span className="folder-tile-icon">
+                <IconFolderFilled width={20} height={20} />
+              </span>
+              <span className="folder-tile-meta">
+                <span className="folder-tile-name">{folder.name}</span>
+                <span className="folder-tile-sub">{folderSummary(folder)}</span>
+              </span>
             </button>
           ))}
         </div>
@@ -482,19 +614,34 @@ export const AssetGrid = ({
         {visible.map((asset) => {
           const duration = durationOf(asset);
           const version = asset.latest_version?.version_number ?? 1;
+          const isSelected = selected.includes(asset.id);
           const isSequenceLinked =
             link?.assetId === asset.id || segmentLinks.some((segment) => segment.assetId === asset.id);
           return (
             <div
               key={asset.id}
-              className="card"
+              className={`card${isSelected ? " selected" : ""}${selected.length ? " selecting" : ""}`}
               role="button"
               tabIndex={0}
-              onClick={() => onOpenAsset(asset)}
+              aria-pressed={selected.length ? isSelected : undefined}
+              onClick={(event) => onCardClick(asset, event)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") onOpenAsset(asset);
+                if (event.key === "Enter" || event.key === " ") onCardClick(asset, event);
               }}
             >
+              <span
+                className="card-check"
+                role="checkbox"
+                aria-checked={isSelected}
+                title={isSelected ? "Deselect" : "Select"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (event.shiftKey) onCardClick(asset, event);
+                  else toggleSelected(asset);
+                }}
+              >
+                {isSelected && <IconCheck width={11} height={11} />}
+              </span>
               <span className="poster asset-poster">
                 <ScrubThumb
                   api={api}
@@ -596,7 +743,7 @@ export const AssetGrid = ({
                         label="Copy Asset URL"
                         onSelect={() => {
                           close();
-                          navigator.clipboard?.writeText(assetUrl(asset));
+                          void copyText(assetUrl(asset));
                         }}
                       />
                       <MenuAction
@@ -623,7 +770,9 @@ export const AssetGrid = ({
                         onSelect={() => {
                           close();
                           setMoveError("");
-                          setMovingAsset(asset);
+                          setMovingAssets(
+                            isSelected && selectedAssets.length > 1 ? selectedAssets : [asset]
+                          );
                         }}
                       />
                       <MenuAction
@@ -661,7 +810,7 @@ export const AssetGrid = ({
               : "Export your sequence to begin."}
           </p>
           {!query.trim() && (
-            <button className="primary" onClick={onExport} disabled={!host.ok}>
+            <button className="primary" onClick={exportHere} disabled={!host.ok}>
               {host.ok ? `Export ${host.sequenceName}` : "Open a sequence in Premiere"}
             </button>
           )}

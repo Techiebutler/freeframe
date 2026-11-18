@@ -1383,6 +1383,22 @@ button {
     display: block;
   }
 
+  > img {
+    opacity: 0;
+    transition: opacity 0.3s $ease;
+
+    &.loaded {
+      opacity: 1;
+    }
+  }
+
+  // Shimmer while the poster downloads, so the card never flashes empty.
+  &.loading {
+    background: linear-gradient(90deg, $bg-secondary 0%, $bg-hover 50%, $bg-secondary 100%);
+    background-size: 200% 100%;
+    animation: thumb-shimmer 1.4s linear infinite;
+  }
+
   .scrub-video {
     position: absolute;
     inset: 0;
@@ -2231,6 +2247,15 @@ button {
   gap: 8px;
   overflow-y: auto;
   animation: rise 0.2s $ease;
+  // Keep content clear of the overlay scrollbar so the header's + button
+  // never sits on top of it.
+  padding-right: 8px;
+
+  // In a scrolling flex column, children shrink by default: a long history
+  // squeezed the overflow-hidden current card down to a hairline.
+  > * {
+    flex-shrink: 0;
+  }
 
   h2 {
     margin: 6px 0 0;
@@ -2959,6 +2984,11 @@ button {
   gap: 1px;
 }
 
+.picker-empty {
+  padding: 10px;
+  font-size: 12px;
+}
+
 .picker-row {
   display: flex;
   align-items: center;
@@ -3041,5 +3071,141 @@ button {
     color: $text-primary;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+}
+
+// -- folder tiles -------------------------------------------------------------
+
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr));
+  gap: 6px;
+  flex: none;
+}
+
+.folder-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: $bg-secondary;
+  border: 1px solid $border-secondary;
+  border-radius: $radius-lg;
+  color: $text-primary;
+  text-align: left;
+  animation: rise 0.2s $ease backwards;
+  transition: background-color 0.15s $ease, border-color 0.15s $ease, transform 0.15s $ease;
+
+  &:hover:not(:disabled) {
+    background: $bg-hover;
+    border-color: $border-primary;
+
+    .folder-tile-icon {
+      background: $accent-muted;
+      color: $accent-hover;
+    }
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+}
+
+.folder-tile-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: $radius-md;
+  background: $bg-tertiary;
+  color: $accent;
+  transition: background-color 0.15s $ease, color 0.15s $ease;
+}
+
+.folder-tile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.folder-tile-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.folder-tile-sub {
+  color: $text-tertiary;
+  font-size: 11px;
+}
+
+// -- multi-select -------------------------------------------------------------
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 2px 2px 2px 8px;
+  border-radius: $radius-md;
+  background: $accent-muted;
+  animation: fade 0.15s $ease;
+
+  strong {
+    color: $text-primary;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .chip.danger {
+    color: $error-hover;
+  }
+}
+
+.card-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s $ease, background-color 0.12s $ease, border-color 0.12s $ease;
+}
+
+.card:hover .card-check,
+.card.selecting .card-check,
+.card:focus-visible .card-check {
+  opacity: 1;
+}
+
+.card.selected {
+  border-color: $accent;
+  box-shadow: 0 0 0 1px $accent;
+
+  .card-check {
+    background: $accent;
+    border-color: $accent;
+  }
+}
+
+@keyframes thumb-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
   }
 }

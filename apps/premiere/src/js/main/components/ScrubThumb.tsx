@@ -31,6 +31,17 @@ export const ScrubThumb = ({
   const [hovering, setHovering] = useState(false);
   const [ready, setReady] = useState(false);
   const [ratio, setRatio] = useState(0);
+  // Fade the poster in once decoded instead of letting it pop in; a cached
+  // image is complete on mount and shows at once.
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const imageLoaded = !!thumbnailUrl && loadedUrl === thumbnailUrl;
+  const markLoaded = useCallback(() => setLoadedUrl(thumbnailUrl ?? null), [thumbnailUrl]);
+  const imgRef = useCallback(
+    (node: HTMLImageElement | null) => {
+      if (node?.complete && node.naturalWidth > 0) markLoaded();
+    },
+    [markLoaded]
+  );
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<{ destroy: () => void } | null>(null);
   const lastSeek = useRef(0);
@@ -104,12 +115,23 @@ export const ScrubThumb = ({
 
   return (
     <span
-      className="scrub-thumb"
+      className={`scrub-thumb${thumbnailUrl && !imageLoaded ? " loading" : ""}`}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
       onMouseMove={onMove}
     >
-      {thumbnailUrl ? <img src={thumbnailUrl} alt={alt} /> : null}
+      {thumbnailUrl ? (
+        <img
+          key={thumbnailUrl}
+          ref={imgRef}
+          src={thumbnailUrl}
+          alt={alt}
+          decoding="async"
+          className={imageLoaded ? "loaded" : ""}
+          onLoad={markLoaded}
+          onError={markLoaded}
+        />
+      ) : null}
       {hovering && (
         <video
           ref={videoRef}

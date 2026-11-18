@@ -16,6 +16,7 @@ const flattenFolders = (nodes: FolderNode[], depth = 0): FolderOption[] =>
 /** Destination picker for keeping assets organised without leaving the panel. */
 export const MoveAssetDialog = ({
   assetName,
+  count = 1,
   tree,
   currentFolderId,
   busy,
@@ -24,6 +25,8 @@ export const MoveAssetDialog = ({
   onClose,
 }: {
   assetName: string;
+  /** How many assets are moving (multi-select). */
+  count?: number;
   tree: FolderNode[];
   currentFolderId: string | null;
   busy?: boolean;
@@ -39,8 +42,8 @@ export const MoveAssetDialog = ({
   return (
     <div className="scrim" onClick={onClose}>
       <div className="dialog move-asset" onClick={(event) => event.stopPropagation()}>
-        <h3>Move asset</h3>
-        <p>Choose where to place “{assetName}”.</p>
+        <h3>{count > 1 ? `Move ${count} assets` : "Move asset"}</h3>
+        <p>{count > 1 ? `Choose where to place these ${count} assets.` : `Choose where to place “${assetName}”.`}</p>
         <div className="move-destinations" role="listbox" aria-label="Asset destination">
           {destinations.map((destination) => {
             const active = destination.id === currentFolderId;

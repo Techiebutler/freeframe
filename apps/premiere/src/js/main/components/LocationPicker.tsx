@@ -1,8 +1,11 @@
-/** Modal for choosing the project (and folder) a render is uploaded into. */
+/**
+ * Modal for choosing the project (and folder) a render is uploaded into — or,
+ * in `mode="asset"`, an existing asset that a render should stack onto.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../state";
-import type { FolderNode, Project } from "../../lib/freeframe/types";
+import type { Asset, FolderNode, Project } from "../../lib/freeframe/types";
 import { gradientFor } from "../../lib/freeframe/format";
 import { IconChevronLeft, IconFolder, IconSearch } from "./Icons";
 
@@ -22,9 +25,13 @@ const flatten = (nodes: FolderNode[], depth = 0): { node: FolderNode; depth: num
 export const LocationPicker = ({
   onSelect,
   onCancel,
+  mode = "folder",
+  onSelectAsset,
 }: {
   onSelect: (location: UploadLocation) => void;
   onCancel: () => void;
+  mode?: "folder" | "asset";
+  onSelectAsset?: (asset: Asset, projectName: string) => void;
 }) => {
   const { api } = useApp();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -33,6 +40,8 @@ export const LocationPicker = ({
   const [folderId, setFolderId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [assetId, setAssetId] = useState<string | null>(null);
 
   useEffect(() => {
     api.projects().then(setProjects).catch((e) => setError(String(e)));
@@ -52,8 +61,27 @@ export const LocationPicker = ({
 
   const rows = useMemo(() => flatten(folders), [folders]);
 
+  // Asset mode lists the assets of the highlighted folder (root = "Assets").
+  useEffect(() => {
+    if (mode !== "asset" || !project) return;
+    let cancelled = false;
+    setAssetId(null);
+    api
+      .assets(project.id, folderId ?? "root")
+      .then((list) => !cancelled && setAssets(list))
+      .catch(() => !cancelled && setAssets([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [api, mode, project, folderId]);
+
   const confirm = () => {
     if (!project) return;
+    if (mode === "asset") {
+      const asset = assets.find((entry) => entry.id === assetId);
+      if (asset) onSelectAsset?.(asset, project.name);
+      return;
+    }
     const folder = rows.find((row) => row.node.id === folderId);
     onSelect({
       projectId: project.id,
@@ -76,7 +104,11 @@ export const LocationPicker = ({
             <IconSearch />
             <input
               type="search"
-              placeholder={project ? `Find folder in ${project.name}` : "Find project"}
+              placeholder={
+                project
+                  ? `Find ${mode === "asset" ? "folder or asset" : "folder"} in ${project.name}`
+                  : "Find project"
+              }
               value={query}
               autoFocus
               onChange={(e) => setQuery(e.target.value)}
@@ -136,13 +168,47 @@ export const LocationPicker = ({
                     <span className="picker-name">{node.name}</span>
                   </button>
                 ))}
+              {mode === "asset" && (
+                <>
+                  <div className="menu-sep">Assets</div>
+                  {assets
+                    .filter(
+                      (asset) =>
+                        !query.trim() ||
+                        asset.name.toLowerCase().includes(query.trim().toLowerCase())
+                    )
+                    .map((asset) => (
+                      <button
+                        key={asset.id}
+                        className={`picker-row${assetId === asset.id ? " on" : ""}`}
+                        onClick={() => setAssetId(asset.id)}
+                        onDoubleClick={() => onSelectAsset?.(asset, project.name)}
+                      >
+                        <span
+                          className="swatch"
+                          style={
+                            asset.thumbnail_url
+                              ? { backgroundImage: `url(${asset.thumbnail_url})` }
+                              : { backgroundImage: gradientFor(asset.id) }
+                          }
+                        />
+                        <span className="picker-name">{asset.name}</span>
+                      </button>
+                    ))}
+                  {!assets.length && <p className="muted picker-empty">No assets in this folder.</p>}
+                </>
+              )}
             </>
           )}
         </div>
 
         <div className="dialog-actions">
           <button onClick={onCancel}>Cancel</button>
-          <button className="primary" disabled={!project} onClick={confirm}>
+          <button
+            className="primary"
+            disabled={!project || (mode === "asset" && !assetId)}
+            onClick={confirm}
+          >
             Select
           </button>
         </div>

@@ -7,6 +7,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useApp } from "../../state";
+import { copyText } from "../../../lib/freeframe/clipboard";
 import type {
   Asset,
   ShareLink,
@@ -204,13 +205,13 @@ export const ShareDialog = ({
   };
 
   const copy = () => {
-    navigator.clipboard?.writeText(url);
+    void copyText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const copyListedShare = (entry: ShareLink) => {
-    navigator.clipboard?.writeText(urlOf(entry));
+    void copyText(urlOf(entry));
     setCopiedShareId(entry.id);
     setTimeout(() => setCopiedShareId(null), 2000);
   };

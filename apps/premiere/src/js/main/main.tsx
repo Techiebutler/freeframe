@@ -5,6 +5,7 @@ import { ProjectGrid } from "./components/ProjectGrid";
 import { AssetGrid } from "./components/AssetGrid";
 import { AssetView } from "./components/AssetView";
 import { ExportView } from "./components/ExportView";
+import type { UploadLocation } from "./components/LocationPicker";
 import { SequencesView } from "./components/SequencesView";
 import { SettingsView } from "./components/SettingsView";
 import type { Asset, Project } from "../lib/freeframe/types";
@@ -28,6 +29,16 @@ const Shell = () => {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [link, setLink] = useState<AssetLink | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Where the export dialog was opened from: the folder being browsed becomes the
+  // default destination, the asset under review becomes a version-stack target.
+  const [exportFrom, setExportFrom] = useState<{ location: UploadLocation | null; asset: Asset | null }>({
+    location: null,
+    asset: null,
+  });
+  const openExport = (location: UploadLocation | null = null, fromAsset: Asset | null = null) => {
+    setExportFrom({ location, asset: fromAsset });
+    setExporting(true);
+  };
 
   const sequenceKey = host.sequenceId ? linkKey(host.projectPath ?? "", host.sequenceId) : "";
 
@@ -164,7 +175,7 @@ const Shell = () => {
               project={project}
               onBack={() => setProject(null)}
               onOpenAsset={openAsset}
-              onExport={() => setExporting(true)}
+              onExport={(location) => openExport(location ?? null)}
               link={link}
               onLinkChange={onLinkChange}
             />
@@ -181,21 +192,28 @@ const Shell = () => {
             asset={asset}
             link={link}
             onLinkChange={onLinkChange}
-            onExport={() => setExporting(true)}
+            onExport={() => openExport(null, asset)}
             onBack={() => setTab("browse")}
           />
         )}
         {tab === "sequences" && (
           <SequencesView
             link={link}
-            onExport={() => setExporting(true)}
+            onExport={() => openExport()}
             onOpenAsset={openAsset}
           />
         )}
         {tab === "settings" && <SettingsView />}
       </main>
 
-      {exporting && <ExportView link={link} onClose={() => setExporting(false)} />}
+      {exporting && (
+        <ExportView
+          link={link}
+          defaultLocation={exportFrom.location}
+          reviewAsset={exportFrom.asset}
+          onClose={() => setExporting(false)}
+        />
+      )}
     </>
   );
 };

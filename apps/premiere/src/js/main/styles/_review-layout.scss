@@ -47,6 +47,29 @@ $ease: cubic-bezier(0.2, 0.8, 0.2, 1);
     // The picture and its controls ride in the middle of the column rather
     // than hugging the top, which left a wide empty gap underneath.
     justify-content: center;
+    // Centred content taller than the column overflowed *upwards* over the
+    // top bar when the thread was dragged narrow. Never paint outside it.
+    overflow: hidden;
+  }
+
+  // Bound the picture by the column's height as well as its width: the stage
+  // gives up height (and letterboxes, video is object-fit: contain) before the
+  // timeline and controls are pushed out of view.
+  .player {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 100%;
+
+    > * {
+      flex: none;
+    }
+
+    > .stage {
+      flex: 0 1 auto;
+      min-height: 0;
+      width: 100%;
+    }
   }
 
   .review-side {

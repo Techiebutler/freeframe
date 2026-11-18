@@ -15,7 +15,8 @@ import { findPresets, type Preset } from "../../lib/freeframe/presets";
 import { Dropdown, MenuRadio } from "./Dropdown";
 import { Toggle } from "./Toggle";
 import { LocationPicker, type UploadLocation } from "./LocationPicker";
-import { IconChevronDown, IconClose, IconRefresh, IconRename } from "./Icons";
+import { IconChevronDown, IconClose, IconRefresh, IconRename, IconSearch } from "./Icons";
+import type { Asset } from "../../lib/freeframe/types";
 
 /** `encodeSequence` work-area codes. */
 const RANGES = [
@@ -30,17 +31,34 @@ const isSegmentLink = (target: StackTarget): target is SegmentLink =>
   typeof (target as SegmentLink).inPoint === "number" &&
   typeof (target as SegmentLink).outPoint === "number";
 
+const linkFromAsset = (asset: Asset, projectName = ""): AssetLink => ({
+  assetId: asset.id,
+  assetName: asset.name,
+  projectId: asset.project_id,
+  projectName,
+});
+
 export const ExportView = ({
   link,
+  defaultLocation = null,
+  reviewAsset = null,
   onClose,
 }: {
   link: AssetLink | null;
+  /** The folder the user was browsing when they opened the dialog. */
+  defaultLocation?: UploadLocation | null;
+  /** The asset open in Review — offered as a version-stack target even if it was uploaded on the web. */
+  reviewAsset?: Asset | null;
   onClose: () => void;
 }) => {
   const { api, settings, updateSettings, host, startExport } = useApp();
   const [name, setName] = useState("");
-  const [location, setLocation] = useState<UploadLocation | null>(null);
+  const [location, setLocation] = useState<UploadLocation | null>(defaultLocation);
   const [pickingLocation, setPickingLocation] = useState(false);
+  const [pickingAsset, setPickingAsset] = useState(false);
+  // An asset chosen by hand from FreeFrame (e.g. one uploaded on the website,
+  // which has no Premiere link to discover it by).
+  const [pickedTarget, setPickedTarget] = useState<AssetLink | null>(null);
   // Persisted: the range is a habit, not a per-export decision.
   const range = settings.exportRange;
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -67,7 +85,12 @@ export const ExportView = ({
   // Metadata in a Premiere project can outlive an asset being moved or deleted
   // on FreeFrame. Validate each timeline link before offering it as a V1.
   const linkedTargets = useMemo(() => {
-    const candidates: StackTarget[] = [...(link ? [link] : []), ...segmentLinks];
+    const candidates: StackTarget[] = [
+      ...(pickedTarget ? [pickedTarget] : []),
+      ...(link ? [link] : []),
+      ...(reviewAsset ? [linkFromAsset(reviewAsset, defaultLocation?.projectName)] : []),
+      ...segmentLinks,
+    ];
     const seen = new Set<string>();
     return candidates.filter((candidate) => {
       const key = isSegmentLink(candidate) ? candidate.id : `sequence-${candidate.assetId}`;
@@ -75,7 +98,7 @@ export const ExportView = ({
       seen.add(key);
       return true;
     });
-  }, [link, segmentLinks]);
+  }, [link, segmentLinks, reviewAsset, pickedTarget, defaultLocation?.projectName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,10 +204,6 @@ export const ExportView = ({
       setError("Choose which timeline asset receives this new version.");
       return;
     }
-    if (versionStack && range !== 1) {
-      setError("Version stacks for timeline segments require In/Out Points.");
-      return;
-    }
     setSubmitting(true);
     try {
       const inOut = range === 1 ? await getInOut() : null;
@@ -235,6 +254,20 @@ export const ExportView = ({
   const modal = (
     <div className="scrim" onClick={() => !busy && onClose()}>
       <div className="export-view" onClick={(event) => event.stopPropagation()}>
+      {pickingAsset && (
+        <LocationPicker
+          mode="asset"
+          onCancel={() => setPickingAsset(false)}
+          onSelect={() => setPickingAsset(false)}
+          onSelectAsset={(asset, projectName) => {
+            const next = linkFromAsset(asset, projectName);
+            setPickedTarget(next);
+            setStackTarget(next);
+            setPickingAsset(false);
+            setError("");
+          }}
+        />
+      )}
       {pickingLocation && (
         <LocationPicker
           onCancel={() => setPickingLocation(false)}
@@ -259,7 +292,7 @@ export const ExportView = ({
         hint={
           linkedAssetGone
             ? "The selected asset is no longer on the server, so this export creates a new asset."
-            : "Choose the asset this In/Out selection should update as a new version."
+            : "Choose the asset this render (entire sequence or In/Out) should update as a new version."
         }
         checked={versionStack}
         onChange={(checked) => {
@@ -311,6 +344,16 @@ export const ExportView = ({
                 {!stackTargets.length && (
                   <div className="menu-field">No current timeline assets were found in FreeFrame.</div>
                 )}
+                <button
+                  className="menu-foot"
+                  onClick={() => {
+                    close();
+                    setPickingAsset(true);
+                  }}
+                >
+                  <IconSearch width={13} height={13} />
+                  Choose another FreeFrame asset…
+                </button>
               </>
             )}
           </Dropdown>

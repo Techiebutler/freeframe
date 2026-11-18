@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "../state";
 import type { Project } from "../../lib/freeframe/types";
+import { copyText } from "../../lib/freeframe/clipboard";
 import { formatBytes, gradientFor, relativeTime } from "../../lib/freeframe/format";
 import { Dropdown, MenuAction } from "./Dropdown";
 import { AppearanceMenu, SortedByMenu, cardMinWidth } from "./BrowseControls";
@@ -279,7 +280,7 @@ export const ProjectGrid = ({ onOpen }: { onOpen: (project: Project) => void }) 
                       label="Copy link"
                       onSelect={() => {
                         close();
-                        navigator.clipboard?.writeText(projectUrl(project));
+                        void copyText(projectUrl(project));
                       }}
                     />
                     <MenuAction

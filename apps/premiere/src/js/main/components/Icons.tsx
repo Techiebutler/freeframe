@@ -58,6 +58,18 @@ export const IconFolder = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+/** Solid folder for folder tiles: reads as a container at a glance. */
+export const IconFolderFilled = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <path
+      d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+      fill="currentColor"
+      fillOpacity="0.22"
+    />
+    <path d="M3 10h18" />
+  </Svg>
+);
+
 export const IconFilm = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <rect x="3" y="4" width="18" height="16" rx="2" />

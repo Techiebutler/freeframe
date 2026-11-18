@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApp } from "../../state";
 import type { ShareLink, ShareOptions } from "../../../lib/freeframe/types";
+import { copyText } from "../../../lib/freeframe/clipboard";
 import { openLinkInBrowser } from "../../../lib/utils/bolt";
 import { Dropdown, MenuRadio } from "../Dropdown";
 import { Toggle } from "../Toggle";
@@ -78,7 +79,7 @@ export const CollectionShareDialog = ({
   }, [load]);
 
   const copy = (share: ShareLink) => {
-    navigator.clipboard?.writeText(urlOf(share));
+    void copyText(urlOf(share));
     setCopied(share.id);
     setTimeout(() => setCopied(null), 2000);
   };

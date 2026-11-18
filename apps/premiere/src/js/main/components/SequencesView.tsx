@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "../state";
 import type { Asset } from "../../lib/freeframe/types";
+import { copyText } from "../../lib/freeframe/clipboard";
 import { relativeTime } from "../../lib/freeframe/format";
 import { getSegmentLinks, type AssetLink, type SegmentLink } from "../../lib/freeframe/host";
 import { openLinkInBrowser } from "../../lib/utils/bolt";
@@ -105,14 +106,33 @@ export const SequencesView = ({
     );
     const linked = history.find((entry) => linkedAssetIds.includes(entry.assetId));
     if (linked) return linked;
-    if (!host.sequenceName) return null;
-    return history.find((entry) => entry.sequenceName === host.sequenceName) ?? null;
+    const byName = host.sequenceName
+      ? history.find((entry) => entry.sequenceName === host.sequenceName)
+      : undefined;
+    if (byName) return byName;
+    // The export history is a per-machine log. A sequence linked by hand, by a
+    // teammate, or exported on another computer still has a link — show it.
+    const fallback = link ?? segmentLinks[0];
+    if (!fallback) return null;
+    return {
+      assetId: fallback.assetId,
+      name: fallback.assetName,
+      projectId: fallback.projectId,
+      projectName: fallback.projectName,
+      sequenceName: host.sequenceName ?? "",
+      uploadedAt: "",
+    };
   }, [link, segmentLinks, history, host.sequenceName]);
 
   // Thumbnails and comment counts aren't in the history, so fetch what's shown.
   useEffect(() => {
     let cancelled = false;
-    const ids = [...new Set(history.slice(0, 20).map((entry) => entry.assetId))];
+    const ids = [
+      ...new Set([
+        ...(current ? [current.assetId] : []),
+        ...history.slice(0, 20).map((entry) => entry.assetId),
+      ]),
+    ];
     ids.forEach(async (id) => {
       // Refetch while the thumbnail is still missing: it appears only when the
       // server finishes transcoding, after this row was first drawn.
@@ -162,7 +182,7 @@ export const SequencesView = ({
     return () => {
       cancelled = true;
     };
-  }, [api, history, thumbTick, thumbs, commentCounts]);
+  }, [api, history, current, thumbTick, thumbs, commentCounts]);
 
   // Poll gently while any visible row is still waiting on its thumbnail.
   useEffect(() => {
@@ -255,7 +275,7 @@ export const SequencesView = ({
                 label="Copy Asset URL"
                 onSelect={() => {
                   close();
-                  navigator.clipboard?.writeText(assetUrl(projectId, assetId));
+                  void copyText(assetUrl(projectId, assetId));
                 }}
               />
             </>
@@ -353,7 +373,7 @@ export const SequencesView = ({
             />
             <div className="seq-status">
               <span className="seq-status-text">
-                Uploaded {relativeTime(current.uploadedAt)}
+                {current.uploadedAt ? `Uploaded ${relativeTime(current.uploadedAt)}` : "Linked to this sequence"}
               </span>
             </div>
           </>
