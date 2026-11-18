@@ -3,8 +3,8 @@
 Only `downgrade()` is exercised here. `upgrade()` opens an autocommit block for the
 `ALTER TYPE ... ADD VALUE` statements, which commits the connection's transaction and
 would take the rollback that keeps these tests from touching the shared database with it.
-The upgrade half is checked by hand (up, down, up on a populated database, and the
-whole chain from an empty one); see the task report.
+The upgrade half was checked by hand when the migration was written (up, down, up on a
+populated database, and the whole chain from an empty one).
 
 Postgres DDL is transactional, so the downgrade below is rolled back with `real_db`
 and the database is left at head for every test that follows.
