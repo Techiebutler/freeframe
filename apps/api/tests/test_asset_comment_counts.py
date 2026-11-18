@@ -92,6 +92,7 @@ def test_the_asset_list_carries_each_assets_comment_count():
     from one query for the whole list."""
     from apps.api.models.asset import AssetType, AssetStatus, ProcessingStatus
     from apps.api.routers.assets import _build_asset_responses_bulk
+    from apps.api.schemas.verdict import VerdictSummary
 
     now = datetime.now(timezone.utc)
     project_id = uuid.uuid4()
@@ -104,6 +105,7 @@ def test_the_asset_list_carries_each_assets_comment_count():
         a.keywords = []; a.created_by = uuid.uuid4(); a.created_at = now; a.updated_at = now
         # Read by AssetResponse.model_validate before the builder sets them.
         a.latest_version = None; a.thumbnail_url = None; a.comment_count = 0
+        a.verdict_summary = None
         return a
 
     def version(a):
@@ -121,7 +123,10 @@ def test_the_asset_list_carries_each_assets_comment_count():
     # Newest version per asset (twice: any, then viewable), then their files.
     db.all.side_effect = [[v1, v2], [v1, v2], []]
 
+    # The verdict summary is a query of its own (test_asset_verdict_summary.py).
+    summaries = {v1.id: VerdictSummary(), v2.id: VerdictSummary()}
     with patch("apps.api.routers.assets._comment_counts", return_value={v1.id: 4}) as counts, \
+         patch("apps.api.routers.assets.verdict_summaries", return_value=summaries), \
          patch("apps.api.routers.assets.AssetVersionResponse.model_validate",
                side_effect=lambda v: MagicMock(files=[])):
         result = _build_asset_responses_bulk([a1, a2, a3], db)
