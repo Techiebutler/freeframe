@@ -112,7 +112,7 @@ def agent_events(db: Session, agent_user: User, project_id: uuid.UUID, cursor: O
     for d in q.order_by(Delivery.approved_at).all():
         if d.request_id not in complete:
             complete[d.request_id] = not parts_open(db, db.get(UploadRequest, d.request_id))
-        if complete[d.request_id]:
+        if d.handed_on_at is not None or complete[d.request_id]:  # a link already handed on never goes back into hiding
             out.append(d)
     return out
 
