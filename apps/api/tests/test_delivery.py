@@ -111,3 +111,80 @@ def test_the_public_page_and_delivery_v1(env):
         assert (r.status_code, r.headers["location"]) == (302, "https://s3.test/dl")
         assert env.client.get(f"/deliveries/{token}/files/{uuid.uuid4()}", follow_redirects=False).status_code == 404
     assert env.client.get("/deliveries/nope").status_code == 404
+
+
+# --- parts: no delivery / share link / approved event until EVERY part of the request is approved (founder, 2026-11-18) ---
+
+def _hand_in(e, agent, names=("Hook 1", "Hook 2", "Body")):
+    req = e.request(e.project_a, e.owner, "Ad")
+    return req, [e.asset(req, n, by=agent.who) for n in names]
+
+
+def _approve_raw(e, a):
+    r = e.client.post(f"/assets/{a.id}/approve", json={"version_id": str(a.versions[0].id)}, headers=e.headers(e.owner))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_one_part_approved_makes_no_delivery_and_no_agent_event(env):
+    agent = env.pair_agent(env.project_a)
+    _, (h1, h2, body) = _hand_in(env, agent)
+    r = _approve_raw(env, h1)
+    assert r["delivery"] is None and (r["parts"]["approved"], r["parts"]["total"], r["parts"]["complete"]) == (1, 3, False)
+    assert events(env, agent)["approvals"] == []
+    _approve_raw(env, h2)
+    assert events(env, agent)["approvals"] == []
+
+
+def test_the_last_part_delivers_every_part_at_once(env):
+    agent = env.pair_agent(env.project_a)
+    req, parts = _hand_in(env, agent)
+    for a in parts[:-1]:
+        _approve_raw(env, a)
+    last = _approve_raw(env, parts[-1])
+    assert last["delivery"]["share_url"] and last["parts"]["complete"] is True
+    evs = events(env, agent)["approvals"]
+    assert {e["asset_id"] for e in evs} == {str(a.id) for a in parts} and {e["request_id"] for e in evs} == {str(req.id)}
+
+
+def test_a_take_back_while_parts_are_open_removes_the_unsent_links(env):
+    agent = env.pair_agent(env.project_a)
+    _, parts = _hand_in(env, agent, ("Hook 1", "Body"))
+    for a in parts:
+        d = _approve_raw(env, a)["delivery"]
+    assert env.client.get(f"/deliveries/{d['token']}").status_code == 200
+    assert env.client.delete(f"/assets/{parts[0].id}/approve?version_id={parts[0].versions[0].id}", headers=env.headers(env.owner)).status_code == 204
+    assert env.client.get(f"/deliveries/{d['token']}").status_code == 404
+    assert events(env, agent)["approvals"] == []
+
+
+def test_a_handed_on_link_survives_a_later_undo_and_stays_in_the_events(env):
+    agent = env.pair_agent(env.project_a)
+    _, parts = _hand_in(env, agent, ("Hook 1", "Body"))
+    for a in parts:
+        d = _approve_raw(env, a)["delivery"]
+    assert env.client.post(f"/deliveries/{d['token']}/handed-on").status_code == 204
+    env.client.delete(f"/assets/{parts[1].id}/approve?version_id={parts[1].versions[0].id}", headers=env.headers(env.owner))
+    assert env.client.get(f"/deliveries/{d['token']}").status_code == 200
+    assert [e["asset_id"] for e in events(env, agent, "2000-01-01T00:00:00+00:00")["approvals"]] == [str(parts[1].id)]
+
+
+def test_the_delivery_page_answers_409_while_parts_are_open(env):
+    from apps.api.models.delivery import Delivery
+    agent = env.pair_agent(env.project_a)
+    req, parts = _hand_in(env, agent, ("Hook 1", "Body"))
+    _approve_raw(env, parts[0])
+    with env.Session() as db:   # a stray unsent link on a request that is not complete
+        db.add(Delivery(token="stray", request_id=req.id, asset_id=parts[0].id, version_id=parts[0].versions[0].id,
+                        approved_by="x", approved_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc)))
+        db.commit()
+    r = env.client.get("/deliveries/stray")
+    assert r.status_code == 409 and r.json()["detail"] == {"error": "parts_open", "approved": 1, "total": 2}
+
+
+def test_a_guest_approve_through_the_share_link_reports_progress_not_a_link(env):
+    from .test_share_approve import link
+    agent = env.pair_agent(env.project_a)
+    req, (h1, h2) = _hand_in(env, agent, ("Hook 1", "Hook 2"))
+    r = env.client.post(f"/share/{link(env, req.folder_id)}/assets/{h1.id}/approve", json={}).json()
+    assert r["delivery"] is None and (r["parts"]["approved"], r["parts"]["total"]) == (1, 2)
