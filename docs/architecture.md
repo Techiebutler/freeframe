@@ -302,7 +302,7 @@ channel `project:{project_id}`, and anything published there reaches the browser
 | `transcode_failed` | `{asset_id, error}` | Processing failed |
 | `new_comment` | `{asset_id, comment_id, author}` | Comment posted, including replies and guest comments |
 | `comment_resolved` | `{comment_id, resolved}` | Comment resolved or unresolved (the endpoint toggles) |
-| `approval_updated` | `{asset_id, version_id, status}` | Approval status changed |
+| `approval_updated` | `{asset_id, version_id, status?}` | A verdict was given, changed, cleared or removed. `status` is sent only on give and change; clear and remove omit it |
 
 All six are published through `event_service.publish_sync`, which is the single emit path. It
 is best-effort: every call site publishes after its commit, and a broker that is down or slow
