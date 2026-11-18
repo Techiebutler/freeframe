@@ -214,8 +214,9 @@ def clear_verdict(db: Session, asset: Asset, version: AssetVersion, actor: Actor
     it is a person taking a label back, and a hidden row would still hold the unique
     index against the next time they decide. Notifies nobody.
 
-    Returns whether there was a verdict to clear. Either way it logs, commits (so a
-    row the caller added to the session persists) and publishes, as the contract says.
+    Returns whether there was a verdict to clear. Clearing nothing changes nothing, so
+    it writes no log and publishes no event; it still commits, so a row the caller added
+    to the session (a ShareLinkActivity) persists either way.
     """
     _require_one_actor(actor)
     _require_version_of(asset, version)
@@ -231,16 +232,17 @@ def clear_verdict(db: Session, asset: Asset, version: AssetVersion, actor: Actor
     existed = row is not None
     if existed:
         db.delete(row)
-    db.add(ActivityLog(
-        user_id=actor.user.id if actor.user is not None else None,
-        project_id=project_id,
-        asset_id=asset_id,
-        action="verdict_cleared",
-        payload=_log_payload(version_id, actor),
-    ))
+        db.add(ActivityLog(
+            user_id=actor.user.id if actor.user is not None else None,
+            project_id=project_id,
+            asset_id=asset_id,
+            action="verdict_cleared",
+            payload=_log_payload(version_id, actor),
+        ))
     db.commit()
 
-    _publish(project_id, {"asset_id": str(asset_id), "version_id": str(version_id)})
+    if existed:
+        _publish(project_id, {"asset_id": str(asset_id), "version_id": str(version_id)})
     return existed
 
 

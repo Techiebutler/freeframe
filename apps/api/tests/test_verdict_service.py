@@ -197,12 +197,11 @@ def test_clearing_only_touches_the_callers_own_verdict(db):
     assert len(_rows(db, v)) == 2
 
 
-def test_clearing_when_there_is_nothing_to_clear_returns_false_but_still_commits_and_publishes(db, mocks):
-    """The contract: always log, commit and publish; the return value says whether a row existed.
-    The unconditional commit matters to Task 4, which adds a ShareLinkActivity row before calling."""
+def _clear_with_a_caller_row(db, w, actor):
+    """Clear as Task 4 does: the caller adds a ShareLinkActivity row to the session first
+    and relies on the service's one commit to persist it. Returns (result, commit count)."""
     from apps.api.models.share import ShareActivityAction, ShareLinkActivity
 
-    w = _seed(db)
     link = _link(db, w)
     commits = []
     original = db.commit
@@ -211,19 +210,50 @@ def test_clearing_when_there_is_nothing_to_clear_returns_false_but_still_commits
         db.add(ShareLinkActivity(share_link_id=link.id, action=ShareActivityAction.approved,
                                  actor_email="dana@client.test", actor_name="Dana",
                                  asset_id=w.A.id, asset_name=w.A.name))
-        assert clear_verdict(db, w.A, _v1(w), Actor(user=w.editor)) is False
+        result = clear_verdict(db, w.A, _v1(w), actor)
     finally:
         db.commit = original
+    persisted = db.query(ShareLinkActivity).filter(ShareLinkActivity.share_link_id == link.id).count()
+    return result, len(commits), persisted
 
-    assert len(commits) == 1
-    assert db.query(ShareLinkActivity).filter(ShareLinkActivity.share_link_id == link.id).count() == 1
+
+def _cleared_logs(db, w):
+    return db.query(ActivityLog).filter(
+        ActivityLog.asset_id == w.A.id, ActivityLog.action == "verdict_cleared").count()
+
+
+def test_clearing_with_nothing_to_clear_commits_but_logs_and_publishes_nothing(db, mocks):
+    """A no-op clear changes nothing, so it writes no log and wakes nobody. It still commits,
+    because Task 4 adds a ShareLinkActivity row before calling and relies on that commit."""
+    w = _seed(db)
+
+    result, commits, persisted = _clear_with_a_caller_row(db, w, Actor(user=w.editor))
+
+    assert result is False
+    assert commits == 1 and persisted == 1
+    assert _cleared_logs(db, w) == 0
     assert db.query(Notification).filter(Notification.asset_id == w.A.id).count() == 0
     mocks.send.assert_not_called()
+    mocks.publish.assert_not_called()
+
+
+def test_clearing_a_real_verdict_commits_logs_and_publishes_once(db, mocks):
+    w = _seed(db)
+    v = _v1(w)
+    set_verdict(db, w.A, v, Actor(user=w.editor), "approved", None)
+    mocks.send.reset_mock()
+    mocks.publish.reset_mock()
+
+    result, commits, persisted = _clear_with_a_caller_row(db, w, Actor(user=w.editor))
+
+    assert result is True
+    assert commits == 1 and persisted == 1
+    assert _rows(db, v) == []
+    assert _cleared_logs(db, w) == 1
+    mocks.send.assert_not_called()
     mocks.publish.assert_called_once_with(w.project.id, "approval_updated", {
-        "asset_id": str(w.A.id), "version_id": str(_v1(w).id),
+        "asset_id": str(w.A.id), "version_id": str(v.id),
     })
-    assert db.query(ActivityLog).filter(
-        ActivityLog.asset_id == w.A.id, ActivityLog.action == "verdict_cleared").count() == 1
 
 
 def test_clear_and_remove_notify_nobody(db, mocks):
