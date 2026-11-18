@@ -5,6 +5,7 @@ a vocabulary prompt built from the lexicon (Gen's lexicon.json), and word + segm
 """
 import difflib
 import json
+import re
 from pathlib import Path
 
 import httpx
@@ -20,7 +21,29 @@ MAX_BYTES = 25 * 1024 * 1024
 LANGS = {"de", "en", "auto"}
 # Whisper reads about 224 tokens of prompt; ~800 characters of German/English words stay inside that.
 MAX_PROMPT = 800
-TERMS = [str(t).strip() for t in json.loads((Path(__file__).parent / "dictation_lexicon.json").read_text(encoding="utf-8"))["terms"] if str(t).strip()]
+_LEXICON = json.loads((Path(__file__).parent / "dictation_lexicon.json").read_text(encoding="utf-8"))
+TERMS = [str(t).strip() for t in _LEXICON["terms"] if str(t).strip()]
+# Whisper invents these on silence or noise. Whole-segment match, case and punctuation ignored.
+NO_SPEECH_MAX, LOGPROB_MIN = 0.6, -1.0
+_BARE_URL = re.compile(r"^(https?://)?(www\.)?[\w-]+(\.[\w-]+)*\.(tv|de|com|org|net|fr|co|ai)(/\S*)?$")
+
+
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[\W_]+", " ", text.lower()).split())
+
+
+HALLUCINATIONS = {_norm(h) for h in _LEXICON.get("hallucinations", []) if _norm(h)}
+HALLUCINATION_PATTERNS = [re.compile(p) for p in _LEXICON.get("hallucination_patterns", [])]
+
+
+def is_hallucination(text: str, no_speech_prob=None, avg_logprob=None) -> bool:
+    """True for a segment that is Whisper's invention (known phrase, bare web address, or silent + low confidence)."""
+    if no_speech_prob is not None and avg_logprob is not None and no_speech_prob > NO_SPEECH_MAX and avg_logprob < LOGPROB_MIN:
+        return True
+    n = _norm(text)
+    if not n:
+        return False
+    return n in HALLUCINATIONS or bool(_BARE_URL.match(text.strip().lower().rstrip(".,!?;: "))) or any(p.match(n) for p in HALLUCINATION_PATTERNS)
 
 
 def build_prompt(hint: str = "", terms: list = TERMS, max_chars: int = MAX_PROMPT) -> str:
@@ -91,11 +114,20 @@ def transcribe(audio: bytes, filename: str, content_type: str, lang: str = "de")
         if r.status_code != 200:
             raise HTTPException(502, "dictation_failed")
         body = r.json()
+        raw_segments = [x for x in body.get("segments") or [] if str(x.get("text", "")).strip()]
         segments = [{"start": float(x["start"]), "end": float(x["end"]), "text": str(x["text"]).strip()}
-                    for x in body.get("segments") or [] if str(x.get("text", "")).strip()]
+                    for x in raw_segments if not is_hallucination(str(x["text"]), x.get("no_speech_prob"), x.get("avg_logprob"))]
         words = [{"start": float(x["start"]), "end": float(x["end"]), "word": str(x["word"]).strip()}
                  for x in body.get("words") or [] if str(x.get("word", "")).strip()]
         raw = str(body.get("text", "")).strip()
+        if raw_segments:
+            # Built from the surviving segments (before the fix-up) so text and segments stay aligned.
+            if len(segments) != len(raw_segments):
+                raw = " ".join(x["text"] for x in segments)
+                dropped = [(float(x["start"]), float(x["end"])) for x in raw_segments if is_hallucination(str(x["text"]), x.get("no_speech_prob"), x.get("avg_logprob"))]
+                words = [w for w in words if not any(a - 0.05 <= (w["start"] + w["end"]) / 2 <= b + 0.05 for a, b in dropped)]
+        elif is_hallucination(raw):
+            raw = ""
         text = fix_terms(raw)
         result = {"text": text, "segments": segments}
         if text != raw:

@@ -389,6 +389,28 @@ describe('FlowView', () => {
     expect(typeof startRecording.mock.calls[0][0]).toBe('function')
   })
 
+  it('mutes the playing video while a note records (no bleed into the mic) and restores it after', async () => {
+    setup({ renderMedia: (o) => <div><video data-testid="vid" />{o}</div> })
+    const vid = document.querySelector('video') as HTMLVideoElement
+    vid.muted = false
+    fireEvent.click(screen.getByRole('button', { name: /comment/i }))
+    await screen.findByRole('button', { name: /stop/i })
+    expect(vid.muted).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+    await waitFor(() => expect(vid.muted).toBe(false))
+  })
+
+  it('keeps a video the viewer had muted muted after recording', async () => {
+    setup({ renderMedia: (o) => <div><video data-testid="vid" />{o}</div> })
+    const vid = document.querySelector('video') as HTMLVideoElement
+    vid.muted = true
+    fireEvent.click(screen.getByRole('button', { name: /comment/i }))
+    await screen.findByRole('button', { name: /stop/i })
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /stop/i })).toBeNull())
+    expect(vid.muted).toBe(true)
+  })
+
   it('hands the player one marker per note', async () => {
     const seen: number[] = []
     setup({ renderMedia: (o, extra) => { seen.push(extra.markers.length); return <div>{o}</div> } })

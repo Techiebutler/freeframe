@@ -364,6 +364,15 @@ export function FlowView(p: FlowViewProps) {
     }
   }
 
+  // Non-embed: talk-while-it-plays (H69) stays, but the video's own sound must never reach the transcript: mute it for the recording.
+  React.useEffect(() => {
+    const v = active && !p.embed ? rootRef.current?.querySelector('video') : null
+    if (!v) return
+    const was = v.muted
+    v.muted = true
+    return () => { v.muted = was }
+  }, [active, p.embed])
+
   // Embed: the mic follows the video (lib/embed-dictation.ts). Paused = talk, playing = silence.
   const dict = React.useRef(dictInitial)
   const [micHint, setMicHint] = React.useState('')
