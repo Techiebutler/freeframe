@@ -24,7 +24,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { GuestCommentInput, IdentityForm, loadIdentity, type GuestIdentity } from '@/components/review/guest-comment-input'
+import { GuestCommentInput, IdentityForm, loadIdentity, consumeHostIdentity, type GuestIdentity } from '@/components/review/guest-comment-input'
 import { FlowView } from '@/components/review/flow-view'
 import { GuestCommentList, type CommentsResponse } from '@/components/share/guest-comments'
 import { chainOrder, inferRoles } from '@/components/share/embed-chain'
@@ -833,7 +833,7 @@ function ShareViewer({
   const [identity, setIdentity] = React.useState<GuestIdentity | null>(null)
   const [askIdentity, setAskIdentity] = React.useState(false)
   const [flowApproved, setFlowApproved] = React.useState(!!folder?.approved)
-  React.useEffect(() => { setIdentity(loadIdentity()) }, [])
+  React.useEffect(() => { setIdentity(consumeHostIdentity() ?? loadIdentity()) }, [])
   const [sidebarOpen, setSidebarOpen] = React.useState(() => {
     if (SHARE_COMMENTS_COLLAPSED) return false
     return typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
