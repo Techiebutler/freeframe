@@ -188,3 +188,17 @@ def test_a_guest_approve_through_the_share_link_reports_progress_not_a_link(env)
     req, (h1, h2) = _hand_in(env, agent, ("Hook 1", "Hook 2"))
     r = env.client.post(f"/share/{link(env, req.folder_id)}/assets/{h1.id}/approve", json={}).json()
     assert r["delivery"] is None and (r["parts"]["approved"], r["parts"]["total"]) == (1, 2)
+
+
+def test_iteration_copies_are_not_parts(env):
+    """A 3-part request with a pending and a derived iteration copy in its folder still counts 3 parts (was "1 of 5")."""
+    from apps.api.models.asset import Asset
+    agent = env.pair_agent(env.project_a)
+    req, (h1, _h2, _body) = _hand_in(env, agent)
+    pending, derived = env.asset(req, "Hook 1 (iterating)", by=agent.who), env.asset(req, "Hook 1 v2 derived", by=agent.who)
+    with env.Session() as db:
+        db.get(Asset, pending.id).iteration_pending = True
+        db.get(Asset, derived.id).iteration_derived = True
+        db.commit()
+    r = _approve_raw(env, h1)
+    assert (r["parts"]["approved"], r["parts"]["total"]) == (1, 3)

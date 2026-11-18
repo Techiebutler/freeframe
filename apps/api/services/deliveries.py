@@ -37,7 +37,9 @@ def request_parts(db: Session, req: UploadRequest) -> list[tuple[uuid.UUID, uuid
     latest = {}
     for a_id, v_id, _n in db.query(AssetVersion.asset_id, AssetVersion.id, AssetVersion.version_number) \
             .join(Asset, Asset.id == AssetVersion.asset_id) \
-            .filter(Asset.folder_id == req.folder_id, Asset.deleted_at.is_(None), AssetVersion.deleted_at.is_(None)) \
+            .filter(Asset.folder_id == req.folder_id, Asset.deleted_at.is_(None), AssetVersion.deleted_at.is_(None),
+                    # the parts the review shows: no pending or derived iteration copies (they made "1 of 7" on a 5-part request)
+                    Asset.iteration_pending.is_(False), Asset.iteration_derived.is_(False)) \
             .order_by(AssetVersion.version_number):
         latest[a_id] = v_id
     done = {v for (v,) in db.query(Approval.version_id).filter(
