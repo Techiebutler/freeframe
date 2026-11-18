@@ -51,3 +51,12 @@ export const VERDICT_TONE_DOT_CLASS: Record<VerdictTone, string> = {
 export function verdictCountLabel(count: number): string {
   return `${count} ${count === 1 ? 'verdict' : 'verdicts'}`
 }
+
+/**
+ * The SWR key for the verdicts on one version. One builder, because the asset
+ * page revalidates it from an SSE event and a key that differs by a character
+ * is a revalidation that silently does nothing.
+ */
+export function verdictsKey(assetId: string, versionId: string): string {
+  return `/assets/${assetId}/verdicts?version_id=${versionId}`
+}

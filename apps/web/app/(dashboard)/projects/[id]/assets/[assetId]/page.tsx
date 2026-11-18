@@ -2,7 +2,7 @@
 
 import { use, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
-import useSWR from 'swr'
+import useSWR, { mutate as globalMutate } from 'swr'
 import { ReviewProvider, useReview } from '@/components/review/review-provider'
 import { VideoPlayer } from '@/components/review/video-player'
 import { AudioPlayer } from '@/components/review/audio-player'
@@ -15,6 +15,7 @@ import { AnnotationOverlay } from '@/components/review/annotation-overlay'
 import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
 import { VersionSwitcher } from '@/components/review/version-switcher'
+import { VerdictControls } from '@/components/review/verdict-controls'
 import { ShareDialog } from '@/components/review/share-dialog'
 import { CompareOverlay } from '@/components/review/compare/compare-overlay'
 import { useReviewStore } from '@/stores/review-store'
@@ -30,6 +31,7 @@ import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
 import { useViewStore } from '@/stores/view-store'
 import { sortAssets } from '@/lib/sort-assets'
 import { canCompare } from '@/lib/compare-time'
+import { verdictsKey } from '@/lib/verdicts'
 import {
   ArrowLeft,
   ChevronLeft,
@@ -82,6 +84,13 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const isWide = useMediaQuery('(min-width: 768px)')
   const isLandscape = useMediaQuery('(orientation: landscape)')
   const useSheet = !isWide && !isLandscape
+  // Where the verdict controls go. The top bar is the first thing to run out of
+  // room (see the credit's comment below): at 744px it was already full, and
+  // the indicator with three icon buttons is about 150px more. So from `lg` up
+  // they join the version switcher there, and below it they get a bar of their
+  // own under it, which takes its height from the review area.
+  const verdictsInTopBar = useMediaQuery('(min-width: 1024px)')
+  const showsVerdictRow = !verdictsInTopBar && Boolean(asset) && Boolean(currentVersion)
   const [sheetState, setSheetState] = useState<SheetState>('peek')
   const [sheetHeight, setSheetHeight] = useState(PEEK_PX)
   const { isPlaying, togglePlay, mediaRootRef } = useMediaTransport({ toggleVideo: togglePlayback })
@@ -120,7 +129,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     }
     const available = root.clientHeight - sheetHeight - 60
     root.style.setProperty('--ff-stage-max', `${Math.max(80, available)}px`)
-  }, [useSheet, sheetHeight])
+    // The verdict row changes `root.clientHeight`, and it can arrive after the
+    // layout (it waits on the current version), so it is measured again.
+  }, [useSheet, sheetHeight, showsVerdictRow])
 
 
   const deepLinkApplied = useRef(false)
@@ -213,6 +224,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     onTranscodeProgress: (d) => refetchIfThisAsset(d.asset_id),
     onTranscodeComplete: (d) => refetchIfThisAsset(d.asset_id),
     onTranscodeFailed: (d) => refetchIfThisAsset(d.asset_id),
+    // The event is project-wide, and only this asset's verdicts are on screen.
+    onApprovalUpdated: (d) => {
+      if (d.asset_id === asset?.id) void globalMutate(verdictsKey(d.asset_id, d.version_id))
+    },
   })
 
   // Transcode events are not the only thing that changes this list. Discarding
@@ -323,6 +338,20 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       </div>
     )
   }
+
+  // The team's verdicts on the version shown. The top bar already holds the
+  // version switcher, Compare, New Version, Share and the sidebar toggle, and
+  // is clipped by the root's `overflow-hidden` rather than scrolled, so where it
+  // has no room the controls get a row of their own instead of one more thing
+  // for it to push off the edge.
+  const verdictControls = currentVersion ? (
+    <VerdictControls
+      assetId={asset.id}
+      versionId={currentVersion.id}
+      role={currentRole}
+      variant={verdictsInTopBar ? 'toolbar' : 'row'}
+    />
+  ) : null
 
   const handleSubmitComment = async (
     body: string,
@@ -659,6 +688,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             }}
           />
           <VersionSwitcher versions={versions} />
+          {verdictsInTopBar && verdictControls}
           {asset && canCompare(asset.asset_type, versions) && (
             <button
               onClick={() => {
@@ -709,6 +739,17 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
           </button>
         </div>
       </div>
+
+      {/* ─── Verdicts on a phone: a row of its own, a fixed height whatever the
+          role or the data, so nothing in it can move the media. ──────────── */}
+      {showsVerdictRow && (
+        <div
+          data-testid="verdict-row"
+          className="flex h-10 shrink-0 items-center overflow-x-auto border-b border-border bg-bg-secondary px-3"
+        >
+          {verdictControls}
+        </div>
+      )}
 
       {/* ─── Main content: viewer + sidebar ────────────────────────────── */}
       {compareOpen && asset && currentVersion && canCompare(asset.asset_type, versions) ? (
