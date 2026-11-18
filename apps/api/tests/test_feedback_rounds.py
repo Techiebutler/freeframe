@@ -320,3 +320,68 @@ def test_send_on_a_share_link_closes_the_round_at_once(scene):
     assert e.client.post(url).status_code == 204  # nothing open: still fine
     view = f"/share/{link(e, e.scene.req.folder_id, 'view')}/assets/{e.scene.asset.id}/feedback-done"
     assert e.client.post(view).status_code == 403
+
+
+# ── Agent-readable feedback (spec 2026-11-18): segments, mark ids, additive contract ──────────────────────────────
+
+def _w(text, start, end):
+    return {"w": text, "start_s": start, "end_s": end}
+
+
+# The BOF case: "make this ..." then, after a pause, "as likeable as possible" at 6.1 s; the stroke began at 6.9 s (offset_ms)
+# and sits on video frame 7.67. The fragment is a video-time 7.7 note, the drawn comment is stamped 12.4.
+BOF_WORDS = [_w("Make", 0.2, 0.5), _w("this", 0.5, 0.8), _w("pop.", 0.8, 1.2),
+             _w("as", 6.1, 6.24), _w("likeable", 6.3, 6.9), _w("as", 6.9, 7.0), _w("possible", 7.0, 7.6)]
+BOF_MARKS = [{"k": "stroke", "t": 7.67, "offset_ms": 6900, "times": [0, 40], "points": [[0.4, 0.4], [0.6, 0.6]]}]
+
+
+def test_segments_for_maps_the_bof_stroke_to_the_words_said_when_it_began():
+    from apps.api.services.feedback_rounds import segments_for
+    segs = segments_for(BOF_WORDS, BOF_MARKS)
+    assert [(s["text"], s["start_s"], s["mark_ids"]) for s in segs] == [("Make this pop.", 0.2, []), ("as likeable as possible", 6.1, ["m0"])]
+
+
+def test_segments_for_uses_the_stored_segments_and_their_video_time_and_assigns_marks_by_start():
+    from apps.api.services.feedback_rounds import segments_for
+    stored = [{"text": "Make this pop.", "start_s": 0.2, "end_s": 1.2, "video_t": 4.0, "segment_index": 0},
+              {"text": "as likeable as possible", "start_s": 6.1, "end_s": 7.6, "video_t": 7.7, "segment_index": 1}]
+    marks = [{"offset_ms": 100, "points": [[0, 0]]}, {"offset_ms": 6900, "points": [[0, 0]]}, {"offset_ms": 6200, "points": [[0, 0]]}]
+    out = segments_for([], marks, stored)
+    assert [(s["video_t"], s["mark_ids"]) for s in out] == [(4.0, ["m0"]), (7.7, ["m1", "m2"])]   # a stroke before the first word joins the first segment
+    assert "mark_ids" not in stored[0]   # the stored list is not mutated
+
+
+def test_segments_for_without_words_or_marks_is_empty_not_an_error():
+    from apps.api.services.feedback_rounds import segments_for
+    assert segments_for([], []) == [] and segments_for(BOF_WORDS, []) [0]["mark_ids"] == []
+
+
+def test_a_long_pause_ends_a_sentence_even_without_punctuation():
+    from apps.api.services.feedback_rounds import segments_for
+    segs = segments_for([_w("slower", 0, 1), _w("and", 3, 3.2), _w("louder", 3.2, 4)], [])
+    assert [s["text"] for s in segs] == ["slower", "and louder"]
+
+
+def test_mark_ids_are_added_to_a_copy_and_old_marks_keep_their_fields():
+    from apps.api.services.feedback_rounds import with_mark_ids
+    out = with_mark_ids(INK)
+    assert out["marks"][0]["mark_id"] == "m0" and out["marks"][0]["points"] == INK["marks"][0]["points"] and "mark_id" not in INK["marks"][0]
+    assert with_mark_ids(None) is None
+
+
+def test_dictations_key_appears_only_when_the_round_has_spoken_notes():
+    from apps.api.services.feedback_rounds import build_feedback_v1
+    kw = dict(round_id=uuid.uuid4(), request_id=uuid.uuid4(), project_id=uuid.uuid4(), briefing="b", opened_at=T0, closed_at=T0,
+              closed_by="idle", context_base="https://x", files=[])
+    assert "dictations" not in build_feedback_v1(**kw)
+    assert build_feedback_v1(**kw, dictations=[{"dictation_id": "d"}])["dictations"] == [{"dictation_id": "d"}]
+
+
+def test_attachment_kinds_audio_is_allowed_only_for_a_dictation_and_has_its_own_cap():
+    from apps.api.services import comment_attachments as ca
+    assert ca.check_file("audio/webm;codecs=opus", 1000, "dictation_audio") is None
+    assert ca.check_file("audio/mp4", 1000, "dictation_audio") is None and ca.check_file("audio/ogg", 1, "dictation_audio") is None
+    assert ca.check_file("audio/webm", 1000) is not None   # a reference image cannot be audio
+    assert ca.check_file("image/png", 1000, "dictation_audio") is not None
+    assert ca.check_file("audio/webm", ca.MAX_AUDIO_BYTES + 1, "dictation_audio") is not None
+    assert ca.check_file("image/png", 1000) is None   # unchanged for images

@@ -9,15 +9,28 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 ALLOWED_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+ALLOWED_AUDIO = {"audio/webm", "audio/mp4", "audio/ogg"}
 MAX_BYTES = 10 * 1024 * 1024
+MAX_AUDIO_BYTES = 25 * 1024 * 1024  # dictation.MAX_BYTES: the recording already passed that cap on its way to Whisper
 MAX_PER_COMMENT = 4
 PENDING_FOR = timedelta(minutes=15)
 
 State = Literal["ready", "pending", "images_failed"]
 
 
-def check_file(content_type: str, size: int) -> Optional[str]:
+def base_type(content_type: str) -> str:
+    """`audio/webm;codecs=opus` (what MediaRecorder reports) -> `audio/webm`."""
+    return (content_type or "").split(";")[0].strip().lower()
+
+
+def check_file(content_type: str, size: int, kind: str = "reference_image") -> Optional[str]:
     """None when the file may be attached, else the reason (shown to the person as is)."""
+    if kind == "dictation_audio":
+        if base_type(content_type) not in ALLOWED_AUDIO:
+            return "Only WebM, MP4 or Ogg audio can be attached to a dictation."
+        if size <= 0 or size > MAX_AUDIO_BYTES:
+            return "A voice note can be up to 25 MB."
+        return None
     if (content_type or "").lower() not in ALLOWED_TYPES:
         return "Only PNG, JPEG, WebP or GIF images can be attached."
     if size <= 0 or size > MAX_BYTES:

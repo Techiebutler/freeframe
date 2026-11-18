@@ -31,3 +31,4 @@ kombu==5.6.2
 
 # Shared Worker/Python checklist snapshot hashing (RFC 8785, including decimal thresholds).
 rfc8785==0.1.4
+pillow==12.3.0

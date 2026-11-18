@@ -6,6 +6,7 @@ a vocabulary prompt built from the lexicon (Gen's lexicon.json), and word + segm
 import difflib
 import json
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from fastapi import HTTPException
@@ -53,11 +54,31 @@ def fix_terms(text: str) -> str:
     return fixed if fixed and 0.7 <= len(fixed) / len(text) <= 1.4 else text
 
 
-def apply_fixes(raw: str, fixed: str, segments: list) -> list:
+def _fix_words(swaps: list, words: list) -> None:
+    """The same swaps on the word list (agents read the words next to the audio): equal length swaps replace word by word,
+    a different length collapses the matched words into one that spans their time."""
+    i = 0
+    while i < len(words):
+        for src, dst in swaps:
+            n = len(src)
+            if [w["word"] for w in words[i:i + n]] == src:
+                if len(dst) == n:
+                    for w, new in zip(words[i:i + n], dst):
+                        w["word"] = new
+                else:
+                    words[i:i + n] = [{"start": words[i]["start"], "end": words[i + n - 1]["end"], "word": " ".join(dst)}]
+                break
+        i += 1
+
+
+def apply_fixes(raw: str, fixed: str, segments: list, words: Optional[list] = None) -> list:
     """Carry the fix-up into the segments (the embed builds notes from them): each 'replace' between raw and fixed tokens is applied
-    to a segment's text when its whole token sequence sits inside that segment. Timings are untouched."""
+    to a segment's text when its whole token sequence sits inside that segment. Timings are untouched. `words` (when given) get the
+    same fix in place, so the stored words and the text agree."""
     a, b = raw.split(), fixed.split()
     swaps = [(a[i1:i2], b[j1:j2]) for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes() if op == "replace"]
+    if words:
+        _fix_words(swaps, words)
     for seg in segments:
         toks = seg["text"].split()
         for src, dst in swaps:
@@ -99,7 +120,7 @@ def transcribe(audio: bytes, filename: str, content_type: str, lang: str = "de")
         text = fix_terms(raw)
         result = {"text": text, "segments": segments}
         if text != raw:
-            apply_fixes(raw, text, segments)
+            apply_fixes(raw, text, segments, words)
         if text != raw:  # the raw Whisper text stays available; absent when nothing was fixed
             result["raw_text"] = raw
         if words:  # absent when the provider sent none, so the response shape of v1 clients is unchanged

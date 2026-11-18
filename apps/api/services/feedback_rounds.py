@@ -16,7 +16,7 @@ from ..config import settings
 from ..models.approval import Approval, ApprovalStatus
 from ..models.agent import AgentKey, FeedbackRound
 from ..models.asset import Asset, AssetVersion, MediaFile
-from ..models.comment import Annotation, Comment, CommentAttachment
+from ..models.comment import Annotation, Comment, CommentAttachment, CommentDictation
 from . import comment_attachments as images
 from ..models.project import Project
 from ..models.upload_request import RequestUpload, UploadRequest
@@ -40,10 +40,11 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
 
 
 def build_feedback_v1(*, round_id, request_id, project_id, briefing: str, opened_at: datetime, closed_at: datetime,
-                      closed_by: str, files: list[dict], context_base: str) -> dict:
-    """FeedbackV1 as the contract spells it. `files` carry comments with `t_start` and are ordered here."""
+                      closed_by: str, files: list[dict], context_base: str, dictations: Optional[list[dict]] = None) -> dict:
+    """FeedbackV1 as the contract spells it. `files` carry comments with `t_start` and are ordered here.
+    `dictations` (round level, additive) is present only when the round has spoken notes."""
     ordered = sorted(files, key=lambda f: (f["name"].lower(), f["version_number"]))
-    return {
+    out = {
         "schema": SCHEMA, "round_id": str(round_id), "request_id": str(request_id), "project_id": str(project_id),
         "briefing": briefing, "opened_at": _iso(opened_at), "closed_at": _iso(closed_at), "closed_by": closed_by,
         "files": [{**{k: f[k] for k in ("asset_id", "version_id", "name", "version_number")},
@@ -51,6 +52,62 @@ def build_feedback_v1(*, round_id, request_id, project_id, briefing: str, opened
                   for f in ordered],
         "context_url": f"{context_base.rstrip('/')}/api/v1/agents/context?project={project_id}",
     }
+    if dictations:
+        out["dictations"] = dictations
+    return out
+
+
+PAUSE_S = 1.5  # dictation-sentences.ts PAUSE_S: a longer pause ends a sentence
+INK_FRAME_TOL = 0.25
+FRAME_TIMEOUT = timedelta(seconds=60)
+
+
+def mark_id(index: int) -> str:
+    """Server-derived, stable because a comment's marks are stored once."""
+    return f"m{index}"
+
+
+def with_mark_ids(drawing_data):
+    """drawing_data as stored plus `mark_id` on every mark (a copy; the stored JSON is untouched)."""
+    if not (isinstance(drawing_data, dict) and isinstance(drawing_data.get("marks"), list)):
+        return drawing_data
+    return {**drawing_data, "marks": [{**m, "mark_id": mark_id(i)} if isinstance(m, dict) else m for i, m in enumerate(drawing_data["marks"])]}
+
+
+def _sentences_from_words(words: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    cur: list[dict] = []
+    for i, w in enumerate(words):
+        cur.append(w)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if w["w"].rstrip("\"')").endswith((".", "?", "!", "…")) or (nxt and nxt["start_s"] - w["end_s"] > PAUSE_S):
+            out.append({"text": " ".join(x["w"] for x in cur), "start_s": cur[0]["start_s"], "end_s": cur[-1]["end_s"]})
+            cur = []
+    if cur:
+        out.append({"text": " ".join(x["w"] for x in cur), "start_s": cur[0]["start_s"], "end_s": cur[-1]["end_s"]})
+    return out
+
+
+def segments_for(words: list[dict], marks: list[dict], segments: Optional[list[dict]] = None) -> list[dict]:
+    """Which strokes were drawn while each segment was spoken. Both on the recording clock: a mark's stroke starts at
+    `offset_ms / 1000`; it belongs to the last segment that had started by then (the first, when it began earlier) -
+    the same rule as flow-notes.ts, made explicit. `segments` as stored with the dictation (they carry `video_t`);
+    without them the sentences are cut from `words` (backfill). Returns the segments with `mark_ids`."""
+    segs = [dict(s) for s in (segments if segments is not None else _sentences_from_words(words))]
+    for s in segs:
+        s["mark_ids"] = []
+    if not segs:
+        return segs
+    for i, m in enumerate(marks):
+        if not isinstance(m, dict):
+            continue
+        at = (m.get("offset_ms") or 0) / 1000
+        k = 0
+        for j, s in enumerate(segs):
+            if s["start_s"] <= at:
+                k = j
+        segs[k]["mark_ids"].append(mark_id(i))
+    return segs
 
 
 def rule_candidates(round_id, comments: list[dict]) -> list[dict]:
@@ -152,9 +209,16 @@ def _uploaded(db: Session, comment_id) -> list[CommentAttachment]:
 
 
 def images_pending(db: Session, comments: list[Comment], now: datetime) -> list[str]:
-    """Comments whose announced images are not all in yet - pending or images_failed alike."""
-    return [str(c.id) for c in comments if (c.attachments_expected or 0) > 0 and images.comment_state(
-        c.attachments_expected, len(_uploaded(db, c.id)), c.created_at, now) != "ready"]
+    """Comments whose announced images (or dictation audio) are not all in yet - pending or images_failed alike - and
+    drawn comments whose PNG is still being rendered (frame_state 'pending': at most FRAME_TIMEOUT, then the round goes on)."""
+    out = []
+    for c in comments:
+        got = [a for a in _uploaded(db, c.id) if a.kind != "frame_png"]  # the worker's PNGs were never announced
+        if (c.attachments_expected or 0) > 0 and images.comment_state(c.attachments_expected, len(got), c.created_at, now) != "ready":
+            out.append(str(c.id))
+        elif frame_state(db, c, now) == "pending":
+            out.append(str(c.id))
+    return out
 
 
 def _ms(seconds: Optional[float]) -> Optional[float]:
@@ -162,6 +226,7 @@ def _ms(seconds: Optional[float]) -> Optional[float]:
 
 
 # The client uploads the frame with the ink rendered on it as a normal comment image with this file name.
+# Legacy / fallback only: the server renders `frame_png` attachments now (kind column).
 DRAWN_FRAME_NAME = "drawn-frame"
 
 
@@ -169,29 +234,91 @@ def _is_drawn_frame(a: CommentAttachment) -> bool:
     return (a.original_filename or "").lower().startswith(DRAWN_FRAME_NAME)
 
 
-def _frame_url(db: Session, comment_id: uuid.UUID, version_id: uuid.UUID) -> Optional[str]:
-    """The drawn frame when the client uploaded one; otherwise the version thumbnail (older clients)."""
+def _is_client_frame(a: CommentAttachment) -> bool:
+    return a.kind != "frame_png" and _is_drawn_frame(a)
+
+
+def _has_marks(drawing_data) -> bool:
+    return isinstance(drawing_data, dict) and any(isinstance(m, dict) and m.get("points") for m in drawing_data.get("marks") or [])
+
+
+def frame_state(db: Session, comment: Comment, now: datetime) -> str:
+    """'ready' (a server frame_png exists) | 'pending' (render due, under FRAME_TIMEOUT old) | 'failed' (render failed or
+    timed out; the client picture or thumbnail stands in) | 'unavailable' (no marks, or no media to render from) | 'none' (no drawing)."""
+    note = db.query(Annotation).filter(Annotation.comment_id == comment.id).first()
+    if note is None:
+        return "none"
+    if not _has_marks(note.drawing_data):
+        return "unavailable"
+    if db.query(CommentAttachment.id).filter(CommentAttachment.comment_id == comment.id, CommentAttachment.kind == "frame_png",
+                                             CommentAttachment.uploaded_at.isnot(None)).first():
+        return "ready"
+    if comment.frame_status == "failed":
+        return "failed"
+    from . import drawn_frame
+    if not drawn_frame.has_renderable_media(db, comment.version_id):
+        return "unavailable"
+    created = comment.created_at if comment.created_at.tzinfo else comment.created_at.replace(tzinfo=timezone.utc)
+    return "pending" if now - created < FRAME_TIMEOUT else "failed"
+
+
+def _url(key: str) -> str:
     from . import s3_service
-    drawn = next((a for a in _uploaded(db, comment_id) if _is_drawn_frame(a)), None)
-    if drawn:
-        try:
-            return s3_service.generate_presigned_get_url(drawn.s3_key, expires_in=7 * 24 * 3600)
-        except Exception:  # noqa: BLE001 - fall back to the thumbnail rather than lose the comment
-            pass
+    return s3_service.generate_presigned_get_url(key, expires_in=7 * 24 * 3600)
+
+
+def _thumbnail_url(db: Session, version_id: uuid.UUID) -> Optional[str]:
     media = db.query(MediaFile).filter(MediaFile.version_id == version_id).first()
     if not media or not media.s3_key_thumbnail:
         return None
     try:
-        return s3_service.generate_presigned_get_url(media.s3_key_thumbnail, expires_in=7 * 24 * 3600)
+        return _url(media.s3_key_thumbnail)
     except Exception:  # noqa: BLE001 - a missing thumbnail must not lose the comment
         return None
 
 
+def _frame(db: Session, comment: Comment, atts: list[CommentAttachment], now: datetime) -> tuple[Optional[str], Optional[str], str]:
+    """(frame_url, frame_source, frame_status): the server PNG, else the client's drawn-frame picture, else the thumbnail (older rounds)."""
+    state = frame_state(db, comment, now)
+    server = sorted((a for a in atts if a.kind == "frame_png"), key=lambda a: a.t or 0.0)
+    for a, source in [(server[0], "server")] if server else []:
+        try:
+            return _url(a.s3_key), source, state
+        except Exception:  # noqa: BLE001
+            pass
+    client = next((a for a in atts if _is_client_frame(a)), None)
+    if client:
+        try:
+            return _url(client.s3_key), "client", state
+        except Exception:  # noqa: BLE001
+            pass
+    thumb = _thumbnail_url(db, comment.version_id)
+    return thumb, ("thumbnail" if thumb else None), state
+
+
+def _attachment_json(a: CommentAttachment, version_id: uuid.UUID) -> dict:
+    meta = a.meta or {}
+    out = {"attachment_id": str(a.id), "kind": a.kind or "reference_image", "file_name": a.original_filename,
+           "content_type": a.file_type, "url": _url(a.s3_key), "version_id": str(a.version_id or version_id), "t": a.t}
+    if a.kind == "frame_png":
+        out.update(mark_ids=meta.get("mark_ids", []), width=meta.get("width"), height=meta.get("height"))
+        if meta.get("source") and meta["source"] != "raw":
+            out["source"] = meta["source"]  # rendered from a proxy, not the raw master: same frame, lower resolution
+    if a.kind == "dictation_audio":
+        out["duration_s"] = meta.get("duration_s")
+    return out
+
+
+def _words_json(d: CommentDictation) -> list[dict]:
+    return [{"w": w["w"], "start_s": w["start_s"], "end_s": w["end_s"]} for w in d.words or []]
+
+
 def feedback_v1(db: Session, rnd: FeedbackRound) -> dict:
-    from . import s3_service
     req = db.get(UploadRequest, rnd.request_id)
     comments = round_comments(db, rnd, req)
+    now = datetime.now(timezone.utc)
     files: dict[tuple, dict] = {}
+    spoken: dict[uuid.UUID, dict] = {}  # dictation_id -> {row, comments: [(comment, marks)]}
     for c in comments:
         name, kind = human_author(db, c)
         key = (c.asset_id, c.version_id)
@@ -200,17 +327,43 @@ def feedback_v1(db: Session, rnd: FeedbackRound) -> dict:
             files[key] = {"asset_id": str(c.asset_id), "version_id": str(c.version_id), "name": asset.name,
                           "version_number": version.version_number, "comments": []}
         note = db.query(Annotation).filter(Annotation.comment_id == c.id).first()
+        atts = _uploaded(db, c.id)
+        marks = [m for m in (note.drawing_data.get("marks") or [])] if note and isinstance(note.drawing_data, dict) else []
+        dictation = db.get(CommentDictation, c.dictation_id) if c.dictation_id else None
+        own = []
+        if dictation is not None:
+            all_segs = segments_for(_words_json(dictation), marks, list(dictation.segments or []))
+            own = [{k: s.get(k) for k in ("text", "start_s", "end_s", "video_t", "mark_ids")} for s in all_segs if s.get("segment_index") == c.segment_index]
+            spoken.setdefault(dictation.id, {"row": dictation, "comments": []})["comments"].append((c, all_segs))
+        frame_url, frame_source, frame_status = _frame(db, c, atts, now)
         files[key]["comments"].append({
             "comment_id": str(c.id), "t_start": _ms(c.timecode_start), "t_end": _ms(c.timecode_end), "text": c.body,
-            "drawing": {"drawing_data": note.drawing_data, "frame_url": _frame_url(db, c.id, c.version_id),
+            "dictation_id": str(c.dictation_id) if c.dictation_id else None,
+            "segment_index": c.segment_index if c.dictation_id else None,
+            "segments": own,
+            "drawing": {"drawing_data": with_mark_ids(note.drawing_data), "frame_url": frame_url, "frame_source": frame_source,
+                        "frame_status": frame_status,
                         "mark_offset_ms": note.drawing_data.get("mark_offset_ms") if isinstance(note.drawing_data, dict) else None} if note else None,
-            "attachments": [{"attachment_id": str(a.id), "file_name": a.original_filename, "content_type": a.file_type,
-                             "url": s3_service.generate_presigned_get_url(a.s3_key, expires_in=7 * 24 * 3600)}
-                            for a in _uploaded(db, c.id) if not _is_drawn_frame(a)],
+            "attachments": [_attachment_json(a, c.version_id) for a in atts if not _is_client_frame(a)],
             "author": name, "author_kind": kind})
+    dictations = []
+    for did, g in spoken.items():
+        d = g["row"]
+        owners = {c.segment_index: (c, segs) for c, segs in g["comments"]}  # sentence -> the comment it became + that comment's mark assignment
+        segs = []
+        for i, s in enumerate(d.segments or []):
+            owner, mine = owners.get(s.get("segment_index"), (None, []))
+            segs.append({"text": s.get("text"), "start_s": s.get("start_s"), "end_s": s.get("end_s"), "video_t": s.get("video_t"),
+                         "mark_ids": mine[i]["mark_ids"] if mine else [], "comment_id": str(owner.id) if owner else None})
+        ordered = sorted(g["comments"], key=lambda x: x[0].segment_index or 0)
+        dictations.append({"dictation_id": str(did), "comment_ids": [str(c.id) for c, _ in ordered],
+                           "text": d.text, **({"raw_text": d.raw_text} if d.raw_text else {}), "lang": d.lang,
+                           "audio_attachment_id": str(d.audio_attachment_id) if d.audio_attachment_id else None,
+                           "clock": "recording_s", "words": _words_json(d), "segments": segs})
     return build_feedback_v1(round_id=rnd.id, request_id=rnd.request_id, project_id=req.project_id, briefing=req.title,
                              opened_at=rnd.opened_at, closed_at=rnd.closed_at, closed_by=rnd.closed_by,
-                             files=list(files.values()), context_base=settings.review_bridge_url or "https://review.aditor.ai")
+                             files=list(files.values()), context_base=settings.review_bridge_url or "https://review.aditor.ai",
+                             dictations=dictations)
 
 
 def close_round(db: Session, rnd: FeedbackRound, by: str, now: datetime) -> FeedbackRound:
@@ -331,3 +484,37 @@ def request_agents(db: Session, request_id: uuid.UUID) -> list[dict]:
     rows = db.query(User, AgentKey).join(AgentKey, AgentKey.user_id == User.id) \
         .filter(User.email.in_(handed_in), User.kind == "agent", AgentKey.revoked_at.is_(None)).all()
     return [{"user_id": str(u.id), "name": u.name, "program": k.program} for u, k in rows]
+
+
+# ── Retention: reviewer voice notes ────────────────────────────────────────────
+
+AUDIO_RETENTION = timedelta(days=90)
+
+
+def purge_dictation_audio(db: Session, now: datetime) -> int:
+    """Delete dictation audio 90 days after the round it belongs to was acknowledged (the words stay; only the voice goes).
+    A round nobody acknowledged keeps its audio. Returns how many recordings were removed."""
+    from . import s3_service
+    cutoff = now - AUDIO_RETENTION
+    rows = (db.query(CommentAttachment, Comment)
+            .join(Comment, Comment.id == CommentAttachment.comment_id)
+            .join(Asset, Asset.id == Comment.asset_id)
+            .join(UploadRequest, UploadRequest.folder_id == Asset.folder_id)
+            .join(FeedbackRound, FeedbackRound.request_id == UploadRequest.id)
+            .filter(CommentAttachment.kind == "dictation_audio", FeedbackRound.acked_at.isnot(None), FeedbackRound.acked_at < cutoff,
+                    Comment.created_at >= FeedbackRound.opened_at, FeedbackRound.closed_at.isnot(None), Comment.created_at <= FeedbackRound.closed_at)
+            .all())
+    removed = 0
+    for att, comment in rows:
+        try:
+            s3_service.delete_object(att.s3_key)
+        except Exception:  # noqa: BLE001 - the row goes anyway; an orphan object is swept by sweep_orphan_s3
+            logger.warning("could not delete dictation audio object %s", att.s3_key, exc_info=True)
+        if comment.dictation_id:
+            d = db.get(CommentDictation, comment.dictation_id)
+            if d is not None and d.audio_attachment_id == att.id:
+                d.audio_attachment_id = None
+        db.delete(att)
+        removed += 1
+    db.commit()
+    return removed
