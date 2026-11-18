@@ -191,6 +191,7 @@ services:
       # Preset do x264. Mais rapido = menos CPU por frame e arquivo um pouco
       # maior; a qualidade visual nao muda porque o rate control e CRF (fixo).
       TRANSCODER_PRESET: ${TRANSCODER_PRESET:-veryfast}
+      HLS_KEYFRAME_INTERVAL: ${HLS_KEYFRAME_INTERVAL:-1}
     depends_on:
       postgres:
         condition: service_healthy

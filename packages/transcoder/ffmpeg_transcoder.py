@@ -77,6 +77,32 @@ _URL_RE = re.compile(r"https?://\S+")
 _DIAGNOSTIC_TAIL_MAX_CHARS = 2_000
 
 
+# Seconds between forced keyframes in the HLS ladder. Review players scrub with
+# `fastSeek`, which lands on the nearest keyframe, so this interval is exactly
+# how far apart the frames shown while dragging the progress bar are. 1s gives
+# twice the scrub resolution of the former 2s for a few percent more bytes.
+DEFAULT_HLS_KEYFRAME_INTERVAL = 1.0
+MIN_HLS_KEYFRAME_INTERVAL = 0.25
+MAX_HLS_KEYFRAME_INTERVAL = 2.0
+
+
+def resolve_keyframe_interval() -> float:
+    """Read HLS_KEYFRAME_INTERVAL (seconds), clamped to a sane range.
+
+    An unparsable value falls back to the default rather than failing every
+    encode. Values above 2s are capped: segments are 2s long and must start on
+    a keyframe for `independent_segments` to hold.
+    """
+    raw = (os.environ.get("HLS_KEYFRAME_INTERVAL") or "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_HLS_KEYFRAME_INTERVAL
+    except ValueError:
+        return DEFAULT_HLS_KEYFRAME_INTERVAL
+    if value != value:  # NaN
+        return DEFAULT_HLS_KEYFRAME_INTERVAL
+    return max(MIN_HLS_KEYFRAME_INTERVAL, min(MAX_HLS_KEYFRAME_INTERVAL, value))
+
+
 def resolve_x264_preset() -> str:
     """Read TRANSCODER_PRESET, falling back to the default when unset or bogus.
 
@@ -367,6 +393,9 @@ class FFmpegTranscoder(BaseTranscoder):
             ]
 
             preset = resolve_x264_preset()
+            keyframe_interval = resolve_keyframe_interval()
+            # `:g` keeps "1" rather than "1.0" in the expression.
+            keyframe_expr = f"expr:gte(t,n_forced*{keyframe_interval:g})"
             for i, quality in enumerate(qualities):
                 scale, crf = QUALITY_MAP[quality]
                 ffmpeg_cmd += ["-map", f"[{quality}]"]
@@ -374,7 +403,10 @@ class FFmpegTranscoder(BaseTranscoder):
                     ffmpeg_cmd += ["-map", "a:0"]
                 ffmpeg_cmd += [
                     f"-c:v:{i}", "libx264", f"-crf", str(crf), "-preset", preset,
-                    "-force_key_frames", "expr:gte(t,n_forced*2)",
+                    "-force_key_frames", keyframe_expr,
+                    # Forced keyframes as IDR frames: decoding can restart at
+                    # each one, so a scrub never has to walk back further.
+                    "-forced-idr", "1",
                 ]
 
             segment_dir = hls_dir / "%v"

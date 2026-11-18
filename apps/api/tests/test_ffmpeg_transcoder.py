@@ -439,3 +439,63 @@ def test_no_video_stream_defaults_to_false_for_other_transcoder_backends():
 
     assert TranscodeResult(success=True).no_video_stream is False
     assert TranscodeResult(success=False, error="boom").no_video_stream is False
+
+
+# ─── keyframe interval (scrub smoothness) ─────────────────────────────────────
+
+from packages.transcoder.ffmpeg_transcoder import resolve_keyframe_interval  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (None, 1.0),        # default: 1s keyframes
+        ("", 1.0),
+        ("0.5", 0.5),
+        ("2", 2.0),
+        ("10", 2.0),        # capped: segments are 2s and must start on a keyframe
+        ("0.01", 0.25),     # floored: avoid all-intra bloat from a typo
+        ("fast", 1.0),      # unparsable → default instead of failing encodes
+        ("nan", 1.0),
+    ],
+)
+def test_resolve_keyframe_interval(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("HLS_KEYFRAME_INTERVAL", raising=False)
+    else:
+        monkeypatch.setenv("HLS_KEYFRAME_INTERVAL", raw)
+    assert resolve_keyframe_interval() == expected
+
+
+def _encode_cmd_with_interval(monkeypatch, raw):
+    if raw is None:
+        monkeypatch.delenv("HLS_KEYFRAME_INTERVAL", raising=False)
+    else:
+        monkeypatch.setenv("HLS_KEYFRAME_INTERVAL", raw)
+    with patch("subprocess.run", side_effect=_mock_probe_side_effect(1920, 1080)):
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        with patch("builtins.open", MagicMock()), \
+             patch("pathlib.Path.glob", return_value=[]), \
+             patch("pathlib.Path.rglob", return_value=[]), \
+             patch("pathlib.Path.mkdir"), \
+             patch("shutil.rmtree"):
+            transcoder = FFmpegTranscoder(s3_mock, "test-bucket")
+            assert asyncio.run(transcoder.transcode(_make_job(["720p", "360p"]))).success
+    return _get_ffmpeg_cmd()
+
+
+def test_every_rendition_forces_keyframes_every_second_by_default(monkeypatch):
+    """Scrubbing uses fastSeek (nearest keyframe): 1s keyframes, as IDR frames."""
+    cmd = _encode_cmd_with_interval(monkeypatch, None)
+    forced = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-force_key_frames"]
+    assert forced == ["expr:gte(t,n_forced*1)"] * 2
+    idr = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-forced-idr"]
+    assert idr == ["1"] * 2
+    # Segment length is unchanged, so a segment always holds whole GOPs.
+    assert cmd[cmd.index("-hls_time") + 1] == "2"
+
+
+def test_keyframe_interval_is_configurable(monkeypatch):
+    cmd = _encode_cmd_with_interval(monkeypatch, "0.5")
+    assert "expr:gte(t,n_forced*0.5)" in cmd

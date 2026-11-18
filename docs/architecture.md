@@ -109,7 +109,9 @@ Reviewer approves / rejects ──▶ SSE: approval_updated
 3. `ffprobe` extracts metadata (duration, resolution, FPS)
 4. FFmpeg generates multi-bitrate HLS:
    - 1080p (CRF 20), 720p (CRF 22), 360p (CRF 26)
-   - 2-second segments with forced keyframes
+   - 2-second segments with a forced IDR keyframe every `HLS_KEYFRAME_INTERVAL`
+     seconds (default 1, range 0.25–2). Players scrub with `fastSeek`, which
+     lands on keyframes, so a shorter interval means smoother scrubbing.
    - Rungs above the source resolution are omitted; if all requested rungs are
      larger, the smallest requested rung is retained.
    - An audio-only MP4/MPEG container is retyped and processed through the
