@@ -317,10 +317,14 @@ export class FreeFrameApi {
     });
   }
 
-  /** Presigned URL for the original file, with a download disposition. */
+  /**
+   * Presigned URL for the original file, with a download disposition. A plain
+   * download serves the transcoded MP4, so the panel asks for the original by
+   * name; project members and the asset's creator are always allowed it.
+   */
   async downloadUrl(assetId: string) {
     const res = await this.request<{ url: string }>(
-      `/assets/${assetId}/stream?download=true`
+      `/assets/${assetId}/stream?download=true&rendition=original`
     );
     return res.url.startsWith("/") ? `${this.baseUrl}${res.url}` : res.url;
   }

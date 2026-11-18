@@ -62,6 +62,12 @@ interface CommentInputProps {
   annotationActive?: boolean;
   /** Compare mode: called instead of the global toggle when the pencil / exit is clicked. */
   onToggleAnnotation?: () => void;
+  /**
+   * Show the Public / Internal toggle. Share pages pass false: an internal
+   * comment is team-only, so the share link would never show it back, and the
+   * API refuses one from a caller without access to the asset.
+   */
+  allowInternal?: boolean;
   className?: string;
 }
 
@@ -206,6 +212,7 @@ export function CommentInput({
   onToggleAnnotation,
   onAttachmentsUploaded,
   allowAttachments = true,
+  allowInternal = true,
   className,
 }: CommentInputProps) {
   const {
@@ -504,7 +511,7 @@ export function CommentInput({
             )}
             <textarea
               ref={textareaRef}
-              className="flex-1 resize-none bg-transparent px-2.5 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none min-h-[38px] max-h-[120px]"
+              className="flex-1 resize-none bg-transparent px-2.5 py-2.5 text-[16px] [@media(hover:hover)]:text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none min-h-[38px] max-h-[120px]"
               placeholder={
                 replyToId ? "Write a reply..." : "Leave your comment..."
               }
@@ -686,7 +693,7 @@ export function CommentInput({
                   <Smile className="h-4 w-4" />
                 </button>
                 {emojiOpen && (
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 rounded-lg border border-border bg-bg-elevated shadow-2xl p-1.5 animate-in fade-in zoom-in-95 duration-100 w-[200px]">
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 slide-in-from-left-1/2 mb-2 z-50 rounded-lg border border-border bg-bg-elevated shadow-2xl p-1.5 animate-in fade-in zoom-in-95 duration-100 w-[200px]">
                     <div className="grid grid-cols-8 gap-px">
                       {EMOJIS.map((e) => (
                         <button
@@ -709,59 +716,61 @@ export function CommentInput({
 
             <div className="flex items-center gap-2">
               {/* Visibility dropdown */}
-              <div className="relative" ref={visRef}>
-                <button
-                  onClick={() => setVisDropdownOpen((p) => !p)}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] transition-colors border",
-                    commentVisibility === "internal"
-                      ? "text-amber-400 border-amber-400/30 bg-amber-400/10"
-                      : "text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary border-border",
+              {allowInternal && (
+                <div className="relative" ref={visRef}>
+                  <button
+                    onClick={() => setVisDropdownOpen((p) => !p)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] transition-colors border",
+                      commentVisibility === "internal"
+                        ? "text-amber-400 border-amber-400/30 bg-amber-400/10"
+                        : "text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary border-border",
+                    )}
+                  >
+                    {commentVisibility === "internal" ? (
+                      <Lock className="h-3 w-3" />
+                    ) : (
+                      <Globe className="h-3 w-3" />
+                    )}
+                    {commentVisibility === "internal" ? "Internal" : "Public"}
+                    <ChevronDown className="h-3 w-3" />
+                  </button>
+                  {visDropdownOpen && (
+                    <div className="absolute bottom-full right-0 mb-1 z-50 w-44 rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 animate-in fade-in zoom-in-95 duration-100">
+                      <button
+                        className={cn(
+                          "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
+                          commentVisibility === "public"
+                            ? "text-text-primary bg-bg-tertiary"
+                            : "text-text-secondary hover:bg-bg-tertiary",
+                        )}
+                        onClick={() => {
+                          setCommentVisibility("public");
+                          setVisDropdownOpen(false);
+                        }}
+                      >
+                        <Globe className="h-3.5 w-3.5" />
+                        Public
+                      </button>
+                      <button
+                        className={cn(
+                          "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
+                          commentVisibility === "internal"
+                            ? "text-amber-400 bg-bg-tertiary"
+                            : "text-text-secondary hover:bg-bg-tertiary",
+                        )}
+                        onClick={() => {
+                          setCommentVisibility("internal");
+                          setVisDropdownOpen(false);
+                        }}
+                      >
+                        <Lock className="h-3.5 w-3.5" />
+                        Internal
+                      </button>
+                    </div>
                   )}
-                >
-                  {commentVisibility === "internal" ? (
-                    <Lock className="h-3 w-3" />
-                  ) : (
-                    <Globe className="h-3 w-3" />
-                  )}
-                  {commentVisibility === "internal" ? "Internal" : "Public"}
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-                {visDropdownOpen && (
-                  <div className="absolute bottom-full right-0 mb-1 z-50 w-44 rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 animate-in fade-in zoom-in-95 duration-100">
-                    <button
-                      className={cn(
-                        "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
-                        commentVisibility === "public"
-                          ? "text-text-primary bg-bg-tertiary"
-                          : "text-text-secondary hover:bg-bg-tertiary",
-                      )}
-                      onClick={() => {
-                        setCommentVisibility("public");
-                        setVisDropdownOpen(false);
-                      }}
-                    >
-                      <Globe className="h-3.5 w-3.5" />
-                      Public
-                    </button>
-                    <button
-                      className={cn(
-                        "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
-                        commentVisibility === "internal"
-                          ? "text-amber-400 bg-bg-tertiary"
-                          : "text-text-secondary hover:bg-bg-tertiary",
-                      )}
-                      onClick={() => {
-                        setCommentVisibility("internal");
-                        setVisDropdownOpen(false);
-                      }}
-                    >
-                      <Lock className="h-3.5 w-3.5" />
-                      Internal
-                    </button>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Submit */}
               <button

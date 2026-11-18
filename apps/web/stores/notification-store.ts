@@ -23,6 +23,10 @@ export const useNotificationStore = create<NotificationState>()((set, get) => ({
       const notifications = await api.get<Notification[]>('/me/notifications')
       const unreadCount = notifications.filter((n) => !n.read).length
       set({ notifications, unreadCount })
+    } catch {
+      // A failed fetch keeps the current list and unread count. The callers
+      // run this from effects without a .catch, so rethrowing would leave an
+      // unhandled rejection.
     } finally {
       set({ isLoading: false })
     }

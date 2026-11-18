@@ -16,17 +16,26 @@ import {
   Images,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   MessageSquare,
   Download,
   Key,
   Clock,
   Droplets,
   LayoutGrid,
+  Paintbrush,
 } from 'lucide-react'
 import * as Switch from '@radix-ui/react-switch'
-import { cn, copyToClipboard, endOfDayISO } from '@/lib/utils'
+import { cn, copyToClipboard, dateInputValue, endOfDayISO } from '@/lib/utils'
+import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { SHARE_PASSWORD_TOO_LONG, sharePasswordTooLong } from '@/lib/share-password'
+import {
+  ShareAppearanceFields,
+  DEFAULT_SHARE_APPEARANCE,
+  appearanceFromView,
+} from '@/components/projects/share-appearance-fields'
 import type { AssetResponse, Folder, ShareLink, ShareLinkAppearance } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -44,6 +53,11 @@ interface ShareCreateDialogProps {
   initialResult?: CreatedShareResult | null
   onShareCreated: () => void
   onAdvancedSettings?: (token: string) => void
+  /**
+   * Whether the dialog opens over a folder view, so "Use my current view" has
+   * something on screen to copy. The asset review page passes false.
+   */
+  currentViewAvailable?: boolean
 }
 
 type SelectedItem =
@@ -77,12 +91,22 @@ function AssetTypeIcon({ type, className }: { type: string; className?: string }
   }
 }
 
+// ─── Share URL helper ────────────────────────────────────────────────────────
+
+/** The short /s/<code> link when the link has one, else the long token link. */
+function buildShareUrl(token: string, shortCode?: string | null): string {
+  const path = withBasePath(shortCode ? `/s/${shortCode}` : `/share/${token}`)
+  return typeof window !== 'undefined' ? `${window.location.origin}${path}` : path
+}
+
 // ─── Copy button ─────────────────────────────────────────────────────────────
 
-function CopyButton({ text, label }: { text: string; label?: string }) {
-  const [status, setStatus] = React.useState<'idle' | 'copied' | 'failed'>('idle')
+type CopyStatus = 'idle' | 'copied' | 'failed'
 
-  async function handleCopy() {
+function useCopyStatus(text: string) {
+  const [status, setStatus] = React.useState<CopyStatus>('idle')
+
+  async function copy() {
     const ok = await copyToClipboard(text)
     if (ok) {
       setStatus('copied')
@@ -93,11 +117,23 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
     }
   }
 
+  return { status, copy }
+}
+
+function CopyAnnouncer({ status }: { status: CopyStatus }) {
+  return (
+    <div className="sr-only" aria-live="polite" role="status">
+      {status === 'copied' ? 'URL copied to clipboard' : status === 'failed' ? 'Copy failed' : ''}
+    </div>
+  )
+}
+
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const { status, copy: handleCopy } = useCopyStatus(text)
+
   return (
     <>
-      <div className="sr-only" aria-live="polite" role="status">
-        {status === 'copied' ? 'URL copied to clipboard' : status === 'failed' ? 'Copy failed' : ''}
-      </div>
+      <CopyAnnouncer status={status} />
       <Button variant="secondary" size="sm" onClick={handleCopy}>
         {status === 'copied' ? (
           <>
@@ -268,6 +304,7 @@ interface ShareConfig {
   expiresAt: string | null
   watermark: boolean
   visibility: 'public' | 'secure'
+  appearance: ShareLinkAppearance
 }
 
 // ─── Configure Phase ──────────────────────────────────────────────────────────
@@ -277,10 +314,19 @@ interface ConfigurePhaseProps {
   onBack: () => void
   onCreate: (config: ShareConfig) => void
   creating: boolean
+  /** Set once the link exists; the settings lock and the footer offers Copy and Close */
+  createdUrl: string | null
+  onClose: () => void
+  /** A single asset makes an asset link, which only takes a theme and accent */
+  linkKind: 'asset' | 'collection'
+  canCopyCurrentView: boolean
 }
 
-function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigurePhaseProps) {
+function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, onClose, linkKind, canCopyCurrentView }: ConfigurePhaseProps) {
   const [title, setTitle] = React.useState(defaultTitle)
+  // Comments on, downloads off, matching ShareLinkCreate on the API. Both have to
+  // move together or a link created through the API keeps the old behaviour while
+  // one made in the dialog does not. (#266)
   const [allowComments, setAllowComments] = React.useState(true)
   const [allowDownloads, setAllowDownloads] = React.useState(false)
   const [passphrase, setPassphrase] = React.useState(false)
@@ -289,6 +335,13 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
   const [watermark, setWatermark] = React.useState(false)
   const [expiresAt, setExpiresAt] = React.useState('')
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
+  // The link's own look, editable right here. It starts on the share defaults
+  // (same as the API's), not on the viewer's current view, so a link never
+  // depends on how one browser happened to be set up. "Use my current view"
+  // inside the block copies the view in once, at the click.
+  const [appearance, setAppearance] = React.useState<ShareLinkAppearance>(DEFAULT_SHARE_APPEARANCE)
+  const [showAppearance, setShowAppearance] = React.useState(false)
+  const { status: copyStatus, copy } = useCopyStatus(createdUrl ?? '')
 
   function handleCreate() {
     onCreate({
@@ -299,6 +352,7 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
       expiresAt: expiresAt || null,
       watermark,
       visibility,
+      appearance,
     })
   }
 
@@ -307,11 +361,13 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div className="flex items-center gap-2 min-w-0">
-          <button onClick={onBack} className="text-text-tertiary hover:text-text-primary transition-colors shrink-0">
-            <ChevronLeft className="h-4 w-4" />
-          </button>
+          {!createdUrl && (
+            <button onClick={onBack} className="text-text-tertiary hover:text-text-primary transition-colors shrink-0">
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          )}
           <Dialog.Title className="text-sm font-semibold text-text-primary truncate">
-            Configure Share Link
+            {createdUrl ? 'Share Link Created' : 'Configure Share Link'}
           </Dialog.Title>
         </div>
         <Dialog.Close className="text-text-tertiary hover:text-text-primary transition-colors">
@@ -319,8 +375,14 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
         </Dialog.Close>
       </div>
 
-      {/* Content */}
-      <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+      {/* Content — locked once the link exists, since the settings are already
+          applied. The scrollbar's space stays reserved (`[scrollbar-gutter:stable]`)
+          so the content box keeps one width: hiding the grid-only rows on list
+          layout made the scrollbar come and go, which visibly widened the dialog. */}
+      <fieldset
+        disabled={!!createdUrl}
+        className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto min-w-0 disabled:opacity-60 [scrollbar-gutter:stable]"
+      >
         {/* Link name */}
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-text-secondary">Link name</label>
@@ -454,16 +516,93 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
             </Switch.Root>
           </div>
         </div>
-      </div>
 
-      {/* Footer */}
-      <div className="flex items-center justify-end border-t border-border px-5 py-3 gap-2">
-        <Button variant="secondary" size="sm" onClick={onBack}>
-          Back
-        </Button>
-        <Button size="sm" onClick={handleCreate} loading={creating} disabled={creating}>
-          Create
-        </Button>
+        {/* Appearance — same block as the link panel's Settings > Appearance,
+            so how the client sees the link is picked here, not rebuilt by
+            hand afterwards. Goes out with the create request itself. */}
+        <div className="border-t border-border pt-1">
+          <button
+            type="button"
+            onClick={() => setShowAppearance((v) => !v)}
+            className="flex w-full items-center justify-between py-2.5"
+          >
+            <div className="flex items-center gap-2.5">
+              <Paintbrush className="h-4 w-4 text-text-tertiary" />
+              <span className="text-sm text-text-primary">Appearance</span>
+            </div>
+            {showAppearance ? (
+              <ChevronDown className="h-4 w-4 text-text-tertiary" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-text-tertiary" />
+            )}
+          </button>
+          {showAppearance && (
+            <div className="rounded-lg border border-border bg-bg-tertiary/50 p-3">
+              <ShareAppearanceFields
+                appearance={appearance}
+                kind={linkKind}
+                onChange={(patch) => setAppearance((a) => ({ ...a, ...patch }))}
+                onUseCurrentView={
+                  canCopyCurrentView
+                    ? () => setAppearance((a) => ({ ...a, ...appearanceFromView() }))
+                    : undefined
+                }
+              />
+            </div>
+          )}
+        </div>
+      </fieldset>
+
+      {/* Footer, one line: URL | Create→Copy | Back→Close. The buttons have
+          fixed widths and the footer's height doesn't change once the link
+          exists, so the dialog stays put and Copy lands exactly where Create
+          was. It is the same button element, so it keeps focus too. */}
+      <div className="flex items-center gap-3 border-t border-border px-5 py-3">
+        <div className="flex-1 min-w-0">
+          {createdUrl && (
+            <p className="truncate rounded-md border border-border bg-bg-tertiary px-3 py-1.5 font-mono text-xs text-text-primary">
+              {createdUrl}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <CopyAnnouncer status={copyStatus} />
+          <Button
+            size="sm"
+            className="w-24"
+            onClick={createdUrl ? copy : handleCreate}
+            loading={creating}
+            disabled={creating}
+          >
+            {!createdUrl ? (
+              'Create'
+            ) : copyStatus === 'copied' ? (
+              <>
+                <Check className="h-3.5 w-3.5" />
+                Copied!
+              </>
+            ) : copyStatus === 'failed' ? (
+              <>
+                <X className="h-3.5 w-3.5" />
+                Failed
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" />
+                Copy
+              </>
+            )}
+          </Button>
+          {createdUrl ? (
+            <Button key="close" variant="secondary" size="sm" className="w-20" onClick={onClose}>
+              Close
+            </Button>
+          ) : (
+            <Button key="back" variant="secondary" size="sm" className="w-20" onClick={onBack}>
+              Back
+            </Button>
+          )}
+        </div>
       </div>
     </>
   )
@@ -576,10 +715,15 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   const [savingTitle, setSavingTitle] = React.useState(false)
   const [showSettings, setShowSettings] = React.useState(false)
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
-  const [allowComments, setAllowComments] = React.useState(false)
+  // Same defaults as the single-item path above. (#266)
+  const [allowComments, setAllowComments] = React.useState(true)
   const [allowDownloads, setAllowDownloads] = React.useState(false)
   const [passphrase, setPassphrase] = React.useState(false)
   const [passphraseValue, setPassphraseValue] = React.useState('')
+  // The link already has a password, which the details call does not send back.
+  const [passphraseStored, setPassphraseStored] = React.useState(false)
+  // The typed password is over the API's limit, so it is not being saved.
+  const [passphraseTooLong, setPassphraseTooLong] = React.useState(false)
   const [showPassphraseInput, setShowPassphraseInput] = React.useState(false)
   const [watermark, setWatermark] = React.useState(false)
   const [expiresAt, setExpiresAt] = React.useState<string>('')
@@ -592,27 +736,37 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   }, [result.token, result.title])
   const [urlCopied, setUrlCopied] = React.useState(false)
   const [urlCopyFailed, setUrlCopyFailed] = React.useState(false)
-  const [layout, setLayout] = React.useState<'grid' | 'list'>('grid')
+  // The full appearance, not just the layout: the PATCH below replaces the
+  // whole object server-side, so switching layout must carry the rest along.
+  const [appearance, setAppearance] = React.useState<ShareLinkAppearance>(DEFAULT_SHARE_APPEARANCE)
+  // The token whose appearance `appearance` holds. Until it matches the link
+  // shown, the layout switch is disabled: patching then would send the
+  // defaults, or the previous link's appearance, over this link's own.
+  const [appearanceToken, setAppearanceToken] = React.useState<string | null>(null)
   const titleInputRef = React.useRef<HTMLInputElement>(null)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Fetch share link details to initialize settings
   React.useEffect(() => {
+    // Switching between created links refetches; a late answer for the link
+    // switched away from must not land on the one now shown.
+    let cancelled = false
     api.get<ShareLink>(`/share/${result.token}/details`).then((data) => {
+      if (cancelled) return
       setAllowComments(data.permission === 'comment' || data.permission === 'approve')
       setAllowDownloads(data.allow_download)
       setPassphrase(data.has_password ?? false)
+      setPassphraseStored(data.has_password ?? false)
       setWatermark(data.show_watermark)
-      setExpiresAt(data.expires_at ? new Date(data.expires_at).toISOString().split('T')[0] : '')
-      setLayout((data.appearance as ShareLinkAppearance | null)?.layout || 'grid')
+      setExpiresAt(dateInputValue(data.expires_at))
+      setAppearance({ ...DEFAULT_SHARE_APPEARANCE, ...(data.appearance ?? {}) })
+      setAppearanceToken(result.token)
       setVisibility(data.visibility === 'secure' ? 'secure' : 'public')
     }).catch(() => {})
+    return () => { cancelled = true }
   }, [result.token])
 
-  const shareUrl =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}/s/${result.shortCode ?? result.token}`
-      : `/s/${result.shortCode ?? result.token}`
+  const shareUrl = buildShareUrl(result.token, result.shortCode)
 
   async function handleSaveTitle() {
     if (!title.trim() || title === result.title) {
@@ -698,8 +852,9 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
         </Dialog.Close>
       </div>
 
-      {/* Content */}
-      <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+      {/* Content — scrollbar gutter reserved here too; the Settings tab's
+          layout switch hides rows the same way the configure phase does */}
+      <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto [scrollbar-gutter:stable]">
         {/* Multiple share links switcher */}
         {allResults && allResults.length > 1 && (
           <div className="space-y-1">
@@ -822,8 +977,13 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                   {(['grid', 'list'] as const).map((l) => (
                     <button
                       key={l}
-                      onClick={() => { setLayout(l); patchLink({ appearance: { layout: l, theme: 'dark', accent_color: null, open_in_viewer: true, sort_by: 'created_at' } }) }}
-                      className={cn('rounded-md px-3 py-1 text-2xs font-medium capitalize', layout === l ? 'bg-accent text-white' : 'text-text-tertiary hover:text-text-primary')}
+                      disabled={appearanceToken !== result.token}
+                      onClick={() => {
+                        const next = { ...appearance, layout: l }
+                        setAppearance(next)
+                        patchLink({ appearance: next })
+                      }}
+                      className={cn('rounded-md px-3 py-1 text-2xs font-medium capitalize', appearance.layout === l ? 'bg-accent text-white' : 'text-text-tertiary hover:text-text-primary', 'disabled:opacity-50')}
                     >{l}</button>
                   ))}
                 </div>
@@ -871,7 +1031,13 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                     onCheckedChange={(v) => {
                       setPassphrase(v)
                       setShowPassphraseInput(v)
-                      if (!v) { setPassphraseValue(''); patchLink({ password: null }) }
+                      if (!v) {
+                        if (debounceRef.current) clearTimeout(debounceRef.current)
+                        setPassphraseValue('')
+                        setPassphraseStored(false)
+                        setPassphraseTooLong(false)
+                        patchLink({ password: null })
+                      }
                     }}
                     className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors"
                   >
@@ -883,8 +1049,24 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                     <input
                       type={showPassphraseInput ? 'text' : 'password'}
                       value={passphraseValue}
-                      onChange={(e) => { setPassphraseValue(e.target.value); debouncedPatch({ password: e.target.value || null }) }}
-                      placeholder={passphrase && !passphraseValue ? '••••••••' : 'Enter passphrase'}
+                      // Keeps the browser from filling in a saved password over the link's.
+                      autoComplete="new-password"
+                      onChange={(e) => {
+                        setPassphraseValue(e.target.value)
+                        // Over the limit the API refuses the save, and this
+                        // dialog would not show that, so it is never sent and
+                        // the message below says why.
+                        const tooLong = sharePasswordTooLong(e.target.value)
+                        setPassphraseTooLong(tooLong)
+                        // An empty box is not "remove the password": the switch does that.
+                        if (e.target.value && !tooLong) {
+                          debouncedPatch({ password: e.target.value })
+                        } else if (debounceRef.current) {
+                          clearTimeout(debounceRef.current)
+                        }
+                      }}
+                      aria-invalid={passphraseTooLong || undefined}
+                      placeholder={passphraseStored ? 'Password set. Type a new one to replace it' : 'Enter passphrase'}
                       className="w-full rounded-md border border-border bg-bg-secondary px-3 py-2 pr-14 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
                     />
                     <button
@@ -895,6 +1077,9 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                       {showPassphraseInput ? 'Hide' : 'Show'}
                     </button>
                   </div>
+                )}
+                {passphrase && passphraseTooLong && (
+                  <p role="alert" className="text-xs text-status-error">{SHARE_PASSWORD_TOO_LONG}</p>
                 )}
               </div>
 
@@ -908,7 +1093,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                   <input
                     type="date"
                     value={expiresAt}
-                    onChange={(e) => { setExpiresAt(e.target.value); patchLink({ expires_at: e.target.value ? new Date(e.target.value).toISOString() : null }) }}
+                    onChange={(e) => { setExpiresAt(e.target.value); patchLink({ expires_at: e.target.value ? endOfDayISO(e.target.value) : null }) }}
                     className="w-[120px] rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary outline-none focus:border-accent [color-scheme:dark]"
                   />
                   {expiresAt && (
@@ -975,6 +1160,7 @@ export function ShareCreateDialog({
   initialResult,
   onShareCreated,
   onAdvancedSettings,
+  currentViewAvailable = true,
 }: ShareCreateDialogProps) {
   type Phase = 'selection' | 'configure' | 'result'
 
@@ -985,6 +1171,7 @@ export function ShareCreateDialog({
   const [error, setError] = React.useState<string | null>(null)
   const [createdResult, setCreatedResult] = React.useState<CreatedShareResult | null>(null)
   const [allCreatedResults, setAllCreatedResults] = React.useState<CreatedShareResult[]>([])
+  const [createdUrl, setCreatedUrl] = React.useState<string | null>(null)
 
   // Compute default title from a given items map (avoids stale state reads)
   function computeDefaultTitle(items: Map<string, SelectedItem>): string {
@@ -995,9 +1182,15 @@ export function ShareCreateDialog({
     return 'Shared Project'
   }
 
-  // Reset state when dialog opens/closes
+  // Reset only when the dialog opens. The other deps are read for the reset but
+  // must not trigger one: `assets` is a new array after every SWR revalidation
+  // (fresh signed thumbnail URLs), and resetting after Create would turn Copy
+  // back into Create and post a second link.
+  const wasOpenRef = React.useRef(false)
   React.useEffect(() => {
-    if (open) {
+    const justOpened = open && !wasOpenRef.current
+    wasOpenRef.current = open
+    if (justOpened) {
       const initial = new Map<string, SelectedItem>()
       if (preselectedItem) {
         const key = `${preselectedItem.type}:${preselectedItem.id}`
@@ -1048,6 +1241,7 @@ export function ShareCreateDialog({
       setError(null)
       setCreatedResult(initialResult ?? null)
       setAllCreatedResults(initialResult ? [initialResult] : [])
+      setCreatedUrl(null)
     }
   }, [open, preselectedItem, preselectedItems, assets])
 
@@ -1076,19 +1270,27 @@ export function ShareCreateDialog({
       // Check if a specific item is selected (single asset or single folder)
       const items = Array.from(selectedItems.values())
 
+      // Every create endpoint takes the link's settings, so they go in the
+      // create request itself. A follow-up PATCH could fail after the link
+      // was live, leaving it public without its passphrase or expiry.
+      const settings: Record<string, unknown> = {
+        title: config.title,
+        permission: config.allowComments ? 'comment' : 'view',
+        visibility: config.visibility,
+        allow_download: config.allowDownloads,
+        show_watermark: config.watermark,
+        appearance: config.appearance,
+      }
+      if (config.passphrase) settings.password = config.passphrase
+      if (config.expiresAt) settings.expires_at = endOfDayISO(config.expiresAt)
+
       // Multi-item share — use the /share/multi endpoint
       if (items.length >= 2) {
         const body: Record<string, unknown> = {
+          ...settings,
           asset_ids: items.filter(i => i.type === 'asset').map(i => i.id),
           folder_ids: items.filter(i => i.type === 'folder').map(i => i.id),
-          title: config.title,
-          permission: config.allowComments ? 'comment' : 'view',
-          visibility: config.visibility,
-          allow_download: config.allowDownloads,
-          show_watermark: config.watermark,
         }
-        if (config.passphrase) body.password = config.passphrase
-        if (config.expiresAt) body.expires_at = endOfDayISO(config.expiresAt)
 
         const link = await api.post<ShareLink>(`/projects/${projectId}/share/multi`, body)
         shareLink = link
@@ -1096,39 +1298,21 @@ export function ShareCreateDialog({
         const singleItem = items.length === 1 ? items[0] : null
 
         if (singleItem?.type === 'asset') {
-          shareLink = await api.post<ShareLink>(`/assets/${singleItem.id}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/assets/${singleItem.id}/share`, settings)
           itemType = 'asset'
           thumbUrl = singleItem.thumbnailUrl
         } else if (singleItem?.type === 'folder') {
-          shareLink = await api.post<ShareLink>(`/folders/${singleItem.id}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/folders/${singleItem.id}/share`, settings)
         } else if (currentFolderId) {
-          shareLink = await api.post<ShareLink>(`/folders/${currentFolderId}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/folders/${currentFolderId}/share`, settings)
         } else {
-          shareLink = await api.post<ShareLink>(`/projects/${projectId}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/projects/${projectId}/share`, settings)
         }
-
-        // Apply configured settings
-        const patches: Record<string, unknown> = {
-          visibility: config.visibility,
-          permission: config.allowComments ? 'comment' : 'view',
-          allow_download: config.allowDownloads,
-          show_watermark: config.watermark,
-        }
-        if (config.passphrase) patches.password = config.passphrase
-        if (config.expiresAt) patches.expires_at = new Date(config.expiresAt).toISOString()
-        await api.patch(`/share/${shareLink.token}`, patches)
       }
 
       onShareCreated()
-      onOpenChange(false)
+      // Stay open so the person can copy the new link; Create becomes Close.
+      setCreatedUrl(buildShareUrl(shareLink.token, shareLink.short_code))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create share link')
     } finally {
@@ -1146,7 +1330,7 @@ export function ShareCreateDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <Dialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2',
+            'fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%]',
             'rounded-xl border border-border bg-bg-secondary shadow-xl',
             'max-h-[90vh] flex flex-col',
             'data-[state=open]:animate-in data-[state=closed]:animate-out',
@@ -1178,6 +1362,15 @@ export function ShareCreateDialog({
               onBack={preselectedItem ? () => onOpenChange(false) : () => setPhase('selection')}
               onCreate={handleCreate}
               creating={creating}
+              createdUrl={createdUrl}
+              onClose={handleDone}
+              linkKind={
+                selectedItems.size === 1 &&
+                Array.from(selectedItems.values())[0].type === 'asset'
+                  ? 'asset'
+                  : 'collection'
+              }
+              canCopyCurrentView={currentViewAvailable}
             />
           ) : (
             <SelectionPhase

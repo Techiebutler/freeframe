@@ -4,6 +4,13 @@ name: Promote release to stable
 # track for production. Refuses to promote a tag whose commit did not pass CI,
 # so a bad release can never become `stable`. Rollback = re-run this with an
 # older, known-good tag.
+#
+# The `stable` image tags (ghcr.io/techiebutler/freeframe-api and -web) move
+# with the branch: the same digest the release's tag already points at, never
+# a rebuild. Both images must exist before the branch moves, so the branch and
+# the image tag never disagree. `branch_only` is for releases from before images
+# were published (rolling back past them): it moves the branch and leaves the
+# `stable` image tag where it was.
 
 on:
   workflow_dispatch:
@@ -17,16 +24,65 @@ on:
         required: false
         type: boolean
         default: false
+      branch_only:
+        description: "Move only the stable branch, not the stable image tag (only for releases from before images were published)"
+        required: false
+        type: boolean
+        default: false
 
-permissions:
-  contents: write
+# Each job declares what it needs.
+permissions: {}
 
 jobs:
   promote:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Always, branch_only included: the check below needs the registry either way.
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Before the CI gate and before anything is pushed, so a refused run
+      # leaves the stable branch untouched. A normal promotion needs both
+      # images; branch_only is refused for a tag that has any, since it would
+      # leave the stable image tag on a different release than the branch.
+      - name: Check the images exist
+        env:
+          TAG: ${{ inputs.tag }}
+          BRANCH_ONLY: ${{ inputs.branch_only }}
+        run: |
+          set -euo pipefail
+          published=0
+          for image in freeframe-api freeframe-web; do
+            digest="$(.github/scripts/image_digest.sh "ghcr.io/techiebutler/${image}:${TAG}")"
+            if [ -n "${digest}" ]; then
+              published=$((published + 1))
+              echo "ghcr.io/techiebutler/${image}:${TAG} is ${digest}"
+            else
+              echo "ghcr.io/techiebutler/${image}:${TAG} is not published"
+            fi
+          done
+          if [ "${BRANCH_ONLY}" = "true" ]; then
+            if [ "${published}" -gt 0 ]; then
+              echo "::error::${TAG} has published images, so branch_only=true would leave the stable image tag on another release. branch_only is only for releases from before images were published; re-run without it."
+              exit 1
+            fi
+          elif [ "${published}" -lt 2 ]; then
+            echo "::error::No published images for ${TAG}. Run the \"Publish images\" workflow for ${TAG} first, or re-run with branch_only=true for a release from before images were published."
+            exit 1
+          fi
 
       - name: Verify CI is green, then move `stable`
         env:
@@ -40,13 +96,16 @@ jobs:
           echo "Promoting ${TAG} (${COMMIT}) -> stable"
 
           if [ "${FORCE}" != "true" ]; then
-            runs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}/check-runs")"
+            # Every page: the API returns 30 check-runs per page, and a commit with
+            # CI plus the publish jobs can have more, so one page would fail open.
+            # --paginate prints each page's object in turn; jq -s folds them.
+            runs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}/check-runs?per_page=100")"
             # Exclude this workflow's OWN check-run: a workflow_dispatch run registers a
             # `promote` check-run on the default branch's HEAD commit. When a release is
             # promoted straight from main HEAD (the common case), that HEAD *is* the tag
             # commit being gated, so this run would count its own in_progress/failed
             # `promote` check as a non-success and refuse to promote against itself.
-            checks="$(echo "$runs" | jq '[.check_runs[] | select(.name != "promote")]')"
+            checks="$(echo "$runs" | jq -s '[.[].check_runs[] | select(.name != "promote")]')"
             total="$(echo "$checks" | jq 'length')"
             bad="$(echo "$checks" | jq '[.[] | select(.conclusion != "success")] | length')"
             if [ "$total" -lt 1 ]; then
@@ -65,3 +124,32 @@ jobs:
 
           git push --force origin "${COMMIT}:refs/heads/stable"
           echo "::notice::stable now points at ${TAG} (${COMMIT})"
+
+      # A retag from a single index without --annotation keeps its digest, so
+      # `stable` is byte-for-byte the release's image and keeps its attestation.
+      - name: Move the `stable` image tags
+        if: ${{ !inputs.branch_only }}
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for image in freeframe-api freeframe-web; do
+            ref="ghcr.io/techiebutler/${image}"
+            docker buildx imagetools create -t "${ref}:stable" "${ref}:${TAG}"
+            release="$(.github/scripts/image_digest.sh "${ref}:${TAG}")"
+            stable="$(.github/scripts/image_digest.sh "${ref}:stable")"
+            echo "${ref}:${TAG} ${release}"
+            echo "${ref}:stable ${stable}"
+            if [ -z "${release}" ] || [ "${stable}" != "${release}" ]; then
+              echo "::error::${ref}:stable (${stable:-missing}) does not match ${ref}:${TAG} (${release:-missing})."
+              failed=1
+            fi
+          done
+          exit "${failed}"
+
+      - name: Leave the `stable` image tags alone
+        if: ${{ inputs.branch_only }}
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "::notice::branch_only=true, so only the stable branch moved to ${TAG}; the stable image tag was left where it was."

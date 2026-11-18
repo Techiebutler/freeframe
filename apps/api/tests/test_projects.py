@@ -147,7 +147,10 @@ def test_delete_project(client, auth_headers, mock_db, test_user):
 
     resp = client.delete(f"/projects/{proj.id}", headers=auth_headers)
     assert resp.status_code == 204
-    assert mock_db.query.return_value.filter.return_value.update.call_count == 2
+    # A project delete marks only the project; its folders and assets stay as they are,
+    # hidden by the live-project checks, so restoring the project brings them back.
+    assert proj.deleted_at is not None
+    assert mock_db.query.return_value.filter.return_value.update.call_count == 0
 
 
 def test_update_project(client, auth_headers, mock_db, test_user):

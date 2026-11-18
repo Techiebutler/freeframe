@@ -5,9 +5,9 @@
 #   cp .env.example .env.prod        # configure your settings
 #   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 #
-# SSL: Set DOMAIN and ACME_EMAIL in .env.prod for automatic
-#      Let's Encrypt certificates. Without a domain, it runs
-#      on HTTP only (port 80).
+# SSL: This file alone serves HTTP only (port 80) and requests no
+#      certificate. For automatic Let's Encrypt certificates, set DOMAIN
+#      and ACME_EMAIL in .env.prod and add -f docker-compose.https.yml.
 # ============================================================
 
 services:
@@ -19,7 +19,7 @@ services:
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
-      # Let's Encrypt automatic certificates (requires DOMAIN and ACME_EMAIL)
+      # Let's Encrypt resolver; certificates are requested only with -f docker-compose.https.yml
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
@@ -63,11 +63,11 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ─── Optional: self-hosted object storage (MinIO) ────────────────────────────
+  # ─── Optional: self-hosted object storage (Silo, a MinIO fork) ──────────────
   # FreeFrame has NO local-filesystem storage backend — it speaks only the S3 API.
   # By default, point it at external S3-compatible storage (AWS S3, R2, B2, Spaces)
   # via the S3_* vars in .env.prod. To instead keep media on THIS host, run your
-  # own MinIO by uncommenting the two services below, then:
+  # own S3 server by uncommenting the two services below, then:
   #   1. add `miniodata:` under the top-level `volumes:` (see bottom of file);
   #   2. add `depends_on: { minio: { condition: service_healthy } }` to
   #      api / worker / email_worker / maintenance_worker / beat;
@@ -76,21 +76,21 @@ services:
   #        S3_ENDPOINT=http://minio:9000
   #        S3_PUBLIC_ENDPOINT=https://storage.${DOMAIN}   # MUST be browser-reachable
   #        S3_ACCESS_KEY / S3_SECRET_KEY = strong values
-  # Presigned URLs are handed to the browser, so MinIO must be reachable from
-  # OUTSIDE the compose network — that is what the Traefik router below provides
-  # (point a `storage.<your-domain>` DNS record at this host). The app sets a
-  # public-read policy on the `processed/*` prefix itself on startup.
+  #        S3_BUCKET = lowercase letters, digits and hyphens only (no underscores)
+  # Presigned URLs are handed to the browser, so the storage server must be
+  # reachable from OUTSIDE the compose network — that is what the Traefik router
+  # below provides (point a `storage.<your-domain>` DNS record at this host).
+  # The bucket can stay private. On startup the app sets the bucket's CORS rules
+  # from FRONTEND_URL and CORS_ALLOW_ORIGINS, and Silo enforces them, so
+  # FRONTEND_URL must be the exact https:// origin people browse to.
+  # An existing miniodata volume from the old minio/minio image opens as is.
   #
   # minio:
-  #   image: minio/minio:RELEASE.2025-04-22T22-12-26Z   # 2025+ supports the boto3>=1.36 checksums
+  #   image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z   # maintained MinIO fork; minio/minio is no longer pullable (#461)
   #   command: server /data --console-address ":9001"
   #   environment:
   #     MINIO_ROOT_USER: ${S3_ACCESS_KEY}
   #     MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-  #     MINIO_CORS_ALLOW_ORIGIN: ${FRONTEND_URL}
-  #     MINIO_CORS_ALLOW_METHODS: GET,PUT,POST,DELETE,HEAD
-  #     MINIO_CORS_ALLOW_HEADERS: "*"
-  #     MINIO_CORS_EXPOSE_HEADERS: ETag,Content-Length,x-amz-request-id
   #   volumes:
   #     - miniodata:/data
   #   healthcheck:
@@ -107,15 +107,16 @@ services:
   #     - traefik.http.services.minio.loadbalancer.server.port=9000
   #
   # minio-init:                     # one-shot: create the bucket (idempotent)
-  #   image: minio/mc:latest
+  #   image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+  #   env_file:
+  #     - .env.prod                    # the S3_* vars below are read inside the container
   #   depends_on:
   #     minio:
   #       condition: service_healthy
   #   entrypoint: >
   #     /bin/sh -c "
-  #     mc alias set local http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY};
-  #     mc mb --ignore-existing local/$${S3_BUCKET};
-  #     exit 0;
+  #     mc alias set local http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY} &&
+  #     mc mb --ignore-existing local/$${S3_BUCKET}
   #     "
 
   api:
@@ -138,7 +139,8 @@ services:
       -k uvicorn.workers.UvicornWorker
       --bind 0.0.0.0:8000
       --timeout 120
-      --graceful-timeout 30"
+      --graceful-timeout 30
+      --access-logfile -"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -173,7 +175,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q transcoding -c $${TRANSCODING_CONCURRENCY:-2} --loglevel=$${CELERY_LOG_LEVEL:-info}"
+    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q transcoding -c $${TRANSCODING_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   email_worker:
@@ -185,10 +187,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c $${EMAIL_CONCURRENCY:-2} --loglevel=warning"
+    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c $${EMAIL_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
-  # Housekeeping: retention GC, stale-upload reaper, orphan sweep, watermarking.
+  # Housekeeping: retention GC, stale-upload reaper, orphan sweep. (Watermarking
+  # runs on the transcoding worker, see apps/api/tasks/celery_app.py.)
   # Kept off the transcoding worker (these hold a slot for minutes while a video
   # waits) and off the email worker (a magic code queued behind a full bucket
   # listing is a login someone is waiting on).
@@ -203,7 +206,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q maintenance -c $${MAINTENANCE_CONCURRENCY:-1} --loglevel=warning"
+    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q maintenance -c $${MAINTENANCE_CONCURRENCY:-1} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   beat:
@@ -215,7 +218,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app beat --loglevel=warning -s /tmp/celerybeat-schedule"
+    command: sh -c "celery -A apps.api.tasks.celery_app beat --loglevel=$${CELERY_LOGLEVEL:-info} -s /tmp/celerybeat-schedule"
     restart: unless-stopped
 
   web:
@@ -224,15 +227,28 @@ services:
       dockerfile: Dockerfile.prod
       args:
         NEXT_PUBLIC_API_URL: /api
-        NEXT_PUBLIC_UPLOAD_CONCURRENCY: ${NEXT_PUBLIC_UPLOAD_CONCURRENCY:-5}
+        NEXT_PUBLIC_BASE_PATH: ${NEXT_PUBLIC_BASE_PATH:-}
     env_file:
       - .env.prod
     environment:
-      - INTERNAL_API_URL=http://api:8000
+      # Server-to-server, for the branding Next renders into the first byte.
+      # It cannot reuse NEXT_PUBLIC_API_URL here: that is `/api`, a path the
+      # browser resolves against the current origin and Traefik routes. A fetch
+      # from inside this container has no origin to resolve it against.
+      - API_INTERNAL_URL=${API_INTERNAL_URL:-http://api:8000}
+      # Older name for the same address, read by the share-link preview metadata.
+      - INTERNAL_API_URL=${INTERNAL_API_URL:-${API_INTERNAL_URL:-http://api:8000}}
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
+      # Probe a public page under the prefix: with NEXT_PUBLIC_BASE_PATH set,
+      # the app root `/` answers 404 and the container would never go healthy.
+      # Compose interpolates the same value the build arg gets.
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider \"http://127.0.0.1:3000${NEXT_PUBLIC_BASE_PATH:-}/login\"",
+        ]
       interval: 30s
       timeout: 5s
       start_period: 15s

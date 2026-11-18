@@ -37,8 +37,10 @@ export function useAuth(): UseAuthReturn {
   }
 
   function logout(): void {
+    // storeLogout() clears tokens, which already performs a full-page
+    // navigation to the login screen. Pushing here too would race that with a
+    // second, basePath-unaware navigation.
     storeLogout()
-    router.push('/login')
   }
 
   return {

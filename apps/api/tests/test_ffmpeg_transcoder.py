@@ -8,60 +8,13 @@ Verifies:
 - _run() raises RuntimeError with stderr on non-zero exit
 """
 import asyncio
-import io
-from collections import deque
 import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, validate_hls_output as _validate_hls_output
+from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, _THUMB_GEOMETRY
 from packages.transcoder.base import TranscodeJob
-
-
-class _FakeProc:
-    """Stands in for the ffmpeg process behind subprocess.Popen.
-
-    The main encode moved from subprocess.run to Popen when progress streaming
-    was added, so it needs a line-iterable stdout that can be closed. Both
-    ffprobe calls and the thumbnail pass still go through subprocess.run.
-    """
-
-    def __init__(self, lines=(), returncode=0):
-        self.stdout = io.StringIO(chr(10).join(lines))
-        self._returncode = returncode
-
-    def wait(self):
-        return self._returncode
-
-    def kill(self):
-        pass
-
-
-_popen_holder = {}
-
-
-@pytest.fixture(autouse=True)
-def _patch_popen():
-    """Every transcode test drives the main encode, which now uses Popen."""
-    with patch("subprocess.Popen") as mock_popen:
-        mock_popen.side_effect = lambda *a, **k: _FakeProc(
-            ["out_time=00:00:03.000000", "progress=continue", "progress=end"]
-        )
-        _popen_holder["mock"] = mock_popen
-        yield mock_popen
-        _popen_holder.pop("mock", None)
-
-
-@pytest.fixture(autouse=True)
-def _bypass_hls_validation_for_command_tests():
-    """Command tests do not create ffmpeg's real playlist files.
-
-    Dedicated tests below exercise the validator against real temporary files;
-    this keeps the existing command-construction tests focused on their concern.
-    """
-    with patch("packages.transcoder.ffmpeg_transcoder.validate_hls_output"):
-        yield
 
 
 def _make_job(qualities: list[str] | None = None) -> TranscodeJob:
@@ -77,7 +30,7 @@ def _mock_probe_side_effect(width: int, height: int):
     (given width/height) and no audio stream, then a generic success
     result for the main ffmpeg transcode call."""
     def mock_run_side_effect(cmd, **_kwargs):
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock = MagicMock()
             mock.returncode = 0
             mock.stderr = ""
@@ -98,11 +51,10 @@ def _mock_probe_side_effect(width: int, height: int):
     return mock_run_side_effect
 
 
-def _get_ffmpeg_cmd():
+def _get_ffmpeg_cmd(mock_run):
     """Pull the main ffmpeg transcode command (the one with -filter_complex)
-    out of the mocked subprocess.Popen call list."""
-    mock_popen = _popen_holder["mock"]
-    ffmpeg_calls = [c for c in mock_popen.call_args_list
+    out of a mocked subprocess.run's call list."""
+    ffmpeg_calls = [c for c in mock_run.call_args_list
                     if any("filter_complex" in str(a) for a in c[0][0])]
     assert len(ffmpeg_calls) > 0, "no -filter_complex call was made"
     return ffmpeg_calls[0][0][0]
@@ -136,47 +88,13 @@ def test_run_uses_errors_replace():
         assert call_kwargs["timeout"] == 60
 
 
-# ─── HLS output validation ───────────────────────────────────────────────────
-
-def _write_playlist(path, durations, endlist=True):
-    path.parent.mkdir(parents=True)
-    lines = ["#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-PLAYLIST-TYPE:VOD"]
-    for index, duration in enumerate(durations):
-        lines.extend([f"#EXTINF:{duration:.6f},", f"seg_{index:03d}.ts"])
-    if endlist:
-        lines.append("#EXT-X-ENDLIST")
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def test_validate_hls_output_accepts_complete_duration(tmp_path):
-    _write_playlist(tmp_path / "0" / "playlist.m3u8", [2.0, 2.0, 1.5])
-
-    durations = _validate_hls_output(tmp_path, expected_duration_seconds=5.5)
-
-    assert durations == {"0/playlist.m3u8": 5.5}
-
-
-def test_validate_hls_output_rejects_playlist_without_endlist(tmp_path):
-    _write_playlist(tmp_path / "0" / "playlist.m3u8", [2.0], endlist=False)
-
-    with pytest.raises(RuntimeError, match="missing ENDLIST"):
-        _validate_hls_output(tmp_path, expected_duration_seconds=2.0)
-
-
-def test_validate_hls_output_rejects_truncated_playlist(tmp_path):
-    _write_playlist(tmp_path / "0" / "playlist.m3u8", [2.0] * 10 + [0.233333])
-
-    with pytest.raises(RuntimeError, match="does not match source duration"):
-        _validate_hls_output(tmp_path, expected_duration_seconds=1340.533333)
-
-
 # ─── has_audio=True command construction ───────────────────────────────────────
 
 def test_transcode_with_audio_includes_audio_map():
     """When ffprobe detects audio streams, ffmpeg cmd must include -map a:0."""
     def mock_run_side_effect(cmd, **_kwargs):
         # First call: video probe → return metadata
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock = MagicMock()
             mock.returncode = 0
             mock.stderr = ""
@@ -214,7 +132,11 @@ def test_transcode_with_audio_includes_audio_map():
                 job = _make_job(["720p"])
                 asyncio.run(transcoder.transcode(job))
 
-        ffmpeg_cmd = _get_ffmpeg_cmd()
+        # Find the main ffmpeg command call (the one with -filter_complex)
+        ffmpeg_calls = [c for c in mock_run.call_args_list
+                        if any("filter_complex" in str(a) for a in c[0][0])]
+        assert len(ffmpeg_calls) > 0
+        ffmpeg_cmd = ffmpeg_calls[0][0][0]
 
         # Assert audio map is present
         assert "-map" in ffmpeg_cmd
@@ -234,7 +156,7 @@ def test_transcode_without_audio_excludes_audio_map():
     """When ffprobe detects no audio streams, ffmpeg cmd must NOT include -map a:0."""
     def mock_run_side_effect(cmd, **_kwargs):
         # First call: video probe
-        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "v:0":
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
             mock = MagicMock()
             mock.returncode = 0
             mock.stderr = ""
@@ -269,7 +191,11 @@ def test_transcode_without_audio_excludes_audio_map():
                 job = _make_job(["720p"])
                 asyncio.run(transcoder.transcode(job))
 
-        ffmpeg_cmd = _get_ffmpeg_cmd()
+        # Find the main ffmpeg command call
+        ffmpeg_calls = [c for c in mock_run.call_args_list
+                        if any("filter_complex" in str(a) for a in c[0][0])]
+        assert len(ffmpeg_calls) > 0
+        ffmpeg_cmd = ffmpeg_calls[0][0][0]
 
         # Assert audio map is NOT present
         maps = [ffmpeg_cmd[i+1] for i, arg in enumerate(ffmpeg_cmd) if arg == "-map"]
@@ -299,9 +225,18 @@ def test_source_smaller_than_ladder_drops_upscaled_renditions():
                 result = asyncio.run(transcoder.transcode(job))
 
         assert result.success is True
-        ffmpeg_cmd = _get_ffmpeg_cmd()
+        ffmpeg_cmd = _get_ffmpeg_cmd(mock_run)
 
         filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
+        assert "[0:V:0]split=1" in filter_complex
+        video_probes = [
+            c[0][0][c[0][0].index("-select_streams") + 1]
+            for c in mock_run.call_args_list
+            if "-select_streams" in c[0][0]
+            and c[0][0][0] == "ffprobe"
+            and c[0][0][c[0][0].index("-select_streams") + 1] != "a"
+        ]
+        assert video_probes and set(video_probes) == {"V:0"}
         assert "1920:1080" not in filter_complex, "1080p rendition should have been dropped"
         assert "1280:720" not in filter_complex, "720p rendition should have been dropped"
         assert "640:360" in filter_complex, "360p rendition should still be present"
@@ -316,7 +251,14 @@ def test_source_smaller_than_ladder_drops_upscaled_renditions():
 
 def test_source_smaller_than_all_requested_keeps_smallest():
     """A source below every requested quality must still yield exactly one
-    rendition (the smallest requested), never zero."""
+    rendition, never zero -- and at the source's own size.
+
+    The rendition kept here used to be the smallest requested rung at its
+    nominal size, which `force_original_aspect_ratio=decrease` then upscaled to:
+    a 426x240 source came out as one 1280x720 rendition, larger and more
+    expensive than the source. It is clamped to the source now, which is the
+    only reading of "one rung above the source" that saves anything.
+    """
     with patch("subprocess.run", side_effect=_mock_probe_side_effect(426, 240)) as mock_run:
         s3_mock = MagicMock()
         s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
@@ -332,11 +274,12 @@ def test_source_smaller_than_all_requested_keeps_smallest():
                 result = asyncio.run(transcoder.transcode(job))
 
         assert result.success is True
-        ffmpeg_cmd = _get_ffmpeg_cmd()
+        ffmpeg_cmd = _get_ffmpeg_cmd(mock_run)
         filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
 
         assert "1920:1080" not in filter_complex
-        assert "1280:720" in filter_complex, "smallest requested quality (720p) must survive as fallback"
+        assert "1280:720" not in filter_complex, "the kept rung must not upscale the source"
+        assert "426:240" in filter_complex, "the smallest requested rung survives, at source size"
         assert "split=1" in filter_complex
 
 
@@ -358,7 +301,7 @@ def test_source_larger_than_ladder_keeps_full_ladder():
                 result = asyncio.run(transcoder.transcode(job))
 
         assert result.success is True
-        ffmpeg_cmd = _get_ffmpeg_cmd()
+        ffmpeg_cmd = _get_ffmpeg_cmd(mock_run)
         filter_complex = ffmpeg_cmd[ffmpeg_cmd.index("-filter_complex") + 1]
 
         assert "1920:1080" in filter_complex
@@ -381,17 +324,32 @@ def test_run_returns_stdout():
         assert result == "output data"
 
 
-def test_successful_ffmpeg_tail_is_sanitized_for_later_validation_diagnostics(monkeypatch):
-    from packages.transcoder.ffmpeg_transcoder import _safe_diagnostic_tail
+def test_video_metadata_probe_skips_attached_pictures():
+    transcoder = FFmpegTranscoder(MagicMock(), "bucket")
+    probe = json.dumps({"streams": [{"width": 640, "height": 360}]})
 
-    diagnostic = _safe_diagnostic_tail(deque([
-        "frame=100",
-        "Input #0, mov, from 'https://storage.example/video?X-Amz-Signature=secret'",
-        "out_time=00:00:22.250000",
-    ]))
+    with patch.object(transcoder, "_get_presigned_url", return_value="http://in"), \
+         patch.object(transcoder, "_run", return_value=probe) as run:
+        metadata = asyncio.run(transcoder.get_video_metadata("video.mp4"))
 
-    assert "secret" not in diagnostic
-    assert "<redacted-url>" in diagnostic
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("-select_streams") + 1] == "V:0"
+    assert (metadata.width, metadata.height) == (640, 360)
+
+
+def test_thumbnail_command_maps_the_primary_video_stream():
+    transcoder = FFmpegTranscoder(MagicMock(), "bucket")
+    with patch.object(transcoder, "_get_presigned_url", return_value="http://in"), \
+         patch("packages.transcoder.ffmpeg_transcoder.tempfile.mkdtemp", return_value="/tmp/thumbs"), \
+         patch.object(transcoder, "_run") as run, \
+         patch("pathlib.Path.glob", return_value=[]), \
+         patch("shutil.rmtree"):
+        thumbnails = asyncio.run(transcoder.generate_thumbnails("video.mp4", 3))
+
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("-map") + 1] == "0:V:0"
+    assert _THUMB_GEOMETRY in cmd[cmd.index("-vf") + 1]
+    assert thumbnails == []
 
 
 def test_transcode_returns_probe_metadata():
@@ -404,11 +362,12 @@ def test_transcode_returns_probe_metadata():
 
     def fake_run(cmd, timeout=None, label="ffmpeg"):
         if label == "ffprobe":
-            return video_probe if "v:0" in cmd else audio_probe
+            return video_probe if "-select_streams" in cmd and cmd[
+                cmd.index("-select_streams") + 1
+            ] == "V:0" else audio_probe
         return ""
 
     with patch.object(FFmpegTranscoder, "_run", side_effect=fake_run), \
-         patch.object(FFmpegTranscoder, "_run_with_progress"), \
          patch.object(FFmpegTranscoder, "_get_presigned_url", return_value="http://in"):
         result = asyncio.run(t.transcode(_make_job()))
 
@@ -418,27 +377,188 @@ def test_transcode_returns_probe_metadata():
     assert result.duration_seconds == 8.0
 
 
-def test_transcode_reports_an_audio_only_video_container_before_encoding():
-    transcoder = FFmpegTranscoder(MagicMock(), "bucket")
-    audio_only_probe = json.dumps({"streams": [], "format": {"duration": "3.0"}})
+# ─── hardware → software runtime fallback ─────────────────────────────────────
 
-    with patch.object(FFmpegTranscoder, "_run", return_value=audio_only_probe) as run, \
-         patch.object(FFmpegTranscoder, "_run_with_progress") as transcode, \
-         patch.object(FFmpegTranscoder, "_get_presigned_url", return_value="http://in"):
-        result = asyncio.run(transcoder.transcode(_make_job()))
+def test_hw_runtime_failure_detection():
+    """Environmental hardware failures fall back; input errors must not."""
+    from packages.transcoder.ffmpeg_transcoder import _is_hw_runtime_failure
+
+    assert _is_hw_runtime_failure(
+        "decoder->cvdl->cuvidCreateDecoder failed -> CUDA_ERROR_OUT_OF_MEMORY: out of memory")
+    assert _is_hw_runtime_failure("Failed setup for format cuda: hwaccel initialisation returned error.")
+    assert _is_hw_runtime_failure("[h264_nvenc] Cannot load libnvidia-encode.so.1")
+    # Input/content problems must still fail loudly rather than silently
+    # burning CPU on a job that cannot succeed either way.
+    assert not _is_hw_runtime_failure("No such file or directory")
+    assert not _is_hw_runtime_failure("Invalid data found when processing input")
+    assert not _is_hw_runtime_failure("")
+
+
+def test_nvenc_oom_falls_back_to_software_encoder():
+    """A CUDA OOM on the first attempt must transparently retry on CPU."""
+    calls = []
+
+    def side_effect(cmd, **_kwargs):
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": [
+                {"r_frame_rate": "30/1", "duration": 6.0, "width": 3840, "height": 2160}]})
+            return m
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "a":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": []})
+            return m
+        if any("filter_complex" in str(a) for a in cmd):
+            calls.append(cmd)
+            if len(calls) == 1:                      # first (hardware) attempt
+                return MagicMock(
+                    returncode=218,
+                    stderr="CUDA_ERROR_OUT_OF_MEMORY: out of memory",
+                    stdout="")
+        return MagicMock(returncode=0, stderr="", stdout="")
+
+    with patch("subprocess.run", side_effect=side_effect), \
+         patch("packages.transcoder.ffmpeg_transcoder.get_backend", return_value="nvenc"), \
+         patch("builtins.open", MagicMock()), \
+         patch("pathlib.Path.glob", return_value=[]), \
+         patch("pathlib.Path.rglob", return_value=[]), \
+         patch("pathlib.Path.mkdir"), \
+         patch("shutil.rmtree"):
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        result = asyncio.run(FFmpegTranscoder(s3_mock, "test-bucket").transcode(_make_job()))
+
+    assert result.success is True, f"fallback should have rescued the job: {result.error}"
+    assert len(calls) == 2, f"expected a hardware attempt then a software retry, got {len(calls)}"
+
+    hw_cmd, cpu_cmd = calls
+    assert "cuda" in " ".join(hw_cmd), "first attempt should have used CUDA"
+    assert "h264_nvenc" in " ".join(hw_cmd)
+    # The retry must be a full software rebuild: no hwaccel, no GPU scaler.
+    joined = " ".join(cpu_cmd)
+    assert "-hwaccel" not in joined, "software retry must not request hwaccel"
+    assert "scale_cuda" not in joined, "software retry must not use the CUDA scaler"
+    assert "h264_nvenc" not in joined
+    assert "libx264" in joined, "software retry should encode with libx264"
+
+
+def test_non_hardware_error_does_not_retry():
+    """A content error must surface immediately, not trigger a CPU retry."""
+    calls = []
+
+    def side_effect(cmd, **_kwargs):
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "V:0":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": [
+                {"r_frame_rate": "30/1", "duration": 6.0, "width": 1920, "height": 1080}]})
+            return m
+        if "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "a":
+            m = MagicMock(returncode=0, stderr="")
+            m.stdout = json.dumps({"streams": []})
+            return m
+        if any("filter_complex" in str(a) for a in cmd):
+            calls.append(cmd)
+            return MagicMock(returncode=1, stderr="Invalid data found when processing input", stdout="")
+        return MagicMock(returncode=0, stderr="", stdout="")
+
+    with patch("subprocess.run", side_effect=side_effect), \
+         patch("packages.transcoder.ffmpeg_transcoder.get_backend", return_value="nvenc"), \
+         patch("builtins.open", MagicMock()), \
+         patch("pathlib.Path.glob", return_value=[]), \
+         patch("pathlib.Path.rglob", return_value=[]), \
+         patch("pathlib.Path.mkdir"), \
+         patch("shutil.rmtree"):
+        s3_mock = MagicMock()
+        s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
+        result = asyncio.run(FFmpegTranscoder(s3_mock, "test-bucket").transcode(_make_job()))
+
+    assert result.success is False
+    assert len(calls) == 1, "content errors must not trigger a software retry"
+
+
+# ── audio-only file in a video container (#82) ────────────────────────────────
+
+def _audio_only_probe(cmd, **_kwargs):
+    """ffprobe -select_streams V:0 on an audio-only container returns no streams.
+
+    That is the whole of the bug: the container's mime is video/*, so the file
+    is routed to the video pipeline, but there is no video track to encode.
+    """
+    mock = MagicMock()
+    mock.returncode = 0
+    mock.stderr = ""
+    mock.stdout = json.dumps({"streams": [], "format": {"duration": "3.0"}})
+    return mock
+
+
+def test_transcode_reports_a_missing_video_stream_instead_of_an_ffmpeg_error():
+    """The browser types .mpg / .mp4 as video/* even with no video track.
+
+    Before this, every ladder rung was filtered out by the source-height check,
+    the "never emit an empty ladder" fallback put one back, and ffmpeg died on
+    `[0:V:0] matches no streams` -- an error that says nothing about the cause.
+    """
+    t = FFmpegTranscoder.__new__(FFmpegTranscoder)
+    t.s3 = MagicMock()
+    t.bucket = "bucket"
+    t._get_presigned_url = lambda key, expires_in=7200: "http://example.test/in.mpg"
+
+    with patch("subprocess.run", side_effect=_audio_only_probe):
+        result = asyncio.run(t.transcode(_make_job()))
 
     assert result.success is False
     assert result.no_video_stream is True
     assert "No video stream" in (result.error or "")
-    assert run.call_count == 1
-    transcode.assert_not_called()
 
 
-def test_no_video_stream_defaults_to_false_for_other_transcoder_backends():
+def test_no_video_stream_defaults_false_so_other_backends_need_not_set_it():
+    """The field is additive; a real failure must not look like an audio file."""
     from packages.transcoder.base import TranscodeResult
 
     assert TranscodeResult(success=True).no_video_stream is False
     assert TranscodeResult(success=False, error="boom").no_video_stream is False
+
+
+# ─── HLS output length (fork tests, on upstream's truncation check) ───────────
+
+def _write_playlist(path, durations, endlist=True):
+    path.parent.mkdir(parents=True)
+    lines = ["#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-PLAYLIST-TYPE:VOD"]
+    for index, duration in enumerate(durations):
+        lines.extend([f"#EXTINF:{duration:.6f},", f"seg_{index:03d}.ts"])
+    if endlist:
+        lines.append("#EXT-X-ENDLIST")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_hls_output_of_complete_duration_is_accepted(tmp_path):
+    from packages.transcoder.ffmpeg_transcoder import hls_output_seconds, refuse_a_truncated_result
+
+    _write_playlist(tmp_path / "0" / "playlist.m3u8", [2.0, 2.0, 1.5])
+
+    assert hls_output_seconds(tmp_path) == pytest.approx(5.5)
+    refuse_a_truncated_result(tmp_path, 5.5)  # does not raise
+
+
+def test_truncated_hls_output_is_refused_while_a_retry_remains(tmp_path):
+    from packages.transcoder.ffmpeg_transcoder import TranscodeTruncated, refuse_a_truncated_result
+
+    # A 22-minute source whose ladder stopped after 20 seconds.
+    _write_playlist(tmp_path / "0" / "playlist.m3u8", [2.0] * 10 + [0.233333])
+
+    with pytest.raises(TranscodeTruncated):
+        refuse_a_truncated_result(tmp_path, 1340.533333)
+
+
+def test_ffmpeg_diagnostics_do_not_leak_the_presigned_input_url():
+    from packages.transcoder.redact import redact_presigned_urls
+
+    diagnostic = redact_presigned_urls(
+        "Input #0, mov, from 'https://storage.example/video?X-Amz-Signature=secret'"
+    )
+
+    assert "secret" not in diagnostic
+    assert "https://storage.example/video" in diagnostic
 
 
 # ─── keyframe interval (scrub smoothness) ─────────────────────────────────────
@@ -472,7 +592,7 @@ def _encode_cmd_with_interval(monkeypatch, raw):
         monkeypatch.delenv("HLS_KEYFRAME_INTERVAL", raising=False)
     else:
         monkeypatch.setenv("HLS_KEYFRAME_INTERVAL", raw)
-    with patch("subprocess.run", side_effect=_mock_probe_side_effect(1920, 1080)):
+    with patch("subprocess.run", side_effect=_mock_probe_side_effect(1920, 1080)) as mock_run:
         s3_mock = MagicMock()
         s3_mock.generate_presigned_url.return_value = "https://s3.example.com/uploads/video.mp4"
         with patch("builtins.open", MagicMock()), \
@@ -482,20 +602,39 @@ def _encode_cmd_with_interval(monkeypatch, raw):
              patch("shutil.rmtree"):
             transcoder = FFmpegTranscoder(s3_mock, "test-bucket")
             assert asyncio.run(transcoder.transcode(_make_job(["720p", "360p"]))).success
-    return _get_ffmpeg_cmd()
+    return _get_ffmpeg_cmd(mock_run)
+
+
+def _per_rung(cmd, option):
+    """Values of `option:v:<i>` tokens, in rung order."""
+    return [cmd[i + 1] for i, arg in enumerate(cmd) if arg.split(":")[0] == option]
 
 
 def test_every_rendition_forces_keyframes_every_second_by_default(monkeypatch):
     """Scrubbing uses fastSeek (nearest keyframe): 1s keyframes, as IDR frames."""
     cmd = _encode_cmd_with_interval(monkeypatch, None)
-    forced = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-force_key_frames"]
-    assert forced == ["expr:gte(t,n_forced*1)"] * 2
-    idr = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-forced-idr"]
-    assert idr == ["1"] * 2
+    # Qualified per rung, or ffmpeg applies the last copy to every stream.
+    assert "-force_key_frames:v:0" in cmd and "-force_key_frames:v:1" in cmd
+    assert _per_rung(cmd, "-force_key_frames") == ["expr:gte(t,n_forced*1)"] * 2
+    assert "-forced-idr:v:0" in cmd and "-forced-idr:v:1" in cmd
+    assert _per_rung(cmd, "-forced-idr") == ["1"] * 2
     # Segment length is unchanged, so a segment always holds whole GOPs.
     assert cmd[cmd.index("-hls_time") + 1] == "2"
 
 
 def test_keyframe_interval_is_configurable(monkeypatch):
     cmd = _encode_cmd_with_interval(monkeypatch, "0.5")
-    assert "expr:gte(t,n_forced*0.5)" in cmd
+    assert _per_rung(cmd, "-force_key_frames") == ["expr:gte(t,n_forced*0.5)"] * 2
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (None, "veryfast"), ("", "veryfast"), ("Medium", "medium"), ("bogus", "veryfast"),
+])
+def test_x264_preset_is_configurable_and_validated(monkeypatch, raw, expected):
+    from packages.transcoder.ffmpeg_transcoder import resolve_x264_preset
+
+    if raw is None:
+        monkeypatch.delenv("TRANSCODER_PRESET", raising=False)
+    else:
+        monkeypatch.setenv("TRANSCODER_PRESET", raw)
+    assert resolve_x264_preset() == expected

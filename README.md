@@ -31,6 +31,7 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 - **Guest commenting** via share links (no account required)
 - **Due date tracking** with email reminders
 - **Real-time updates** via Server-Sent Events
+- **White-label it completely** — your workspace name, logos, favicon and accent colour across the app, share links and emails; the "Powered by FreeFrame" badge switches off
 - **Self-hosted** with Docker Compose — runs on any server or cloud VM
 
 ### Compare any two versions
@@ -47,7 +48,7 @@ Put two cuts or revisions on screen at once and see exactly what changed. Video 
 
 Export a version's timecoded comments as timeline markers your editor can import — DaVinci Resolve (marker EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), or CSV — so notes land on the exact frame back in the timeline.
 
-See [Export comments to an NLE](docs/comment-export.md) for the workflow, format choices, and frame-rate troubleshooting.
+See [Export comments to an NLE](docs/comment-export.md) for the export workflow, format choices, and frame-rate troubleshooting.
 
 <p align="center">
   <img src="docs/images/comment-export.png" alt="Export comments menu — DaVinci Resolve (EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), and CSV" width="480">
@@ -60,6 +61,18 @@ Send a link; clients review and comment without signing up. You stay in control 
 | Client view (no login) | Your share-link controls |
 |---|---|
 | ![Public share link — clients browse assets and comment without an account](docs/images/share-client-view.png) | ![Share link settings — permissions, passphrase, expiration, watermark](docs/images/share-link-settings.png) |
+
+### Make it yours, not ours
+
+Set your workspace name, logos and accent colour once, and the whole platform follows — sign-in screen, sidebar, browser tab, share links, and the emails your clients receive. Switch off the "Powered by FreeFrame" badge (left on in the shots below) and nothing identifies the software your studio runs on.
+
+![A branded sign-in screen — the studio's own logo, workspace name and accent colour throughout](docs/images/branding-login.png)
+
+A live preview shows the app, the sign-in screen and an email side by side with the controls, so you can see what a change does before saving it.
+
+| Live preview of the branded app | The controls |
+|---|---|
+| ![Settings → Branding preview — a faithful mock of the app shell carrying the studio's logo, name and accent](docs/images/branding-preview.png) | ![Settings → Branding — workspace name, accent colour picker, and light and dark logo slots](docs/images/branding-settings.png) |
 
 ## Quick Start (Development)
 
@@ -81,7 +94,7 @@ Open [http://localhost:3000](http://localhost:3000) to access FreeFrame. The fir
 | Frontend    | http://localhost:3000         |
 | API         | http://localhost:8000         |
 | API Docs    | http://localhost:8000/docs    |
-| MinIO Console | http://localhost:9001       |
+| Storage console (Silo) | http://localhost:9001 |
 
 ### Access from other devices on your network (LAN)
 
@@ -92,9 +105,8 @@ In `.env` (replace `192.168.1.50` with your IP):
 ```env
 NEXT_PUBLIC_API_URL=http://192.168.1.50:8000   # web → API (baked into the browser bundle)
 FRONTEND_URL=http://192.168.1.50:3000           # links in invite/magic-code emails
-CORS_ALLOW_ORIGINS=*                            # API allows the LAN browser origin
+CORS_ALLOW_ORIGINS=*                            # API and storage allow the LAN browser origin
 S3_PUBLIC_ENDPOINT=http://192.168.1.50:9000     # presigned upload/download URLs
-MINIO_CORS_ALLOW_ORIGIN=*                       # MinIO allows the LAN browser origin
 ```
 
 ```bash
@@ -120,14 +132,79 @@ Release notes are on the [Releases page](https://github.com/Techiebutler/freefra
 
 ## Production Deployment
 
+### Install on a fresh server
+
+The easiest way, and the one we recommend if you have not run a server before. Rent a server, run one command, and answer a few short questions: your web address (with an email for certificate notices when it uses HTTPS), where to keep footage (on the server or in an S3 bucket), your mail server (SMTP), your admin account and, on a server with an NVIDIA GPU, whether to use it. The installer sets up Docker, starts FreeFrame, gets a free HTTPS certificate, creates your admin account and turns on nightly backups. It also tells you whether video is processed on the GPU or the CPU: an NVIDIA GPU whose driver works can be used with one confirmation (the installer sets up NVIDIA's container toolkit), see [Video processing on a GPU](docs/deployment.md#video-processing-on-a-gpu).
+
+What to rent:
+
+- **Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13**, on amd64 or arm64.
+- **2 CPU cores, 4 GB of memory and 20 GB of disk at the least**, more for a bigger team or for footage kept on the server (see the [hardware table](docs/deployment.md#hardware-requirements)).
+- **Ports 80 and 443 reachable** from the internet (open them in your provider's firewall).
+
+Log in to the server and run:
+
+```bash
+sudo FREEFRAME_CHANNEL=stable bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)"
+```
+
+The installer is for **Linux servers only**:
+
+- **Supported:** Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13, on amd64 or arm64.
+- **Not macOS or Windows.** On a Mac, use the [manual compose setup](#or-set-it-up-by-hand) with Docker Desktop. On Windows, Ubuntu in WSL2 with systemd switched on works for trying FreeFrame, but it is not something a team should rely on: its address changes when Windows restarts, and it stops when the PC sleeps.
+- **Other Linux distributions:** use the [manual compose setup](#or-set-it-up-by-hand).
+
+The command installs `stable`, the release we have validated for production, and the server keeps following it: `sudo freeframe update` moves to the next release promoted there. To follow every release as soon as it is published, write `latest` in both places instead (`FREEFRAME_CHANNEL=latest` and `.../latest/install.sh`). To set a variable, put it after `sudo`: `sudo FREEFRAME_CHANNEL=stable FREEFRAME_DOMAIN=review.yourstudio.com bash -c "$(curl -fsSL https://raw.githubusercontent.com/Techiebutler/freeframe/stable/install.sh)"`. Use this `bash -c` form rather than `curl ... | sudo bash`: on Ubuntu 26.04, whose `sudo` is sudo-rs, a piped script cannot read your answers (the installer notices and shows this command instead). A piped command is fine only for an [unattended install](docs/deployment.md#unattended-installs-cloud-init-ansible) with `--yes`.
+
+When it finishes, open the address it prints and sign in with your admin account, then invite your team from the admin area. Without email set up, sign-in codes and invitations are not sent and there is no password reset; invitation links can still be copied from the admin page.
+
+Afterwards the `freeframe` command looks after the server: `sudo freeframe status`, `update` (backs up first), `rollback`, `configure`, `backup`, `restore`, `logs`, `restart` and `uninstall`. Nightly backups run at 03:00 and the last 7 are kept, on the same server, so copy them elsewhere now and then. Uploaded media in bundled storage is not in them.
+
+The installer refuses a server that already runs FreeFrame set up by hand, and leaves it alone. For the DNS step, an office server behind a router, moving to a new server, unattended installs (cloud-init, Ansible) and troubleshooting, see the **[installation guide](docs/deployment.md#install-on-a-fresh-server)**.
+
+#### Removing FreeFrame
+
+`sudo freeframe uninstall` takes FreeFrame off the server. It first saves a final backup of the database and moves it, with every earlier backup and a copy of the settings file, to `/root/freeframe-removed-<date>-<time>/`. Then it removes FreeFrame's containers, the nightly backup, `/opt/freeframe` and the `freeframe` command. Your data stays in its Docker volumes (the database, and footage kept on the server) unless you add `--delete-data`, and Docker itself is left alone. Run `sudo freeframe uninstall --dry-run` first to see exactly what it would remove and keep. To put FreeFrame back later, or to run it unattended, see [Removing FreeFrame](docs/deployment.md#removing-freeframe) in the guide.
+
+### Or set it up by hand
+
+There are two manual ways to run FreeFrame in production, both fully supported. They use the same `.env.prod` settings file as the installer; pick one.
+
+#### Run the published images
+
+No clone and no build: the server needs only the compose files and your settings. This works from v1.22.0, the first release that has these compose files.
+
+```bash
+mkdir freeframe && cd freeframe
+( set -e; for f in docker-compose.prod.yml docker-compose.images.yml .env.example; do
+    curl -fsSLO "https://raw.githubusercontent.com/Techiebutler/freeframe/stable/$f" \
+      || { echo "Could not download $f: check the ref." >&2; exit 1; }
+  done ) && cp .env.example .env.prod
+# Edit .env.prod: set your credentials, S3, email config
+# For SSL: also download docker-compose.https.yml, set DOMAIN and ACME_EMAIL,
+# and add -f docker-compose.https.yml below (see docs/deployment.md)
+docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.images.yml up -d
+```
+
+`stable` is the release we have validated for production. To follow every release as soon as it is published, download from `latest` instead.
+
+`docker-compose.images.yml` names the release it belongs to, so downloading the files again from the same ref and running `docker compose pull` then `up -d` is how you update. To pin a version, set `FREEFRAME_VERSION` in `.env.prod`.
+
+#### Build from source
+
+Fully supported, and unchanged: this builds every image on the server.
+
 ```bash
 git clone -b stable https://github.com/Techiebutler/freeframe.git
 cd freeframe
 cp .env.example .env.prod
 # Edit .env.prod — set your credentials, S3, email config
-# For SSL: also set DOMAIN and ACME_EMAIL (Traefik auto-provisions Let's Encrypt certs)
+# For SSL: also set DOMAIN and ACME_EMAIL, and add -f docker-compose.https.yml below
+# (Traefik then requests a Let's Encrypt certificate; see docs/deployment.md)
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
+
+Use the same `-f` flags for every later `docker compose` command (`ps`, `logs`, `down`).
 
 For the full guide including **SSL setup**, **bring-your-own infrastructure** (external database, Redis, S3, SMTP), scaling, and troubleshooting, see:
 
@@ -171,13 +248,13 @@ For the full guide including **SSL setup**, **bring-your-own infrastructure** (e
 
 | Component    | Technology                                       |
 |--------------|--------------------------------------------------|
-| Frontend     | Next.js 14, React 18, Tailwind CSS, Zustand      |
+| Frontend     | Next.js 16, React 19, Tailwind CSS, Zustand      |
 | Backend      | FastAPI, SQLAlchemy, Pydantic                    |
 | Database     | PostgreSQL 15                                     |
 | Queue        | Celery + Redis                                    |
 | Transcoding  | FFmpeg (multi-bitrate HLS)                        |
-| Storage      | Any S3-compatible (AWS, R2, B2, MinIO)           |
-| Proxy        | Traefik (auto SSL via Let's Encrypt)              |
+| Storage      | Any S3-compatible (AWS, R2, B2, Garage, Silo)    |
+| Proxy        | Traefik (opt-in Let's Encrypt SSL)                |
 | Auth         | JWT + magic code email login                      |
 
 ## Documentation

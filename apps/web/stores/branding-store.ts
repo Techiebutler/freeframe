@@ -1,36 +1,158 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { logoUrlFromApi } from '@/lib/branding-logo'
 
-interface BrandingState {
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
+export interface InstanceBranding {
+  id: string
+  org_name: string
+  logo_light_key: string | null
+  logo_dark_key: string | null
+  favicon_key: string | null
+  apple_icon_key: string | null
+  login_logo_key: string | null
+  logo_light_url: string | null
+  logo_dark_url: string | null
+  favicon_url: string | null
+  apple_icon_url: string | null
+  login_logo_url: string | null
+  primary_color: string | null
+  powered_by_freeframe: boolean
+  default_login_mode: LoginMode
+  created_at: string
+  updated_at: string
+}
+
+
+export type LoginMode = 'magic_code' | 'password'
+
+/** The branding fields that decide what gets painted, with no store plumbing. */
+export interface BrandingValues {
   orgName: string
-  /** Logo for dark theme (shown on dark backgrounds) */
   orgLogoDark: string | null
-  /** Logo for light theme (shown on light backgrounds) */
   orgLogoLight: string | null
+  faviconUrl: string | null
+  appleIconUrl: string | null
+  loginLogoUrl: string | null
+  poweredByFreeframe: boolean
+  primaryColor: string | null
+  defaultLoginMode: LoginMode
+}
+
+interface BrandingState extends BrandingValues {
+  loaded: boolean
+  loading: boolean
+
   setOrgName: (name: string) => void
   setOrgLogoDark: (url: string | null) => void
   setOrgLogoLight: (url: string | null) => void
-  resetAll: () => void
+  setFaviconUrl: (url: string | null) => void
+  setAppleIconUrl: (url: string | null) => void
+  setLoginLogoUrl: (url: string | null) => void
+  setPoweredByFreeframe: (value: boolean) => void
+  setPrimaryColor: (color: string | null) => void
+  setDefaultLoginMode: (mode: LoginMode) => void
+  fetchBranding: () => Promise<void>
+  syncBranding: (data: InstanceBranding) => void
+}
+
+/**
+ * The API's branding row as the values the app paints with.
+ *
+ * Shared with the server-rendered path so an SSR'd page and a client sync can
+ * never disagree about what a field means -- in particular `primary_color`,
+ * where `null` has to stay `null`.
+ */
+export function brandingValuesFromApi(data: InstanceBranding): BrandingValues {
+  return {
+    orgName: data.org_name || HARDCODED_DEFAULTS.orgName,
+    orgLogoDark: logoUrlFromApi(data.logo_dark_url),
+    orgLogoLight: logoUrlFromApi(data.logo_light_url),
+    faviconUrl: logoUrlFromApi(data.favicon_url),
+    appleIconUrl: logoUrlFromApi(data.apple_icon_url),
+    loginLogoUrl: logoUrlFromApi(data.login_logo_url),
+    poweredByFreeframe: data.powered_by_freeframe ?? true,
+    // No coercion to a default here, unlike the fields above. `null` means no
+    // accent was ever configured, and it has to survive as `null` so the accent
+    // tokens are handed back to the stylesheet rather than repainting every
+    // un-branded instance in the default colour.
+    primaryColor: data.primary_color ?? null,
+    defaultLoginMode: data.default_login_mode ?? 'magic_code',
+  }
+}
+
+export const HARDCODED_DEFAULTS = {
+  orgName: 'FreeFrame',
+  orgLogoDark: null,
+  orgLogoLight: null,
+  faviconUrl: null,
+  appleIconUrl: null,
+  loginLogoUrl: null,
+  poweredByFreeframe: true,
+  // null, like the API's unset accent: before branding loads, or if the fetch
+  // fails, an unbranded instance must not look as if it had an accent set.
+  primaryColor: null as string | null,
+  defaultLoginMode: 'magic_code' as LoginMode,
 }
 
 export const useBrandingStore = create<BrandingState>()(
   persist(
-    (set) => ({
-      orgName: 'FreeFrame',
-      orgLogoDark: null,
-      orgLogoLight: null,
+    (set, get) => ({
+      ...HARDCODED_DEFAULTS,
+      loaded: false,
+      loading: false,
+
       setOrgName: (name) => set({ orgName: name }),
       setOrgLogoDark: (url) => set({ orgLogoDark: url }),
       setOrgLogoLight: (url) => set({ orgLogoLight: url }),
-      resetAll: () => set({ orgName: 'FreeFrame', orgLogoDark: null, orgLogoLight: null }),
+      setFaviconUrl: (url) => set({ faviconUrl: url }),
+      setAppleIconUrl: (url) => set({ appleIconUrl: url }),
+      setLoginLogoUrl: (url) => set({ loginLogoUrl: url }),
+      setPoweredByFreeframe: (value) => set({ poweredByFreeframe: value }),
+      setPrimaryColor: (color) => set({ primaryColor: color }),
+      setDefaultLoginMode: (mode) => set({ defaultLoginMode: mode }),
+
+      syncBranding: (data: InstanceBranding) => {
+        set({
+          ...brandingValuesFromApi(data),
+          loaded: true,
+          loading: false,
+        })
+      },
+
+      fetchBranding: async () => {
+        try {
+          set({ loading: true })
+          const res = await fetch(`${API_URL}/instance/branding`)
+          if (!res.ok) throw new Error('Failed to fetch branding')
+          const data: InstanceBranding = await res.json()
+          get().syncBranding(data)
+        } catch {
+          set({ loaded: true, loading: false })
+        }
+      },
     }),
     {
       name: 'ff-branding',
-      version: 2,
+      // 7: logo URLs became stable API paths. Copies from earlier versions hold
+      // signed links that have long expired, so they are discarded.
+      version: 7,
       migrate: () => ({
-        orgName: 'FreeFrame',
-        orgLogoDark: null,
-        orgLogoLight: null,
+        ...HARDCODED_DEFAULTS,
+        loaded: false,
+        loading: false,
+      }),
+      partialize: (state) => ({
+        orgName: state.orgName,
+        poweredByFreeframe: state.poweredByFreeframe,
+        primaryColor: state.primaryColor,
+        defaultLoginMode: state.defaultLoginMode,
+        orgLogoDark: state.orgLogoDark,
+        orgLogoLight: state.orgLogoLight,
+        faviconUrl: state.faviconUrl,
+        appleIconUrl: state.appleIconUrl,
+        loginLogoUrl: state.loginLogoUrl,
       }),
     },
   ),

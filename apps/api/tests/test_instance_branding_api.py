@@ -1,3 +1,4 @@
+import uuid
 from apps.api.models.instance_branding import DEFAULT_INSTANCE_ORG_NAME
 
 
@@ -42,20 +43,22 @@ def test_admin_updates_safe_instance_branding_values(client, auth_headers, mock_
 
 def test_admin_can_reset_global_branding(client, auth_headers, mock_db, test_user):
     test_user.is_superadmin = True
-    branding = type(
-        "Branding",
-        (),
-        {
-            "org_name": "Acme Studio",
-            "primary_color": "#7c3aed",
-            "powered_by_freeframe": False,
-            "logo_light_key": "branding/instance/logo-light/old",
-            "logo_dark_key": None,
-            "favicon_key": None,
-            "apple_icon_key": None,
-            "login_logo_key": None,
-        },
-    )()
+    from datetime import datetime, timezone
+    from apps.api.models.instance_branding import InstanceBranding
+
+    now = datetime.now(timezone.utc)
+    # A real row: the response model needs its id and timestamps. The logo key is
+    # one the fork issued before the merge, which stays owned (legacy prefix).
+    branding = InstanceBranding(
+        id=uuid.uuid4(),
+        org_name="Acme Studio",
+        primary_color="#7c3aed",
+        powered_by_freeframe=False,
+        logo_light_key="branding/instance/logo-light/old",
+        default_login_mode="magic_code",
+        created_at=now,
+        updated_at=now,
+    )
     mock_db.first.return_value = branding
 
     response = client.delete("/instance/branding", headers=auth_headers)
@@ -97,7 +100,8 @@ def test_branding_upload_pins_a_known_mime_type(client, auth_headers, test_user,
     )
 
     assert response.status_code == 201
-    assert response.json()["key"].startswith("branding/instance/logo-light/")
+    # New uploads use upstream's layout; branding/instance/<slot>/ is only read for older logos.
+    assert response.json()["key"].startswith("branding/logo-light/")
     assert calls[0][1:] == ("image/png", 3600)
 
 

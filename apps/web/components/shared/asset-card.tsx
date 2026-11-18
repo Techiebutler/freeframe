@@ -223,7 +223,7 @@ export function SharedAssetCard({
   )
 }
 
-function ScrubbableVideoThumbnail({
+export function ScrubbableVideoThumbnail({
   thumbnailUrl,
   name,
   thumbnailScale,

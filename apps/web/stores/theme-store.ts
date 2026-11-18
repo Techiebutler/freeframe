@@ -13,7 +13,8 @@ interface ThemeState {
   syncFromServer: (preferences: Record<string, unknown>) => void
 }
 
-function resolveTheme(theme: Theme): 'dark' | 'light' {
+/** Resolve 'system' against the OS setting — matches the bootstrap script in app/layout.tsx. */
+export function resolveTheme(theme: Theme): 'dark' | 'light' {
   if (theme === 'system') {
     if (typeof window !== 'undefined') {
       return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'

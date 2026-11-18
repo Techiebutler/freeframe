@@ -1,0 +1,36 @@
+# ============================================================
+# FreeFrame - run the published images with docker-compose.prod.yml
+# ============================================================
+# Usage (no clone and no build; download this file and docker-compose.prod.yml
+# from the same ref, see docs/deployment.md):
+#   docker compose --env-file .env.prod \
+#     -f docker-compose.prod.yml -f docker-compose.images.yml up -d
+#
+# This file only adds `image:` lines. With an image and a build section both
+# present, `up` pulls the image and never builds; `up --build` still builds
+# from source. docker-compose.prod.yml on its own behaves as before, so nothing
+# changes for anyone who does not pass this file.
+#
+# The default version below is the release this file belongs to, so the compose
+# files and the images always move together. The release PR bumps it (a test
+# checks it against CHANGELOG.md). Set FREEFRAME_VERSION in .env.prod to pin
+# another version, for example when rolling back.
+#
+# This file exists from v1.22.0 on. The web image
+# is built for the domain root: for a sub-path deployment
+# (NEXT_PUBLIC_BASE_PATH) build from source instead.
+# ============================================================
+
+services:
+  api:
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
+  worker:
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
+  email_worker:
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
+  maintenance_worker:
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
+  beat:
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
+  web:
+    image: ghcr.io/techiebutler/freeframe-web:${FREEFRAME_VERSION:-1.22.1}

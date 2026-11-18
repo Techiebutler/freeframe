@@ -1,13 +1,36 @@
 "use client";
 
 import * as React from "react";
-import { Check, Copy, Link2, Loader2, Plus, Search, Share2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Link2,
+  Loader2,
+  Share2,
+  Plus,
+  Search,
+} from "lucide-react";
 import { cn, copyToClipboard } from "@/lib/utils";
+import { withBasePath } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useShareLinks } from "@/hooks/use-share-links";
 import { ShareCreateDialog } from "@/components/projects/share-create-dialog";
-import type { AssetResponse, ShareLinkListItem } from "@/types";
+import type { ShareLinkListItem, AssetResponse } from "@/types";
+
+// ─── Share Dialog (Dropdown) ─────────────────────────────────────────────────
+
+type AddResult =
+  | { token: string; kind: "added" | "already" }
+  | { token: string; kind: "error"; message: string };
+
+// Fork: copy the short public link (custom slug, then short code) rather than
+// the long /share/<token> URL; /s/<code> resolves to the same share page.
+function shareUrl(link: ShareLinkListItem) {
+  const code = link.custom_slug || link.short_code;
+  const path = code ? `/s/${code}` : `/share/${link.token}`;
+  return `${window.location.origin}${withBasePath(path)}`;
+}
 
 interface ShareDialogProps {
   assetId: string;
@@ -25,13 +48,32 @@ export function ShareDialog({ assetId, assetName, projectId, asset }: ShareDialo
   const [dropdownOpen, setDropdownOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [addingToToken, setAddingToToken] = React.useState<string | null>(null);
-  const [addedToToken, setAddedToToken] = React.useState<string | null>(null);
-  const [copiedToken, setCopiedToken] = React.useState<string | null>(null);
+  const [addResult, setAddResult] = React.useState<AddResult | null>(null);
+  const [copied, setCopied] = React.useState<{ token: string; ok: boolean } | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
+  const sectionId = React.useId();
+  // One pending reset per message. A newer result cancels the older timer, so
+  // an earlier add or copy can never wipe a later result, or an error that
+  // should stay on screen.
+  const addResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { shareLinks, isLoading, mutateShareLinks } = useShareLinks(projectId ?? "");
-  const stableAssets = React.useMemo(() => (asset ? [asset] : []), [asset]);
+  React.useEffect(
+    () => () => {
+      if (addResetRef.current) clearTimeout(addResetRef.current);
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    },
+    [],
+  );
+
+  const { shareLinks, isLoading, mutateShareLinks } = useShareLinks(projectId ?? "", assetId);
+
+  // Stable references for ShareCreateDialog props
+  const stableAssets = React.useMemo(
+    () => (asset ? [asset as AssetResponse] : []),
+    [asset],
+  );
   const emptyFolders = React.useMemo(() => [] as never[], []);
   const stablePreselectedItem = React.useMemo(
     () => asset
@@ -68,28 +110,73 @@ export function ShareDialog({ assetId, assetName, projectId, asset }: ShareDialo
     );
   }, [shareLinks, search]);
 
+  // Links that already show this asset, directly or through a folder or the
+  // whole project, are for copying: adding to them would change nothing.
+  const currentLinks = filteredLinks.filter((l) => l.contains_asset);
+  const otherLinks = filteredLinks.filter((l) => !l.contains_asset);
+
+  async function handleCopy(link: ShareLinkListItem) {
+    const ok = await copyToClipboard(shareUrl(link));
+    if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    setCopied({ token: link.token, ok });
+    copyResetRef.current = setTimeout(() => {
+      copyResetRef.current = null;
+      setCopied(null);
+    }, 2000);
+  }
+
+  function clearAddReset() {
+    if (addResetRef.current) clearTimeout(addResetRef.current);
+    addResetRef.current = null;
+  }
+
   async function handleAddToLink(link: ShareLinkListItem) {
     setAddingToToken(link.token);
+    clearAddReset();
+    setAddResult(null);
     try {
-      await api.post(`/share/${link.token}/add-asset/${assetId}`, {});
-      setAddedToToken(link.token);
+      const res = await api.post<{ added?: boolean }>(
+        `/share/${link.token}/add-asset/${assetId}`,
+        {},
+      );
+      clearAddReset();
+      setAddResult({ token: link.token, kind: res.added ? "added" : "already" });
       mutateShareLinks();
-      setTimeout(() => {
-        setAddedToToken(null);
-        setDropdownOpen(false);
-      }, 1500);
-    } catch {
-      // The existing dropdown intentionally keeps the item available to retry.
+      addResetRef.current = setTimeout(() => {
+        addResetRef.current = null;
+        setAddResult(null);
+      }, 2000);
+    } catch (err) {
+      clearAddReset();
+      setAddResult({
+        token: link.token,
+        kind: "error",
+        message: err instanceof Error ? err.message : "Could not add to this link",
+      });
     } finally {
       setAddingToToken(null);
     }
   }
 
-  async function handleCopyLink(token: string, shortCode: string) {
-    if (await copyToClipboard(`${window.location.origin}/s/${shortCode}`)) {
-      setCopiedToken(token);
-      setTimeout(() => setCopiedToken(null), 2000);
+  function addStatus(token: string) {
+    if (addResult?.token !== token) return null;
+    if (addResult.kind === "error") {
+      return (
+        <p role="alert" className="text-[10px] text-status-error">
+          {addResult.message}
+        </p>
+      );
     }
+    return (
+      <p className="text-[10px] text-status-success">
+        {addResult.kind === "added" ? "Added to this link" : "Already in this link"}
+      </p>
+    );
+  }
+
+  function handleNewShareLink() {
+    setDropdownOpen(false);
+    setCreateDialogOpen(true);
   }
 
   return (
@@ -113,7 +200,7 @@ export function ShareDialog({ assetId, assetName, projectId, asset }: ShareDialo
           )}>
             <div className="p-2">
               <button
-                onClick={() => { setDropdownOpen(false); setCreateDialogOpen(true); }}
+                onClick={handleNewShareLink}
                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent/90"
               >
                 <Plus className="h-4 w-4" />
@@ -123,12 +210,9 @@ export function ShareDialog({ assetId, assetName, projectId, asset }: ShareDialo
 
             {projectId && (
               <div className="border-t border-border">
-                <p className="px-3 pb-1.5 pt-2.5 text-xs font-medium text-text-tertiary">
-                  Add to Existing Share Links
-                </p>
-
+                {/* Search (only if more than 3 links) */}
                 {shareLinks.length > 3 && (
-                  <div className="px-2 pb-2">
+                  <div className="px-2 pt-2">
                     <div className="relative">
                       <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
                       <input
@@ -152,44 +236,110 @@ export function ShareDialog({ assetId, assetName, projectId, asset }: ShareDialo
                     <p className="py-4 text-center text-xs text-text-tertiary">
                       {search ? "No matching share links" : "No share links yet"}
                     </p>
-                  ) : filteredLinks.map((link) => {
-                    const isAdding = addingToToken === link.token;
-                    const isAdded = addedToToken === link.token;
-                    const isCopied = copiedToken === link.token;
-                    return (
-                      <div
-                        key={link.id}
-                        className={cn(
-                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
-                          isAdded ? "bg-status-success/10" : "hover:bg-bg-hover",
-                        )}
-                      >
-                        <button
-                          onClick={() => handleAddToLink(link)}
-                          disabled={isAdding || isAdded}
-                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:opacity-70"
-                        >
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-bg-tertiary">
-                            {isAdding ? <Loader2 className="h-4 w-4 animate-spin text-text-tertiary" />
-                              : isAdded ? <Check className="h-4 w-4 text-status-success" />
-                                : <Link2 className="h-4 w-4 text-text-tertiary" />}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm text-text-primary">{link.title || link.target_name}</p>
-                            {isAdded && <p className="text-[10px] text-status-success">Asset added!</p>}
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => handleCopyLink(link.token, link.short_code)}
-                          className="rounded p-1.5 text-text-tertiary transition-colors hover:bg-bg-tertiary hover:text-text-primary"
-                          title="Copy link"
-                          aria-label="Copy link"
-                        >
-                          {isCopied ? <Check className="h-3.5 w-3.5 text-status-success" /> : <Copy className="h-3.5 w-3.5" />}
-                        </button>
-                      </div>
-                    );
-                  })}
+                  ) : (
+                    <>
+                      {currentLinks.length > 0 && (
+                        <section aria-labelledby={`${sectionId}-current`}>
+                          <p
+                            id={`${sectionId}-current`}
+                            className="px-2 pt-2.5 pb-1.5 text-xs font-medium text-text-tertiary"
+                          >
+                            Links to this asset
+                          </p>
+                          {currentLinks.map((link) => {
+                            const copyState = copied?.token === link.token ? copied : null;
+                            const name = link.title || link.target_name;
+                            return (
+                              <div
+                                key={link.id}
+                                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2"
+                              >
+                                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-bg-tertiary shrink-0">
+                                  <Link2 className="h-4 w-4 text-text-tertiary" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm text-text-primary truncate">
+                                    {name}
+                                  </p>
+                                  {addStatus(link.token) ??
+                                    ((!link.is_enabled ||
+                                      link.is_expired ||
+                                      link.contains_asset === "indirect") && (
+                                      <p className="text-[10px] text-text-tertiary truncate">
+                                        {!link.is_enabled
+                                          ? "Access disabled"
+                                          : link.is_expired
+                                            ? "Expired"
+                                            : "Through a folder or the whole project"}
+                                      </p>
+                                    ))}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(link)}
+                                  aria-label={`Copy link ${name}`}
+                                  className={cn(
+                                    "flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors",
+                                    copyState?.ok
+                                      ? "text-status-success"
+                                      : copyState
+                                        ? "text-status-error"
+                                        : "text-text-secondary hover:bg-bg-hover hover:text-text-primary",
+                                  )}
+                                >
+                                  {copyState?.ok ? (
+                                    <Check className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Copy className="h-3.5 w-3.5" />
+                                  )}
+                                  {copyState ? (copyState.ok ? "Copied" : "Copy failed") : "Copy"}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </section>
+                      )}
+
+                      {otherLinks.length > 0 && (
+                        <section aria-labelledby={`${sectionId}-other`}>
+                          <p
+                            id={`${sectionId}-other`}
+                            className="px-2 pt-2.5 pb-1.5 text-xs font-medium text-text-tertiary"
+                          >
+                            Add to another share link
+                          </p>
+                          {otherLinks.map((link) => {
+                            const isAdding = addingToToken === link.token;
+                            return (
+                              <button
+                                key={link.id}
+                                onClick={() => handleAddToLink(link)}
+                                disabled={isAdding}
+                                className={cn(
+                                  "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                                  "hover:bg-bg-hover disabled:opacity-70",
+                                )}
+                              >
+                                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-bg-tertiary shrink-0">
+                                  {isAdding ? (
+                                    <Loader2 className="h-4 w-4 animate-spin text-text-tertiary" />
+                                  ) : (
+                                    <Plus className="h-4 w-4 text-text-tertiary" />
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm text-text-primary truncate">
+                                    {link.title || link.target_name}
+                                  </p>
+                                  {addStatus(link.token)}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </section>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -206,7 +356,10 @@ export function ShareDialog({ assetId, assetName, projectId, asset }: ShareDialo
           assets={stableAssets}
           folders={emptyFolders}
           preselectedItem={stablePreselectedItem}
-          onShareCreated={mutateShareLinks}
+          currentViewAvailable={false}
+          onShareCreated={() => {
+            mutateShareLinks();
+          }}
         />
       )}
     </>

@@ -6,6 +6,7 @@ import Hls from 'hls.js'
 import { Globe, Lock, X } from 'lucide-react'
 import { cn, formatTimecode } from '@/lib/utils'
 import { buildCommentNumbers } from '@/lib/comment-numbers'
+import { Avatar } from '@/components/shared/avatar'
 import { useReviewStore } from '@/stores/review-store'
 import type { Comment } from '@/types'
 
@@ -25,12 +26,6 @@ export function getAvatarColor(name: string): string {
     hash = name.charCodeAt(i) + ((hash << 5) - hash)
   }
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
-}
-
-export function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/)
-  if (parts.length === 1) return parts[0].charAt(0).toUpperCase()
-  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase()
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -159,7 +154,6 @@ interface CommentMarkerProps {
   leftPercent: number
   rightPercent?: number
   authorName: string
-  initials: string
   color: string
   isHovered: boolean
   isFocused: boolean
@@ -174,7 +168,6 @@ function CommentMarker({
   leftPercent,
   rightPercent,
   authorName,
-  initials,
   color,
   isHovered,
   isFocused,
@@ -223,7 +216,7 @@ function CommentMarker({
     <div
       ref={markerRef}
       className={cn(
-        'absolute top-0 cursor-pointer',
+        'absolute top-0 cursor-pointer pointer-events-auto',
         rightPercent === undefined && '-translate-x-1/2',
       )}
       style={{
@@ -244,19 +237,17 @@ function CommentMarker({
       )}
 
       {/* Avatar dot */}
-      <div
+      <Avatar
+        src={comment.author?.avatar_url}
+        name={authorName}
+        color={comment.author?.avatar_color}
         className={cn(
-          'relative flex items-center justify-center overflow-hidden rounded-full font-bold leading-none text-white shadow-md border-2 transition-transform hover:scale-110',
+          'font-bold leading-none text-white shadow-md border-2 transition-transform hover:scale-110',
           rightPercent === undefined ? 'w-5 h-5 text-[9px]' : 'w-5 h-5 -translate-x-1/2 text-[9px]',
-          isFocused ? 'border-accent scale-125' : 'border-bg-primary',
+          isFocused ? 'border-accent scale-125 ring-2 ring-accent/40' : 'border-bg-primary',
         )}
         style={{ backgroundColor: color }}
-      >
-        {comment.author?.avatar_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={comment.author.avatar_url} alt="" className="h-full w-full object-cover" />
-        ) : initials}
-      </div>
+      />
 
       {/* Tooltip — portaled to document.body to escape all overflow */}
       {isHovered && tooltipPos && createPortal(
@@ -273,12 +264,13 @@ function CommentMarker({
         >
           <div className="bg-[#1e1e22] border border-white/10 rounded-lg shadow-2xl p-3">
             <div className="flex items-center gap-2 mb-1.5">
-              <div
-                className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold leading-none text-white shrink-0"
+              <Avatar
+                src={comment.author?.avatar_url}
+                name={authorName}
+                color={comment.author?.avatar_color}
+                className="w-5 h-5 text-[9px] font-bold leading-none text-white"
                 style={{ backgroundColor: color }}
-              >
-                {initials}
-              </div>
+              />
               <span className="min-w-0 flex-1 text-xs font-medium text-white truncate">{authorName}</span>
               <div className="flex items-center gap-1.5 shrink-0 text-text-tertiary">
                 {commentNumber !== undefined && (
@@ -329,6 +321,10 @@ export function ProgressBar({
   const progressRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const seekFrameRef = useRef<number | null>(null)
+  // The pointer driving the current drag (scrub or Shift+drag range). Only it
+  // may move or end the drag, so a second finger cannot hijack the seek.
+  const activePointerIdRef = useRef<number | null>(null)
+  const dragModeRef = useRef<'scrub' | 'range' | null>(null)
   const queuedSeekTimeRef = useRef<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [scrubTime, setScrubTime] = useState<number | null>(null)
@@ -366,8 +362,13 @@ export function ProgressBar({
 
   // Pointer events can fire far faster than a video frame can be decoded. Coalesce
   // native seeks to one per animation frame while keeping the progress UI in sync
-  // with the pointer through `scrubTime`.
+  // with the pointer through `scrubTime`. Only the fast scrub path is coalesced;
+  // a player without one (audio) seeks straight away.
   const scheduleSeek = useCallback((time: number) => {
+    if (!onScrubSeek) {
+      onSeek(time)
+      return
+    }
     queuedSeekTimeRef.current = time
     if (seekFrameRef.current !== null) return
 
@@ -400,161 +401,159 @@ export function ProgressBar({
     }
   }, [currentTime, scrubTime])
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      const time = getTimeFromEvent(e.clientX)
-      if (!isDragging) {
-        setHoverTime(time)
-        const track = trackRef.current
-        if (track) {
-          const rect = track.getBoundingClientRect()
-          const progressRect = progressRef.current?.getBoundingClientRect() ?? rect
-          const cursorX = e.clientX - progressRect.left
-          const halfPreview = FRAME_PREVIEW_WIDTH / 2
-          const edgeMargin = Math.min(
-            FRAME_PREVIEW_EDGE_MARGIN,
-            Math.max(0, (progressRect.width - FRAME_PREVIEW_WIDTH) / 2),
-          )
-          setHoverX(
-            progressRect.width <= FRAME_PREVIEW_WIDTH
-              ? progressRect.width / 2
-              : Math.min(
-                  progressRect.width - halfPreview - edgeMargin,
-                  Math.max(halfPreview + edgeMargin, cursorX),
-                ),
-          )
-        }
-        seekPreview(time)
-      } else {
-        setHoverTime(null)
-        clearPreview()
-      }
-      if (isDragging) {
-        setScrubTime(time)
-        scheduleSeek(time)
-      }
-    },
-    [isDragging, clearPreview, getTimeFromEvent, scheduleSeek, seekPreview],
-  )
+  // Hover: the floating frame preview + timecode stays inside the player, with
+  // a margin sized for the 160px thumbnail.
+  const previewXFor = useCallback((clientX: number): number => {
+    const track = trackRef.current
+    if (!track) return 0
+    const rect = track.getBoundingClientRect()
+    const progressRect = progressRef.current?.getBoundingClientRect() ?? rect
+    const cursorX = clientX - progressRect.left
+    const halfPreview = FRAME_PREVIEW_WIDTH / 2
+    const edgeMargin = Math.min(
+      FRAME_PREVIEW_EDGE_MARGIN,
+      Math.max(0, (progressRect.width - FRAME_PREVIEW_WIDTH) / 2),
+    )
+    return progressRect.width <= FRAME_PREVIEW_WIDTH
+      ? progressRect.width / 2
+      : Math.min(
+          progressRect.width - halfPreview - edgeMargin,
+          Math.max(halfPreview + edgeMargin, cursorX),
+        )
+  }, [])
 
-  const handleMouseLeave = useCallback(() => {
-    if (!isDragging && !draggingRangeHandle) {
-      setHoverTime(null)
-      clearPreview()
-    }
-  }, [isDragging, draggingRangeHandle, clearPreview])
+  // Dragging: only the timecode shows (the video itself is the preview). It is
+  // clamped to the track, because a captured drag keeps delivering pointermove
+  // past the track's edges and would otherwise push the tooltip off the player
+  // (e.g. over the comment panel), though the seek itself is already clamped.
+  const dragXFor = useCallback((clientX: number): number => {
+    const track = trackRef.current
+    if (!track) return 0
+    const trackRect = track.getBoundingClientRect()
+    const progressRect = progressRef.current?.getBoundingClientRect() ?? trackRect
+    const min = trackRect.left - progressRect.left
+    const max = trackRect.right - progressRect.left
+    return Math.max(min, Math.min(max, clientX - progressRect.left))
+  }, [])
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
+  const endDrag = useCallback(() => {
+    activePointerIdRef.current = null
+    dragModeRef.current = null
+    setIsDragging(false)
+    setRangeDragStart(null)
+    setRangeDragEnd(null)
+    setHoverTime(null)
+    clearPreview()
+  }, [clearPreview])
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // Ignore a secondary touch and any button but the main one (right-click).
+      if (!e.isPrimary || e.button !== 0) return
+      if (activePointerIdRef.current !== null) return // a drag is already in progress
       e.preventDefault()
+      activePointerIdRef.current = e.pointerId
+      // Capture keeps move/up/cancel coming to this element once the pointer
+      // leaves the track, so no window listeners are needed. Optional: jsdom
+      // does not implement it.
+      e.currentTarget.setPointerCapture?.(e.pointerId)
       const time = getTimeFromEvent(e.clientX)
       if (e.shiftKey) {
+        dragModeRef.current = 'range'
         setRangeDragStart(time)
         setRangeDragEnd(time)
         return
       }
+      dragModeRef.current = 'scrub'
       setIsDragging(true)
       setScrubTime(time)
-      setHoverTime(null)
+      setHoverTime(time)
+      setHoverX(dragXFor(e.clientX))
       clearPreview()
       flushSeek(time)
     },
-    [clearPreview, flushSeek, getTimeFromEvent],
-  )
-
-  const handlePointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === 'mouse') return
-      event.preventDefault()
-      event.currentTarget.setPointerCapture(event.pointerId)
-      const time = getTimeFromEvent(event.clientX)
-      setIsDragging(true)
-      setScrubTime(time)
-      setHoverTime(null)
-      clearPreview()
-      flushSeek(time)
-    },
-    [clearPreview, flushSeek, getTimeFromEvent],
+    [clearPreview, dragXFor, flushSeek, getTimeFromEvent],
   )
 
   const handlePointerMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.pointerType !== 'mouse' && isDragging) {
-        event.preventDefault()
-        const time = getTimeFromEvent(event.clientX)
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const time = getTimeFromEvent(e.clientX)
+      if (activePointerIdRef.current !== null) {
+        // Only the pointer that started the drag may drive it.
+        if (e.pointerId !== activePointerIdRef.current) return
+        if (dragModeRef.current === 'range') {
+          setRangeDragEnd(time)
+          return
+        }
+        setHoverTime(time)
+        setHoverX(dragXFor(e.clientX))
         setScrubTime(time)
         scheduleSeek(time)
+        return
       }
+      if (draggingRangeHandle) return
+      setHoverTime(time)
+      setHoverX(previewXFor(e.clientX))
+      seekPreview(time)
     },
-    [isDragging, getTimeFromEvent, scheduleSeek],
+    [draggingRangeHandle, dragXFor, getTimeFromEvent, previewXFor, scheduleSeek, seekPreview],
   )
 
   const handlePointerUp = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === 'mouse') return
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId)
-      }
-      const time = getTimeFromEvent(event.clientX)
-      setIsDragging(false)
-      setHoverTime(null)
-      clearPreview()
-      setScrubTime(time)
-      flushSeek(time)
-    },
-    [clearPreview, flushSeek, getTimeFromEvent],
-  )
-
-  const handlePointerCancel = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === 'mouse') return
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId)
-      }
-      setIsDragging(false)
-      setHoverTime(null)
-      clearPreview()
-    },
-    [clearPreview],
-  )
-
-  // Global mouse up / move to handle drag outside track
-  useEffect(() => {
-    if (!isDragging && rangeDragStart === null && !draggingRangeHandle) return
-
-    const handleGlobalMouseMove = (e: MouseEvent) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.pointerId !== activePointerIdRef.current) return
       const time = getTimeFromEvent(e.clientX)
-      if (rangeDragStart !== null) setRangeDragEnd(time)
-      else if (draggingRangeHandle && selectedTimeRange) {
-        setSelectedTimeRange(
-          draggingRangeHandle === 'start'
-            ? { start: Math.min(time, selectedTimeRange.end), end: selectedTimeRange.end }
-            : { start: selectedTimeRange.start, end: Math.max(time, selectedTimeRange.start) },
-        )
-      }
-      else {
-        setScrubTime(time)
-        scheduleSeek(time)
-      }
-    }
-
-    const handleGlobalMouseUp = (e: MouseEvent) => {
-      const time = getTimeFromEvent(e.clientX)
-      if (rangeDragStart !== null) {
-        const start = Math.min(rangeDragStart, time)
-        const end = Math.max(rangeDragStart, time)
-        setSelectedTimeRange(end - start > 0.05 ? { start, end } : null)
-        setRangeDragStart(null)
-        setRangeDragEnd(null)
-      }
-      setDraggingRangeHandle(null)
-      setIsDragging(false)
-      setHoverTime(null)
-      clearPreview()
-      if (rangeDragStart === null && !draggingRangeHandle) {
+      if (dragModeRef.current === 'range') {
+        if (rangeDragStart !== null) {
+          const start = Math.min(rangeDragStart, time)
+          const end = Math.max(rangeDragStart, time)
+          setSelectedTimeRange(end - start > 0.05 ? { start, end } : null)
+        }
+      } else {
         setScrubTime(time)
         flushSeek(time)
       }
+      endDrag()
+    },
+    [endDrag, flushSeek, getTimeFromEvent, rangeDragStart, setSelectedTimeRange],
+  )
+
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // iOS fires this instead of pointerup when the system takes the gesture
+      // (a pinch, an edge swipe, a long-press callout). The drag must still
+      // end, or every later pointer move on the page seeks.
+      if (e.pointerId !== activePointerIdRef.current) return
+      endDrag()
+    },
+    [endDrag],
+  )
+
+  const handlePointerLeave = useCallback(() => {
+    if (activePointerIdRef.current === null && !draggingRangeHandle) {
+      setHoverTime(null)
+      clearPreview()
+    }
+  }, [draggingRangeHandle, clearPreview])
+
+  // Range handles (below the bar) drag with window listeners.
+  useEffect(() => {
+    if (!draggingRangeHandle) return
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (!selectedTimeRange) return
+      const time = getTimeFromEvent(e.clientX)
+      setSelectedTimeRange(
+        draggingRangeHandle === 'start'
+          ? { start: Math.min(time, selectedTimeRange.end), end: selectedTimeRange.end }
+          : { start: selectedTimeRange.start, end: Math.max(time, selectedTimeRange.start) },
+      )
+    }
+
+    const handleGlobalMouseUp = () => {
+      setDraggingRangeHandle(null)
+      setHoverTime(null)
+      clearPreview()
     }
 
     window.addEventListener('mousemove', handleGlobalMouseMove)
@@ -563,7 +562,7 @@ export function ProgressBar({
       window.removeEventListener('mousemove', handleGlobalMouseMove)
       window.removeEventListener('mouseup', handleGlobalMouseUp)
     }
-  }, [isDragging, rangeDragStart, draggingRangeHandle, selectedTimeRange, getTimeFromEvent, scheduleSeek, flushSeek, clearPreview, setSelectedTimeRange])
+  }, [draggingRangeHandle, selectedTimeRange, getTimeFromEvent, clearPreview, setSelectedTimeRange])
 
   // Separate timecoded comments
   // Same helper the side panel uses, so a marker's #N always matches its card's.
@@ -593,23 +592,21 @@ export function ProgressBar({
       {/* Track area */}
       <div
         ref={trackRef}
+        data-testid="progress-bar-track"
         className={cn(
           "relative mx-3 h-1 cursor-pointer touch-none before:absolute before:-top-3 before:bottom-0 before:inset-x-0 before:content-['']",
         )}
         onMouseEnter={() => setIsTrackHovered(true)}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => {
-          setIsTrackHovered(false)
-          handleMouseLeave()
-        }}
-        onMouseDown={handleMouseDown}
+        onMouseLeave={() => setIsTrackHovered(false)}
+        onPointerLeave={handlePointerLeave}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
+        onLostPointerCapture={endDrag}
         title="Shift + drag to select a comment range"
       >
-        <div className={cn('pointer-events-none absolute inset-0 origin-bottom rounded-full bg-border transition-transform duration-200 ease-out', isTrackHovered ? 'scale-y-[3]' : 'scale-y-100')}>
+        <div className={cn('pointer-events-none absolute inset-0 origin-bottom rounded-full bg-border transition-transform duration-200 ease-out', isTrackHovered || isDragging ? 'scale-y-[3]' : 'scale-y-100')}>
         {/* Buffered range */}
         <div
           className="absolute inset-y-0 left-0 bg-border-secondary rounded-full"
@@ -735,7 +732,6 @@ export function ProgressBar({
             const left = timeToPercent(c.timecode_start)
             const right = timeToPercent(c.timecode_end)
             const authorName = c.author?.name ?? c.guest_author?.name ?? 'Unknown'
-            const initials = getInitials(authorName)
             const color = getAvatarColor(authorName)
             const isHovered = hoveredCommentId === c.id
 
@@ -747,7 +743,6 @@ export function ProgressBar({
                 leftPercent={left}
                 rightPercent={right}
                 authorName={authorName}
-                initials={initials}
                 color={color}
                 isHovered={isHovered}
                 isFocused={focusedCommentId === c.id}
@@ -761,7 +756,6 @@ export function ProgressBar({
             if (c.timecode_start === null) return null
             const left = timeToPercent(c.timecode_start)
             const authorName = c.author?.name ?? c.guest_author?.name ?? 'Unknown'
-            const initials = getInitials(authorName)
             const color = getAvatarColor(authorName)
             const isHovered = hoveredCommentId === c.id
 
@@ -772,7 +766,6 @@ export function ProgressBar({
                 commentNumber={commentNumbers.get(c.id)}
                 leftPercent={left}
                 authorName={authorName}
-                initials={initials}
                 color={color}
                 isHovered={isHovered}
                 isFocused={focusedCommentId === c.id}
@@ -788,6 +781,7 @@ export function ProgressBar({
       {/* Frame preview + time tooltip on bar hover */}
       {hoverTime !== null && (
         <div
+          data-testid="progress-bar-hover-tooltip"
           className="absolute -top-2 z-30 pointer-events-none"
           style={{ left: hoverX, transform: 'translateX(-50%) translateY(-100%)' }}
         >

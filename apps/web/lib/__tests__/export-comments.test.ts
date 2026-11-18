@@ -143,3 +143,37 @@ describe('exportComments', () => {
     vi.advanceTimersByTime(1000)
   })
 })
+
+describe('a 422 carrying a structured detail', () => {
+  it('surfaces the explanation instead of a bare "Export failed"', async () => {
+    // The endpoint answers an export with nothing to place on a timeline with
+    // {code, message}. Reading only the string form of `detail` reduced every
+    // one of those to "Export failed", which says no more than silence did.
+    mockFetch(422, {
+      detail: {
+        code: 'no_timecoded_comments',
+        message: "None of this version's comments are attached to a timecode.",
+      },
+    })
+
+    await expect(
+      exportComments({ assetId: 'a', versionId: 'v', format: 'edl' }),
+    ).rejects.toThrow("None of this version's comments are attached to a timecode.")
+  })
+
+  it('still raises FpsRequiredError for the one code with its own prompt', async () => {
+    mockFetch(422, { detail: { code: 'fps_required', message: 'Frame rate unknown' } })
+
+    await expect(
+      exportComments({ assetId: 'a', versionId: 'v', format: 'edl' }),
+    ).rejects.toBeInstanceOf(FpsRequiredError)
+  })
+
+  it('falls back when the detail carries no message at all', async () => {
+    mockFetch(422, { detail: { code: 'something_new' } })
+
+    await expect(
+      exportComments({ assetId: 'a', versionId: 'v', format: 'edl' }),
+    ).rejects.toThrow('Export failed')
+  })
+})

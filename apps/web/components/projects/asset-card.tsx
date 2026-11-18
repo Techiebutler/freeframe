@@ -1,16 +1,27 @@
 'use client'
 
 import * as React from 'react'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { Download, Link as LinkIcon, MoreHorizontal, Pencil, Share2, Trash2 } from 'lucide-react'
-import { SharedAssetCard } from '@/components/shared/asset-card'
+import { Film, Music, Image as ImageIcon, Images, MoreHorizontal, Check, Layers } from 'lucide-react'
+import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { api } from '@/lib/api'
-import type { Asset } from '@/types'
+import { FadeImage } from '@/components/shared/fade-image'
+import { ScrubbableVideoThumbnail } from '@/components/shared/asset-card'
+import type { Asset, AssetType, DownloadOption, User } from '@/types'
+import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { CommentCountBadge } from '@/components/shared/comment-count-badge'
+import { AssetMenuItems } from './menus/asset-menu'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
-const aspectMap: Record<AspectRatio, string> = {
+const assetTypeIcons: Record<AssetType, React.ElementType> = {
+  video: Film,
+  audio: Music,
+  image: ImageIcon,
+  image_carousel: Images,
+}
+
+const aspectMap = {
   landscape: 'aspect-[16/10]',
   square: 'aspect-square',
   portrait: 'aspect-[3/4]',
@@ -20,19 +31,26 @@ interface AssetCardProps {
   asset: Asset
   projectId: string
   versionCount?: number
+  assignee?: User | null
   authorName?: string
   thumbnailUrl?: string | null
   commentCount?: number
   duration?: number | null
   selected?: boolean
-  active?: boolean
-  onSelect?: () => void
-  onDragStart?: (event: React.DragEvent) => void
+  onSelect?: (e: React.MouseEvent) => void
+  onDragStart?: (e: React.DragEvent) => void
   onShare?: () => void
-  onDownload?: () => void
+  /** `rendition` is a DownloadOption id; left out, the server picks. */
+  onDownload?: (rendition?: string) => void
+  /** With this, Download opens a submenu of what the asset can be downloaded as. */
+  loadDownloadOptions?: () => Promise<DownloadOption[] | null>
   onRename?: () => void
   onDelete?: () => void
+  /** Shown on right-click instead of the asset's own menu: the grid passes the
+   *  selection's menu when this asset is one of several selected. */
+  contextMenu?: React.ReactNode
   fileSize?: number | null
+  // Appearance settings
   showInfo?: boolean
   showFileSize?: boolean
   showUploader?: boolean
@@ -42,23 +60,35 @@ interface AssetCardProps {
   className?: string
 }
 
-/** Project adapter for the canonical shared asset card. */
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  if (m >= 60) {
+    const h = Math.floor(m / 60)
+    const rm = m % 60
+    return `${h}:${String(rm).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
 export function AssetCard({
   asset,
   projectId,
   versionCount = 1,
+  assignee,
   authorName,
   thumbnailUrl,
   commentCount,
   duration,
   selected = false,
-  active = false,
   onSelect,
   onDragStart,
   onShare,
   onDownload,
+  loadDownloadOptions,
   onRename,
   onDelete,
+  contextMenu,
   fileSize,
   showInfo = true,
   showFileSize = true,
@@ -68,95 +98,142 @@ export function AssetCard({
   thumbnailScale = 'fit',
   className,
 }: AssetCardProps) {
-  const titleClassName = titleLines === '1' ? 'line-clamp-1' : titleLines === '2' ? 'line-clamp-2' : 'line-clamp-3'
-  const hasActions = onShare || onDownload || onRename || onDelete
+  const TypeIcon = assetTypeIcons[asset.asset_type]
+  const lineClamp = titleLines === '1' ? 'line-clamp-1' : titleLines === '2' ? 'line-clamp-2' : 'line-clamp-3'
+  const [imgError, setImgError] = React.useState(false)
 
-  const actionMenu = hasActions ? (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <button
-          type="button"
-          aria-label={`Actions for ${asset.name}`}
-          onClick={(event) => event.stopPropagation()}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-0 outline-none transition-all group-hover:opacity-100 hover:bg-bg-hover hover:text-text-primary"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          collisionPadding={12}
-          className="z-[100] min-w-[200px] origin-[var(--radix-dropdown-menu-content-transform-origin)] rounded-xl border border-border bg-bg-elevated py-1.5 shadow-2xl data-[state=open]:animate-scale-in"
-          onClick={(event) => event.stopPropagation()}
-        >
-          {onShare && (
-            <DropdownMenu.Item onSelect={onShare} className="flex cursor-pointer items-center gap-2.5 mx-1 rounded-lg px-2.5 py-2 text-sm text-text-secondary outline-none transition-colors hover:bg-bg-hover hover:text-text-primary">
-              <Share2 className="h-3.5 w-3.5 text-text-tertiary" /> Create Share Link
-            </DropdownMenu.Item>
-          )}
-          {onShare && (onDownload || onRename || onDelete) && <DropdownMenu.Separator className="my-1 h-px bg-border mx-1" />}
-          {onDownload && (
-            <DropdownMenu.Item onSelect={onDownload} className="flex cursor-pointer items-center gap-2.5 mx-1 rounded-lg px-2.5 py-2 text-sm text-text-secondary outline-none transition-colors hover:bg-bg-hover hover:text-text-primary">
-              <Download className="h-3.5 w-3.5 text-text-tertiary" /> Download
-            </DropdownMenu.Item>
-          )}
-          <DropdownMenu.Item
-            onSelect={() => navigator.clipboard.writeText(`${window.location.origin}/projects/${projectId}/assets/${asset.id}`)}
-            className="flex cursor-pointer items-center gap-2.5 mx-1 rounded-lg px-2.5 py-2 text-sm text-text-secondary outline-none transition-colors hover:bg-bg-hover hover:text-text-primary"
-          >
-            <LinkIcon className="h-3.5 w-3.5 text-text-tertiary" /> Copy Asset URL
-          </DropdownMenu.Item>
-          {(onRename || onDelete) && <DropdownMenu.Separator className="my-1 h-px bg-border mx-1" />}
-          {onRename && (
-            <DropdownMenu.Item onSelect={onRename} className="flex cursor-pointer items-center gap-2.5 mx-1 rounded-lg px-2.5 py-2 text-sm text-text-secondary outline-none transition-colors hover:bg-bg-hover hover:text-text-primary">
-              <Pencil className="h-3.5 w-3.5 text-text-tertiary" /> Rename
-            </DropdownMenu.Item>
-          )}
-          {onDelete && (
-            <DropdownMenu.Item onSelect={onDelete} className="flex cursor-pointer items-center gap-2.5 mx-1 rounded-lg px-2.5 py-2 text-sm text-status-error outline-none transition-colors hover:bg-status-error/10">
-              <Trash2 className="h-3.5 w-3.5" /> Delete
-            </DropdownMenu.Item>
-          )}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  ) : null
+  // Hovering a video's thumbnail scrubs through it. The stream is asked for
+  // only once the pointer is over the card, and is relative to the API when
+  // the server answers with a path (the authenticated HLS proxy).
+  const getVideoPreviewUrl = React.useCallback(async () => {
+    const response = await api.get<{ url?: string }>(`/assets/${asset.id}/stream`)
+    if (!response.url) return null
+    return response.url.startsWith('/') ? `${API_URL}${response.url}` : response.url
+  }, [asset.id])
+
+  const menuItems = (
+    <AssetMenuItems
+      asset={asset}
+      onShare={onShare}
+      onDownload={onDownload}
+      loadDownloadOptions={loadDownloadOptions}
+      onRename={onRename}
+      onDelete={onDelete}
+    />
+  )
 
   return (
-    <SharedAssetCard
-      asset={{
-        id: asset.id,
-        name: asset.name,
-        assetType: asset.asset_type,
-        thumbnailUrl,
-        commentCount,
-        versionCount,
-        durationSeconds: duration,
-        createdByName: authorName,
-        createdAt: asset.created_at,
-        fileSize,
-      }}
-      selected={selected}
-      active={active}
-      onToggleSelection={onSelect}
+    // Right-click works with or without the info row, which is where ⋯ lives.
+    <ContextMenuArea items={contextMenu ?? menuItems}>
+    <div
       draggable
       onDragStart={onDragStart}
-      actionMenu={actionMenu}
-      getVideoPreviewUrl={asset.asset_type === 'video' ? async () => {
-        const response = await api.get<{ url?: string }>(`/assets/${asset.id}/stream`)
-        if (!response.url) return null
-        return response.url.startsWith('/') ? `${API_URL}${response.url}` : response.url
-      } : undefined}
-      aspectClass={aspectMap[aspectRatio]}
-      thumbnailScale={thumbnailScale}
-      showInfo={showInfo}
-      showFileSize={showFileSize}
-      showUploader={showUploader}
-      titleClassName={titleClassName}
-      className={className}
-    />
+      className={cn(
+        'group flex flex-col rounded-lg overflow-hidden transition-all duration-150 cursor-pointer',
+        'border-2',
+        selected
+          ? 'border-accent bg-accent/5 shadow-lg shadow-accent/10'
+          : 'border-transparent [@media(hover:hover)]:hover:border-border-focus',
+        className,
+      )}
+    >
+      {/* Thumbnail area */}
+      <div className={cn(
+        'relative w-full bg-bg-tertiary overflow-hidden flex items-center justify-center',
+        aspectMap[aspectRatio],
+      )}>
+        {asset.asset_type === 'video' && thumbnailUrl && !imgError ? (
+          <ScrubbableVideoThumbnail
+            thumbnailUrl={thumbnailUrl}
+            name={asset.name}
+            thumbnailScale={thumbnailScale}
+            getVideoPreviewUrl={getVideoPreviewUrl}
+            onThumbnailError={() => setImgError(true)}
+          />
+        ) : thumbnailUrl && !imgError ? (
+          // Loads behind a shimmer and fades in once decoded.
+          <FadeImage
+            src={thumbnailUrl}
+            alt={asset.name}
+            onError={() => setImgError(true)}
+            className={cn(
+              'h-full w-full transition-[transform,opacity] duration-200 [@media(hover:hover)]:group-hover:scale-[1.02]',
+              thumbnailScale === 'fill' ? 'object-cover' : 'object-contain',
+            )}
+          />
+        ) : (
+          <div className="flex items-center justify-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-bg-hover text-text-secondary">
+              <TypeIcon className="h-7 w-7" />
+            </div>
+          </div>
+        )}
+
+        {/* Selection checkbox — top-left */}
+        {onSelect && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onSelect(e) }}
+            className={cn(
+              'absolute top-2 left-2 h-5 w-5 rounded flex items-center justify-center transition-all',
+              selected
+                ? 'bg-accent text-white'
+                : 'bg-black/40 text-white/60 [@media(hover:hover)]:text-transparent [@media(hover:hover)]:group-hover:text-white/60 backdrop-blur-sm',
+            )}
+          >
+            <Check className="h-3.5 w-3.5" />
+          </button>
+        )}
+
+        {/* Version count badge — top-right, when there is more than one */}
+        {versionCount > 1 && (
+          <span
+            className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white tabular-nums backdrop-blur-sm"
+            title={`${versionCount} versions`}
+          >
+            <Layers className="h-3 w-3" />
+            {versionCount}
+          </span>
+        )}
+
+        {/* Duration badge — bottom-right (for video/audio) */}
+        {duration != null && duration > 0 && (
+          <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white tabular-nums backdrop-blur-sm">
+            {formatDuration(duration)}
+          </span>
+        )}
+
+        {/* Comment count badge — bottom-left, as in a share link's grid */}
+        <CommentCountBadge count={commentCount} />
+      </div>
+
+      {/* Info section */}
+      {showInfo && (
+        <div className="flex flex-col gap-1 px-2 pt-2 pb-1.5">
+          {/* Title + context menu */}
+          <div className="flex items-start justify-between gap-1">
+            <p className={cn('text-sm font-medium text-text-primary leading-tight', lineClamp)}>
+              {asset.name}
+            </p>
+            <DotsMenu items={menuItems}>
+              <button
+                aria-label={`${asset.name} menu`}
+                onClick={(e) => e.stopPropagation()}
+                className="shrink-0 h-5 w-5 flex items-center justify-center rounded text-text-tertiary opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 data-[state=open]:opacity-100 [@media(hover:hover)]:hover:bg-bg-hover [@media(hover:hover)]:hover:text-text-primary transition-all outline-none"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </DotsMenu>
+          </div>
+
+          {/* Author + date + file size row */}
+          <p className="text-2xs text-text-tertiary line-clamp-1">
+            {showUploader && authorName && <span>{authorName} &bull; </span>}
+            {formatRelativeTime(asset.created_at)}
+            {showFileSize && fileSize ? <span> &bull; {formatBytes(fileSize)}</span> : null}
+          </p>
+        </div>
+      )}
+    </div>
+    </ContextMenuArea>
   )
 }

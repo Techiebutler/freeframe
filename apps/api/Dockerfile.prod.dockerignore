@@ -1,0 +1,8 @@
+.git
+.worktrees
+node_modules
+apps/web
+.env*
+**/__pycache__
+**/.pytest_cache
+apps/api/tests

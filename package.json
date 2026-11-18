@@ -16,5 +16,13 @@
   },
   "dependencies": {
     "hls.js": "^1.6.19"
+  },
+  "pnpm": {
+    "overrides": {
+      "brace-expansion@1": "^1.1.21",
+      "js-yaml": "4.3.2",
+      "nanoid@3": "3.3.18",
+      "postcss-selector-parser@6": "^7.1.6"
+    }
   }
 }

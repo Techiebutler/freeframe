@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -29,6 +29,9 @@ class AssetVersionResponse(BaseModel):
     processing_status: ProcessingStatus
     created_by: uuid.UUID
     created_at: datetime
+    # When the upload last moved. Lets a client that only has history to go on
+    # tell an upload still running on another device from one that stopped.
+    last_activity_at: Optional[datetime] = None
     files: list[MediaFileResponse] = []
     model_config = {"from_attributes": True}
 
@@ -50,11 +53,12 @@ class AssetResponse(BaseModel):
     latest_version: Optional[AssetVersionResponse] = None
     version_count: int = 0
     thumbnail_url: Optional[str] = None
+    # Comments on latest_version, as its comment panel shows them (replies too).
     comment_count: int = 0
     model_config = {"from_attributes": True}
 
 class AssetUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
     status: Optional[AssetStatus] = None
     rating: Optional[int] = None
@@ -67,6 +71,14 @@ class StreamUrlResponse(BaseModel):
     asset_type: AssetType
     expires_in: int = 3600
 
+class DownloadOption(BaseModel):
+    """One file a version can be downloaded as: the original, or a transcode."""
+    # "original" or "transcode". Passed back as `rendition` on the stream endpoint.
+    id: str
+    label: str
+    format: str
+    size_bytes: Optional[int] = None
+
 class NotificationResponse(BaseModel):
     id: uuid.UUID
     type: NotificationType
@@ -77,5 +89,7 @@ class NotificationResponse(BaseModel):
     # Enriched fields
     asset_name: Optional[str] = None
     actor_name: Optional[str] = None
+    # The actor is a share-link guest, not an account in the workspace
+    actor_is_guest: bool = False
     comment_preview: Optional[str] = None
     project_id: Optional[uuid.UUID] = None

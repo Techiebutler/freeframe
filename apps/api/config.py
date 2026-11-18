@@ -1,12 +1,20 @@
 import os
 from pathlib import Path
 from urllib.parse import urlparse
-from pydantic import model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default S3 endpoint (local MinIO). Shared between the field default and the
 # consistency validator so the two can't drift.
 DEFAULT_S3_ENDPOINT = "http://minio:9000"
+
+# Every token is signed and checked with JWT_SECRET as a shared HMAC key, so
+# only the HMAC algorithms work. PyJWT fails an RS/ES algorithm on the first
+# token rather than at startup.
+JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
+
+# Storage classes whose objects cannot be read until they are restored.
+ARCHIVE_STORAGE_CLASSES = ("GLACIER", "DEEP_ARCHIVE")
 
 
 def _is_aws_endpoint(url: str) -> bool:
@@ -45,18 +53,45 @@ class Settings(BaseSettings):
     s3_secret_key: str = "minioadmin"
     s3_region: str = "us-east-1"
     s3_public_endpoint: str | None = None  # External URL for presigned URLs (e.g. http://localhost:9000 when S3_ENDPOINT is http://minio:9000)
+    # Storage class for media: uploaded originals and every transcoder output.
+    # Sent when the object is created (CreateMultipartUpload for an original),
+    # never by the browser. Unset sends no class, so the bucket default applies;
+    # MinIO and Silo refuse everything but STANDARD and REDUCED_REDUNDANCY.
+    s3_storage_class: str | None = None
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     # Sessions cloned to the Premiere panel (see /auth/session/clone).
     panel_refresh_token_expire_days: int = 30
+    # Live event streams (GET /events/{project_id}). Authorization is checked
+    # again for as long as a stream stays open, not only when it connects, so a
+    # subscriber who loses access (removed from the project, deactivated, token
+    # expired or revoked, project deleted or made private) stops receiving.
+    # An event is never delivered on a check older than SSE_AUTH_MAX_AGE_SECONDS;
+    # 0 checks before every single event. An idle stream is checked every
+    # SSE_AUTH_RECHECK_SECONDS and sent a keepalive at that interval or every
+    # 30 seconds, whichever is shorter. Each check is one indexed query. Token
+    # expiry is exact either way: nothing is sent after the token's `exp`.
+    sse_auth_max_age_seconds: float = Field(1.0, ge=0)
+    sse_auth_recheck_seconds: float = Field(15.0, gt=0)
     frontend_url: str = "http://localhost:3000"
     # Extra browser origins allowed by CORS, comma-separated (in addition to the
     # frontend + localhost defaults). Each value must be an explicit origin;
     # wildcard origins are intentionally ignored for credentialed API access.
     cors_allow_origins: str = ""
     transcoder_engine: str = "ffmpeg"
+    # Which rungs of the quality ladder to build, comma-separated. Valid names
+    # are the keys of packages.transcoder.ffmpeg_transcoder.QUALITY_MAP; the
+    # default is the ladder that was hardcoded before this setting existed.
+    # 2160p is opt-in and not part of it.
+    #
+    # An instance whose reviewers all watch at full size pays for the smaller
+    # rungs in encode time and in storage without anyone playing them. Rungs
+    # above the source resolution are still dropped, so this cannot be used to
+    # ask for more than the source has: a ladder left empty that way builds its
+    # smallest rung at the source's own size.
+    transcoder_qualities: str = "1080p,720p,360p"
 
     # Maximum size (bytes) for a single uploaded file. 0 = unlimited (no per-file cap).
     # Note: S3 multipart still caps effective size at ~10,000 parts x chunk size.
@@ -65,7 +100,12 @@ class Settings(BaseSettings):
     instance_branding_max_asset_bytes: int = 5 * 1024 * 1024
 
     # Reaper: uploads stuck in `uploading`/`failed` longer than this are reclaimed. Hours.
-    # Processing versions are recovered separately after this safe timeout; 0 disables it.
+    # A `failed` version whose master is still in storage (a transcode that failed)
+    # is kept.
+    # A version claimed as `processing` whose transcode never ran is re-dispatched
+    # after this long. It must stay comfortably above the transcoder's own 4-hour
+    # ceiling, or a legitimately slow encode gets a second worker on top of it.
+    # 0 disables the sweep.
     stuck_processing_timeout_hours: int = 6
     stale_upload_timeout_hours: int = 24
 
@@ -79,6 +119,12 @@ class Settings(BaseSettings):
     orphan_sweep_grace_hours: int = 0
     # Report-only by default: when False the sweeper only LOGS what it would delete; set True to delete.
     orphan_sweep_delete: bool = False
+    # Refuse to delete when more than this share of the keys scanned look orphaned. A database that
+    # is empty, wrong or half-migrated makes the whole bucket look unowned, and that shape is a high
+    # orphan ratio rather than a zero-length live-set, so the empty-set check alone does not catch it.
+    # Raise it deliberately (1.0 disables the floor) for a first clean-up of a genuinely dirty bucket,
+    # after reading the report-only output.
+    orphan_sweep_max_orphan_ratio: float = 0.5
 
     # Worker concurrency settings
     transcoding_concurrency: int = 2  # Number of concurrent video transcoding jobs
@@ -89,7 +135,10 @@ class Settings(BaseSettings):
     # If mail_provider is "smtp", uses standard SMTP with smtp_* settings
     mail_provider: str = "ses"  # "ses" or "smtp"
     mail_from_address: str = "noreply@example.com"
-    mail_from_name: str = "FreeFrame"
+    # Blank means "follow the instance branding org name" (see
+    # services/branding_service.resolve_org_name). Set it to pin a fixed
+    # display name regardless of branding.
+    mail_from_name: str = ""
     
     # AWS SES settings
     aws_mail_access_key_id: str | None = None
@@ -102,6 +151,53 @@ class Settings(BaseSettings):
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_use_tls: bool = True
+
+    @field_validator("s3_storage_class")
+    @classmethod
+    def _check_s3_storage_class(cls, value: str | None) -> str | None:
+        """Normalise S3_STORAGE_CLASS, and refuse a class FreeFrame cannot read.
+
+        Only the archive classes are refused: every object is streamed or
+        downloaded directly, and these need a restore before any read. Anything
+        else is passed through, because providers name their own tiers.
+        """
+        value = (value or "").strip().upper()
+        if not value:
+            return None
+        if value in ARCHIVE_STORAGE_CLASSES:
+            raise ValueError(
+                f"S3_STORAGE_CLASS={value} is an archive class. FreeFrame reads "
+                f"media directly, and objects in {value} need a restore before "
+                f"they can be read. Leave it unset or pick a class that can be "
+                f"read immediately."
+            )
+        return value
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _check_jwt_secret(cls, value: str) -> str:
+        """Refuse to start with an empty JWT_SECRET.
+
+        PyJWT rejects an empty HMAC key on every encode and decode, which would
+        show up as a 500 on sign-in and on every request carrying a bearer
+        token. (python-jose accepted it, so anyone could sign a valid token.)
+        """
+        if not value.strip():
+            raise ValueError(
+                "JWT_SECRET is empty. Set it to a long random string, for "
+                "example the output of `openssl rand -hex 64`."
+            )
+        return value
+
+    @field_validator("jwt_algorithm")
+    @classmethod
+    def _check_jwt_algorithm(cls, value: str) -> str:
+        if value not in JWT_ALGORITHMS:
+            raise ValueError(
+                f"JWT_ALGORITHM must be one of {', '.join(JWT_ALGORITHMS)}, not {value!r}. "
+                f"Tokens are signed with JWT_SECRET as a shared key."
+            )
+        return value
 
     @model_validator(mode="after")
     def _check_s3_endpoint_consistency(self):
@@ -126,11 +222,45 @@ class Settings(BaseSettings):
 
     @property
     def frontend_origin(self) -> str:
-        """Return the browser origin for ``frontend_url`` without any path."""
+        """`frontend_url` reduced to a bare `scheme://host[:port]` origin.
+
+        A browser's Origin header never carries a path, so a sub-path
+        deployment (FRONTEND_URL=https://host/freeframe) has to be matched
+        against https://host — using the raw URL means no CORS check ever
+        matches. Falls back to the configured value when it isn't parseable
+        as an absolute URL.
+        """
         raw = (self.frontend_url or "").strip()
         parsed = urlparse(raw)
         if not parsed.scheme or not parsed.netloc:
             return raw
         return f"{parsed.scheme}://{parsed.netloc}"
+
+    @property
+    def cors_allows_any_origin(self) -> bool:
+        """CORS_ALLOW_ORIGINS contains "*"."""
+        return "*" in [o.strip() for o in self.cors_allow_origins.split(",")]
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Every explicit browser origin allowed by CORS ("*" is never in it).
+
+        The single list behind both the API's CORS middleware (main.py) and the
+        bucket CORS rules set at startup (s3_service.ensure_bucket_exists), so an
+        origin allowed to call the API can also upload and play media. A store
+        that enforces bucket CORS (Silo, Garage) refuses every other origin.
+        With `cors_allows_any_origin` the bucket allows any origin, but the API
+        keeps to this list: credentialed access needs explicit origins.
+        """
+        extra = [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+        candidates = [
+            # A sub-path deployment puts a path in FRONTEND_URL; an Origin
+            # header never has one, so match against the bare origin.
+            self.frontend_origin,
+            "http://localhost:3000",
+            "http://localhost:3001",
+            *extra,
+        ]
+        return list(dict.fromkeys(o for o in candidates if o and o != "*"))
 
 settings = Settings()

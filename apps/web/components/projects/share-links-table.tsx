@@ -3,14 +3,18 @@
 import * as React from 'react'
 import * as Switch from '@radix-ui/react-switch'
 import { Search, Folder, File, Copy, Check, Eye } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { formatRelativeTime } from '@/lib/utils'
+import { cn, copyToClipboard, formatRelativeTime } from '@/lib/utils'
+import { withBasePath } from '@/lib/base-path'
+import { ContextMenuArea } from '@/components/shared/item-menu'
+import { ShareLinkMenuItems } from './menus/share-link-menu'
 import type { ShareLinkListItem } from '@/types'
 
 interface ShareLinksTableProps {
   shareLinks: ShareLinkListItem[]
   onSelectLink: (token: string) => void
   onToggleEnabled: (token: string, enabled: boolean) => void
+  /** With this, right-click on a row opens the link's menu, as in the sidebar. */
+  onDelete?: (token: string) => void
   onViewActivity: (token: string) => void
   frontendUrl: string
 }
@@ -19,6 +23,7 @@ export function ShareLinksTable({
   shareLinks,
   onSelectLink,
   onToggleEnabled,
+  onDelete,
   onViewActivity,
   frontendUrl,
 }: ShareLinksTableProps) {
@@ -31,15 +36,23 @@ export function ShareLinksTable({
     return shareLinks.filter((link) => link.title.toLowerCase().includes(q))
   }, [shareLinks, search])
 
+  // The short /s/<code> link when the row has one, else the long token link.
+  const shareUrlFor = React.useCallback(
+    (link: ShareLinkListItem) =>
+      `${frontendUrl}${withBasePath(link.short_code ? `/s/${link.short_code}` : `/share/${link.token}`)}`,
+    [frontendUrl],
+  )
+
   const handleCopy = React.useCallback(
-    async (shortCode: string, e: React.MouseEvent) => {
+    async (link: ShareLinkListItem, e: React.MouseEvent) => {
       e.stopPropagation()
-      const url = `${frontendUrl}/s/${shortCode}`
-      await navigator.clipboard.writeText(url)
-      setCopiedToken(shortCode)
+      // copyToClipboard falls back to execCommand over plain HTTP, and the
+      // copied state only shows when the copy really happened.
+      if (!(await copyToClipboard(shareUrlFor(link)))) return
+      setCopiedToken(link.token)
       setTimeout(() => setCopiedToken(null), 2000)
     },
-    [frontendUrl],
+    [shareUrlFor],
   )
 
   return (
@@ -95,13 +108,20 @@ export function ShareLinksTable({
             </thead>
             <tbody>
               {filtered.map((link, i) => {
-                const shareUrl = `${frontendUrl}/s/${link.short_code}`
-                const isCopied = copiedToken === link.short_code
+                const shareUrl = shareUrlFor(link)
+                const isCopied = copiedToken === link.token
                 const isLast = i === filtered.length - 1
 
                 return (
-                  <tr
+                  <ContextMenuArea
                     key={link.token}
+                    items={
+                      onDelete ? (
+                        <ShareLinkMenuItems link={link} onToggleEnabled={onToggleEnabled} onDelete={onDelete} />
+                      ) : null
+                    }
+                  >
+                  <tr
                     className={cn(
                       'group transition-colors hover:bg-bg-hover/40',
                       !isLast && 'border-b border-border',
@@ -131,7 +151,7 @@ export function ShareLinksTable({
                           {shareUrl}
                         </span>
                         <button
-                          onClick={(e) => handleCopy(link.short_code, e)}
+                          onClick={(e) => handleCopy(link, e)}
                           className="flex items-center justify-center h-6 w-6 rounded border border-border bg-bg-tertiary hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors shrink-0"
                           title="Copy link"
                         >
@@ -195,6 +215,7 @@ export function ShareLinksTable({
                       </button>
                     </td>
                   </tr>
+                  </ContextMenuArea>
                 )
               })}
             </tbody>

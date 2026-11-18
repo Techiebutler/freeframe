@@ -21,6 +21,55 @@ project's independent history. The first table records the 31 upstream commits
 up to v1.12.0; the second records every later upstream commit, plus the v1.22.1
 release commit that lives only on upstream's release branch.
 
+## Upstream merge (2026-11-18)
+
+`upstream/main` at `1e3ed4a` was merged into the fork in one merge commit
+(branch `feat/upstream-merge`). From that merge on, the new common ancestor is
+`1e3ed4a`, every upstream behaviour in the two audit tables below is present
+unless listed here, and the tables are kept as the record of how each upstream
+change relates to the fork. Later upstream releases arrive the same way: merge
+`upstream/main`, then record any deliberate divergence in this section.
+
+Deliberate divergences kept on top of upstream:
+
+- **Single-asset share links** open directly on the video, with Back to a root
+  holding only that asset (upstream `ab073f7` routes them through the folder
+  review screen). The dashboard preview of such a link shows the one-asset grid.
+- **Mobile review** uses the fork's resizable split (`use-mobile-review-split.ts`)
+  on both the asset page and share pages, not upstream's bottom comment sheet.
+  `components/share/share-review-screen.tsx` and
+  `components/review/mobile-comment-sheet.tsx` stay only so upstream's own tests
+  and future merges keep applying; the app does not render them.
+- **Share links** keep short codes, aliases and custom slugs (`/s/<code>`), the
+  guest comment edit token, header banners and the instance share-preview
+  metadata. Copy actions prefer the short link. Guest share sessions are stored
+  and revoked under the token, the short code and every alias.
+- **Processing status** keeps the fork's `queued` state (transcode waiting for a
+  worker, used by the dedicated remote transcoding host). Completion claims
+  `uploading -> queued`; the upload panel shows it as "Waiting for processing
+  worker". It is not re-dispatched by the stuck-processing requeue, because a
+  queued job is still in Redis while the remote worker is offline.
+- **Transcoder** keeps `HLS_KEYFRAME_INTERVAL` (forced IDR keyframes, per rung)
+  and `TRANSCODER_PRESET` on top of upstream's ladder, CRF offset and source copy.
+  `TRANSCODER_CPU_LIMIT` is also passed to the dev compose `cpus:`, so it must be
+  a plain number there.
+- **Player** keeps the fork's stepped arrow-key seek, Ctrl+wheel/pinch zoom, edge
+  double-click seek and `fastSeek` scrubbing alongside upstream's J/K/L shuttle
+  and frame clock. The comment action menu is the fork's Radix menu.
+- **CORS** never echoes a wildcard origin for the API; `CORS_ALLOW_ORIGINS="*"`
+  is logged and only explicit origins are used (the bucket CORS still honours it).
+- **Instance logos** uploaded before the merge live under
+  `branding/instance/<slot>/`. `services/owned_keys.py` and migration
+  `d2b7e5f9a1c3` accept that legacy prefix as well as upstream's
+  `branding/<slot>/`, so existing logos survive the upgrade.
+- **Migrations**: the fork (`c0a9b1d2e3f4`) and upstream (`cdcf8e5a6437`) both
+  create `instance_branding` with the same schema; both now skip creation when
+  the table exists. `3d4e5f6a7b8c` merges the two heads.
+- **Workspace**: the fork keeps a root pnpm workspace, so the root
+  `pnpm-lock.yaml` is the one installs use and upstream's `pnpm.overrides` are
+  repeated in the root `package.json`. The web lint warning cap is 122 (upstream
+  95): the extra warnings are React Compiler hints in fork components.
+
 ## Status meanings
 
 | Status | Meaning |

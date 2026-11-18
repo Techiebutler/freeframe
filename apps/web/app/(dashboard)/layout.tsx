@@ -7,8 +7,12 @@ import { useUploadStore } from "@/stores/upload-store";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { CommandPalette } from "@/components/layout/command-palette";
+import { KeyboardShortcuts } from "@/components/layout/keyboard-shortcuts";
 import { UploadsPanel } from "@/components/layout/uploads-panel";
 import { UploadSSEBridge } from "@/components/layout/upload-sse-bridge";
+import { PoweredByBadge } from "@/components/shared/powered-by-badge";
+import { useUploadLeaveGuard } from "@/hooks/use-upload-leave-guard";
+import { refuseFileDrag } from "@/lib/drag";
 import { cn } from "@/lib/utils";
 
 export default function DashboardLayout({
@@ -20,9 +24,13 @@ export default function DashboardLayout({
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(true);
   const [commandOpen, setCommandOpen] = React.useState(false);
   const { fetchUser } = useAuthStore();
-  const { fetchHistory } = useUploadStore();
+  const fetchHistory = useUploadStore((s) => s.fetchHistory);
 
-  // Hide header on asset viewer pages — the viewer has its own top bar
+  // Ask the browser to confirm before the tab goes away with uploads in it.
+  useUploadLeaveGuard();
+
+  // The asset viewer renders its own top bar, carrying both the header's role
+  // and the attribution credit, so the shell supplies neither here.
   const isAssetViewer = /\/projects\/[^/]+\/assets\/[^/]+/.test(pathname);
 
   React.useEffect(() => {
@@ -43,7 +51,18 @@ export default function DashboardLayout({
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg-primary">
+    // The shell refuses a file drag nothing inside it took. Every drop target
+    // stops the event when it accepts, so anything arriving here was wanted by
+    // nobody, and the browser's own handling of it navigates the tab to the
+    // file. The rail, the header and the attribution badge are all siblings of
+    // the page rather than parts of it, and the badge in particular floats over
+    // the asset area a project page offers as a drop target -- releasing a few
+    // pixels off it used to load `file:///...` over the session.
+    <div
+      className="flex h-dvh overflow-hidden bg-bg-primary pl-safe pr-safe"
+      onDragOver={refuseFileDrag}
+      onDrop={refuseFileDrag}
+    >
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((c) => !c)}
@@ -61,9 +80,30 @@ export default function DashboardLayout({
         <div className="relative flex-1 overflow-y-auto">{children}</div>
       </main>
 
-      <UploadsPanel />
+      {/* Attribution floats over the content rather than living in the sidebar,
+          so it stays put whether the rail is collapsed or expanded and doesn't
+          compete with the org name for the 48px logo header. Renders nothing
+          when an admin turns "Powered by FreeFrame" off.
+
+          Not on the asset viewer. That route carries its own credit in the top
+          bar it renders in place of the header, so the floating one was a
+          second copy -- and at 173px wide it covered the 28px send button in
+          the corner of the comment composer completely, so every click on Send
+          opened the repository in a new tab instead of posting the comment.
+          Enter still posted, which is why it went unseen.
+
+          The viewer's own copy is hidden below `lg`, where it would push the
+          bar's controls off the screen. Nothing takes its place there: bringing
+          this one back would restore the send-button collision on exactly the
+          widths where the composer is hardest to hit. */}
+      {!isAssetViewer && (
+        <PoweredByBadge className="fixed bottom-safe right-safe [--ff-bottom:1rem] [--ff-right:1rem] z-20 rounded-full border border-border bg-bg-elevated/90 px-3 py-1.5 shadow-lg backdrop-blur-sm" />
+      )}
+
+      <UploadsPanel railCollapsed={sidebarCollapsed} />
       <UploadSSEBridge />
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
+      <KeyboardShortcuts standalone />
     </div>
   );
 }

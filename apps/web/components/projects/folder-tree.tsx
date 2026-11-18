@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo, useRef } from 'react'
 import {
   ChevronRight,
   FolderOpen,
@@ -8,12 +8,13 @@ import {
   Plus,
   Trash2,
   MoreHorizontal,
-  Pencil,
-  FolderPlus,
-  Trash,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { FolderMenuItems } from './menus/folder-menu'
 import type { FolderTreeNode } from '@/types'
+import { carriesFiles } from '@/lib/drag'
+import { collectDataTransfer, type Collected } from '@/lib/upload-folder-walk'
 
 interface FolderTreeProps {
   tree: FolderTreeNode[]
@@ -22,11 +23,165 @@ interface FolderTreeProps {
   showTrash: boolean
   onSelectFolder: (folderId: string | null) => void
   onShowTrash: () => void
-  onCreateFolder: (name: string, parentId: string | null) => Promise<void>
+  /** New Subfolder in a folder's menu. Absent = not offered. */
+  onCreateFolder?: (name: string, parentId: string | null) => Promise<void>
   onRenameFolder: (folderId: string, name: string) => Promise<void>
   onDeleteFolder: (folderId: string) => Promise<void>
+  /** Create Share Link in a folder's menu. Absent = not offered. */
+  onShareFolder?: (folderId: string, folderName: string) => void
   // Drag-drop targets
   onDropItems?: (targetFolderId: string | null, assetIds: string[], folderIds: string[]) => void
+  /** Files dropped on a folder row upload into it, `null` being the project
+   *  root. Absent = uploads not allowed. */
+  onDropFiles?: (targetFolderId: string | null, dropped: Promise<Collected>) => void
+  /** See FolderCard: lets the region above shrink its marking to this row. */
+  onFileDragOverFolder?: (folderId: string | null, from?: string) => void
+  /** Which folder currently holds the file-drag marking, so exactly one row can
+   *  be lit. See FolderCard. */
+  fileDragTarget?: string | null
+}
+
+/**
+ * Identifies the project-root row in the page's single-owner drag marking.
+ *
+ * `null` is already spoken for there: it means "released". Folder ids are
+ * UUIDs, so a sentinel that is not one cannot collide with a real row.
+ */
+export const PROJECT_ROOT_ROW = '__project_root__'
+
+/**
+ * The drag behaviour of one row of the tree, file drags and item drags alike.
+ *
+ * The project root and every folder row want exactly this. They used to carry
+ * two copies of it, and the root's was the shorter one -- what it was missing
+ * did not show up by reading it. It had no depth counter, so it blinked as the
+ * pointer crossed its own icon and label; and it lit from its own state instead
+ * of reporting to the page, so it was invisible to the release logic: crossing
+ * up from a folder row lit the root at once while the folder row only scheduled
+ * its guarded release, and both wore the ring for that window -- the exact
+ * condition the timer and the `from` guard exist to prevent.
+ *
+ * One implementation is what makes the invariant hold rather than being
+ * restated. The callbacks take no folder id: each row closes over its own, so
+ * the root's `null` and a folder's id are the caller's business.
+ */
+function useRowFileDrag({
+  rowId,
+  onDropFiles,
+  onDropItems,
+  onFileDragOverFolder,
+}: {
+  /** Identifies this row in the page's marking. */
+  rowId: string
+  /** Absent = this row does not take files, and says so with a `none` cursor. */
+  onDropFiles?: (dropped: Promise<Collected>) => void
+  onDropItems?: (assetIds: string[], folderIds: string[]) => void
+  onFileDragOverFolder?: (folderId: string | null, from?: string) => void
+}) {
+  const [isDragOver, setIsDragOver] = useState(false)
+  // Counted rather than toggled, because the row's own children raise
+  // dragenter/dragleave as the pointer crosses them.
+  const dragDepth = useRef(0)
+
+  const clearDrag = useCallback(() => {
+    dragDepth.current = 0
+    setIsDragOver(false)
+    onFileDragOverFolder?.(null, rowId)
+  }, [rowId, onFileDragOverFolder])
+
+  const onDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      if (!carriesFiles(e) || !onDropFiles) return
+      e.preventDefault()
+      // Deliberately NOT stopPropagation: the region above counts dragenter
+      // against dragleave to know when the pointer has left it entirely, and
+      // swallowing one half of that pair makes its counter drift.
+      dragDepth.current += 1
+      // No local highlight for a file drag: the page owns the marking, so two
+      // rows cannot both be lit while the pointer is between them.
+      onFileDragOverFolder?.(rowId)
+    },
+    [rowId, onDropFiles, onFileDragOverFolder],
+  )
+
+  const onDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (carriesFiles(e)) {
+        // Refusing still means preventing the default. Without it the browser
+        // handles the drop itself and navigates the tab to `file:///...`,
+        // losing whatever is unsaved. `none` is what tells the pointer so.
+        e.preventDefault()
+        if (!onDropFiles) {
+          e.dataTransfer.dropEffect = 'none'
+          return
+        }
+        // A row is a more specific target than the shell behind it, so it takes
+        // the event rather than letting the shell's refusal overwrite the
+        // cursor over one of the few places a file can actually go.
+        e.stopPropagation()
+        e.dataTransfer.dropEffect = 'copy'
+        // Re-asserted on every dragover, not only on entry: this is what makes
+        // the marking recover by itself if anything ever releases it early.
+        onFileDragOverFolder?.(rowId)
+        return
+      }
+      e.preventDefault()
+      // Taken here, as a file drop is: a card dragged by its thumbnail also lists
+      // `Files` in Chrome and Safari, and the shell's refusal behind this would
+      // set `none` over the move.
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'move'
+      setIsDragOver(true)
+    },
+    [rowId, onDropFiles, onFileDragOverFolder],
+  )
+
+  const onDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      if (carriesFiles(e) && onDropFiles) {
+        // See onDragEnter: this half bubbles too, or the region's count of its
+        // own children never comes back down.
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (dragDepth.current > 0) return
+      }
+      clearDrag()
+    },
+    [clearDrag, onDropFiles],
+  )
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (carriesFiles(e)) {
+        // See onDragOver: prevented whether or not it is accepted.
+        e.preventDefault()
+        if (!onDropFiles) return
+        e.stopPropagation()
+        clearDrag()
+        // Read here, in the drop event's own turn: afterwards the drop's
+        // items answer nothing, and a dropped folder is only an unreadable
+        // placeholder in `files`. Handed over even when the drop is empty,
+        // which is what several promised-file sources on macOS produce: the
+        // caller owns the region marking, and it has to come down either way.
+        onDropFiles(collectDataTransfer(e.dataTransfer))
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDragOver(false)
+      try {
+        const data = JSON.parse(e.dataTransfer.getData('application/json'))
+        onDropItems?.(data.assetIds ?? [], data.folderIds ?? [])
+      } catch {
+        // ignore
+      }
+    },
+    [clearDrag, onDropFiles, onDropItems],
+  )
+
+  return {
+    isDragOver,
+    dragHandlers: { onDragEnter, onDragOver, onDragLeave, onDrop },
+  }
 }
 
 interface FolderNodeProps {
@@ -34,10 +189,17 @@ interface FolderNodeProps {
   depth: number
   currentFolderId: string | null
   onSelectFolder: (folderId: string | null) => void
-  onCreateFolder: (name: string, parentId: string | null) => Promise<void>
+  onCreateFolder?: (name: string, parentId: string | null) => Promise<void>
   onRenameFolder: (folderId: string, name: string) => Promise<void>
   onDeleteFolder: (folderId: string) => Promise<void>
+  onShareFolder?: (folderId: string, folderName: string) => void
   onDropItems?: (targetFolderId: string | null, assetIds: string[], folderIds: string[]) => void
+  /** Files dropped on a folder row upload into it. Absent = uploads not allowed. */
+  onDropFiles?: (targetFolderId: string, dropped: Promise<Collected>) => void
+  /** See FolderCard: lets the region above shrink its marking to this row. */
+  onFileDragOverFolder?: (folderId: string | null, from?: string) => void
+  /** See FolderTreeProps. */
+  fileDragTarget?: string | null
 }
 
 function FolderNode({
@@ -48,13 +210,15 @@ function FolderNode({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  onShareFolder,
   onDropItems,
+  onDropFiles,
+  onFileDragOverFolder,
+  fileDragTarget,
 }: FolderNodeProps) {
   const [expanded, setExpanded] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [renameName, setRenameName] = useState(node.name)
-  const [isDragOver, setIsDragOver] = useState(false)
   const isActive = currentFolderId === node.id
 
   const hasChildren = node.children.length > 0
@@ -71,48 +235,56 @@ function FolderNode({
     setRenaming(false)
   }, [renameName, node.id, node.name, onRenameFolder])
 
-  // Drag-drop target
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    setIsDragOver(true)
-  }, [])
+  const { isDragOver, dragHandlers } = useRowFileDrag({
+    rowId: node.id,
+    onDropFiles: useMemo(
+      () => (onDropFiles ? (dropped: Promise<Collected>) => onDropFiles(node.id, dropped) : undefined),
+      [onDropFiles, node.id],
+    ),
+    onDropItems: useMemo(
+      () => (assetIds: string[], folderIds: string[]) =>
+        onDropItems?.(node.id, assetIds, folderIds),
+      [onDropItems, node.id],
+    ),
+    onFileDragOverFolder,
+  })
 
-  const handleDragLeave = useCallback(() => setIsDragOver(false), [])
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setIsDragOver(false)
-      try {
-        const data = JSON.parse(e.dataTransfer.getData('application/json'))
-        onDropItems?.(node.id, data.assetIds ?? [], data.folderIds ?? [])
-      } catch {
-        // ignore
-      }
-    },
-    [node.id, onDropItems],
+  // The same items for the ⋯ button and right-click. Rename stays inline here,
+  // where the grid asks in a dialog.
+  const menuItems = (
+    <FolderMenuItems
+      onShare={onShareFolder ? () => onShareFolder(node.id, node.name) : undefined}
+      onNewSubfolder={onCreateFolder ? () => onCreateFolder('', node.id) : undefined}
+      // Runs once the menu has closed (see item-menu), so the field that
+      // appears keeps focus: blur would end the rename.
+      onRename={() => {
+        setRenameName(node.name)
+        setRenaming(true)
+      }}
+      onDelete={async () => {
+        if (confirm(`Delete folder "${node.name}" and all its contents?`)) {
+          await onDeleteFolder(node.id)
+        }
+      }}
+    />
   )
 
   return (
     <div>
+      {/* Right-click opens the folder's menu; while renaming, the input gets
+          the browser's own menu back. */}
+      <ContextMenuArea items={menuItems} disabled={renaming}>
       <div
         className={cn(
           'group flex items-center gap-1 px-2 py-1 rounded-md text-[13px] cursor-pointer transition-colors',
           isActive
             ? 'bg-accent/10 text-accent font-medium'
             : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover',
-          isDragOver && 'ring-2 ring-accent/50 bg-accent/5',
+          (isDragOver || fileDragTarget === node.id) && 'ring-2 ring-accent/50 bg-accent/5',
         )}
         style={{ paddingLeft: `${8 + depth * 16}px` }}
         onClick={handleClick}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          setMenuOpen((p) => !p)
-        }}
+        {...dragHandlers}
       >
         {/* Expand chevron */}
         <span className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}>
@@ -153,54 +325,19 @@ function FolderNode({
           <span className="text-[10px] text-text-tertiary shrink-0">{node.item_count}</span>
         )}
 
-        {/* Context menu button */}
-        <button
-          className="opacity-0 group-hover:opacity-100 shrink-0 h-5 w-5 flex items-center justify-center rounded hover:bg-bg-hover transition-opacity"
-          onClick={(e) => {
-            e.stopPropagation()
-            setMenuOpen((p) => !p)
-          }}
-        >
-          <MoreHorizontal className="h-3 w-3" />
-        </button>
+        {/* Menu button */}
+        <DotsMenu items={menuItems}>
+          <button
+            aria-label={`${node.name} menu`}
+            className="opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 shrink-0 h-5 w-5 flex items-center justify-center rounded hover:bg-bg-hover transition-opacity"
+            // Opening the menu is not a click on the folder.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreHorizontal className="h-3 w-3" />
+          </button>
+        </DotsMenu>
       </div>
-
-      {/* Context menu */}
-      {menuOpen && (
-        <div className="ml-8 mt-0.5 mb-1 rounded-lg border border-border bg-bg-elevated shadow-xl py-1 z-50 w-44">
-          <button
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-            onClick={() => {
-              setMenuOpen(false)
-              setRenaming(true)
-              setRenameName(node.name)
-            }}
-          >
-            <Pencil className="h-3 w-3" /> Rename
-          </button>
-          <button
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-            onClick={() => {
-              setMenuOpen(false)
-              onCreateFolder('', node.id)
-            }}
-          >
-            <FolderPlus className="h-3 w-3" /> New Subfolder
-          </button>
-          <div className="my-1 border-t border-border" />
-          <button
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-[12px] text-red-400 hover:bg-red-500/10"
-            onClick={async () => {
-              setMenuOpen(false)
-              if (confirm(`Delete folder "${node.name}" and all its contents?`)) {
-                await onDeleteFolder(node.id)
-              }
-            }}
-          >
-            <Trash className="h-3 w-3" /> Delete
-          </button>
-        </div>
-      )}
+      </ContextMenuArea>
 
       {/* Children */}
       {expanded && hasChildren && (
@@ -215,7 +352,11 @@ function FolderNode({
               onCreateFolder={onCreateFolder}
               onRenameFolder={onRenameFolder}
               onDeleteFolder={onDeleteFolder}
+              onShareFolder={onShareFolder}
               onDropItems={onDropItems}
+              onDropFiles={onDropFiles}
+              onFileDragOverFolder={onFileDragOverFolder}
+              fileDragTarget={fileDragTarget}
             />
           ))}
         </div>
@@ -234,9 +375,29 @@ export function FolderTree({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  onShareFolder,
   onDropItems,
+  onDropFiles,
+  onFileDragOverFolder,
+  fileDragTarget,
 }: FolderTreeProps) {
-  const [isDragOverRoot, setIsDragOverRoot] = useState(false)
+  // The root row is a row like any other: same hook, same reporting, so the
+  // page's "exactly one frame is lit" holds here too rather than stopping at
+  // the folders. `null` as the drop target is what this row means by itself.
+  const { isDragOver: isDragOverRoot, dragHandlers: rootDragHandlers } =
+    useRowFileDrag({
+      rowId: PROJECT_ROOT_ROW,
+      onDropFiles: useMemo(
+        () => (onDropFiles ? (dropped: Promise<Collected>) => onDropFiles(null, dropped) : undefined),
+        [onDropFiles],
+      ),
+      onDropItems: useMemo(
+        () => (assetIds: string[], folderIds: string[]) =>
+          onDropItems?.(null, assetIds, folderIds),
+        [onDropItems],
+      ),
+      onFileDragOverFolder,
+    })
 
   return (
     <div className="space-y-0.5">
@@ -247,22 +408,11 @@ export function FolderTree({
           currentFolderId === null && !showTrash
             ? 'bg-accent/10 text-accent font-medium'
             : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover',
-          isDragOverRoot && 'ring-2 ring-accent/50 bg-accent/5',
+          (isDragOverRoot || fileDragTarget === PROJECT_ROOT_ROW) &&
+            'ring-2 ring-accent/50 bg-accent/5',
         )}
         onClick={() => onSelectFolder(null)}
-        onDragOver={(e) => {
-          e.preventDefault()
-          setIsDragOverRoot(true)
-        }}
-        onDragLeave={() => setIsDragOverRoot(false)}
-        onDrop={(e) => {
-          e.preventDefault()
-          setIsDragOverRoot(false)
-          try {
-            const data = JSON.parse(e.dataTransfer.getData('application/json'))
-            onDropItems?.(null, data.assetIds ?? [], data.folderIds ?? [])
-          } catch {}
-        }}
+        {...rootDragHandlers}
       >
         <FolderOpen className="h-4 w-4 shrink-0" />
         <span className="truncate">{projectName}</span>
@@ -279,7 +429,11 @@ export function FolderTree({
           onCreateFolder={onCreateFolder}
           onRenameFolder={onRenameFolder}
           onDeleteFolder={onDeleteFolder}
+          onShareFolder={onShareFolder}
           onDropItems={onDropItems}
+          onDropFiles={onDropFiles}
+          onFileDragOverFolder={onFileDragOverFolder}
+          fileDragTarget={fileDragTarget}
         />
       ))}
 

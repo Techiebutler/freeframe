@@ -5,13 +5,16 @@ import { createPortal } from 'react-dom'
 import { Pause, Play, RotateCcw } from 'lucide-react'
 import { cn, formatTimecode } from '@/lib/utils'
 import { frameStep, markerPosition, type SideTiming } from '@/lib/compare-time'
-import { getAvatarColor, getInitials } from '@/components/review/progress-bar'
+import { getAvatarColor } from '@/components/review/progress-bar'
+import { Avatar } from '@/components/shared/avatar'
 
 export interface ScrubberMarker {
   id: string
   commentNumber?: number
   tc: number
   authorName: string
+  avatarUrl?: string | null
+  avatarColor?: string | null
   body: string
   hasAnnotation: boolean
 }
@@ -59,9 +62,8 @@ function ScrubberCommentMarker({
   onLeave: () => void
   onClick: () => void
 }) {
-  const markerRef = React.useRef<HTMLDivElement>(null)
+  const markerRef = React.useRef<HTMLButtonElement>(null)
   const [tooltipPos, setTooltipPos] = React.useState<{ left: number; top: number } | null>(null)
-  const initials = getInitials(marker.authorName)
   const color = getAvatarColor(marker.authorName)
 
   // Recalculate tooltip position when hovered to avoid viewport clipping.
@@ -82,23 +84,40 @@ function ScrubberCommentMarker({
     setTooltipPos({ left, top })
   }, [isHovered])
 
+  // A native button, so Tab reaches it and Enter/Space fire onClick.
   return (
-    <div
+    <button
       ref={markerRef}
+      type="button"
       data-testid={`marker-${side}-${marker.id}`}
-      className={cn('absolute -translate-x-1/2 cursor-pointer', side === 'a' ? 'top-0' : 'bottom-0')}
+      aria-label={`Comment by ${marker.authorName} at ${formatTimecode(marker.tc, fps ?? 24)}`}
+      className={cn(
+        'absolute -translate-x-1/2 cursor-pointer pointer-events-auto rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+        side === 'a' ? 'top-0' : 'bottom-0',
+      )}
       style={{ left: `${leftPercent}%` }}
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
-      onClick={onClick}
+      onClick={(e) => {
+        onClick()
+        // A mouse click (detail > 0; keyboard activation is 0) leaves focus
+        // here in Chromium, and the next Space would re-activate the marker
+        // instead of reaching the overlay's play/pause. Drop it, as the old
+        // div marker never took focus.
+        if (e.detail > 0) e.currentTarget.blur()
+      }}
+      // The overlay plays/pauses on a window-level Space; this one is the
+      // button's own activation key, so keep it from reaching that handler.
+      onKeyDown={(e) => { if (e.key === ' ') e.stopPropagation() }}
     >
       {/* Avatar dot */}
-      <div
-        className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-bg-primary text-[9px] font-bold text-white shadow-md transition-transform hover:scale-110"
+      <Avatar
+        src={marker.avatarUrl}
+        name={marker.authorName}
+        color={marker.avatarColor}
+        className="h-5 w-5 border-2 border-bg-primary text-[9px] font-bold text-white shadow-md transition-transform [@media(hover:hover)]:hover:scale-110"
         style={{ backgroundColor: color }}
-      >
-        {initials}
-      </div>
+      />
 
       {/* Tooltip — portaled to document.body to escape all overflow */}
       {isHovered && tooltipPos && createPortal(
@@ -115,12 +134,13 @@ function ScrubberCommentMarker({
         >
           <div className="bg-[#1e1e22] border border-white/10 rounded-lg shadow-2xl p-3">
             <div className="flex items-center gap-2 mb-1.5">
-              <div
-                className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
+              <Avatar
+                src={marker.avatarUrl}
+                name={marker.authorName}
+                color={marker.avatarColor}
+                className="w-5 h-5 text-[9px] font-bold text-white"
                 style={{ backgroundColor: color }}
-              >
-                {initials}
-              </div>
+              />
               <span className="text-xs font-medium text-white truncate">{marker.authorName}</span>
               {marker.commentNumber !== undefined && (
                 <span className="text-[10px] font-semibold text-text-tertiary shrink-0">#{marker.commentNumber}</span>
@@ -136,7 +156,7 @@ function ScrubberCommentMarker({
         </div>,
         document.body,
       )}
-    </div>
+    </button>
   )
 }
 
@@ -162,13 +182,66 @@ function OffsetStepper({ side, label, offset, fps, onOffsetChange }: {
 export function CompareScrubber(props: CompareScrubberProps) {
   const { t, total, isPlaying, fps, onToggle, onSeek, markersA, markersB, timingA, timingB, onMarkerClick, onOffsetChange, labelA, labelB, onResetOffsets } = props
   const trackRef = React.useRef<HTMLDivElement>(null)
+  const activePointerIdRef = React.useRef<number | null>(null)
+  const [isDragging, setIsDragging] = React.useState(false)
   const [hovered, setHovered] = React.useState<HoveredMarker | null>(null)
 
-  const seekFromEvent = (clientX: number) => {
-    const rect = trackRef.current?.getBoundingClientRect()
-    if (!rect || rect.width === 0) return
-    onSeek(((clientX - rect.left) / rect.width) * total)
-  }
+  // Pointer Events throughout, mirroring progress-bar.tsx: a click-only
+  // handler here means a finger can tap-seek once but never drag, since
+  // there is no touch equivalent of a window `mousemove` listener.
+  const getTimeFromEvent = React.useCallback(
+    (clientX: number): number => {
+      const rect = trackRef.current?.getBoundingClientRect()
+      if (!rect || rect.width === 0) return 0
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+      return ratio * total
+    },
+    [total],
+  )
+
+  const endDrag = React.useCallback(() => {
+    activePointerIdRef.current = null
+    setIsDragging(false)
+  }, [])
+
+  const handlePointerDown = React.useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.isPrimary || e.button !== 0) return
+      if (activePointerIdRef.current !== null) return
+      activePointerIdRef.current = e.pointerId
+      e.currentTarget.setPointerCapture?.(e.pointerId)
+      setIsDragging(true)
+      onSeek(getTimeFromEvent(e.clientX))
+    },
+    [getTimeFromEvent, onSeek],
+  )
+
+  const handlePointerMove = React.useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDragging || e.pointerId !== activePointerIdRef.current) return
+      onSeek(getTimeFromEvent(e.clientX))
+    },
+    [isDragging, getTimeFromEvent, onSeek],
+  )
+
+  const handlePointerUp = React.useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.pointerId !== activePointerIdRef.current) return
+      onSeek(getTimeFromEvent(e.clientX))
+      endDrag()
+    },
+    [getTimeFromEvent, onSeek, endDrag],
+  )
+
+  const handlePointerCancel = React.useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // iOS fires this instead of pointerup when the system takes the
+      // gesture mid-drag (a second finger starting a pinch, an edge swipe).
+      if (e.pointerId !== activePointerIdRef.current) return
+      endDrag()
+    },
+    [endDrag],
+  )
 
   return (
     <div className="flex items-center gap-4 border-t border-border bg-bg-primary px-4 py-2">
@@ -182,42 +255,65 @@ export function CompareScrubber(props: CompareScrubberProps) {
       </button>
 
       <div className="relative flex-1 py-6">
-        {/* A markers above the track */}
-        {markersA.map((m) => (
-          <ScrubberCommentMarker
-            key={m.id}
-            marker={m}
-            side="a"
-            fps={fps}
-            leftPercent={markerPosition(m.tc, timingA, total) * 100}
-            isHovered={hovered?.side === 'a' && hovered.id === m.id}
-            onHover={() => setHovered({ side: 'a', id: m.id })}
-            onLeave={() => setHovered(null)}
-            onClick={() => onMarkerClick('a', m)}
-          />
-        ))}
+        {/* Track — handlers live here; the invisible hit-area extension below
+            is a plain overflowing child, and the marker rows render after
+            this in the DOM (see below) so a dot always wins hit-testing over
+            the extension where the two overlap, the same ordering
+            progress-bar.tsx relies on for its own comment-markers row. */}
         <div
           ref={trackRef}
           data-testid="compare-track"
-          onClick={(e) => seekFromEvent(e.clientX)}
-          className="relative h-2 cursor-pointer rounded-full bg-bg-tertiary"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+          onLostPointerCapture={endDrag}
+          className="relative h-2 cursor-pointer touch-none rounded-full bg-bg-tertiary"
         >
+          {/* Invisible hit-area extension — widens the 8px track to a more
+              graspable touch target. The two marker rows sit in the same
+              py-6 gutter this reaches into, which is fine: they render after
+              this element and get pointer-events-auto back on each dot, so a
+              dot still wins hit-testing at any pixel the two share. */}
+          <div className="absolute -top-2 -bottom-2 inset-x-0" />
           <div className="absolute inset-y-0 left-0 rounded-full bg-accent" style={{ width: `${total > 0 ? (t / total) * 100 : 0}%` }} />
         </div>
-        {/* B markers below the track */}
-        {markersB.map((m) => (
-          <ScrubberCommentMarker
-            key={m.id}
-            marker={m}
-            side="b"
-            fps={fps}
-            leftPercent={markerPosition(m.tc, timingB, total) * 100}
-            isHovered={hovered?.side === 'b' && hovered.id === m.id}
-            onHover={() => setHovered({ side: 'b', id: m.id })}
-            onLeave={() => setHovered(null)}
-            onClick={() => onMarkerClick('b', m)}
-          />
-        ))}
+
+        {/* A markers above the track. pointer-events-none on the row so its
+            own empty space doesn't shadow the track's hit-area extension
+            above it; pointer-events-auto is restored on each marker itself. */}
+        <div className="pointer-events-none">
+          {markersA.map((m) => (
+            <ScrubberCommentMarker
+              key={m.id}
+              marker={m}
+              side="a"
+              fps={fps}
+              leftPercent={markerPosition(m.tc, timingA, total) * 100}
+              isHovered={hovered?.side === 'a' && hovered.id === m.id}
+              onHover={() => setHovered({ side: 'a', id: m.id })}
+              onLeave={() => setHovered(null)}
+              onClick={() => onMarkerClick('a', m)}
+            />
+          ))}
+        </div>
+
+        {/* B markers below the track — same treatment. */}
+        <div className="pointer-events-none">
+          {markersB.map((m) => (
+            <ScrubberCommentMarker
+              key={m.id}
+              marker={m}
+              side="b"
+              fps={fps}
+              leftPercent={markerPosition(m.tc, timingB, total) * 100}
+              isHovered={hovered?.side === 'b' && hovered.id === m.id}
+              onHover={() => setHovered({ side: 'b', id: m.id })}
+              onLeave={() => setHovered(null)}
+              onClick={() => onMarkerClick('b', m)}
+            />
+          ))}
+        </div>
       </div>
 
       <span className="font-mono text-[12px] tabular-nums text-text-secondary">{formatTimecode(t, fps ?? 24)}</span>

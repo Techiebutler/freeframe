@@ -18,6 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # The fork (c0a9b1d2e3f4) and upstream (cdcf8e5a6437) both create this
+    # table with the same schema. Whichever runs second finds it in place.
+    if sa.inspect(op.get_bind()).has_table("instance_branding"):
+        return
     op.create_table(
         "instance_branding",
         sa.Column("id", sa.UUID(), nullable=False),

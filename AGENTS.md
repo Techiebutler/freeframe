@@ -23,7 +23,20 @@ docker compose -f docker-compose.dev.yml up --build
 # open http://localhost:3000
 ```
 
-Everything (Postgres, Redis, MinIO, API, Celery workers, web) starts in Docker with hot reload.
+Ten services start in Docker: postgres, redis, minio, minio-init, api, worker, email_worker,
+maintenance_worker, beat, web.
+
+> **Hot reload covers `api` and `web` only.** The four Celery containers have no autoreload, so
+> a change under `apps/api/tasks/` (or to anything a task imports) does nothing until you restart
+> them:
+> ```bash
+> docker compose -f docker-compose.dev.yml restart worker email_worker maintenance_worker beat
+> ```
+
+> **The dev stack really deletes local data on a schedule.** `maintenance_worker` and `beat` run
+> the stale-upload reaper hourly and hard-delete soft-deleted rows at 03:00 UTC, reclaiming S3
+> objects. Set `STALE_UPLOAD_TIMEOUT_HOURS=0` and `SOFT_DELETE_RETENTION_DAYS=0` in `.env` to
+> switch both off while you work.
 
 ### Dev endpoints
 
@@ -32,7 +45,7 @@ Everything (Postgres, Redis, MinIO, API, Celery workers, web) starts in Docker w
 | Frontend (Next.js)  | http://localhost:3000        | hot reload                              |
 | API (FastAPI)       | http://localhost:8000        |                                         |
 | API docs (Swagger)  | http://localhost:8000/docs   | the fastest way to find an endpoint     |
-| MinIO console       | http://localhost:9001        | S3 API is on :9000                      |
+| Silo console        | http://localhost:9001        | S3 API is on :9000 (Silo, a MinIO fork) |
 | Postgres            | `localhost:5433` (dev only)  | host mapping `5433:5432`; in-container and prod it's `5432` |
 | Redis               | `localhost:6379`             |                                         |
 
@@ -50,11 +63,12 @@ freeframe/
 │   │   ├── schemas/        # Pydantic request/response schemas
 │   │   ├── routers/        # API route handlers
 │   │   ├── services/       # business logic (auth, s3, permissions, …)
-│   │   ├── tasks/          # Celery async tasks (transcode, email)
-│   │   ├── middleware/     # auth, rate limiting, setup guard
+│   │   ├── tasks/          # Celery tasks (transcode, email, watermark, reminders,
+│   │   │                   #   cleanup — the only code that hard-deletes)
+│   │   ├── middleware/     # auth deps, share-link auth, rate limiting, setup guard
 │   │   ├── alembic/        # database migrations
 │   │   └── tests/          # pytest suite (mock-DB based — see Gotchas)
-│   └── web/                # Next.js 14 App Router frontend
+│   └── web/                # Next.js 16 App Router frontend
 │       ├── app/            # routes/pages
 │       ├── components/     # React components
 │       ├── hooks/          # React hooks
@@ -90,6 +104,35 @@ pnpm --filter web exec tsc --noEmit   # type check
 pnpm --filter web lint
 ```
 
+**Installer** (`install.sh`, `deploy/freeframe`; CI's `installer` job runs these on
+Ubuntu 24.04 with pinned ShellCheck 0.11.0 and bats-core 1.14.0):
+
+```bash
+shellcheck -x install.sh deploy/freeframe deploy/tests/ci-e2e.sh
+bats --count deploy/tests   # CI fails below 450 tests, a floor against deleted tests
+bats --timing deploy/tests  # needs bats-core 1.5 or newer (Ubuntu 22.04's apt bats is too old)
+
+# without a recent bats, or on macOS (the Alpine image skips the few tests that
+# need flock, setsid or systemd-analyze):
+docker run --rm -v "$PWD:/code" -w /code bats/bats:latest deploy/tests
+```
+
+The installer end-to-end job (`installer-e2e`) runs `bash deploy/tests/ci-e2e.sh PHASE`
+for each of `prepare`, `foreign`, `build`, `install`, `api`, `backup-restore`, `update`,
+`rerun` and `status` (and `diagnose` on failure), in that order, on a GitHub runner.
+**Never run it on your machine:** it uses sudo, writes `/opt/freeframe` and
+`/usr/local/bin/freeframe`, and starts a compose project named `freeframe`, the name a dev
+FreeFrame uses too (it refuses to run outside GitHub Actions). On a pull request it runs
+only when the change touches `deploy/**`, `install.sh`, `docker-compose*.yml`,
+`apps/*/Dockerfile.prod*`, `apps/*/docker-entrypoint.sh`, `*.dockerignore` or
+`.github/workflows/ci.yml`; every push to main runs it.
+
+After #585 merges, CI also lints the workflows: run `actionlint` from the repo root.
+
+> **Use the Node version in [`.nvmrc`](.nvmrc).** CI reads it, and so do `nvm use` and `fnm`.
+> A different system Node can fail tests that pass in CI. CI also checks that npm, which
+> `docker-compose.dev.yml` installs `apps/web` with, can still resolve `apps/web/package.json`.
+
 > CI ignores changes limited to `*.md`, `docs/**`, `LICENSE`, and the issue/PR templates,
 > so a docs-only PR (like editing this file) will not trigger the test/build jobs.
 
@@ -113,11 +156,14 @@ Read this section before writing backend code or tests.
   `routers/share.py`, `services/permissions.py`, key `apps/web` files) goes missing. If a
   test is genuinely obsolete, replace it — don't remove coverage.
 
-- **Soft delete is model-specific.** Check the model before assuming it has `deleted_at`;
-  some dependent records do not. For models that have it, filter
-  `deleted_at.is_(None)` explicitly in queries — there is no automatic middleware. Application
-  deletes are normally soft deletes; the maintenance retention GC permanently removes eligible
-  soft-deleted roots and their associated storage after `SOFT_DELETE_RETENTION_DAYS`.
+- **Soft delete is common but not universal, and it is not automatic.** 13 of the 29 models
+  carry a `deleted_at` column; 16 do not, including `MediaFile`, `Annotation`,
+  `CommentAttachment`, `CommentReaction`, `Notification` and `ActivityLog`. Check the model
+  before assuming. Where the column exists, prefer setting it over deleting the row, and
+  filter `deleted_at.is_(None)` **by hand in every query** — nothing filters it for you,
+  there is no automatic soft-delete layer. Soft deletion is not
+  permanent either: `tasks/cleanup_tasks.py` hard-deletes soft-deleted rows and reclaims their
+  S3 objects after `SOFT_DELETE_RETENTION_DAYS` (default 30).
 
 - **Model change ⇒ Alembic migration.** After editing a SQLAlchemy model:
   ```bash
@@ -142,7 +188,7 @@ Read this section before writing backend code or tests.
   heading (Keep a Changelog format: `Added` / `Changed` / `Fixed`). Don't invent or cut a
   version — releases are handled separately.
 - **UI changes:** include before/after screenshots in the PR (see
-  `.github/pull_request_template.md`).
+  `.github/PULL_REQUEST_TEMPLATE.md`).
 - **Docs:** update `docs/` or user-facing text when you change behavior.
 
 ---
@@ -153,12 +199,12 @@ FreeFrame ships **moving branch pointers** on top of immutable `vX.Y.Z` tags. Kn
 
 - **`main`** — active development. PRs target `main`; it may be ahead of any release.
 - **`stable`** — the last **validated** release. **This is what production self-hosters run** (`git clone -b stable`). Never tell users to run `main` in production, and don't point install/deploy docs at `main` — point them at `stable`.
-- **`latest`** — the newest published release (auto-moved by `.github/workflows/release-pointers.yml`). For early adopters.
+- **`latest`**: the newest published release (auto-moved by `.github/workflows/publish-images.yml` once that release's images are published). For early adopters.
 - **`vX.Y.Z`** — immutable release tags; never move or delete them.
 
 Rules for agents:
 
-- **Don't create, move, or force-push `stable` / `latest`** — they are moved only by the release workflows (`release-pointers.yml` on release publish; `promote-stable.yml` manually, which gates on green CI). See [`docs/RELEASING.md`](docs/RELEASING.md).
+- **Don't create, move, or force-push `stable` / `latest`**: they are moved only by the release workflows (`publish-images.yml` on release publish, after the images; `promote-stable.yml` manually, which gates on green CI). See [`docs/RELEASING.md`](docs/RELEASING.md).
 - **Don't cut releases or tags** unless explicitly asked — releases are manual and CHANGELOG-driven.
 - Default user-facing install/deploy instructions to `stable` (see the README "Release channels" table).
 

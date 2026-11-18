@@ -57,16 +57,16 @@ def test_reap_logic_soft_deletes_and_deletes_s3(mock_db, monkeypatch):
     monkeypatch.setattr(ct, "delete_prefix", lambda k: deleted.append(k))
 
     version = MagicMock(deleted_at=None)
-    media = MagicMock(s3_key_raw="raw/x", s3_key_processed="processed/x", s3_key_thumbnail="thumb/x")
-    # Version query returns [version]; media-files query (inside the loop)
-    # returns [media]. Processing versions are handled by the separate requeue.
+    media = MagicMock(s3_key_raw="raw/x", s3_key_processed="processed/x",
+                      s3_key_download="processed/x/download.mp4", s3_key_thumbnail="thumb/x")
+    # versions query returns [version]; media-files query (inside the loop) returns [media]
     mock_db.all.side_effect = [[version], [media]]
 
     n = ct._reap_stale_uploads(mock_db)
 
     assert n == 1
     assert version.deleted_at is not None
-    assert set(deleted) == {"raw/x", "processed/x", "thumb/x"}
+    assert set(deleted) == {"raw/x", "processed/x", "processed/x/download.mp4", "thumb/x"}
 
 
 def _seed_version(db, status, created_shift_hours):
@@ -91,6 +91,7 @@ def test_reap_selects_only_old_uploading_and_failed(real_db, monkeypatch):
     monkeypatch.setattr(ct, "list_stale_multipart_uploads", lambda cutoff: [])
     monkeypatch.setattr(ct, "delete_object", lambda k: None)
     monkeypatch.setattr(ct, "delete_prefix", lambda k: None)
+    monkeypatch.setattr(ct, "head_object_size", lambda k: None)  # no master assembled
 
     old_uploading = _seed_version(real_db, ProcessingStatus.uploading, 48)
     old_failed = _seed_version(real_db, ProcessingStatus.failed, 48)
@@ -113,6 +114,9 @@ def test_reaper_leaves_processing_versions_for_the_dedicated_requeue(real_db, mo
 
     stuck = _seed_version(real_db, ProcessingStatus.processing, 48)
     recent = _seed_version(real_db, ProcessingStatus.processing, 1)
+    # `queued` is a completed upload waiting for a transcoding worker: its master
+    # is assembled, so it is never the upload reaper's to take either.
+    queued = _seed_version(real_db, ProcessingStatus.queued, 48)
 
     ct._reap_stale_uploads(real_db)
 
@@ -120,6 +124,8 @@ def test_reaper_leaves_processing_versions_for_the_dedicated_requeue(real_db, mo
     assert stuck.deleted_at is None
     assert recent.processing_status == ProcessingStatus.processing
     assert recent.deleted_at is None
+    assert queued.processing_status == ProcessingStatus.queued
+    assert queued.deleted_at is None
 
 
 def test_requeue_stuck_processing_retries_only_old_versions(real_db, monkeypatch):
@@ -167,6 +173,102 @@ def test_requeue_stuck_processing_can_be_disabled(mock_db, monkeypatch):
 
     assert ct._requeue_stuck_processing(mock_db) == 0
     mock_db.query.assert_not_called()
+
+
+def _reap_with_storage(db, monkeypatch, head):
+    """Run the reaper against a recorded storage. `head` answers HeadObject."""
+    calls = {"head": [], "deleted": [], "aborted": []}
+
+    def fake_head(key):
+        calls["head"].append(key)
+        return head(key)
+
+    monkeypatch.setattr(ct, "list_stale_multipart_uploads", lambda cutoff: [])
+    monkeypatch.setattr(ct, "head_object_size", fake_head)
+    monkeypatch.setattr(ct, "delete_object", lambda k: calls["deleted"].append(k))
+    monkeypatch.setattr(ct, "delete_prefix", lambda k: calls["deleted"].append(k))
+    monkeypatch.setattr(ct, "abort_multipart_upload", lambda k, u: calls["aborted"].append(k))
+    n = ct._reap_stale_uploads(db)
+    return n, calls
+
+
+def _asset_of(db, v):
+    return db.query(Asset).filter(Asset.id == v.asset_id).one()
+
+
+def test_reaper_keeps_a_failed_version_whose_master_is_in_storage(real_db, monkeypatch):
+    """A transcode that failed on every attempt leaves a whole master behind.
+
+    It is the one copy of the user's original and nothing can rebuild it, so the
+    reaper's "has this upload stopped moving" window is no reason to delete it.
+    """
+    failed = _seed_version(real_db, ProcessingStatus.failed, 48)
+
+    n, calls = _reap_with_storage(real_db, monkeypatch, lambda k: 1)
+
+    assert n == 0
+    assert failed.deleted_at is None
+    assert calls["deleted"] == [] and calls["aborted"] == []
+    assert _asset_of(real_db, failed).deleted_at is None
+
+
+def test_reaper_keeps_a_failed_master_held_at_another_size(real_db, monkeypatch):
+    """An object at the key is a master CompleteMultipartUpload assembled, whatever
+    size was declared for it, so a mismatch is not a reason to delete it either."""
+    failed = _seed_version(real_db, ProcessingStatus.failed, 48)
+
+    n, calls = _reap_with_storage(real_db, monkeypatch, lambda k: 7)
+
+    assert n == 0
+    assert failed.deleted_at is None
+    assert calls["deleted"] == []
+
+
+def test_reaper_keeps_a_failed_version_when_storage_cannot_answer(real_db, monkeypatch):
+    """Could not find out is not evidence of absence."""
+    from botocore.exceptions import ClientError, EndpointConnectionError
+
+    def unreachable(key):
+        raise EndpointConnectionError(endpoint_url="http://s3")
+
+    def refused(key):
+        raise ClientError({"Error": {"Code": "500"}}, "HeadObject")
+
+    def sizeless(key):
+        raise s3_service.ObjectSizeUnavailable(key)
+
+    for head in (unreachable, refused, sizeless):
+        failed = _seed_version(real_db, ProcessingStatus.failed, 48)
+        n, calls = _reap_with_storage(real_db, monkeypatch, head)
+        assert n == 0, head.__name__
+        assert failed.deleted_at is None, head.__name__
+        assert calls["deleted"] == [], head.__name__
+
+
+def test_reaper_still_reclaims_a_failed_upload_with_no_master(real_db, monkeypatch):
+    """An aborted upload is recorded `failed` too, and never assembled anything:
+    that one is the reaper's to take, with its asset."""
+    failed = _seed_version(real_db, ProcessingStatus.failed, 48)
+
+    n, calls = _reap_with_storage(real_db, monkeypatch, lambda k: None)
+
+    assert n == 1
+    assert failed.deleted_at is not None
+    assert f"raw/{failed.id}" in calls["deleted"]
+    assert _asset_of(real_db, failed).deleted_at is not None
+
+
+def test_reaper_reclaims_a_stale_uploading_version_without_asking_storage(real_db, monkeypatch):
+    """`uploading` is unchanged: an upload that never completed has no master to
+    keep, so there is nothing to ask."""
+    stale = _seed_version(real_db, ProcessingStatus.uploading, 48)
+
+    n, calls = _reap_with_storage(real_db, monkeypatch, lambda k: 1)
+
+    assert n == 1
+    assert stale.deleted_at is not None
+    assert calls["head"] == []
+    assert f"raw/{stale.id}" in calls["deleted"]
 
 
 def test_reaper_disabled_when_timeout_zero(mock_db, monkeypatch):

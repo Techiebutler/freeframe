@@ -67,11 +67,17 @@ function makeMediaQueryList(query: string) {
   return mql
 }
 
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  configurable: true,
-  value: (query: string) => makeMediaQueryList(query),
-})
+// Guarded: setupFiles run for every test file, including one that declares
+// `@vitest-environment node` because it needs Node APIs rather than a DOM.
+// There is no window to define matchMedia on there, and the whole shim is for
+// components that cannot run in that environment anyway.
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: (query: string) => makeMediaQueryList(query),
+  })
+}
 
 /** Sets the viewport width every matchMedia min-width/max-width query is evaluated
  * against, and fires 'change' on any query whose match state actually flips —

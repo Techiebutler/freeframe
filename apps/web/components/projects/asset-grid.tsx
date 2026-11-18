@@ -1,33 +1,41 @@
 'use client'
 
 import * as React from 'react'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images, Link as LinkIcon, Pencil } from 'lucide-react'
-import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images } from 'lucide-react'
+import { cn, formatBytes } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
+import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
 import { AssetCard } from './asset-card'
 import { FolderCard } from './folder-card'
+import { AssetMenuItems } from './menus/asset-menu'
+import { WithFolderMenu } from './menus/folder-menu'
+import { SelectionMenuItems, type SelectionActions } from './menus/selection-menu'
 import { AppearancePopover } from './appearance-popover'
 import { SortPopover } from './sort-popover'
 import { MoveToDialog } from './move-to-dialog'
 import { useViewStore } from '@/stores/view-store'
-import type { Asset, AssetStatus, User, Folder, FolderTreeNode } from '@/types'
+import { sortAssets } from '@/lib/sort-assets'
+import type { Asset, DownloadOption, User, Folder, FolderTreeNode } from '@/types'
+import type { Collected } from '@/lib/upload-folder-walk'
+
+function isCoarsePointer(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+}
+
+type ItemKind = 'asset' | 'folder'
+
+/** One key space for folders and assets, whose ids could otherwise collide. */
+function itemKey(kind: ItemKind, id: string): string {
+  return `${kind}:${id}`
+}
 
 const assetTypeIcons: Record<string, React.ElementType> = {
   video: Film,
   audio: Music,
   image: ImageIcon,
   image_carousel: Images,
-}
-
-const statusOrder: Record<AssetStatus, number> = {
-  in_review: 0,
-  draft: 1,
-  approved: 2,
-  rejected: 3,
-  archived: 4,
 }
 
 interface AssetGridProps {
@@ -50,8 +58,17 @@ interface AssetGridProps {
   onFolderOpen?: (folder: Folder) => void
   onFolderRename?: (folderId: string, name: string) => Promise<void>
   onFolderDelete?: (folderId: string) => Promise<void>
-  onFolderShare?: (folderId: string, folderName: string) => Promise<void>
+  /** Create Share Link in a folder's menu. Absent = not offered. */
+  onFolderShare?: (folderId: string, folderName: string) => void
+  /** New Subfolder in a folder's menu, with that folder as the parent. */
+  onFolderNewSubfolder?: (parentId: string) => void
   onDropToFolder?: (targetFolderId: string, assetIds: string[], folderIds: string[]) => void
+  /** Files dropped on a folder card upload into it. Absent = uploads not allowed. */
+  onDropFilesToFolder?: (targetFolderId: string, dropped: Promise<Collected>) => void
+  /** See FolderCard: lets the region above shrink its marking to one folder. */
+  onFileDragOverFolder?: (folderId: string | null, from?: string) => void
+  /** Which folder holds the file-drag marking. See FolderCard. */
+  fileDragTarget?: string | null
   /** Share selection mode */
   shareMode?: boolean
   onShareModeChange?: (active: boolean) => void
@@ -63,11 +80,20 @@ interface AssetGridProps {
   projectName?: string
   folderTree?: FolderTreeNode[]
   onAssetShare?: (asset: Asset) => void
-  onAssetDownload?: (asset: Asset) => void
+  /** `rendition` is a DownloadOption id; left out, the server picks. */
+  onAssetDownload?: (asset: Asset, rendition?: string) => void
+  /** With this, Download opens a submenu of what the asset can be downloaded as. */
+  loadAssetDownloadOptions?: (asset: Asset) => Promise<DownloadOption[] | null>
   onAssetRename?: (asset: Asset) => void
   onAssetDelete?: (asset: Asset) => void
   /** Actions rendered on the right side of the navigator bar */
   actions?: React.ReactNode
+  /** ⌘/Ctrl-A selects everything shown, shift-click selects a range,
+   *  ⌘/Ctrl-click adds or removes one item, and Esc clears the selection. */
+  selectionShortcuts?: boolean
+  /** Esc with `selectionShortcuts`: clear what the page itself has selected
+   *  (the asset in the side panel), alongside the grid's own selection. */
+  onDeselectAll?: () => void
 }
 
 // Grid column classes based on card size
@@ -105,7 +131,11 @@ export function AssetGrid({
   onFolderRename,
   onFolderDelete,
   onFolderShare,
+  onFolderNewSubfolder,
   onDropToFolder,
+  onDropFilesToFolder,
+  onFileDragOverFolder,
+  fileDragTarget,
   shareMode = false,
   onShareModeChange,
   onCreateShareLink,
@@ -116,9 +146,12 @@ export function AssetGrid({
   folderTree = [],
   onAssetShare,
   onAssetDownload,
+  loadAssetDownloadOptions,
   onAssetRename,
   onAssetDelete,
   actions,
+  selectionShortcuts = false,
+  onDeselectAll,
 }: AssetGridProps) {
   const [selectedAssetIds, setSelectedAssetIds] = React.useState<Set<string>>(new Set())
   const [selectedFolderIds, setSelectedFolderIds] = React.useState<Set<string>>(new Set())
@@ -148,7 +181,12 @@ export function AssetGrid({
     sortDirection,
   } = useViewStore()
 
+  // Where a shift-click range starts: the last item clicked or toggled, as an
+  // `itemKey`, since folders and assets share one range.
+  const rangeAnchorRef = React.useRef<string | null>(null)
+
   const toggleAssetSelect = (assetId: string) => {
+    rangeAnchorRef.current = itemKey('asset', assetId)
     setSelectedAssetIds((prev) => {
       const next = new Set(prev)
       if (next.has(assetId)) next.delete(assetId)
@@ -158,6 +196,7 @@ export function AssetGrid({
   }
 
   const toggleFolderSelect = (folderId: string) => {
+    rangeAnchorRef.current = itemKey('folder', folderId)
     setSelectedFolderIds((prev) => {
       const next = new Set(prev)
       if (next.has(folderId)) next.delete(folderId)
@@ -171,32 +210,147 @@ export function AssetGrid({
     setSelectedFolderIds(new Set())
   }
 
+  // Drop from the selection whatever is no longer here. A bulk delete is
+  // confirmed in the page's dialog and only lands when the lists refetch, so
+  // without this the bar went on counting items that were gone. Cancelling
+  // the delete removes nothing, and the selection stays.
+  React.useEffect(() => {
+    const assetIds = new Set(assets.map((a) => a.id))
+    const folderIds = new Set((folders ?? []).map((f) => f.id))
+    const prune = (prev: Set<string>, present: Set<string>) =>
+      Array.from(prev).every((id) => present.has(id))
+        ? prev
+        : new Set(Array.from(prev).filter((id) => present.has(id)))
+    setSelectedAssetIds((prev) => prune(prev, assetIds))
+    setSelectedFolderIds((prev) => prune(prev, folderIds))
+  }, [assets, folders])
+
   const totalSelected = selectedAssetIds.size + selectedFolderIds.size
+
+  // What the selection bar offers, shared with right-click on a selected item.
+  const selectionActions: SelectionActions = {
+    onShare: onCreateShareLink
+      ? () => {
+          onCreateShareLink(Array.from(selectedAssetIds), Array.from(selectedFolderIds))
+          clearSelection()
+        }
+      : undefined,
+    onDownload: onBulkDownload
+      ? () => onBulkDownload(Array.from(selectedAssetIds), Array.from(selectedFolderIds))
+      : undefined,
+    onMove: onBulkMove ? () => setMoveDialogOpen(true) : undefined,
+    onDelete: onBulkDelete
+      ? () => onBulkDelete(Array.from(selectedAssetIds), Array.from(selectedFolderIds))
+      : undefined,
+  }
+
+  /** Right-click on an item that is one of several selected acts on all of
+   *  them; on anything else it is that item's own menu (undefined here). */
+  const selectionMenuFor = (kind: ItemKind, id: string): React.ReactNode | undefined => {
+    if (shareMode || totalSelected < 2) return undefined
+    const isSelected = kind === 'asset' ? selectedAssetIds.has(id) : selectedFolderIds.has(id)
+    return isSelected ? <SelectionMenuItems count={totalSelected} {...selectionActions} /> : undefined
+  }
   const selectedTotalSize = Array.from(selectedAssetIds).reduce((sum, id) => sum + (fileSizes[id] ?? 0), 0)
 
-  const filtered = React.useMemo(() => {
-    let result = [...assets]
-
-    if (sortKey !== 'custom') {
-      result.sort((a, b) => {
-        let cmp = 0
-        if (sortKey === 'date') {
-          cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
-        } else if (sortKey === 'name') {
-          cmp = a.name.localeCompare(b.name)
-        } else if (sortKey === 'status') {
-          cmp = statusOrder[a.status] - statusOrder[b.status]
-        } else if (sortKey === 'type') {
-          cmp = a.asset_type.localeCompare(b.asset_type)
-        }
-        return sortDirection === 'asc' ? cmp : -cmp
-      })
-    }
-
-    return result
-  }, [assets, sortKey, sortDirection])
+  const filtered = React.useMemo(
+    () => sortAssets(assets, sortKey, sortDirection),
+    [assets, sortKey, sortDirection],
+  )
 
   const showFolders = !flattenFolders && folders && folders.length > 0
+
+  /** Add every folder and asset between the anchor and this item, in the
+   *  order shown: folders first, then assets. */
+  const selectRange = (kind: ItemKind, id: string) => {
+    const keys = [
+      ...(showFolders ? folders!.map((f) => itemKey('folder', f.id)) : []),
+      ...filtered.map((a) => itemKey('asset', a.id)),
+    ]
+    const target = itemKey(kind, id)
+    const to = keys.indexOf(target)
+    const anchor = rangeAnchorRef.current ?? (selectedAssetId ? itemKey('asset', selectedAssetId) : '')
+    const from = keys.indexOf(anchor)
+    const range = from === -1 ? [target] : keys.slice(Math.min(from, to), Math.max(from, to) + 1)
+    const pick = (k: ItemKind) => range.filter((key) => key.startsWith(`${k}:`)).map((key) => key.slice(k.length + 1))
+    setSelectedAssetIds((prev) => new Set([...Array.from(prev), ...pick('asset')]))
+    setSelectedFolderIds((prev) => new Set([...Array.from(prev), ...pick('folder')]))
+  }
+
+  /** Shift- or ⌘/Ctrl-click with `selectionShortcuts`: change the selection
+   *  and report true, so the caller skips what a plain click would do. */
+  const handleModifierClick = (kind: ItemKind, id: string, e: React.MouseEvent): boolean => {
+    // Ctrl as well as ⌘ for Windows and Linux. On a Mac, Ctrl-click opens the
+    // context menu and never arrives here as a click.
+    if (!selectionShortcuts || !(e.shiftKey || e.metaKey || e.ctrlKey)) return false
+    // Not a click on the item itself: the side panel keeps what it shows, a
+    // folder stays closed, and the page behind doesn't treat it as a click on
+    // empty space.
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.shiftKey) selectRange(kind, id)
+    else if (kind === 'asset') toggleAssetSelect(id)
+    else toggleFolderSelect(id)
+    return true
+  }
+
+  const handleAssetClick = (asset: Asset, e: React.MouseEvent) => {
+    if (isCoarsePointer()) return onAssetOpen?.(asset)
+    if (handleModifierClick('asset', asset.id, e)) return
+    rangeAnchorRef.current = itemKey('asset', asset.id)
+    onAssetSelect?.(asset, e)
+  }
+
+  const handleAssetCheckbox = (assetId: string, e: React.MouseEvent) => {
+    if (selectionShortcuts && e.shiftKey) selectRange('asset', assetId)
+    else toggleAssetSelect(assetId)
+  }
+
+  const handleFolderCheckbox = (folderId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (selectionShortcuts && e.shiftKey) selectRange('folder', folderId)
+    else toggleFolderSelect(folderId)
+  }
+
+  // Shift-click would otherwise also select the page's text between clicks.
+  const suppressShiftTextSelection = (e: React.MouseEvent) => {
+    if (selectionShortcuts && e.shiftKey) e.preventDefault()
+  }
+
+  const hasSelection = selectedAssetIds.size > 0 || selectedFolderIds.size > 0 || !!selectedAssetId
+
+  React.useEffect(() => {
+    if (!selectionShortcuts) return
+    function handleKeyDown(e: KeyboardEvent) {
+      const isSelectAll =
+        (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a'
+      const isDeselect = e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey
+      if (!isSelectAll && !isDeselect) return
+      const target = e.target as HTMLElement
+      // Leave these keys to text fields (select this text / cancel the edit)
+      // and to dialogs and menus, which sit over the grid and close on Esc.
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable ||
+        target.closest('[role="dialog"], [role="menu"]')
+      ) return
+      if (isSelectAll) {
+        e.preventDefault()
+        setSelectedAssetIds(new Set(filtered.map((a) => a.id)))
+        setSelectedFolderIds(new Set(showFolders ? folders!.map((f) => f.id) : []))
+        return
+      }
+      if (!hasSelection) return
+      setSelectedAssetIds(new Set())
+      setSelectedFolderIds(new Set())
+      rangeAnchorRef.current = null
+      onDeselectAll?.()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [selectionShortcuts, filtered, folders, showFolders, hasSelection, onDeselectAll])
 
   if (isLoading) {
     return (
@@ -285,7 +439,15 @@ export function AssetGrid({
                     'group/folder relative',
                     isFolderSelected && 'ring-2 ring-accent rounded-lg',
                   )}
-                  onClick={shareMode ? (e) => { e.stopPropagation(); toggleFolderSelect(folder.id) } : undefined}
+                  onClick={(e) => {
+                    if (shareMode) {
+                      e.stopPropagation()
+                      toggleFolderSelect(folder.id)
+                    } else if (!handleModifierClick('folder', folder.id, e)) {
+                      rangeAnchorRef.current = itemKey('folder', folder.id)
+                    }
+                  }}
+                  onMouseDown={suppressShiftTextSelection}
                 >
                   <button
                     className={cn(
@@ -294,7 +456,7 @@ export function AssetGrid({
                         ? 'bg-accent border-accent text-white opacity-100'
                         : 'bg-black/40 border-white/30 text-transparent opacity-0 group-hover/folder:opacity-100',
                     )}
-                    onClick={(e) => { e.stopPropagation(); toggleFolderSelect(folder.id) }}
+                    onClick={(e) => handleFolderCheckbox(folder.id, e)}
                   >
                     {isFolderSelected && <Check className="h-3 w-3" />}
                   </button>
@@ -304,7 +466,12 @@ export function AssetGrid({
                     onRename={shareMode ? undefined : onFolderRename}
                     onDelete={shareMode ? undefined : onFolderDelete}
                     onShare={shareMode ? undefined : onFolderShare}
+                    onNewSubfolder={shareMode ? undefined : onFolderNewSubfolder}
+                    contextMenu={selectionMenuFor('folder', folder.id)}
                     onDropItems={shareMode ? undefined : onDropToFolder}
+                    onDropFiles={shareMode ? undefined : onDropFilesToFolder}
+                    onFileDragOverFolder={shareMode ? undefined : onFileDragOverFolder}
+                    fileDragActive={!shareMode && fileDragTarget === folder.id}
                   />
                 </div>
               )
@@ -335,22 +502,26 @@ export function AssetGrid({
           {filtered.map((asset) => (
             <div
               key={asset.id}
-              className="rounded-lg cursor-pointer"
-              onClick={(e) => onAssetSelect?.(asset, e)}
+              className={cn(
+                'rounded-lg transition-all cursor-pointer',
+                selectedAssetId === asset.id && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-primary',
+              )}
+              onClick={(e) => handleAssetClick(asset, e)}
+              onMouseDown={suppressShiftTextSelection}
               onDoubleClick={() => onAssetOpen?.(asset)}
             >
               <AssetCard
                 asset={asset}
                 projectId={projectId}
                 versionCount={versionCounts[asset.id]}
+                commentCount={asset.comment_count ?? commentCounts[asset.id]}
+                assignee={asset.assignee_id ? assignees[asset.assignee_id] : null}
                 authorName={authorNames[asset.created_by]}
                 thumbnailUrl={thumbnails[asset.id]}
                 fileSize={fileSizes[asset.id] ?? null}
-                commentCount={commentCounts[asset.id]}
                 duration={durations[asset.id] ?? null}
                 selected={selectedAssetIds.has(asset.id)}
-                active={selectedAssetId === asset.id}
-                onSelect={() => toggleAssetSelect(asset.id)}
+                onSelect={(e) => handleAssetCheckbox(asset.id, e)}
                 showInfo={showCardInfo}
                 showFileSize={showFileSize}
                 showUploader={showUploader}
@@ -358,9 +529,11 @@ export function AssetGrid({
                 aspectRatio={aspectRatio}
                 thumbnailScale={thumbnailScale}
                 onShare={onAssetShare ? () => onAssetShare(asset) : undefined}
-                onDownload={onAssetDownload ? () => onAssetDownload(asset) : undefined}
+                onDownload={onAssetDownload ? (rendition) => onAssetDownload(asset, rendition) : undefined}
+                loadDownloadOptions={loadAssetDownloadOptions ? () => loadAssetDownloadOptions(asset) : undefined}
                 onRename={onAssetRename ? () => onAssetRename(asset) : undefined}
                 onDelete={onAssetDelete ? () => onAssetDelete(asset) : undefined}
+                contextMenu={selectionMenuFor('asset', asset.id)}
                 onDragStart={(e: React.DragEvent) => {
                   const ids = selectedAssetIds.has(asset.id)
                     ? Array.from(selectedIds)
@@ -394,14 +567,30 @@ export function AssetGrid({
           {showFolders && folders!.map((folder, i) => {
             const isFolderSelected = selectedFolderIds.has(folder.id)
             return (
-              <div
+              <WithFolderMenu
                 key={folder.id}
+                folder={folder}
+                actions={{
+                  onShare: onFolderShare,
+                  onNewSubfolder: onFolderNewSubfolder,
+                  onRename: onFolderRename,
+                  onDelete: onFolderDelete,
+                }}
+              >
+                {(folderMenu) => (
+              <ContextMenuArea items={selectionMenuFor('folder', folder.id) ?? folderMenu}>
+              <div
                 className={cn(
                   'group flex items-center gap-4 px-3 py-2.5 transition-colors hover:bg-bg-hover cursor-pointer',
                   i !== folders!.length - 1 || filtered.length > 0 ? 'border-b border-border' : '',
                   isFolderSelected && 'bg-accent/5',
                 )}
-                onClick={() => onFolderOpen?.(folder)}
+                onClick={(e) => {
+                  if (handleModifierClick('folder', folder.id, e)) return
+                  rangeAnchorRef.current = itemKey('folder', folder.id)
+                  onFolderOpen?.(folder)
+                }}
+                onMouseDown={suppressShiftTextSelection}
                 onDoubleClick={() => onFolderOpen?.(folder)}
               >
                 {/* Folder icon with checkbox overlay — aligned with asset thumbnail */}
@@ -412,7 +601,7 @@ export function AssetGrid({
                       'absolute inset-0 flex items-center justify-center transition-all',
                       isFolderSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                     )}
-                    onClick={(e) => { e.stopPropagation(); toggleFolderSelect(folder.id) }}
+                    onClick={(e) => handleFolderCheckbox(folder.id, e)}
                   >
                     <div className={cn(
                       'h-4 w-4 rounded border flex items-center justify-center transition-all',
@@ -448,56 +637,24 @@ export function AssetGrid({
                 {/* Assignee placeholder — keeps column alignment */}
                 <div className="w-8 shrink-0" />
 
-                {/* Context menu */}
-                <div className="w-8 shrink-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger asChild>
+                {/* Menu */}
+                <div className="w-8 shrink-0 flex justify-center opacity-0 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
+                  {folderMenu && (
+                    <DotsMenu items={folderMenu}>
                       <button
+                        aria-label={`${folder.name} menu`}
                         onClick={(e) => e.stopPropagation()}
                         className="flex h-6 w-6 items-center justify-center rounded hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors outline-none"
                       >
                         <MoreHorizontal className="h-3.5 w-3.5" />
                       </button>
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        align="end"
-                        sideOffset={4}
-                        className="z-[100] min-w-[160px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {onFolderShare && (
-                          <DropdownMenu.Item
-                            onSelect={() => onFolderShare(folder.id, folder.name)}
-                            className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                          >
-                            <Share2 className="h-3.5 w-3.5 text-text-tertiary" />
-                            Share
-                          </DropdownMenu.Item>
-                        )}
-                        {onFolderRename && (
-                          <DropdownMenu.Item
-                            onSelect={() => onFolderRename(folder.id, folder.name)}
-                            className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                          >
-                            <Pencil className="h-3.5 w-3.5 text-text-tertiary" />
-                            Rename
-                          </DropdownMenu.Item>
-                        )}
-                        {onFolderDelete && (
-                          <DropdownMenu.Item
-                            onSelect={() => onFolderDelete(folder.id)}
-                            className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-status-error hover:bg-status-error/10 cursor-pointer outline-none transition-colors"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete
-                          </DropdownMenu.Item>
-                        )}
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
+                    </DotsMenu>
+                  )}
                 </div>
               </div>
+              </ContextMenuArea>
+                )}
+              </WithFolderMenu>
             )
           })}
           {filtered.map((asset, i) => {
@@ -507,10 +664,21 @@ export function AssetGrid({
             const versionCount = versionCounts[asset.id]
             const author = authorNames[asset.created_by]
             const TypeIcon = assetTypeIcons[asset.asset_type] ?? ImageIcon
+            const assetMenu = (
+              <AssetMenuItems
+                asset={asset}
+                onShare={onAssetShare ? () => onAssetShare(asset) : undefined}
+                onDownload={onAssetDownload ? (rendition) => onAssetDownload(asset, rendition) : undefined}
+                loadDownloadOptions={loadAssetDownloadOptions ? () => loadAssetDownloadOptions(asset) : undefined}
+                onRename={onAssetRename ? () => onAssetRename(asset) : undefined}
+                onDelete={onAssetDelete ? () => onAssetDelete(asset) : undefined}
+              />
+            )
             return (
+              <ContextMenuArea key={asset.id} items={selectionMenuFor('asset', asset.id) ?? assetMenu}>
               <div
-                key={asset.id}
-                onClick={(e) => onAssetSelect?.(asset, e)}
+                onClick={(e) => handleAssetClick(asset, e)}
+                onMouseDown={suppressShiftTextSelection}
                 onDoubleClick={() => onAssetOpen?.(asset)}
                 className={cn(
                   'group flex items-center gap-4 px-3 py-2 transition-colors hover:bg-bg-hover cursor-pointer',
@@ -531,7 +699,7 @@ export function AssetGrid({
                       'absolute inset-0 flex items-center justify-center transition-all',
                       selectedAssetIds.has(asset.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                     )}
-                    onClick={(e) => { e.stopPropagation(); toggleAssetSelect(asset.id) }}
+                    onClick={(e) => { e.stopPropagation(); handleAssetCheckbox(asset.id, e) }}
                   >
                     <div className={cn(
                       'h-4 w-4 rounded border flex items-center justify-center transition-all',
@@ -569,71 +737,22 @@ export function AssetGrid({
                 </div>
                 {/* Assignee */}
                 <div className="w-8 shrink-0 flex justify-center">
-                  {assignee && <Avatar src={assignee.avatar_url} name={assignee.name} size="sm" />}
+                  {assignee && <Avatar src={assignee.avatar_url} name={assignee.name} color={assignee.avatar_color} size="sm" />}
                 </div>
-                {/* Context menu — hidden until hover */}
-                <div className="w-8 shrink-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger asChild>
-                      <button
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex h-6 w-6 items-center justify-center rounded hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors outline-none"
-                      >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
-                      </button>
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        align="end"
-                        sideOffset={4}
-                        className="z-[100] min-w-[200px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <DropdownMenu.Item
-                          onSelect={() => onAssetShare?.(asset)}
-                          className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                        >
-                          <Share2 className="h-3.5 w-3.5 text-text-tertiary" />
-                          Create Share Link
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator className="my-1 h-px bg-border mx-1" />
-                        <DropdownMenu.Item
-                          onSelect={() => onAssetDownload?.(asset)}
-                          className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                        >
-                          <Download className="h-3.5 w-3.5 text-text-tertiary" />
-                          Download
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          onSelect={() => {
-                            const url = `${window.location.origin}/projects/${asset.project_id}/assets/${asset.id}`
-                            navigator.clipboard.writeText(url)
-                          }}
-                          className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                        >
-                          <LinkIcon className="h-3.5 w-3.5 text-text-tertiary" />
-                          Copy Asset URL
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator className="my-1 h-px bg-border mx-1" />
-                        <DropdownMenu.Item
-                          onSelect={() => onAssetRename?.(asset)}
-                          className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                        >
-                          <Pencil className="h-3.5 w-3.5 text-text-tertiary" />
-                          Rename
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          onSelect={() => onAssetDelete?.(asset)}
-                          className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-status-error hover:bg-status-error/10 cursor-pointer outline-none transition-colors"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
+                {/* Menu — hidden until hover */}
+                <div className="w-8 shrink-0 flex justify-center opacity-0 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
+                  <DotsMenu items={assetMenu}>
+                    <button
+                      aria-label={`${asset.name} menu`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex h-6 w-6 items-center justify-center rounded hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors outline-none"
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </button>
+                  </DotsMenu>
                 </div>
               </div>
+              </ContextMenuArea>
             )
           })}
         </div>
@@ -654,39 +773,23 @@ export function AssetGrid({
             </span>
           )}
           <div className="flex-1" />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => onBulkDelete?.(Array.from(selectedAssetIds), Array.from(selectedFolderIds))}
-          >
-            <Trash2 className="h-4 w-4" /> Delete
-          </Button>
-          {onBulkMove && (
-            <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setMoveDialogOpen(true)}>
+          {selectionActions.onDelete && (
+            <Button variant="ghost" size="sm" className="gap-1.5" onClick={selectionActions.onDelete}>
+              <Trash2 className="h-4 w-4" /> Delete
+            </Button>
+          )}
+          {selectionActions.onMove && (
+            <Button variant="ghost" size="sm" className="gap-1.5" onClick={selectionActions.onMove}>
               <FolderInput className="h-4 w-4" /> Move to
             </Button>
           )}
-          {onCreateShareLink && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => {
-                onCreateShareLink(Array.from(selectedAssetIds), Array.from(selectedFolderIds))
-                clearSelection()
-              }}
-            >
+          {selectionActions.onShare && (
+            <Button variant="ghost" size="sm" className="gap-1.5" onClick={selectionActions.onShare}>
               <Share2 className="h-4 w-4" /> Share
             </Button>
           )}
-          {(selectedAssetIds.size > 0 || selectedFolderIds.size > 0) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => onBulkDownload?.(Array.from(selectedAssetIds), Array.from(selectedFolderIds))}
-            >
+          {selectionActions.onDownload && (
+            <Button variant="ghost" size="sm" className="gap-1.5" onClick={selectionActions.onDownload}>
               <Download className="h-4 w-4" /> Download
             </Button>
           )}

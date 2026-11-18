@@ -1,61 +1,101 @@
+from datetime import datetime
+from typing import Literal, Optional
+from uuid import UUID
 import re
-
 from pydantic import BaseModel, field_validator
 
-from ..models.instance_branding import DEFAULT_INSTANCE_ORG_NAME
+# \Z (not $) so a trailing newline can't sneak past and overflow the String(7) column.
+HEX_COLOR_RE = r'^#[0-9A-Fa-f]{6}\Z'
+
+LoginMode = Literal["magic_code", "password"]
 
 
-_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
+def _validate_hex_color(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return v
+    # Non-strings must raise ValueError, not TypeError — pydantic only wraps ValueError.
+    if not isinstance(v, str) or not re.match(HEX_COLOR_RE, v):
+        raise ValueError("Color must be a 6-digit hex value like '#7c3aed'")
+    return v
 
 
 class InstanceBrandingUpdate(BaseModel):
-    """Safe instance-branding values that do not reference storage objects.
-
-    Logo and icon keys are deliberately introduced with the validated upload
-    flow, rather than accepting arbitrary object-store paths in this endpoint.
-    """
-
-    org_name: str | None = None
-    primary_color: str | None = None
-    powered_by_freeframe: bool | None = None
+    org_name: Optional[str] = None
 
     @field_validator("org_name", mode="before")
     @classmethod
-    def validate_org_name(cls, value: object) -> str:
-        if not isinstance(value, str):
-            raise ValueError("org_name must be a non-empty string")
-        normalized = value.strip()
-        if not 1 <= len(normalized) <= 255:
+    def validate_org_name(cls, v):
+        # Only runs when the caller actually sent org_name — an omitted field keeps
+        # the default and stays out of model_dump(exclude_unset=True). An explicit
+        # null would be written to the NOT NULL column, so reject it here.
+        if v is None:
+            raise ValueError("org_name cannot be null")
+        if not isinstance(v, str):
+            raise ValueError("org_name must be a string")
+        v = v.strip()
+        length = len(v)
+        if length < 1 or length > 255:
             raise ValueError("org_name must be between 1 and 255 characters")
-        return normalized
+        return v
+    logo_light_key: Optional[str] = None
+    logo_dark_key: Optional[str] = None
+    favicon_key: Optional[str] = None
+    apple_icon_key: Optional[str] = None
+    login_logo_key: Optional[str] = None
+    primary_color: Optional[str] = None
+    powered_by_freeframe: Optional[bool] = None
+    default_login_mode: Optional[LoginMode] = None
 
     @field_validator("primary_color", mode="before")
     @classmethod
-    def validate_primary_color(cls, value: object) -> str | None:
-        if value is None:
-            return None
-        if not isinstance(value, str) or not _HEX_COLOR_RE.fullmatch(value):
-            raise ValueError("primary_color must be a 6-digit hex value like '#7c3aed'")
-        return value
+    def validate_primary_color(cls, v):
+        return _validate_hex_color(v)
+
+    @field_validator("default_login_mode", mode="before")
+    @classmethod
+    def validate_default_login_mode(cls, v):
+        if v is None:
+            raise ValueError("default_login_mode cannot be null")
+        return v
 
 
 class InstanceBrandingResponse(BaseModel):
-    org_name: str = DEFAULT_INSTANCE_ORG_NAME
-    primary_color: str | None = None
-    powered_by_freeframe: bool = True
-    logo_light_url: str | None = None
-    logo_dark_url: str | None = None
-    favicon_url: str | None = None
-    apple_icon_url: str | None = None
-    login_logo_url: str | None = None
+    id: UUID
+    org_name: str
+    logo_light_key: Optional[str] = None
+    logo_dark_key: Optional[str] = None
+    favicon_key: Optional[str] = None
+    apple_icon_key: Optional[str] = None
+    login_logo_key: Optional[str] = None
+    logo_light_url: Optional[str] = None
+    logo_dark_url: Optional[str] = None
+    favicon_url: Optional[str] = None
+    apple_icon_url: Optional[str] = None
+    login_logo_url: Optional[str] = None
+    primary_color: Optional[str] = None
+    powered_by_freeframe: bool
+    default_login_mode: LoginMode = "magic_code"
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
+    @field_validator("default_login_mode", mode="before")
+    @classmethod
+    def default_login_mode_or_default(cls, v):
+        return v or "magic_code"
 
-class InstanceBrandingAssetUploadResponse(BaseModel):
+
+class InstanceBrandingLogoUploadResponse(BaseModel):
     upload_url: str
     key: str
 
 
+# Older name for the same response, kept for callers of the fork's API.
+InstanceBrandingAssetUploadResponse = InstanceBrandingLogoUploadResponse
+
+
 class InstanceBrandingAssetConfirm(BaseModel):
+    """Body of `POST /instance/branding/{slot}-confirm`: the key the upload step issued."""
+
     key: str

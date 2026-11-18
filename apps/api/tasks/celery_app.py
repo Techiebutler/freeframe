@@ -18,6 +18,7 @@ celery_app = Celery(
         "apps.api.tasks.reminder_tasks",
         "apps.api.tasks.email_tasks",
         "apps.api.tasks.cleanup_tasks",
+        "apps.api.tasks.storage_tasks",
     ],
 )
 
@@ -33,7 +34,16 @@ celery_app.conf.update(
     broker_pool_limit=0,  # Disable connection pooling in web process to avoid stale connections
     # Large videos can take hours. Keep an unacknowledged Redis task longer
     # than the default one hour, preventing duplicate deliveries mid-encode.
-    broker_transport_options={"visibility_timeout": 24 * 60 * 60},
+    #
+    # Bound every broker socket call. Without this, a Redis that accepts the
+    # connection but never answers (paused, network blackhole) hangs a publish
+    # forever and holds one of the four dispatch threads below. A publish is one
+    # LPUSH and a worker's BRPOP waits 1s, so 5s never fires on a live Redis.
+    broker_transport_options={
+        "visibility_timeout": 24 * 60 * 60,
+        "socket_timeout": 5,
+        "socket_connect_timeout": 5,
+    },
     # Define queues
     task_queues=(
         Queue("default"),
@@ -55,7 +65,10 @@ celery_app.conf.update(
         "requeue_stuck_processing": {"queue": "maintenance"},
         "send_due_date_reminders": {"queue": "maintenance"},
         "cleanup_soft_deleted": {"queue": "maintenance"},
+        "requeue_stuck_processing": {"queue": "maintenance"},
         "sweep_orphan_s3": {"queue": "maintenance"},
+        # A listing per unmeasured version: long, I/O heavy, latency-insensitive.
+        "backfill_media_derived_size": {"queue": "maintenance"},
         # Not housekeeping: this one is dispatched from a request handler and
         # is a full FFmpeg re-encode, so it belongs with the other transcoding
         # work rather than behind an hour-long bucket sweep.
@@ -86,7 +99,7 @@ celery_app.conf.beat_schedule = {
     },
     "requeue-stuck-processing": {
         "task": "requeue_stuck_processing",
-        "schedule": crontab(minute="30"),  # every hour, offset from reaping uploads
+        "schedule": crontab(minute="30"),  # every hour, offset from the reaper
     },
     "cleanup-soft-deleted": {
         "task": "cleanup_soft_deleted",
@@ -99,20 +112,34 @@ celery_app.conf.beat_schedule = {
 }
 
 
-import threading
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 _task_logger = logging.getLogger("celery.dispatch")
+
+# Bounded so a burst of dispatches doesn't open one thread (and, with
+# broker_pool_limit=0, one broker connection) per call. concurrent.futures joins
+# its workers at interpreter exit (even ones that inherited the daemon flag from
+# a daemon caller thread), so a queued or in-flight dispatch is sent instead of
+# being killed mid-send. The broker socket timeouts above bound each dispatch,
+# so a hung Redis delays exit by those timeouts per queued dispatch rather than
+# blocking it. The queue is unbounded on purpose; a caller on the request path
+# must never block waiting for a slot.
+_dispatch_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="celery-dispatch")
 
 
 def _dispatch_task(task, args, kwargs):
     """Actually send the task to Celery broker (runs in background thread)."""
+    # ignore_result: send_task_safe discards the AsyncResult, so nothing can read
+    # the result. Without it Celery first SUBSCRIBEs to the result backend in case
+    # the caller waits on one, and on an unresponsive Redis that call retries for
+    # minutes (20 reconnects) before the publish is even attempted.
     try:
-        task.delay(*args, **kwargs)
+        task.apply_async(args=args, kwargs=kwargs, ignore_result=True)
     except (OperationalError, ConnectionError, OSError):
         try:
             with celery_app.producer_or_acquire() as producer:
-                task.apply_async(args=args, kwargs=kwargs, producer=producer)
+                task.apply_async(args=args, kwargs=kwargs, producer=producer, ignore_result=True)
         except Exception:
             _task_logger.warning("Failed to dispatch task %s after retry", task.name)
     except Exception:
@@ -120,14 +147,10 @@ def _dispatch_task(task, args, kwargs):
 
 
 def send_task_safe(task, *args, **kwargs):
-    """Send a Celery task in a background thread so it never blocks the API response.
+    """Send a Celery task from a background thread so it never blocks the API response.
 
     Broker connections can take seconds (especially with pool_limit=0).
-    This ensures the API returns immediately while the task is dispatched async.
+    This ensures the API returns immediately while the task is dispatched async
+    on the shared, bounded dispatch pool.
     """
-    thread = threading.Thread(
-        target=_dispatch_task,
-        args=(task, args, kwargs),
-        daemon=True,
-    )
-    thread.start()
+    _dispatch_executor.submit(_dispatch_task, task, args, kwargs)

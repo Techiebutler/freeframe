@@ -1,0 +1,13 @@
+# Installed by `freeframe install` into /etc/systemd/system. Started every
+# night by freeframe-backup.timer; run it by hand with: sudo freeframe backup
+# See what the last run said with: journalctl -u freeframe-backup
+
+[Unit]
+Description=FreeFrame database backup
+Documentation=https://github.com/Techiebutler/freeframe/blob/main/docs/deployment.md
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/freeframe backup --quiet

@@ -1,34 +1,60 @@
-"""Defaults for public review links stay consistent across creation APIs."""
+"""A new share link allows commenting and not downloading (#266).
+
+The two defaults have to agree between the API schema and the create dialog, or
+a link made through the API keeps the old behaviour while one made in the UI does
+not. That is the same bug class as the `visibility` default in #202, which is why
+this pins the API side rather than trusting the dialog alone.
+"""
 import uuid
 
 from apps.api.models.share import SharePermission
 from apps.api.schemas.share import (
-    DirectShareCreate,
-    MultiShareCreate,
     ShareLinkCreate,
+    MultiShareCreate,
     ShareLinkValidateResponse,
+    DirectShareCreate,
 )
 
 
-def test_new_single_item_share_link_allows_comments_without_downloads():
-    link = ShareLinkCreate()
+def test_a_new_share_link_allows_commenting():
+    """Commenting is the core loop of a review link. A viewer who cannot comment
+    needs a deliberately read-only link, which is the niche case."""
+    assert ShareLinkCreate().permission == SharePermission.comment
 
-    assert link.permission == SharePermission.comment
-    assert link.allow_download is False
+
+def test_a_new_share_link_does_not_allow_downloading():
+    """Commenting affects what happens inside the review page; downloading pulls
+    the original out of it, and a share link is the most exposed surface there
+    is. Whoever needs it flips one toggle."""
+    assert ShareLinkCreate().allow_download is False
 
 
-def test_new_multi_item_share_link_matches_the_single_item_default():
+def test_a_multi_item_link_matches_the_single_item_one():
     link = MultiShareCreate(asset_ids=[uuid.uuid4()])
-
     assert link.permission == SharePermission.comment
     assert link.allow_download is False
 
 
-def test_share_validation_fallback_and_direct_shares_remain_read_only():
-    """These are not public-link creation defaults and must fail closed."""
-    validated = ShareLinkValidateResponse(
-        valid=True, asset_id=uuid.uuid4(), requires_password=False,
-    )
+def test_versions_stay_visible():
+    assert ShareLinkCreate().show_versions is True
 
-    assert validated.permission == SharePermission.view
+
+def test_a_new_share_link_has_no_custom_slug_by_default():
+    """The fork's short codes are generated server-side; a custom slug is opt-in."""
+    assert ShareLinkCreate().custom_slug is None
+    assert MultiShareCreate(asset_ids=[uuid.uuid4()]).custom_slug is None
+
+
+def test_the_validate_response_fallback_stays_read_only():
+    """Not a create default. This is what an unauthenticated caller is told when
+    the field is absent, so it must fail closed rather than inherit the new
+    permissive create default."""
+    assert ShareLinkValidateResponse(
+        valid=True, asset_id=uuid.uuid4(), requires_password=False
+    ).permission == SharePermission.view
+
+
+def test_direct_shares_are_untouched():
+    """Sharing straight to a user or team is the authenticated path with its own
+    access control, not the public link this issue is about."""
     assert DirectShareCreate(user_id=uuid.uuid4()).permission == SharePermission.view

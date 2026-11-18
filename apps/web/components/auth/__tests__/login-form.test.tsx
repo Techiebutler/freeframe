@@ -1,61 +1,185 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const push = vi.fn()
-const post = vi.fn()
+const replace = vi.fn()
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push, replace }) }))
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push, replace: vi.fn() }) }))
+const sendMagicCode = vi.fn()
 vi.mock('@/lib/api', () => ({
-  api: { post: (...args: unknown[]) => post(...args) },
+  api: { post: (...args: unknown[]) => sendMagicCode(...args) },
   ApiError: class ApiError extends Error {
-    detail: string
-    constructor(detail: string) {
-      super(detail)
-      this.detail = detail
+    status: number
+    constructor(status: number, message: string) {
+      super(message)
+      this.status = status
     }
   },
 }))
 vi.mock('@/lib/auth', () => ({ setTokens: vi.fn() }))
-vi.mock('@/stores/auth-store', () => ({ useAuthStore: { getState: vi.fn() } }))
 
 import { LoginForm } from '../login-form'
+import { useBrandingStore, type LoginMode } from '@/stores/branding-store'
 
-async function requestCodeFor(email: string) {
-  render(<LoginForm />)
-  fireEvent.click(screen.getByRole('button', { name: /back to magic link/i }))
-  fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: email } })
-  fireEvent.click(screen.getByRole('button', { name: /send magic code/i }))
-  await waitFor(() => expect(screen.getByText(/check your email/i)).toBeInTheDocument())
+// The form reads branding through the real useBranding, with no provider
+// mounted, so the store is what decides the sign-in method.
+function setBranding(state: { loaded: boolean; defaultLoginMode?: LoginMode }) {
+  act(() => useBrandingStore.setState({ defaultLoginMode: 'magic_code', ...state }))
 }
 
-describe('LoginForm magic-code step', () => {
+/** Walk the email step and land on the code screen for `email`. */
+async function requestCodeFor(email: string) {
+  const view = render(<LoginForm />)
+  fireEvent.change(screen.getByLabelText(/email/i), { target: { value: email } })
+  fireEvent.click(screen.getByRole('button', { name: /send magic code/i }))
+  await waitFor(() => expect(screen.getByText(/check your email/i)).toBeInTheDocument())
+  return view
+}
+
+describe('LoginForm magic-code step (#248)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // The endpoint intentionally gives this same response for known and
-    // unknown accounts, preventing it from being used to enumerate users.
-    post.mockResolvedValue({})
+    setBranding({ loaded: true })
+    // The endpoint answers identically for known and unknown addresses, on
+    // purpose — that is what stops it being used to enumerate accounts.
+    sendMagicCode.mockResolvedValue({})
   })
 
-  it('does not assert that a code was sent for an address the API cannot confirm', async () => {
+  it('does not claim a code was sent, because the API never said one was', async () => {
     await requestCodeFor('nobody@example.invalid')
 
+    // The old copy asserted a fact the server never promised, stranding anyone
+    // who mistyped their address on a screen waiting for mail that cannot come.
     expect(screen.queryByText(/we sent a 6-digit code/i)).not.toBeInTheDocument()
     expect(screen.getByText(/has an account, a 6-digit code is on its way/i)).toBeInTheDocument()
     expect(screen.getByText('nobody@example.invalid')).toBeInTheDocument()
   })
 
-  it('shows an actionable typo hint without revealing account existence', async () => {
+  it('offers the one check a person can act on without being told the account exists', async () => {
     await requestCodeFor('typo@example.invalid')
-
     expect(screen.getByText(/check the address for typos/i)).toBeInTheDocument()
   })
 
-  it('returns to the email step so the address can be corrected', async () => {
+  it('keeps the wording identical for a registered and an unregistered address', async () => {
+    // The whole anti-enumeration property lives here: if these two screens ever
+    // differ, the login form leaks which addresses have accounts.
+    const first = await requestCodeFor('registered@example.test')
+    const registered = screen.getByText(/has an account/i).textContent
+    first.unmount()
+
+    await requestCodeFor('unknown@example.invalid')
+    const unknown = screen.getByText(/has an account/i).textContent
+
+    expect(registered?.replace('registered@example.test', 'X'))
+      .toBe(unknown?.replace('unknown@example.invalid', 'X'))
+  })
+
+  it('lets the user back out to correct the address', async () => {
     await requestCodeFor('wrong@example.invalid')
     fireEvent.click(screen.getByRole('button', { name: /use a different email/i }))
-
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument(),
     )
   })
+})
+
+describe('LoginForm default sign-in method', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('opens on magic code by default', () => {
+    setBranding({ loaded: true, defaultLoginMode: 'magic_code' })
+    render(<LoginForm />)
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /sign in with password instead/i })).toBeInTheDocument()
+  })
+
+  it('opens on email & password when the admin made that the default', () => {
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+    render(<LoginForm />)
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /send magic code/i })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /sign in with magic code instead/i }))
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+  })
+})
+
+describe('LoginForm when branding loads after mount', () => {
+  // With no server-side branding (the SSR fetch failed), the form first renders
+  // on the built-in default and only learns the admin's choice once the
+  // client-side fetch lands in the store.
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setBranding({ loaded: false })
+  })
+
+  it('switches to email & password when that turns out to be the default', () => {
+    render(<LoginForm />)
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /send magic code/i })).not.toBeInTheDocument()
+  })
+
+  it('leaves the form alone once the user has started typing', () => {
+    render(<LoginForm />)
+    fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'me@example.com' } })
+
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/email/i)).toHaveValue('me@example.com')
+  })
+
+  it('keeps the method the user picked before branding arrived', () => {
+    render(<LoginForm />)
+    // Over to password and back: the fields are empty again, so only the
+    // explicit choice stops the late default from overriding it.
+    fireEvent.click(screen.getByRole('button', { name: /sign in with password instead/i }))
+    fireEvent.click(screen.getByRole('button', { name: /sign in with magic code instead/i }))
+
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+
+    expect(screen.getByRole('button', { name: /send magic code/i })).toBeInTheDocument()
+  })
+})
+
+describe('LoginForm post-login destination', () => {
+  // The Premiere panel's /link handoff bounces through /login?from=... and
+  // relies on coming back; anything but an app-absolute path falls back.
+  async function signInWith(search: string) {
+    window.history.replaceState(null, '', `/login${search}`)
+    setBranding({ loaded: true, defaultLoginMode: 'password' })
+    sendMagicCode.mockResolvedValue({ access_token: 'a', refresh_token: 'r' })
+    render(<LoginForm />)
+    fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'me@example.com' } })
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'hunter22' } })
+    fireEvent.submit(screen.getByLabelText(/password/i).closest('form')!)
+    await waitFor(() => expect(replace).toHaveBeenCalled())
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('returns to a same-origin ?from= path', async () => {
+    await signInWith('?from=%2Flink%3Fcode%3Dabc')
+    expect(replace).toHaveBeenCalledWith('/link?code=abc')
+  })
+
+  it.each(['//evil.example', '/\\evil.example', 'javascript:alert(1)', 'https://evil.example'])(
+    'ignores an unsafe ?from= target (%s)',
+    async (target) => {
+      await signInWith(`?from=${encodeURIComponent(target)}`)
+      expect(replace).toHaveBeenCalledWith('/projects')
+    },
+  )
 })

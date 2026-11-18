@@ -1,54 +1,42 @@
 # Export comments to an NLE
 
-FreeFrame exports a selected version's timecoded review comments as timeline
-markers for DaVinci Resolve, Final Cut Pro, and Adobe Premiere Pro. CSV is also
-available for spreadsheets, archives, image reviews, and audio reviews.
+FreeFrame can export a version's timecoded comments as timeline markers for DaVinci Resolve, Final Cut Pro, and Adobe Premiere Pro. It can also export comments as CSV for a spreadsheet or archive.
 
-## Export a version
+## Export a version's comments
 
-1. Open the asset and select the version that matches the edit in your timeline.
-2. Open the comment panel menu and choose **Export comments**.
-3. Choose the destination format.
+1. Open the asset and select the version whose comments you want to export.
+2. In the comment panel toolbar, select **Export comments**.
+3. Choose the format for your destination:
 
-| Destination | FreeFrame format |
-| --- | --- |
-| DaVinci Resolve | **DaVinci Resolve (EDL)** |
-| Final Cut Pro | **Final Cut Pro (FCPXML)** |
-| Adobe Premiere Pro | **Premiere Pro (XML)** |
-| Spreadsheet or archive | **CSV** |
+   | Destination | FreeFrame export |
+   |-------------|------------------|
+   | DaVinci Resolve | **DaVinci Resolve (EDL)** |
+   | Final Cut Pro | **Final Cut Pro (FCPXML)** |
+   | Adobe Premiere Pro | **Premiere Pro (XML)** |
+   | Spreadsheet or archive | **CSV** |
 
-4. If prompted for a frame rate, enter the original frame rate of the reviewed
-   source. Versions with stored FPS metadata normally skip this prompt.
-5. Import the downloaded file into the corresponding NLE.
+4. If FreeFrame asks for a frame rate, choose the original frame rate of the uploaded video. Newly uploaded videos normally have this metadata stored and skip the prompt.
+5. Import the downloaded marker file into the matching editing application.
 
-EDL, FCPXML, and Premiere XML are available only for video assets. Use CSV for
-images or audio, or whenever you need all review metadata outside an NLE.
+EDL, FCPXML, and Premiere XML exports are available for video assets. Use CSV for image or audio assets.
 
 ## Keep markers aligned
 
-- Export comments from the same FreeFrame version as the cut in the timeline.
-- Use the source frame rate, not a delivery frame rate. A mismatch accumulates
-  timing drift over the duration of the edit.
-- Resolve EDL exports default to a timeline start timecode of `01:00:00:00`.
-  Keep the target timeline aligned with that value, or choose the matching start
-  timecode in the export dialog when available.
-- Variable-frame-rate material can differ by approximately one frame after it is
-  interpreted by an NLE. Transcode to a constant frame rate before editorial
-  handoff when frame-exact marker placement is required.
+- Export comments from the exact version that matches the edit in your timeline.
+- When prompted, use the source video's original frame rate. Choosing a different rate can shift markers away from the reviewed frame.
+- In DaVinci Resolve, keep the timeline start timecode aligned with the exported EDL. FreeFrame uses `01:00:00:00` as the default start timecode.
+- Variable-frame-rate source video can place a marker up to one frame away from the expected position.
 
 ## Troubleshooting
 
-### Frame rate is required
+### The markers drift over time
 
-FreeFrame could not read an FPS value for that version. Enter one of the
-supported source rates (for example `23.976`, `24`, `25`, `29.97`, `30`, `50`,
-`59.94`, or `60`) and export again.
+Export again and select the video's original frame rate. A frame-rate mismatch causes the marker offset to grow over the duration of the video.
 
-### Markers drift over time
+### The markers do not match the current cut
 
-Re-export with the original source frame rate and verify that the selected
-FreeFrame version matches the clip in the target timeline.
+Confirm that the selected FreeFrame version is the same cut loaded in the editing application. Comments are exported relative to the reviewed version.
 
-### An NLE format is unavailable
+### An NLE export is not available
 
-NLE marker files are video-only. Choose CSV for audio or image assets.
+The NLE formats are shown only for video assets. Choose CSV when reviewing an image or audio asset.

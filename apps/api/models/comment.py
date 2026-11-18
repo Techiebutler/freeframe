@@ -14,6 +14,10 @@ class CommentVisibility(str, PyEnum):
     public = "public"
     internal = "internal"
 
+# Keep comment-tree responses and share-grid counts on the same visible depth.
+COMMENT_TREE_MAX_DEPTH = 5
+
+
 class Comment(Base):
     __tablename__ = "comments"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

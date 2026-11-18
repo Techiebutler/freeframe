@@ -147,4 +147,6 @@ export interface InitiateUploadResponse {
   s3_key: string;
   asset_id: string;
   version_id: string;
+  /** Part size the server pinned to this upload; older servers omit it. */
+  chunk_size_bytes?: number;
 }

@@ -4,9 +4,12 @@ import useSWR from "swr"
 import { api } from "@/lib/api"
 import type { ShareLinkListItem, ShareLink, ShareLinkActivity } from "@/types"
 
-export function useShareLinks(projectId: string) {
+/** With `assetId`, each link also says whether it shows that asset (`contains_asset`). */
+export function useShareLinks(projectId: string, assetId?: string) {
   const { data, mutate, isLoading } = useSWR<ShareLinkListItem[]>(
-    projectId ? `/projects/${projectId}/share-links` : null,
+    projectId
+      ? `/projects/${projectId}/share-links${assetId ? `?asset_id=${assetId}` : ""}`
+      : null,
     (key: string) => api.get<ShareLinkListItem[]>(key),
   )
 

@@ -1,10 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { FolderShareViewer } from '../folder-share-viewer'
-
-vi.mock('@/components/shared/global-branding', () => ({
-  useInstanceBranding: () => ({ data: { org_name: 'Instance Brand', primary_color: '#7c3aed', logo_dark_url: 'https://cdn.test/global-dark.png', logo_light_url: null } }),
-}))
+import { useBrandingStore, HARDCODED_DEFAULTS } from '@/stores/branding-store'
 
 // Regression for #192: ShareReviewInner used to resolve its hooks with bare
 // CommonJS require('@/...') calls. Node's loader does not understand the '@'
@@ -99,9 +96,11 @@ describe('folder share — opening an asset mounts the review UI (#192)', () => 
   })
 
   it('uses global branding only when the share has no project branding', async () => {
+    useBrandingStore.setState({ ...HARDCODED_DEFAULTS, orgName: 'Instance Brand', orgLogoDark: 'https://cdn.test/global-dark.png', loaded: true, loading: false })
     const { container } = render(<FolderShareViewer token="t" folderName="F" title="T" description={null} permission="view" allowDownload={false} showVersions={false} appearance={{ theme: 'dark' } as never} branding={null} />)
     await screen.findByText('Clip.mp4')
     expect(container.querySelector('img[src="https://cdn.test/global-dark.png"]')).toBeInTheDocument()
+    useBrandingStore.setState({ ...HARDCODED_DEFAULTS, loaded: false, loading: false })
   })
 
   it('allows inline title and description editing only when embedded for configuration', async () => {
@@ -129,5 +128,25 @@ describe('folder share — opening an asset mounts the review UI (#192)', () => 
     fireEvent.change(descriptionInput, { target: { value: 'New description' } })
     fireEvent.blur(descriptionInput)
     expect(onDescriptionCommit).toHaveBeenCalledWith('New description')
+  })
+
+  // An internal comment is team-only: the share listing never returns one and
+  // the API refuses one from a caller without access to the asset. So the share
+  // composer offers no Public / Internal choice, guest or signed in.
+  it('gives the share composer no visibility toggle', async () => {
+    render(
+      <FolderShareViewer
+        token="t" folderName="F" title="T" description={null}
+        permission="comment" allowDownload={false} showVersions={false}
+        appearance={{ open_in_viewer: true } as never} branding={null}
+      />,
+    )
+
+    await waitFor(() => expect(screen.getByText('Clip.mp4')).toBeInTheDocument())
+    fireEvent.doubleClick(screen.getByText('Clip.mp4'))
+
+    await waitFor(() => expect(screen.getAllByPlaceholderText('Leave your comment...').length).toBeGreaterThan(0), { timeout: 3000 })
+    expect(screen.queryByRole('button', { name: 'Public' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Internal' })).toBeNull()
   })
 })

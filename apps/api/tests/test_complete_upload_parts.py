@@ -200,7 +200,14 @@ def test_head_object_size_returns_none_when_absent(monkeypatch):
     assert s3_service.head_object_size("raw/k") is None
 
 
-def test_head_object_size_refuses_to_guess_without_content_length(monkeypatch):
+def test_head_object_size_refuses_to_guess_when_no_size_is_reported(monkeypatch):
+    """A 200 carrying no ContentLength is an unanswered question, not a missing object.
+
+    HeadObjectOutput has no required members, so botocore omits the key when the
+    header is absent -- which happens behind proxies that strip or chunk-encode HEAD
+    responses. Subscripting raised KeyError, which is neither a ClientError nor a
+    BotoCoreError and so escaped every caller's handling as a 500.
+    """
     fake = MagicMock()
     fake.head_object.return_value = {"ETag": '"abc"'}
     monkeypatch.setattr(s3_service, "_get_probe_client", lambda: fake)

@@ -14,8 +14,9 @@ COPY . .
 
 ARG NEXT_PUBLIC_API_URL=/api
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_UPLOAD_CONCURRENCY=5
-ENV NEXT_PUBLIC_UPLOAD_CONCURRENCY=$NEXT_PUBLIC_UPLOAD_CONCURRENCY
+# Sub-path deployments: empty serves the app from the domain root.
+ARG NEXT_PUBLIC_BASE_PATH=
+ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN pnpm build
@@ -36,8 +37,16 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Refuses to start when NEXT_PUBLIC_BASE_PATH disagrees with the base path this
+# image was built for. Next fixes the base path at build time, so a published
+# root-path image given a sub-path would otherwise start and serve broken links.
+# A plain COPY and a chmod, not COPY --chmod, so legacy (non-BuildKit) builds work.
+COPY docker-entrypoint.sh /usr/local/bin/ff-web-entrypoint
+RUN chmod 0755 /usr/local/bin/ff-web-entrypoint
+
 USER nextjs
 
 EXPOSE 3000
 
+ENTRYPOINT ["/usr/local/bin/ff-web-entrypoint"]
 CMD ["node", "server.js"]

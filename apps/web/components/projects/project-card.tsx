@@ -2,50 +2,36 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { MoreHorizontal, ImagePlus, Settings, Trash2, Globe, Lock } from 'lucide-react'
+import { MoreHorizontal, ImagePlus, Globe, Lock } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
-import { getGradientForProject } from '@/lib/gradient-utils'
-import { api } from '@/lib/api'
-import { ProjectSettingsDialog } from './project-settings-dialog'
+import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { ProjectPoster } from './project-poster'
 import { FadeImage } from '@/components/shared/fade-image'
+import { useProjectMenu } from './menus/project-menu'
 import type { Project } from '@/types'
 
 interface ProjectCardProps {
   project: Project
   showRole?: boolean
   isOwner?: boolean
+  /** Show the info row under the poster. */
+  showInfo?: boolean
   className?: string
-  onMutate?: () => void
 }
 
 export function ProjectCard({
   project,
   showRole,
   isOwner,
+  showInfo = true,
   className,
-  onMutate,
 }: ProjectCardProps) {
-  const gradient = getGradientForProject(project.id)
   const assetCount = project.asset_count ?? 0
-  const [settingsOpen, setSettingsOpen] = React.useState(false)
-  const [deleting, setDeleting] = React.useState(false)
-
-  const handleDelete = async () => {
-    if (!confirm(`Delete "${project.name}"? This action cannot be undone.`)) return
-    setDeleting(true)
-    try {
-      await api.delete(`/projects/${project.id}`)
-      onMutate?.()
-    } catch {
-      // silently fail
-    } finally {
-      setDeleting(false)
-    }
-  }
+  const { items: menuItems } = useProjectMenu(project, { isOwner })
 
   return (
     <>
+      <ContextMenuArea items={menuItems}>
       <div className={cn('group relative', className)}>
         <Link
           href={`/projects/${project.id}`}
@@ -54,15 +40,15 @@ export function ProjectCard({
           {/* Square poster area */}
           <div className="relative aspect-square w-full shrink-0 overflow-hidden">
             {project.poster_url ? (
+              // A chosen poster loads behind a shimmer and fades in; the
+              // gradient fallback has nothing to wait for.
               <FadeImage
                 src={project.poster_url}
                 alt={project.name}
                 className="h-full w-full object-cover"
               />
             ) : (
-              <div className={cn('h-full w-full bg-gradient-to-br', gradient)}>
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,255,255,0.1),transparent_60%)]" />
-              </div>
+              <ProjectPoster project={project} />
             )}
 
             {/* Bottom gradient overlay for text */}
@@ -97,70 +83,40 @@ export function ProjectCard({
           </div>
 
           {/* Footer */}
-          {/* Footer: mt-auto keeps it (and the menu button over it) at the card's bottom edge. */}
-          <div className="mt-auto flex items-center justify-between py-2.5 pl-3 pr-11">
-            <span className="text-2xs text-text-tertiary">
-              {assetCount > 0
-                ? `${assetCount} item${assetCount !== 1 ? 's' : ''} · ${formatBytes(project.storage_bytes ?? 0)}`
-                : `Updated ${formatRelativeTime(project.created_at)}`}
-            </span>
-          </div>
+          {/* mt-auto keeps it (and the menu button over it) at the card's
+              bottom edge when the grid row is taller than the card; pr-11
+              leaves room for that button. */}
+          {showInfo && (
+            <div className="mt-auto flex items-center justify-between py-2.5 pl-3 pr-11">
+              <span className="text-2xs text-text-tertiary">
+                {assetCount > 0
+                  ? `${assetCount} item${assetCount !== 1 ? 's' : ''} · ${formatBytes(project.storage_bytes ?? 0)}`
+                  : `Updated ${formatRelativeTime(project.created_at)}`}
+              </span>
+            </div>
+          )}
         </Link>
 
-        {/* Context menu trigger */}
-        {(isOwner || project.role === 'owner') && (
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <button
-                aria-label="Project actions"
-                className="absolute bottom-[5px] right-2 flex h-7 w-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-all opacity-0 group-hover:opacity-100"
-                onClick={(e) => { e.preventDefault(); e.stopPropagation() }}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
-            </DropdownMenu.Trigger>
-
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                className="z-50 min-w-[180px] rounded-xl border border-border bg-bg-secondary p-1 shadow-xl"
-                sideOffset={4}
-                align="end"
-              >
-                <DropdownMenu.Label className="px-3 py-1.5 text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">
-                  Project
-                </DropdownMenu.Label>
-
-                <DropdownMenu.Item
-                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none transition-colors"
-                  onSelect={() => setSettingsOpen(true)}
-                >
-                  <Settings className="h-4 w-4 text-text-tertiary" />
-                  Project Settings
-                </DropdownMenu.Item>
-
-                <DropdownMenu.Separator className="my-1 h-px bg-border" />
-
-                <DropdownMenu.Item
-                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-status-error hover:bg-status-error/10 cursor-pointer outline-none transition-colors"
-                  onSelect={handleDelete}
-                  disabled={deleting}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+        {/* Menu button: owners only, like the menu itself */}
+        {menuItems && (
+          <DotsMenu items={menuItems}>
+            <button
+              aria-label={`${project.name} menu`}
+              className={cn(
+                'absolute flex h-7 w-7 items-center justify-center rounded-md transition-all opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100',
+                // Without the info row it sits on the poster, styled like the badges.
+                showInfo
+                  ? 'bottom-[5px] right-2 text-text-tertiary hover:bg-bg-hover hover:text-text-primary'
+                  : 'top-2.5 right-2.5 bg-black/30 backdrop-blur-sm text-white/90 hover:bg-black/50 hover:text-white',
+              )}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation() }}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          </DotsMenu>
         )}
       </div>
-
-      {/* Project Settings Dialog */}
-      <ProjectSettingsDialog
-        project={project}
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        onUpdated={() => onMutate?.()}
-      />
+      </ContextMenuArea>
     </>
   )
 }

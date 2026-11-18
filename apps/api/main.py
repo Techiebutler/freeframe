@@ -1,16 +1,46 @@
 import logging
 import os
+import re
 import threading
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from .config import settings
-from .routers import auth, users, projects, upload, events, assets, me, comments, approvals, share, metadata, branding, notifications, admin, setup, folders, hls_proxy, instance_settings, instance_branding
+from .routers import auth, users, projects, upload, events, assets, me, comments, approvals, share, metadata, branding, instance_branding, notifications, admin, setup, folders, hls_proxy, instance_settings
 from .services.s3_service import run_startup_bucket_setup
 from .services.email_service import mail_is_configured
 from .middleware.global_rate_limit import GlobalRateLimitMiddleware
 from .middleware.setup_guard import SetupGuardMiddleware
+
+
+# Paths whose next segment is a credential: an invite token sets the account's
+# password, and a share token opens the link.
+_TOKEN_IN_PATH = re.compile(r"^(/auth/invite/|/share/)[^/]+")
+
+
+class _DropQueryStringFilter(logging.Filter):
+    """Keep credentials out of the access log. Some URLs carry them in the query
+    string, because the client cannot send a header there: `?token=` on /hls
+    (hls.js segment fetches) and /events (EventSource), `?share_session=` on the
+    share routes. Others carry one in the path (`_TOKEN_IN_PATH`), which is
+    replaced with `<redacted>`. uvicorn logs the path with its query as the
+    third argument."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path = _TOKEN_IN_PATH.sub(r"\1<redacted>", args[2].split("?", 1)[0])
+            record.args = args[:2] + (path,) + args[3:]
+        return True
+
+
+# On the logger rather than a handler: gunicorn's UvicornWorker replaces this
+# logger's handlers with its own (--access-logfile) but leaves its filters alone.
+logging.getLogger("uvicorn.access").addFilter(_DropQueryStringFilter())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,29 +81,65 @@ app = FastAPI(
     openapi_url=None if _disable_docs else "/openapi.json",
 )
 
-_cors_requested = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
-_cors_extra = [origin for origin in _cors_requested if origin != "*"]
-if "*" in _cors_requested:
+# Credentialed API access only ever echoes explicit origins. CORS_ALLOW_ORIGINS="*"
+# still opens the bucket CORS (s3_service.ensure_bucket_exists), whose presigned
+# URLs carry no cookies, but the API itself refuses a wildcard: echoing any origin
+# with allow_credentials would let every site read authenticated responses.
+if settings.cors_allows_any_origin:
     logging.getLogger("apps.api.startup").warning(
-        "Ignoring wildcard CORS origin: credentialed API access requires explicit origins."
+        "Ignoring wildcard CORS origin for the API: credentialed API access requires explicit origins."
     )
-_cors_origins = list(dict.fromkeys([
-    settings.frontend_origin,
-    "http://localhost:3000",
-    "http://localhost:3001",
-    *_cors_extra,
-]))
+_cors_origins = settings.cors_origins
 
+# Routes whose whole body is a password check: a body that is not an object at
+# all (a bare string) fails at loc ("body",) and would be echoed back whole.
+_PASSWORD_BODY_ROUTES = frozenset({"/share/{token}/verify"})
+
+
+def _names_a_password(loc) -> bool:
+    return any(isinstance(part, str) and "password" in part.lower() for part in loc)
+
+
+def _without_password_input(request: Request, errors: list) -> list:
+    """FastAPI's 422 detail echoes each failing value as `input`. Drop it (and
+    `ctx`, which can repeat it) for errors about a password field, and for a
+    non-object body on a password route, so a password is never sent back in
+    an error. Every other error is passed through untouched."""
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    cleaned = []
+    for error in errors:
+        loc = tuple(error.get("loc", ()))
+        if _names_a_password(loc) or (loc == ("body",) and route_path in _PASSWORD_BODY_ROUTES):
+            error = {k: v for k, v in error.items() if k not in ("input", "ctx")}
+        cleaned.append(error)
+    return cleaned
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # The same response as FastAPI's default handler, minus echoed passwords.
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(_without_password_input(request, exc.errors()))},
+    )
+
+
+app.add_middleware(GlobalRateLimitMiddleware)
+app.add_middleware(SetupGuardMiddleware)
+# add_middleware prepends, so the one added last runs first. CORS has to be
+# outermost: the limiter's 429 and the setup guard's 503 are returned without
+# reaching anything inside them, and without CORS headers the browser hides
+# the status (and Retry-After) behind a network error (#525). It also answers
+# preflights before they count against the read limit.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Range", "X-Guest-Comment-Token"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "Retry-After"],
 )
-app.add_middleware(GlobalRateLimitMiddleware)
-app.add_middleware(SetupGuardMiddleware)
 
 app.include_router(auth.router)
 app.include_router(users.router)

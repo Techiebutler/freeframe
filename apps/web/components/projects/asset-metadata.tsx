@@ -154,7 +154,7 @@ function CustomFieldInput({
             className={cn(
               'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium border transition-colors',
               selected.includes(opt)
-                ? 'bg-accent-muted border-accent text-accent'
+                ? 'bg-accent-muted border-accent text-text-primary'
                 : 'border-border text-text-secondary hover:border-text-secondary',
             )}
           >
