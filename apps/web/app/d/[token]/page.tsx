@@ -14,7 +14,6 @@ interface Clip { name: string; src: string; file: DeliveryFile | null }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const SCALE = [1, 0.84, 0.7, 0.62], DIM = [0, 0.4, 0.58, 0.7], OP = [1, 1, 0.9, 0]
-const size = (b: number) => (b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`)
 const two = (n: number) => (n < 10 ? '0' : '') + n
 
 async function load(token: string): Promise<Delivery> {
@@ -78,7 +77,6 @@ export default function DeliveryPage({ params: { token } }: { params: { token: s
   if (!data) return <main className={s.root}><div className={s.center}><div className={s.spin} role="status" aria-label="Loading" /></div></main>
   if (!clips.length) return <Notice title="Nothing to show yet" text="This delivery has no video. Please ask your contact at Aditor." />
 
-  const when = new Date(data.approved_at).toLocaleDateString(undefined, { dateStyle: 'medium' })
   const front = clips[cur]
   const others = data.files.filter(f => !f.mime_type.startsWith('video/'))
   const many = clips.length > 1
@@ -109,7 +107,6 @@ export default function DeliveryPage({ params: { token } }: { params: { token: s
 
       <section className={s.hero}>
         <h1 className={`${s.title} ${s.rise}`} style={{ '--i': 1 } as React.CSSProperties}>{title}</h1>
-        <p className={`${s.sub} ${s.rise}`} style={{ '--i': 2 } as React.CSSProperties}>Version {data.version} · approved {when}</p>
       </section>
 
       <section className={s.wrap} aria-label="Videos">
@@ -141,8 +138,7 @@ export default function DeliveryPage({ params: { token } }: { params: { token: s
           <p className={s.name}>{many && <b>{two(cur + 1)}</b>}<span>{many ? front.name : ''}</span></p>
           <div className={s.actions}>
             {dl && <a className={s.cta} href={dl.url} download><Download aria-hidden="true" strokeWidth={2} />Download</a>}
-            {dl && <p className={s.meta}>{size(dl.size_bytes)}</p>}
-            {others.map(f => <a key={f.url} className={s.quiet} href={f.url} download>{f.name} · {size(f.size_bytes)}</a>)}
+            {others.map(f => <a key={f.url} className={s.quiet} href={f.url} download>{f.name}</a>)}
           </div>
         </div>
       </section>
