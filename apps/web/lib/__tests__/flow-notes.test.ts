@@ -94,6 +94,22 @@ describe('notesFromDictation', () => {
     expect(parts[0]).toMatchObject({ t: 3.2, text: 'und dann haben wir eine Person, also die grindet zum Beispiel.' })
     expect(parts[0].marks).toHaveLength(3)
   })
+  it('drops mic-noise sentences, keeps short real notes', () => {
+    const segs = [{ start: 0, end: 1, text: 'Ssort.' }, { start: 1.5, end: 2, text: 'Ss.' }, { start: 3, end: 4, text: 'Zu laut.' }, { start: 5, end: 6, text: 'Cut weg.' }]
+    const w = [{ start: 0, end: 1, word: 'x' }]
+    expect(notesFromDictation(play(0), 'x', segs, [], w).map(p => p.text)).toEqual(['Zu laut.', 'Cut weg.'])
+    expect(notesFromDictation(play(0), 'Ssort.', [], [], w)).toEqual([])
+  })
+  it('keeps a real one-word note', () => {
+    const w = [{ start: 0, end: 1, word: 'x' }]
+    expect(notesFromDictation(play(0), 'x', [{ start: 0, end: 1, text: 'Schneller.' }], [], w).map(p => p.text)).toEqual(['Schneller.'])
+  })
+  it('noise with ink keeps the marks and empties the text', () => {
+    const parts = notesFromDictation(play(0), 'x', [{ start: 0, end: 1, text: 'Ss.' }], [mk(100)], [{ start: 0, end: 1, word: 'Ss.' }])
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ text: '' })
+    expect(parts[0].marks).toHaveLength(1)
+  })
   it('splits a note in the reducer and keeps order', () => {
     const s = notesReducer(add([], 'a', 10), { type: 'split', id: 'a', parts: [{ id: 'a', t: 10, text: 'One.', marks: [] }, { id: 'b', t: 13.5, text: 'Two.', marks: [] }] })
     expect(s.map(n => [n.id, n.status])).toEqual([['a', 'ready'], ['b', 'ready']])

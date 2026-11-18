@@ -67,6 +67,15 @@ export const sendable = (notes: FlowNote[]) => notes.filter(n => n.status === 'r
 /** Send must wait while any note is still being recorded, transcribed or empty. */
 export const sendBlocked = (notes: FlowNote[]) => notes.some(n => n.status === 'recording' || n.status === 'transcribing' || (n.status === 'failed' && !n.text.trim()) || (n.status === 'ready' && !n.text.trim()))
 
+const FILLER = /^(s+|sh+|z+|hm+|h+m+|äh+m*|ähm|mm+|uh+m*|um+|ah+|oh+|e+h+)$/i
+/** Mic noise Whisper turned into text ("Ssort.", "Ss."): only filler/sibilant tokens, or one token that starts with a doubled sibilant.
+ *  ponytail: deliberately narrow; a real one-word note ("Schneller.") must survive, a noise note can be deleted by hand. */
+export function isNoiseText(text: string): boolean {
+  const tokens = text.toLowerCase().replace(/[^a-z0-9äöüß\s'-]/g, ' ').split(/\s+/).filter(Boolean)
+  if (!tokens.length || tokens.every(t => t.length < 2 || FILLER.test(t))) return true
+  return tokens.length === 1 && /^(ss|shh|schh|zz)/.test(tokens[0])
+}
+
 export interface NotePart { t: number; text: string; marks: InkMark[] }
 
 /**
@@ -76,9 +85,11 @@ export interface NotePart { t: number; text: string; marks: InkMark[] }
  */
 export function notesFromDictation(timeAt: (offsetMs: number) => number, text: string, segments: DictationSegment[], marks: InkMark[], words: DictationWord[] = []): NotePart[] {
   const timed = marks.map(m => ({ ...m, t: timeAt(m.offset_ms) }))
+  // Only for real Whisper results (they always carry word timings); bare segments stay untouched.
+  const cleaned = (parts: NotePart[]) => !words.length ? parts : parts.flatMap(p => (isNoiseText(p.text) ? (p.marks.length ? [{ ...p, text: '' }] : []) : [p]))
   // Whole sentences, each stamped where the video was when its first word was said
   const spoken = sentencesFromDictation(segments, words)
-  if (!spoken.length) return [{ t: timeAt(0), text: text.trim(), marks: timed }]
+  if (!spoken.length) return cleaned([{ t: timeAt(0), text: text.trim(), marks: timed }])
   const parts: NotePart[] = spoken.map(s => ({ t: timeAt(s.start * 1000), text: s.text.trim(), marks: [] }))
   for (const m of timed) {
     let i = 0
@@ -86,9 +97,9 @@ export function notesFromDictation(timeAt: (offsetMs: number) => number, text: s
     parts[i].marks.push(m)
   }
   // Fragments on (nearly) the same frame are one thought: paused while drawing, they would all stack on one timestamp.
-  return parts.reduce<NotePart[]>((out, part) => {
+  return cleaned(parts).reduce<NotePart[]>((out, part) => {
     const prev = out[out.length - 1]
-    if (prev && Math.abs(part.t - prev.t) < SAME_FRAME_S) { prev.text = `${prev.text} ${part.text}`; prev.marks.push(...part.marks) }
+    if (prev && Math.abs(part.t - prev.t) < SAME_FRAME_S) { prev.text = `${prev.text} ${part.text}`.trim(); prev.marks.push(...part.marks) }
     else out.push(part)
     return out
   }, [])
