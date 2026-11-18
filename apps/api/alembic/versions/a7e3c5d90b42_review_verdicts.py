@@ -32,8 +32,8 @@ Enums
 Downgrade deletes every guest verdict. A guest row cannot satisfy NOT NULL on
 `user_id`, and there is no user to hand it to. Enum values cannot be removed from
 a PostgreSQL type without rewriting it, so `changes_requested` STAYS in both enums
-after a downgrade. A signed-in user's own verdict of that status survives too, and
-the previous release cannot read it back.
+after a downgrade. A signed-in user's own `changes_requested` verdict survives the
+downgrade as `rejected`, which the previous release can read.
 
 Revision ID: a7e3c5d90b42
 Revises: f4b9c2a7d105
@@ -100,6 +100,9 @@ def downgrade() -> None:
     # Deletes every guest verdict: the column that identifies their author is going away
     # and `user_id` goes back to NOT NULL. The ActivityLog entries stay.
     op.execute("DELETE FROM approvals WHERE guest_user_id IS NOT NULL")
+    # The previous release's enum has no `changes_requested`, so a surviving row of that status
+    # would fail to load there. Map it to `rejected` (not approved); `pending` would read as "no decision".
+    op.execute("UPDATE approvals SET status = 'rejected' WHERE status = 'changes_requested'")
 
     op.drop_column('notifications', 'detail')
     op.drop_column('notifications', 'actor_name')
