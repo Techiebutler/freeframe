@@ -274,6 +274,8 @@ export interface Asset {
   deleted_at: string | null;
   /** Comments on the latest version, replies included, as its comment panel shows them. */
   comment_count?: number;
+  /** Verdicts on the latest version, from team listings, which send zeros rather than null. */
+  verdict_summary?: VerdictSummary | null;
 }
 
 export interface AssetVersion {
@@ -293,8 +295,6 @@ export interface AssetVersion {
 export interface AssetResponse extends Asset {
   latest_version: AssetVersion | null;
   thumbnail_url: string | null;
-  /** Verdicts on `latest_version`, from team listings. */
-  verdict_summary?: VerdictSummary | null;
 }
 
 export interface MediaFile {
