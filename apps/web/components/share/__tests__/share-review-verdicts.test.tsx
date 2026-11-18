@@ -8,7 +8,7 @@ import type { SharePermission } from '@/types'
 // controls only on an `approve` link, and the first press asks who they are
 // through the same name-and-email prompt comments use.
 
-type Call = { method: string; url: URL; body: Record<string, unknown> | null }
+type Call = { method: string; url: URL; headers: Record<string, string>; body: Record<string, unknown> | null }
 let calls: Call[]
 /** Read live by the matchMedia stub, so one file can be a desktop and a phone. */
 let phone = false
@@ -22,7 +22,14 @@ beforeEach(() => {
     vi.fn(async (input: string, init: RequestInit = {}) => {
       const url = new URL(input)
       const method = init.method ?? 'GET'
-      calls.push({ method, url, body: typeof init.body === 'string' ? JSON.parse(init.body) : null })
+      calls.push({
+        method, url,
+        headers: (init.headers ?? {}) as Record<string, string>,
+        body: typeof init.body === 'string' ? JSON.parse(init.body) : null,
+      })
+      if (url.pathname.endsWith('/auth/refresh')) {
+        return { ok: false, status: 401, json: async () => ({ detail: 'Invalid refresh token' }) }
+      }
       let body: unknown = {}
       if (url.pathname.endsWith('/stream/a1')) {
         body = { name: 'Poster.png', asset_type: 'image', version_id: 'v1', url: 'https://cdn.example/p.png' }
@@ -148,5 +155,29 @@ describe('ShareReviewScreen verdicts', () => {
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(screen.queryByPlaceholderText('Your name')).toBeNull()
     expect(puts()[0].body).toMatchObject({ guest_email: 'dana@client.example' })
+  })
+
+  // Ruling R15 through the real screen: a lapsed sign-in that will not refresh
+  // is asked about, and "Continue as guest" opens the same prompt.
+  it('a lapsed sign-in that will not refresh asks, and Continue as guest goes through the prompt', async () => {
+    const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+    localStorage.setItem('ff_access_token', `${b64url({ alg: 'HS256' })}.${b64url({ exp: 1 })}.sig`)
+    localStorage.setItem('ff_refresh_token', 'dead')
+    renderScreen('approve')
+    await loaded()
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your sign-in has expired.')
+    expect(screen.queryByPlaceholderText('Your name')).toBeNull()
+    expect(puts()).toHaveLength(0)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Continue as guest' }))
+    await userEvent.type(await screen.findByPlaceholderText('Your name'), 'Dana')
+    await userEvent.type(screen.getByPlaceholderText('Email address'), 'dana@client.example')
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0].headers.Authorization).toBeUndefined()
+    expect(puts()[0].body).toMatchObject({ guest_name: 'Dana', guest_email: 'dana@client.example', asset_id: 'a1' })
   })
 })

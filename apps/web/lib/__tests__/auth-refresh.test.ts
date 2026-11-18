@@ -79,6 +79,90 @@ describe('refreshAccessToken', () => {
 })
 
 /**
+ * The share page's refresh. /login there would lose the review on screen, so
+ * whatever the answer it neither clears the tokens nor navigates: the caller
+ * asks the visitor what to do instead.
+ */
+describe('refreshAccessTokenQuietly', () => {
+  async function quietly() {
+    const mod = await import('../auth')
+    return mod.refreshAccessTokenQuietly()
+  }
+
+  it.each([401, 403])('keeps the tokens and stays on the page when the refresh is refused (%i)', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status })))
+
+    await expect(quietly()).resolves.toBeNull()
+    expect(sessionSurvived()).toBe(true)
+    expect(store['ff_access_token']).toBe('old-access')
+    expect(location.href).toBe('')
+  })
+
+  it('stays on the page with no refresh token to send', async () => {
+    delete store['ff_refresh_token']
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(quietly()).resolves.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(store['ff_access_token']).toBe('old-access')
+    expect(location.href).toBe('')
+  })
+
+  it('stays on the page offline', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+
+    await expect(quietly()).resolves.toBeNull()
+    expect(sessionSurvived()).toBe(true)
+    expect(location.href).toBe('')
+  })
+
+  it('stores the new pair on success, as the page-leaving refresh does', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200,
+      json: async () => ({ access_token: 'fresh', refresh_token: 'rotated' }),
+    })))
+
+    await expect(quietly()).resolves.toBe('fresh')
+    expect(store['ff_access_token']).toBe('fresh')
+    expect(store['ff_refresh_token']).toBe('rotated')
+  })
+
+  // The other way round: adding the quiet variant must not soften the
+  // existing one, which every API 401 goes through.
+  it('leaves refreshAccessToken ending the session with no refresh token', async () => {
+    delete store['ff_refresh_token']
+    vi.stubGlobal('fetch', vi.fn())
+
+    await expect(refresh()).resolves.toBeNull()
+    expect(store['ff_access_token']).toBeUndefined()
+    expect(location.href).toBe('/login')
+  })
+
+  it('leaves refreshAccessToken navigating to /login on a refusal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401 })))
+
+    await expect(refresh()).resolves.toBeNull()
+    expect(location.href).toBe('/login')
+  })
+})
+
+describe('signInAgain', () => {
+  it('ends the session, then opens /login with the page to come back to', async () => {
+    const mod = await import('../auth')
+    const ended = vi.fn()
+    mod.onSessionEnded(ended)
+
+    mod.signInAgain('/share/abc?x=1')
+
+    expect(store['ff_access_token']).toBeUndefined()
+    expect(store['ff_refresh_token']).toBeUndefined()
+    expect(ended).toHaveBeenCalledTimes(1)
+    expect(location.href).toBe('/login?from=%2Fshare%2Fabc%3Fx%3D1')
+  })
+})
+
+/**
  * Tokens live in localStorage, which every tab shares. Another tab can sign in,
  * sign out or refresh while this tab's refresh is out, and the answer used to
  * be written over whatever was there: a 200 put the old account's pair over the

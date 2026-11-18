@@ -82,6 +82,27 @@ export function onSessionEnded(cb: () => void): () => void {
  */
 export function clearTokens(): void {
   if (typeof window === 'undefined') return
+  endSession()
+  window.location.href = withBasePath('/login')
+}
+
+/**
+ * Ends the session as `clearTokens` does, then opens /login with `from` set,
+ * so a sign-in made there can come back to `from` (an app path, without the
+ * basePath; the login page checks it with `safeInternalPath`).
+ *
+ * For a page that is not behind a login, like a share link, whose visitor
+ * chose to sign in again: their dead tokens must go first, or /login would see
+ * a token in storage and send them straight back.
+ */
+export function signInAgain(from: string): void {
+  if (typeof window === 'undefined') return
+  endSession()
+  window.location.href = withBasePath(`/login?from=${encodeURIComponent(from)}`)
+}
+
+/** Everything `clearTokens` does short of leaving the page. */
+function endSession(): void {
   leaveGuardSuppressed = true
   localStorage.removeItem(ACCESS_TOKEN_KEY)
   localStorage.removeItem(REFRESH_TOKEN_KEY)
@@ -95,7 +116,6 @@ export function clearTokens(): void {
       console.warn('A listener failed as the session ended', err)
     }
   })
-  window.location.href = withBasePath('/login')
 }
 
 // Deduplicate concurrent refresh calls — when access token expires, multiple
@@ -105,11 +125,33 @@ let _refreshPromise: Promise<string | null> | null = null
 export async function refreshAccessToken(): Promise<string | null> {
   if (_refreshPromise) return _refreshPromise
 
-  _refreshPromise = _doRefresh()
+  _refreshPromise = _doRefresh(true)
   try {
     return await _refreshPromise
   } finally {
     _refreshPromise = null
+  }
+}
+
+let _quietRefreshPromise: Promise<string | null> | null = null
+
+/**
+ * `refreshAccessToken` for a page that must not be left: it never clears the
+ * tokens and never navigates, whatever the answer. A refused refresh, no
+ * refresh token, or no network is just null, and the caller decides what to
+ * ask. A share page uses it, where /login would lose the review on screen.
+ *
+ * Its own dedup, so a page-leaving refresh never joins a quiet one (or the
+ * other way round) and inherits the wrong handling of a refusal.
+ */
+export async function refreshAccessTokenQuietly(): Promise<string | null> {
+  if (_quietRefreshPromise) return _quietRefreshPromise
+
+  _quietRefreshPromise = _doRefresh(false)
+  try {
+    return await _quietRefreshPromise
+  } finally {
+    _quietRefreshPromise = null
   }
 }
 
@@ -128,10 +170,11 @@ function sessionMovedOn(sentRefreshToken: string): string | null {
   return sub !== null && sub === subjectOf(sentRefreshToken) ? access : null
 }
 
-async function _doRefresh(): Promise<string | null> {
+/** `endsSession`: whether a refusal (or nothing to send) ends the session. */
+async function _doRefresh(endsSession: boolean): Promise<string | null> {
   const refreshToken = getRefreshToken()
   if (!refreshToken) {
-    clearTokens()
+    if (endsSession) clearTokens()
     return null
   }
 
@@ -149,7 +192,7 @@ async function _doRefresh(): Promise<string | null> {
       // Anything else -- a 502 from a proxy mid-deploy, a 500, a rate limit --
       // is the server being briefly unavailable, and signing the user out for
       // it loses whatever they had open.
-      if (response.status === 401 || response.status === 403) {
+      if (endsSession && (response.status === 401 || response.status === 403)) {
         clearTokens()
       }
       return null

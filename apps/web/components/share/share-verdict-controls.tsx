@@ -3,7 +3,11 @@
 import * as React from 'react'
 import useSWR, { useSWRConfig } from 'swr'
 import { VerdictControlsView } from '@/components/review/verdict-controls'
-import { hasUsableToken, shareRequest, type ShareGuest } from '@/lib/share-request'
+import { signInAgain } from '@/lib/auth'
+import { withBasePath } from '@/lib/base-path'
+import {
+  hasStoredToken, hasUsableToken, isSignInExpired, shareRequest, type ShareGuest,
+} from '@/lib/share-request'
 import type { Verdict, VerdictValue } from '@/types'
 
 /** Every share verdict key starts with this, so a write can revalidate them. */
@@ -58,6 +62,9 @@ function ShareVerdictControlsFor({
   // on the next render (the screen stores what was saved), but the press that
   // asked is already running with the old one.
   const named = React.useRef<ShareGuest | null>(null)
+  // Set by "Continue as guest": with no usable sign-in, the writes go as the
+  // guest instead of refreshing. A usable bearer still wins (`shareRequest`).
+  const asGuest = React.useRef(false)
 
   const signedIn = hasUsableToken()
   const key = shareVerdictsKey(
@@ -83,16 +90,63 @@ function ShareVerdictControlsFor({
   /** The guest to send as, read at call time so a just-saved identity counts. */
   const sendAs = () => guestIdentity ?? named.current
 
-  // Signed in with a good token, or a guest who has named themselves, may go
-  // straight on. Anyone else is asked first, and a cancelled prompt sends
-  // nothing. A lapsed login with no guest identity is asked too, rather than
-  // sent as nobody to a server that can only refuse it.
-  const beforePress = async (): Promise<boolean> => {
-    if (hasUsableToken() || sendAs()) return true
+  /** Asks for a guest identity; false when the prompt was cancelled. */
+  const askWhoTheyAre = async (): Promise<boolean> => {
     const saved = await requestIdentity()
     if (!saved) return false
     named.current = saved
     return true
+  }
+
+  // Anyone who has signed in on this browser, lapsed or not, goes straight on:
+  // their write refreshes the sign-in or asks them what to do, and is never
+  // quietly turned into a guest's. So does a guest who has named themselves.
+  // Only someone with neither is asked for a name first, and a cancelled
+  // prompt sends nothing.
+  const beforePress = async (): Promise<boolean> => {
+    if (hasStoredToken() || sendAs()) return true
+    return askWhoTheyAre()
+  }
+
+  // A lapsed sign-in that would not refresh (or a bearer the server could not
+  // resolve): the person chooses, rather than being made a guest for them.
+  const errorActions = (
+    error: unknown,
+    { retry, dismiss }: { retry: () => Promise<boolean>; dismiss: () => void },
+  ) => {
+    if (!isSignInExpired(error)) return null
+    const from = currentAppPath()
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <a
+          href={withBasePath(`/login?from=${encodeURIComponent(from)}`)}
+          onClick={(event) => {
+            event.preventDefault()
+            signInAgain(from)
+          }}
+          className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-xs font-medium text-white outline-none
+            hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Sign in
+        </a>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!sendAs()) {
+              // The prompt is a modal under this popover: put it away first.
+              dismiss()
+              if (!(await askWhoTheyAre())) return
+            }
+            asGuest.current = true
+            await retry()
+          }}
+          className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium text-text-secondary
+            outline-none hover:bg-bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Continue as guest
+        </button>
+      </div>
+    )
   }
 
   return (
@@ -102,22 +156,33 @@ function ShareVerdictControlsFor({
       canRemove={false}
       variant={variant}
       beforePress={beforePress}
+      errorActions={errorActions}
       give={(status: VerdictValue, note?: string) =>
         shareRequest(token, '/verdict', {
           method: 'PUT',
           body: { version_id: versionId, asset_id: assetId, status, ...(note ? { note } : {}) },
           shareSession,
           guest: sendAs(),
+          asGuest: asGuest.current,
         })
       }
       clear={() =>
         shareRequest(
           token,
           `/verdict?version_id=${encodeURIComponent(versionId)}&asset_id=${encodeURIComponent(assetId)}`,
-          { method: 'DELETE', shareSession, guest: sendAs() },
+          { method: 'DELETE', shareSession, guest: sendAs(), asGuest: asGuest.current },
         )
       }
       revalidate={revalidate}
     />
   )
+}
+
+/** This page's path and query, without the basePath: what /login's `from` takes. */
+function currentAppPath(): string {
+  if (typeof window === 'undefined') return '/'
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+  const { pathname, search } = window.location
+  const path = basePath && pathname.startsWith(basePath) ? pathname.slice(basePath.length) || '/' : pathname
+  return `${path}${search}`
 }

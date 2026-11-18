@@ -134,6 +134,13 @@ export interface VerdictControlsViewProps {
    * request, no note box. The share page asks a guest who they are here.
    */
   beforePress?: () => Promise<boolean>
+  /**
+   * Extra actions under a failure's message, given the error the call threw.
+   * `retry` runs the failed call again (closing the note box once it lands);
+   * `dismiss` puts the message away. The share page offers "Sign in" and
+   * "Continue as guest" here for a lapsed sign-in.
+   */
+  errorActions?: (error: unknown, controls: { retry: () => Promise<boolean>; dismiss: () => void }) => React.ReactNode
 }
 
 /**
@@ -150,6 +157,7 @@ export function VerdictControlsView({
   remove,
   revalidate,
   beforePress,
+  errorActions,
 }: VerdictControlsViewProps) {
   const verdicts = data ?? []
   const mine = verdicts.find((v) => v.is_mine)
@@ -162,6 +170,9 @@ export function VerdictControlsView({
   const [asking, setAsking] = React.useState<VerdictValue | null>(null)
   const [note, setNote] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
+  // What the failed call threw, for `errorActions`, and the call itself, to retry.
+  const [failure, setFailure] = React.useState<unknown>(null)
+  const [lastRequest, setLastRequest] = React.useState<(() => Promise<unknown>) | null>(null)
   const rootRef = React.useRef<HTMLDivElement>(null)
   // Where focus goes back to when the note box or the error is put away.
   const lastPressed = React.useRef<HTMLButtonElement | null>(null)
@@ -171,14 +182,17 @@ export function VerdictControlsView({
   const run = async (request: () => Promise<unknown>): Promise<boolean> => {
     if (inFlight.current) return false
     inFlight.current = true
+    setLastRequest(() => request)
     setBusy(true)
     setError(null)
+    setFailure(null)
     let ok = false
     try {
       await request()
       ok = true
     } catch (err) {
       setError(failureMessage(err))
+      setFailure(err)
     }
     // Held until the list is back, so the pressed button never shows the old state.
     if (ok) await revalidate().catch(() => undefined)
@@ -241,6 +255,16 @@ export function VerdictControlsView({
   const putAway = () => {
     setAsking(null)
     setError(null)
+  }
+
+  const retry = async (): Promise<boolean> => {
+    if (!lastRequest) return false
+    const ok = await run(lastRequest)
+    if (ok) {
+      setAsking(null)
+      setNote('')
+    }
+    return ok
   }
 
   const open = asking !== null || error !== null
@@ -366,9 +390,14 @@ export function VerdictControlsView({
 
           {error !== null && (
             <div className={cn('flex items-start gap-2', asking !== null && 'mt-2')}>
-              <p role="alert" className="min-w-0 flex-1 text-xs text-status-error">
-                {error}
-              </p>
+              <div className="min-w-0 flex-1">
+                <p role="alert" className="text-xs text-status-error">
+                  {error}
+                </p>
+                {errorActions && (
+                  <ErrorActionsSlot render={errorActions} error={failure} retry={retry} dismiss={putAway} />
+                )}
+              </div>
               {asking === null && (
                 <button
                   type="button"
@@ -384,4 +413,14 @@ export function VerdictControlsView({
       </Popover.Portal>
     </Popover.Root>
   )
+}
+
+type ErrorActionsRender = NonNullable<VerdictControlsViewProps['errorActions']>
+
+/** Calls `errorActions` as its own element, so the handlers it is given are
+ *  props (read when clicked), not values read while the controls render. */
+function ErrorActionsSlot({
+  render, error, retry, dismiss,
+}: { render: ErrorActionsRender; error: unknown; retry: () => Promise<boolean>; dismiss: () => void }) {
+  return <>{render(error, { retry, dismiss })}</>
 }
