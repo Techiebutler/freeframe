@@ -65,6 +65,25 @@ afterEach(() => {
   useAuthStore.setState({ user: null, isSuperAdmin: false } as never)
 })
 
+// First in the file: React warns about a switched input once per module, so a
+// later test would find the warning already spent.
+describe('while loading', () => {
+  it('keeps the search box controlled, so loading does not warn about switching it', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      signIn(true)
+      renderList()
+      await screen.findByRole('list')
+      const switched = errors.mock.calls.some((args) =>
+        String(args[0]).includes('uncontrolled input to be controlled'),
+      )
+      expect(switched).toBe(false)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+})
+
 describe('for an Admin', () => {
   it('asks for every project and lists them by name, each with how the Admin reaches it', async () => {
     signIn(true)
@@ -208,5 +227,24 @@ describe('the selected project', () => {
     await screen.findByRole('list')
     await waitFor(() => expect(screen.queryByRole('link', { name: 'General' })).toBeNull())
     expect(screen.queryByRole('link', { name: 'People' })).toBeNull()
+  })
+})
+
+describe('the open project', () => {
+  it('scrolls its row into view once the list has loaded', async () => {
+    const scrolled: Element[] = []
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+    try {
+      signIn(true)
+      renderList('p1')
+      await screen.findByRole('list')
+      await waitFor(() => expect(scrolled).toHaveLength(1))
+      expect(within(scrolled[0] as HTMLElement).getByRole('link', { name: /^Spring Campaign/ })).toBeInTheDocument()
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
   })
 })

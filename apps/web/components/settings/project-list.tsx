@@ -89,6 +89,14 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
   const needle = query.trim().toLowerCase()
   const shown = needle ? rows.filter((p) => p.name.toLowerCase().includes(needle)) : rows
 
+  // The list is sorted by name and can hold hundreds of rows, so the open
+  // project is often below the fold; bring its row and its tab links into view.
+  const selectedRow = React.useRef<HTMLLIElement>(null)
+  const listReady = rows.length > 0
+  React.useEffect(() => {
+    selectedRow.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [selectedId, listReady])
+
   if (error && !data) {
     return (
       <div className="p-2">
@@ -111,6 +119,8 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
           placeholder="Search projects"
           icon={<Search className="h-4 w-4" />}
           className="h-9 text-[16px] [@media(hover:hover)]:text-sm"
+          value=""
+          readOnly
           disabled
         />
         <div aria-label="Loading projects" className="space-y-0.5">
@@ -154,7 +164,7 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
           {shown.map((p) => {
             const selected = p.id === selectedId
             return (
-              <li key={p.id}>
+              <li key={p.id} ref={selected ? selectedRow : undefined}>
                 <Link
                   href={`/settings/projects/${p.id}`}
                   title={p.name}

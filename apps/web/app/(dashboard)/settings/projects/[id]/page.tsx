@@ -186,7 +186,7 @@ export default function ProjectSettingsPage() {
           </Tabs.List>
           {/* General stays mounted behind the other tabs so its unsaved draft
               survives a look at them. */}
-          <Tabs.Content value="general" forceMount className="pt-6 data-[state=inactive]:hidden">
+          <Tabs.Content value="general" forceMount className="pt-6 md:pt-0 data-[state=inactive]:hidden">
             <ProjectGeneralTab project={project} />
             <div ref={deleteRowRef} className={cn('mt-6 border-t border-border pt-4', clearBadge)}>
               <button
@@ -211,7 +211,7 @@ export default function ProjectSettingsPage() {
               )}
             </div>
           </Tabs.Content>
-          <Tabs.Content value="people" className={cn('pt-6', clearBadge)}>
+          <Tabs.Content value="people" className={cn('pt-6 md:pt-0', clearBadge)}>
             <ProjectPeopleTab projectId={projectId} />
           </Tabs.Content>
         </Tabs.Root>
