@@ -2,23 +2,47 @@ FROM python:3.11-slim
 
 WORKDIR /workspace
 
+# Base image is CPU/software-only and architecture-agnostic (builds cleanly on
+# amd64 AND arm64). No non-free repos and no architecture-specific drivers are
+# installed by default, so hardware acceleration is entirely OPTIONAL.
+# Enable the optional VAAPI / Intel HW-accel drivers at build time with:
+#   docker build --build-arg ENABLE_HWACCEL=true ...
+# These packages are amd64-only and would break arm64 / CPU-only builds, so they
+# are gated behind the flag. NVENC needs the nvidia runtime at deploy time, not
+# anything installed here.
+ARG ENABLE_HWACCEL=false
+RUN if [ "$ENABLE_HWACCEL" = "true" ]; then \
+        if [ -f /etc/apt/sources.list ]; then \
+            sed -i 's/main$/main contrib non-free non-free-firmware/g' /etc/apt/sources.list; \
+        fi && \
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+            sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources; \
+        fi && \
+        apt-get update && apt-get install -y \
+            intel-media-va-driver-non-free \
+            libva-drm2 \
+            libva2 \
+            vainfo \
+            libmfx-gen1.2 \
+        && rm -rf /var/lib/apt/lists/* ; \
+    fi
+
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    imagemagick \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install API dependencies
+# Install API dependencies. gunicorn is in requirements.txt, so it is pinned and
+# Dependabot sees it; this image must not install it again.
 COPY apps/api/requirements.txt /workspace/apps/api/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/apps/api/requirements.txt
-RUN pip install --no-cache-dir gunicorn
 
 # Copy transcoder package and API
 COPY packages/transcoder /workspace/packages/transcoder
 COPY apps/api /workspace/apps/api
 
 # Create non-root user
-RUN adduser --disabled-password --no-create-home appuser
+RUN adduser --disabled-password appuser
 
 WORKDIR /workspace
 
@@ -36,4 +60,5 @@ CMD ["gunicorn", "apps.api.main:app", \
      "-k", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
      "--timeout", "120", \
-     "--graceful-timeout", "30"]
+     "--graceful-timeout", "30", \
+     "--access-logfile", "-"]

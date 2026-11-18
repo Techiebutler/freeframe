@@ -2,25 +2,19 @@
 
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import * as Switch from "@radix-ui/react-switch";
 import useSWR from "swr";
 import {
-  ArrowLeft,
   Copy,
   Check,
   ExternalLink,
   Lock,
   Calendar,
   Paintbrush,
-  LayoutGrid,
-  LayoutList,
   Eye,
   EyeOff,
   ChevronDown,
   ChevronRight,
   MessageSquare,
-  Download,
-  Layers,
   Droplets,
   Globe,
   Image as ImageIcon,
@@ -28,11 +22,22 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, copyToClipboard, dateInputValue, endOfDayISO } from "@/lib/utils";
+import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
 import { FolderShareViewer } from "@/components/share/folder-share-viewer";
-import type { ShareLink, ShareLinkAppearance } from "@/types";
+import {
+  ShareAppearanceFields,
+  DEFAULT_SHARE_APPEARANCE,
+} from "@/components/projects/share-appearance-fields";
+import { ToggleRow } from "@/components/ui/setting-controls";
+import { resolveShareLogoUrl } from "@/lib/project-branding";
+import type { Project, ProjectBranding, ShareBranding, ShareLink, ShareLinkAppearance } from "@/types";
+import {
+  SHARE_PASSWORD_TOO_LONG,
+  sharePasswordTooLong,
+} from "@/lib/share-password";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
 
@@ -61,6 +66,12 @@ function useShareLinkData(token: string) {
     [token, mutate],
   );
 
+  // Drop a change still waiting in the debounce, so it is never sent.
+  const cancelPendingUpdate = React.useCallback(() => {
+    if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    updateTimerRef.current = null;
+  }, []);
+
   const immediateUpdate = React.useCallback(
     async (updates: Record<string, unknown>) => {
       try {
@@ -73,21 +84,11 @@ function useShareLinkData(token: string) {
     [token, mutate],
   );
 
-  const appearance: ShareLinkAppearance = shareLink?.appearance || {
-    layout: "grid",
-    theme: "dark",
-    accent_color: null,
-    open_in_viewer: false,
-    sort_by: "name",
-    card_size: "m",
-    aspect_ratio: "landscape",
-    thumbnail_scale: "fit",
-    show_card_info: true,
-    header_banner_key: null,
-    header_banner_position_x: 50,
-    header_banner_position_y: 50,
-    header_banner_zoom: 1,
-  };
+  // A link without a stored appearance renders on the API's defaults, so the
+  // panel shows (and patches from) those same values. The header banner fields
+  // are optional and left out: the API fills them in (no banner, centred,
+  // unzoomed) and every reader falls back to the same values.
+  const appearance: ShareLinkAppearance = shareLink?.appearance || DEFAULT_SHARE_APPEARANCE;
 
   const updateAppearance = React.useCallback(
     (patch: Partial<ShareLinkAppearance>) => {
@@ -101,6 +102,7 @@ function useShareLinkData(token: string) {
     shareLink,
     mutate,
     debouncedUpdate,
+    cancelPendingUpdate,
     immediateUpdate,
     appearance,
     updateAppearance,
@@ -149,46 +151,6 @@ function Section({
         )}
       </button>
       {isOpen && <div className="px-4 pb-4 space-y-3">{children}</div>}
-    </div>
-  );
-}
-
-// ─── Toggle Row ──────────────────────────────────────────────────────────────
-
-function ToggleRow({
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <p className="text-sm text-text-primary">{label}</p>
-        {description && (
-          <p className="text-xs text-text-tertiary mt-0.5">{description}</p>
-        )}
-      </div>
-      <Switch.Root
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        className={cn(
-          "relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-          checked ? "bg-accent" : "bg-bg-hover",
-        )}
-      >
-        <Switch.Thumb
-          className={cn(
-            "block h-4 w-4 rounded-full bg-white transition-transform",
-            checked ? "translate-x-[18px]" : "translate-x-[2px]",
-          )}
-        />
-      </Switch.Root>
     </div>
   );
 }
@@ -488,13 +450,9 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
   const [copied, setCopied] = React.useState(false);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
+    if (!(await copyToClipboard(text))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -527,13 +485,9 @@ function CopyLinkButton({ text }: { text: string }) {
   const [copied, setCopied] = React.useState(false);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
+    if (!(await copyToClipboard(text))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -601,7 +555,7 @@ function HeaderBannerDialog({
     if (!open) return;
     setError(null);
     setDraft({
-      key: appearance.header_banner_key,
+      key: appearance.header_banner_key ?? null,
       url: appearance.header_banner_url ?? null,
       positionX: appearance.header_banner_position_x ?? 50,
       positionY: appearance.header_banner_position_y ?? 50,
@@ -772,90 +726,52 @@ interface ShareLinkSettingsPanelProps {
 
 // ─── ShareLinkContent (LEFT/MAIN panel) ─────────────────────────────────────
 
+/**
+ * The link's page, embedded and editable: the real share page component
+ * (FolderShareViewer) rendered in the link's appearance, with the title and
+ * description editable in place. The settings panel mutates the same SWR key,
+ * so a saved setting re-renders the preview at once. `onBack` and
+ * `frontendUrl` stay on the props for callers; the open/copy actions live in
+ * the settings panel's footer.
+ */
 export function ShareLinkContent({
   token,
   projectId,
-  onBack,
-  frontendUrl,
   onUpdate,
 }: ShareLinkContentProps) {
   const { shareLink, immediateUpdate, appearance } = useShareLinkData(token);
 
-  const [localTitle, setLocalTitle] = React.useState("");
-  const [localDescription, setLocalDescription] = React.useState("");
-  const [previewThumbnails, setPreviewThumbnails] = React.useState<
-    {
-      id: string;
-      name: string;
-      thumbnail_url: string | null;
-      asset_type: string;
-    }[]
-  >([]);
-  const [previewFolders, setPreviewFolders] = React.useState<
-    { id: string; name: string; item_count: number }[]
-  >([]);
+  // The page takes the project's branding (logo, colour, footer) for every
+  // link type, so the preview reads it from the same place the API does.
+  const [projectBranding, setProjectBranding] = React.useState<ProjectBranding | null>(null);
+  const { data: project } = useSWR<Project>(`/projects/${projectId}`, (key: string) =>
+    api.get<Project>(key),
+  );
 
   React.useEffect(() => {
-    if (shareLink) {
-      setLocalTitle(shareLink.title || "");
-      setLocalDescription(shareLink.description || "");
-    }
-  }, [shareLink]);
+    let cancelled = false;
+    api
+      .get<ProjectBranding>(`/projects/${projectId}/branding`)
+      .then((b) => !cancelled && setProjectBranding(b ?? null))
+      .catch(() => !cancelled && setProjectBranding(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
-  // Fetch preview data for shares
-  React.useEffect(() => {
-    if (!shareLink) return;
-    const folderId = shareLink.folder_id;
-    const isProjectShare = !folderId && !shareLink.asset_id;
-
-    if (shareLink.asset_id) {
-      // Asset share: fetch the single asset
-      api
-        .get<{
-          id: string;
-          name: string;
-          asset_type: string;
-          thumbnail_url: string | null;
-        }>(`/assets/${shareLink.asset_id}`)
-        .then((asset) => setPreviewThumbnails([asset]))
-        .catch(() => setPreviewThumbnails([]));
-      setPreviewFolders([]);
-    } else if (folderId || isProjectShare) {
-      // Folder, project root, or multi-share: use the share endpoint
-      // to get only the items actually included in this share link
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const headers: Record<string, string> = {};
-      try {
-        const t = localStorage.getItem('ff_access_token');
-        if (t) headers['Authorization'] = `Bearer ${t}`;
-      } catch {}
-      fetch(`${API_URL}/share/${token}/assets?page=1&per_page=50`, { headers })
-        .then((r) => r.ok ? r.json() : Promise.reject())
-        .then((data) => {
-          setPreviewThumbnails(
-            (data.assets || []).slice(0, 4).map((a: any) => ({
-              id: a.id,
-              name: a.name,
-              asset_type: a.asset_type,
-              thumbnail_url: a.thumbnail_url,
-            }))
-          );
-          setPreviewFolders(
-            (data.subfolders || []).map((f: any) => ({
-              id: f.id,
-              name: f.name,
-              item_count: f.item_count ?? 0,
-            }))
-          );
-        })
-        .catch(() => {
-          setPreviewThumbnails([]);
-          setPreviewFolders([]);
-        });
-    }
-  }, [shareLink, projectId]);
-
-  const shareUrl = `${frontendUrl}/s/${shareLink?.custom_slug ?? shareLink?.short_code ?? token}`;
+  // The branding the share API sends: the resolved project logo (the cover
+  // when the project uses it as its logo), the project colour and the footer.
+  const previewBranding: ShareBranding | null = projectBranding
+    ? {
+        logo_url: resolveShareLogoUrl({
+          useCoverAsLogo: projectBranding.use_cover_as_logo ?? false,
+          coverUrl: project?.poster_url,
+          logoUrl: projectBranding.logo_url,
+        }),
+        primary_color: projectBranding.primary_color ?? null,
+        custom_footer: projectBranding.custom_footer ?? null,
+      }
+    : null;
 
   if (!shareLink) {
     return (
@@ -881,170 +797,14 @@ export function ShareLinkContent({
         allowDownload={shareLink.allow_download}
         showVersions={shareLink.show_versions}
         appearance={appearance}
-        branding={null}
+        branding={previewBranding}
         onTitleCommit={(title) => {
-          setLocalTitle(title);
           void immediateUpdate({ title }).then(() => onUpdate?.());
         }}
         onDescriptionCommit={(description) => {
-          setLocalDescription(description ?? "");
           void immediateUpdate({ description }).then(() => onUpdate?.());
         }}
       />
-      <div className="hidden">
-      <div className="p-6 space-y-6">
-        {/* Back button */}
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          All Share Links
-        </button>
-
-        {/* Editable title */}
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            value={localTitle}
-            onChange={(e) => setLocalTitle(e.target.value)}
-            onBlur={() => {
-              if (localTitle !== shareLink.title) {
-                immediateUpdate({ title: localTitle }).then(() => onUpdate?.());
-              }
-            }}
-            placeholder="Untitled Share Link"
-            className="min-w-0 flex-1 bg-transparent text-2xl font-semibold text-text-primary placeholder:text-text-tertiary outline-none border-none focus:ring-0"
-          />
-          <button
-            onClick={() => window.dispatchEvent(new Event("freeframe:open-share-banner-editor"))}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-bg-tertiary px-3 py-2 text-xs font-medium text-text-primary hover:bg-bg-hover transition-colors"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            Edit header
-          </button>
-        </div>
-
-        {/* Editable description */}
-        <textarea
-          value={localDescription}
-          onChange={(e) => setLocalDescription(e.target.value)}
-          onBlur={() => {
-            if (localDescription !== (shareLink.description || "")) {
-              immediateUpdate({ description: localDescription || null });
-            }
-          }}
-          placeholder="Add a description..."
-          rows={2}
-          className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
-        />
-
-        {/* Content preview — matches project view style */}
-        {previewFolders.length > 0 || previewThumbnails.length > 0 ? (
-          <div className="space-y-4">
-            {/* Folders */}
-            {previewFolders.length > 0 && (
-              <>
-                <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {previewFolders.length}{" "}
-                  {previewFolders.length === 1 ? "Folder" : "Folders"}
-                </span>
-                <div className="grid grid-cols-3 gap-3">
-                  {previewFolders.map((folder) => (
-                    <div
-                      key={folder.id}
-                      className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
-                    >
-                      <div className="aspect-[4/3] flex items-center justify-center bg-bg-tertiary">
-                        <svg
-                          className="h-10 w-10 text-text-tertiary/50"
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="24"
-                          height="24"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-                        </svg>
-                      </div>
-                      <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
-                          {folder.name}
-                        </p>
-                        <p className="text-xs text-text-tertiary mt-0.5">
-                          {folder.item_count}{" "}
-                          {folder.item_count === 1 ? "Item" : "Items"}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-            {/* Assets */}
-            {previewThumbnails.length > 0 && (
-              <>
-                <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {previewThumbnails.length}{" "}
-                  {previewThumbnails.length === 1 ? "Asset" : "Assets"}
-                </span>
-                <div className="grid grid-cols-3 gap-3">
-                  {previewThumbnails.slice(0, 6).map((asset) => (
-                    <div
-                      key={asset.id}
-                      className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
-                    >
-                      <div className="aspect-[16/10] bg-bg-tertiary flex items-center justify-center overflow-hidden">
-                        {asset.thumbnail_url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={asset.thumbnail_url}
-                            alt={asset.name}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <Eye className="h-8 w-8 text-text-tertiary/40" />
-                        )}
-                      </div>
-                      <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
-                          {asset.name}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-border bg-bg-tertiary/50 p-8 flex flex-col items-center justify-center text-center space-y-3">
-            <div className="h-12 w-12 rounded-full bg-bg-tertiary flex items-center justify-center">
-              <Eye className="h-6 w-6 text-text-tertiary" />
-            </div>
-            <p className="text-sm font-medium text-text-primary">
-              No content yet
-            </p>
-          </div>
-        )}
-
-        {/* Action buttons */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => window.open(shareUrl, "_blank")}
-            className="inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-text-inverse hover:bg-accent/90 transition-colors"
-          >
-            <ExternalLink className="h-4 w-4" />
-            Open Share Link
-          </button>
-          <CopyLinkButton text={shareUrl} />
-        </div>
-      </div>
-      </div>
     </div>
   );
 }
@@ -1056,6 +816,7 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
     shareLink,
     mutate,
     debouncedUpdate,
+    cancelPendingUpdate,
     immediateUpdate,
     appearance,
     updateAppearance,
@@ -1067,7 +828,8 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
   const [localPassword, setLocalPassword] = React.useState("");
   const [passwordEnabled, setPasswordEnabled] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
-  const [localAccentColor, setLocalAccentColor] = React.useState("");
+  // The typed password is over the API's limit, so it is not being saved.
+  const [passwordTooLong, setPasswordTooLong] = React.useState(false);
   const [appearanceOpen, setAppearanceOpen] = React.useState(false);
   const [bannerDialogOpen, setBannerDialogOpen] = React.useState(false);
   const [customSlug, setCustomSlug] = React.useState("");
@@ -1077,7 +839,6 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
     if (shareLink) {
       setPasswordEnabled(shareLink.has_password ?? false);
       setLocalPassword(shareLink.password_value || "");
-      setLocalAccentColor(shareLink.appearance?.accent_color || "");
       setCustomSlug(shareLink.custom_slug || "");
     }
   }, [shareLink]);
@@ -1094,8 +855,8 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
 
   const shareUrl =
     typeof window !== "undefined"
-      ? `${window.location.origin}/s/${shareLink?.custom_slug ?? shareLink?.short_code ?? token}`
-      : `/s/${shareLink?.custom_slug ?? shareLink?.short_code ?? token}`;
+      ? `${window.location.origin}${withBasePath(`/s/${shareLink?.custom_slug ?? shareLink?.short_code ?? token}`)}`
+      : withBasePath(`/s/${shareLink?.custom_slug ?? shareLink?.short_code ?? token}`);
 
   async function saveCustomSlug() {
     if (!shareLink) return;
@@ -1110,6 +871,13 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
       setCustomSlugError(error instanceof Error ? error.message : "Could not save the custom link name.");
     }
   }
+
+  // The link has a password but the API did not send it back: it shows the
+  // password only to the people who manage the link, and not at all once the
+  // key it was stored under has changed. The box then starts empty, and typing
+  // replaces the password.
+  const passwordHidden =
+    !!shareLink?.has_password && !shareLink?.password_value;
 
   if (!shareLink) {
     return (
@@ -1274,24 +1042,44 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
                 onCheckedChange={(checked) => {
                   setPasswordEnabled(checked);
                   if (!checked) {
+                    cancelPendingUpdate();
                     setLocalPassword("");
                     setShowPassword(false);
+                    setPasswordTooLong(false);
                     immediateUpdate({ password: null });
                   }
                 }}
               />
+              {passwordEnabled && passwordHidden && (
+                <p className="text-xs text-text-tertiary">Password set</p>
+              )}
               {passwordEnabled && (
                 <div className="relative">
                   <input
                     type={showPassword ? "text" : "password"}
                     value={localPassword}
+                    // Keeps the browser from filling in a saved password,
+                    // which would save it over the link's.
+                    autoComplete="new-password"
                     onChange={(e) => {
                       setLocalPassword(e.target.value);
-                      debouncedUpdate({
-                        password: e.target.value.trim() || null,
-                      });
+                      const next = e.target.value.trim();
+                      // Over the limit the API refuses the save, and this
+                      // panel would not show that, so it is never sent and
+                      // the message below says why.
+                      const tooLong = sharePasswordTooLong(next);
+                      setPasswordTooLong(tooLong);
+                      // An empty box is not "remove the password": the
+                      // toggle above does that. Typing is only ever a new one.
+                      if (next && !tooLong) debouncedUpdate({ password: next });
+                      else cancelPendingUpdate();
                     }}
-                    placeholder="Enter passphrase"
+                    aria-invalid={passwordTooLong || undefined}
+                    placeholder={
+                      passwordHidden
+                        ? "Type a new passphrase to replace it"
+                        : "Enter passphrase"
+                    }
                     className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 pr-12 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
                   />
                   <button
@@ -1307,6 +1095,11 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
                   </button>
                 </div>
               )}
+              {passwordEnabled && passwordTooLong && (
+                <p role="alert" className="text-xs text-status-error">
+                  {SHARE_PASSWORD_TOO_LONG}
+                </p>
+              )}
 
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -1321,17 +1114,11 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
                   <Calendar className="h-3.5 w-3.5 text-text-tertiary" />
                   <input
                     type="date"
-                    value={
-                      shareLink.expires_at
-                        ? new Date(shareLink.expires_at)
-                            .toISOString()
-                            .split("T")[0]
-                        : ""
-                    }
+                    value={dateInputValue(shareLink.expires_at)}
                     onChange={(e) => {
                       const val = e.target.value;
                       immediateUpdate({
-                        expires_at: val ? new Date(val).toISOString() : null,
+                        expires_at: val ? endOfDayISO(val) : null,
                       });
                     }}
                     className="w-[130px] rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary outline-none focus:border-accent/50 [color-scheme:auto]"
@@ -1349,7 +1136,9 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
               />
             </Section>
 
-            {/* Appearance */}
+            {/* Appearance — the same block the create dialog shows, minus the
+                current-view copy: editing a saved link, there is no folder view
+                on screen to copy from. An asset link gets only theme and accent. */}
             <Section
               title="Appearance"
               icon={<Paintbrush className="h-3.5 w-3.5" />}
@@ -1380,212 +1169,11 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
                 )}
               </div>
 
-              {/* Layout — Grid / List */}
-              <div className="space-y-1.5">
-                <p className="text-xs text-text-secondary">Layout</p>
-                <div className="flex gap-2">
-                  {(["grid", "list"] as const).map((layout) => (
-                    <button
-                      key={layout}
-                      onClick={() => updateAppearance({ layout })}
-                      className={cn(
-                        "flex-1 flex flex-col items-center gap-1.5 rounded-lg border py-3 text-xs font-medium capitalize transition-colors",
-                        appearance.layout === layout
-                          ? "bg-accent/10 border-accent text-accent"
-                          : "border-border text-text-secondary hover:text-text-primary hover:border-border-focus",
-                      )}
-                    >
-                      {layout === "grid" ? (
-                        <LayoutGrid className="h-4 w-4" />
-                      ) : (
-                        <LayoutList className="h-4 w-4" />
-                      )}
-                      {layout}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Open in viewer */}
-              <ToggleRow
-                label="Open in viewer"
-                description="Click assets to open full viewer"
-                checked={appearance.open_in_viewer}
-                onCheckedChange={(checked) =>
-                  updateAppearance({ open_in_viewer: checked })
-                }
+              <ShareAppearanceFields
+                appearance={appearance}
+                kind={shareLink.asset_id ? "asset" : "collection"}
+                onChange={updateAppearance}
               />
-
-              {/* Theme — Dark / Light */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Theme</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {(["dark", "light"] as const).map((theme) => (
-                    <button
-                      key={theme}
-                      onClick={() => updateAppearance({ theme })}
-                      className={cn(
-                        "px-4 py-1.5 text-xs font-medium capitalize transition-colors",
-                        appearance.theme === theme
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {theme === "dark" ? "🌙" : "☀️"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Accent color */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Accent Color</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-text-tertiary">#</span>
-                  <input
-                    type="text"
-                    value={localAccentColor}
-                    onChange={(e) => setLocalAccentColor(e.target.value)}
-                    onBlur={() => {
-                      const color = localAccentColor.trim() || null;
-                      if (color !== (appearance.accent_color || "")) {
-                        updateAppearance({
-                          accent_color: color
-                            ? `#${color.replace("#", "")}`
-                            : null,
-                        });
-                      }
-                    }}
-                    placeholder="None"
-                    maxLength={7}
-                    className="w-20 rounded border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 font-mono"
-                  />
-                  <label className="relative h-6 w-6 rounded-full border border-border cursor-pointer overflow-hidden shrink-0">
-                    <div
-                      className="absolute inset-0 rounded-full"
-                      style={{
-                        backgroundColor: localAccentColor
-                          ? `#${localAccentColor.replace("#", "")}`
-                          : "#6366f1",
-                      }}
-                    />
-                    <input
-                      type="color"
-                      value={
-                        localAccentColor
-                          ? `#${localAccentColor.replace("#", "")}`
-                          : "#6366f1"
-                      }
-                      onChange={(e) => {
-                        const hex = e.target.value.replace("#", "");
-                        setLocalAccentColor(hex);
-                        updateAppearance({ accent_color: `#${hex}` });
-                      }}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {/* Card Size — S / M / L */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Card Size</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {(["s", "m", "l"] as const).map((size) => (
-                    <button
-                      key={size}
-                      onClick={() => updateAppearance({ card_size: size })}
-                      className={cn(
-                        "px-4 py-1.5 text-xs font-medium uppercase transition-colors",
-                        (appearance.card_size || "m") === size
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {size}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Aspect Ratio */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Aspect Ratio</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {[
-                    { value: "landscape" as const, icon: "▭" },
-                    { value: "square" as const, icon: "□" },
-                    { value: "portrait" as const, icon: "▯" },
-                  ].map(({ value, icon }) => (
-                    <button
-                      key={value}
-                      onClick={() => updateAppearance({ aspect_ratio: value })}
-                      className={cn(
-                        "px-4 py-1.5 text-sm transition-colors",
-                        (appearance.aspect_ratio || "landscape") === value
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {icon}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Thumbnail Scale — Fit / Fill */}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-text-primary">Thumbnail Scale</p>
-                <div className="flex rounded-lg border border-border overflow-hidden">
-                  {(["fit", "fill"] as const).map((scale) => (
-                    <button
-                      key={scale}
-                      onClick={() =>
-                        updateAppearance({ thumbnail_scale: scale })
-                      }
-                      className={cn(
-                        "px-4 py-1.5 text-xs font-medium capitalize transition-colors",
-                        (appearance.thumbnail_scale || "fill") === scale
-                          ? "bg-accent text-text-inverse"
-                          : "text-text-secondary hover:text-text-primary",
-                      )}
-                    >
-                      {scale}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Show Card Info */}
-              <ToggleRow
-                label="Show Card Info"
-                description="Display name, type, and size below thumbnail"
-                checked={appearance.show_card_info !== false}
-                onCheckedChange={(checked) =>
-                  updateAppearance({ show_card_info: checked })
-                }
-              />
-            </Section>
-
-            {/* Sort By */}
-            <Section
-              title="Sort By"
-              icon={<Layers className="h-3.5 w-3.5" />}
-              defaultOpen={false}
-            >
-              <select
-                value={appearance.sort_by}
-                onChange={(e) =>
-                  updateAppearance({
-                    sort_by: e.target.value as ShareLinkAppearance["sort_by"],
-                  })
-                }
-                className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 [color-scheme:auto]"
-              >
-                <option value="name">Name</option>
-                <option value="created_at">Date created</option>
-                <option value="file_size">Size</option>
-              </select>
             </Section>
           </div>
         ) : (

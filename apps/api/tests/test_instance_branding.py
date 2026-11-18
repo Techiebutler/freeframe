@@ -1,0 +1,391 @@
+"""Tests for instance branding — logo upload, CRUD, and presigned URL generation."""
+import uuid
+from datetime import datetime, timezone
+import pytest
+from unittest.mock import patch, MagicMock
+
+from apps.api.models.instance_branding import InstanceBranding
+
+
+# ── GET /instance/branding ──────────────────────────────────────────────
+
+def test_get_branding_returns_defaults(client, mock_db):
+    mock_db.first.return_value = None  # no row yet → auto-create
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ):
+        r = client.get("/instance/branding")
+    assert r.status_code == 200
+    body = r.json()
+    assert "org_name" in body
+    assert "powered_by_freeframe" in body
+    assert body["default_login_mode"] == "magic_code"
+
+
+# ── PUT /instance/branding ──────────────────────────────────────────────
+
+def test_put_branding_requires_admin(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = False
+    r = client.put("/instance/branding", headers=auth_headers, json={"org_name": "Acme"})
+    assert r.status_code == 403
+
+
+def test_put_branding_updates_fields(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = True
+    mock_db.first.return_value = None
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ):
+        r = client.put(
+            "/instance/branding",
+            headers=auth_headers,
+            json={"org_name": "Acme", "powered_by_freeframe": False},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["org_name"] == "Acme"
+    assert body["powered_by_freeframe"] is False
+
+
+def test_put_branding_sets_default_login_mode(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = True
+    mock_db.first.return_value = None
+
+    r = client.put(
+        "/instance/branding",
+        headers=auth_headers,
+        json={"default_login_mode": "password"},
+    )
+    assert r.status_code == 200
+    assert r.json()["default_login_mode"] == "password"
+
+
+@pytest.mark.parametrize("value", ["sso", None])
+def test_put_branding_rejects_bad_default_login_mode(client, auth_headers, mock_db, test_user, value):
+    """Only the two forms the login page has are accepted, and null would hit a NOT NULL column."""
+    test_user.is_superadmin = True
+    r = client.put(
+        "/instance/branding",
+        headers=auth_headers,
+        json={"default_login_mode": value},
+    )
+    assert r.status_code == 422
+
+
+def test_put_branding_null_logo_key_deletes_old_object(client, auth_headers, mock_db, test_user, monkeypatch):
+    """Clearing a logo key with an explicit null must delete the old S3 object."""
+    test_user.is_superadmin = True
+
+    now = datetime.now(timezone.utc)
+    branding = InstanceBranding(
+        id=uuid.uuid4(),
+        org_name="FreeFrame",
+        powered_by_freeframe=True,
+        created_at=now,
+        updated_at=now,
+    )
+    branding.logo_light_key = "branding/logo-light/old-key"
+    mock_db.first.return_value = branding
+
+    delete_calls = []
+    monkeypatch.setattr(
+        "apps.api.routers.instance_branding.s3_service.delete_object",
+        lambda key: delete_calls.append(key),
+    )
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ):
+        r = client.put(
+            "/instance/branding",
+            headers=auth_headers,
+            json={"logo_light_key": None},
+        )
+    assert r.status_code == 200
+    assert delete_calls == ["branding/logo-light/old-key"]
+    assert branding.logo_light_key is None
+
+
+# ── POST /instance/branding/{logo_type}-upload ──────────────────────────
+
+def test_upload_presign_requires_admin(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = False
+    r = client.post(
+        "/instance/branding/logo-light-upload",
+        headers=auth_headers,
+        params={"content_type": "image/png"},
+    )
+    assert r.status_code == 403
+
+
+def test_upload_presign_rejects_invalid_logo_type(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = True
+    r = client.post(
+        "/instance/branding/banana-upload",
+        headers=auth_headers,
+        params={"content_type": "image/png"},
+    )
+    assert r.status_code == 400
+    assert "Invalid logo type" in r.json()["detail"]
+
+
+def test_upload_presign_uses_generate_presigned_put_url(client, auth_headers, mock_db, test_user, monkeypatch):
+    """The endpoint must call generate_presigned_put_url (public endpoint), not raw S3 client."""
+    test_user.is_superadmin = True
+
+    calls = []
+
+    def fake_put_url(key, content_type=None, expires_in=3600):
+        calls.append({"key": key, "content_type": content_type, "expires_in": expires_in})
+        return f"https://public.example.com/put/{key}"
+
+    monkeypatch.setattr(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_put_url",
+        fake_put_url,
+    )
+
+    r = client.post(
+        "/instance/branding/logo-light-upload",
+        headers=auth_headers,
+        params={"content_type": "image/png"},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["upload_url"].startswith("https://public.example.com/put/")
+    assert body["key"].startswith("branding/logo-light/")
+
+    assert len(calls) == 1
+    assert calls[0]["content_type"] == "image/png"
+    assert calls[0]["expires_in"] == 3600
+
+
+def test_upload_presign_passes_client_content_type(client, auth_headers, mock_db, test_user, monkeypatch):
+    """When the frontend provides ?content_type=, it must be forwarded — not overridden by the slot default."""
+    test_user.is_superadmin = True
+
+    received = {}
+
+    def fake_put_url(key, content_type=None, expires_in=3600):
+        received["content_type"] = content_type
+        return "https://example.com/put"
+
+    monkeypatch.setattr(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_put_url",
+        fake_put_url,
+    )
+
+    # the favicon slot used to be hardcoded to "image/x-icon"
+    r = client.post(
+        "/instance/branding/favicon-upload",
+        headers=auth_headers,
+        params={"content_type": "image/svg+xml"},
+    )
+    assert r.status_code == 201
+    assert received["content_type"] == "image/svg+xml", (
+        "Client-supplied content_type must take precedence; the old code "
+        "hardcoded 'image/x-icon' for favicon which would mismatch an SVG upload."
+    )
+
+
+def test_upload_presign_without_content_type_leaves_it_unsigned(client, auth_headers, mock_db, test_user, monkeypatch):
+    """When no ?content_type= is provided, ContentType must NOT be signed — S3 won't validate it."""
+    test_user.is_superadmin = True
+
+    received = {}
+
+    def fake_put_url(key, content_type=None, expires_in=3600):
+        received["content_type"] = content_type
+        return "https://example.com/put"
+
+    monkeypatch.setattr(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_put_url",
+        fake_put_url,
+    )
+
+    r = client.post(
+        "/instance/branding/logo-light-upload",
+        headers=auth_headers,
+        # No content_type query param at all
+    )
+    assert r.status_code == 201
+    assert received["content_type"] is None, (
+        "Without a content_type query param, the presigned URL must not pin a ContentType. "
+        "The old code hardcoded 'image/webp' which mismatches PNG/SVG uploads and S3 403s."
+    )
+
+
+def test_upload_presign_key_prefix_matches_logo_type(client, auth_headers, mock_db, test_user, monkeypatch):
+    """Each slot must use its own key prefix so uploads don't collide."""
+    test_user.is_superadmin = True
+    received_keys = []
+
+    def fake_put_url(key, content_type=None, expires_in=3600):
+        received_keys.append(key)
+        return "https://example.com/put"
+
+    monkeypatch.setattr(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_put_url",
+        fake_put_url,
+    )
+
+    for slot in ["logo-dark", "apple-icon", "login-logo"]:
+        r = client.post(
+            f"/instance/branding/{slot}-upload",
+            headers=auth_headers,
+        )
+        assert r.status_code == 201
+
+    assert any(k.startswith("branding/logo-dark/") for k in received_keys)
+    assert any(k.startswith("branding/apple-icon/") for k in received_keys)
+    assert any(k.startswith("branding/login-logo/") for k in received_keys)
+
+
+# ── DELETE /instance/branding/logo/{logo_type} ──────────────────────────
+
+def test_delete_logo_requires_admin(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = False
+    r = client.delete("/instance/branding/logo/logo-light", headers=auth_headers)
+    assert r.status_code == 403
+
+
+def test_delete_logo_invalid_type(client, auth_headers, mock_db, test_user):
+    test_user.is_superadmin = True
+    r = client.delete("/instance/branding/logo/banana", headers=auth_headers)
+    assert r.status_code == 400
+
+
+def test_delete_logo_clears_key_and_deletes_object(client, auth_headers, mock_db, test_user, monkeypatch):
+    test_user.is_superadmin = True
+
+    now = datetime.now(timezone.utc)
+    branding = InstanceBranding(
+        id=uuid.uuid4(),
+        org_name="FreeFrame",
+        powered_by_freeframe=True,
+        created_at=now,
+        updated_at=now,
+    )
+    branding.logo_light_key = "branding/logo-light/old-key"
+    branding.logo_dark_key = None
+    branding.favicon_key = None
+    branding.apple_icon_key = None
+    branding.login_logo_key = None
+    mock_db.first.return_value = branding
+
+    delete_calls = []
+    monkeypatch.setattr(
+        "apps.api.routers.instance_branding.s3_service.delete_object",
+        lambda key: delete_calls.append(key),
+    )
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ):
+        r = client.delete("/instance/branding/logo/logo-light", headers=auth_headers)
+
+    assert r.status_code == 200
+    assert delete_calls == ["branding/logo-light/old-key"]
+    assert branding.logo_light_key is None
+    mock_db.commit.assert_called_once()
+
+
+# ── GET /instance/branding/logo/{logo_type} ─────────────────────────────
+# The branding response carries a stable path for each logo instead of a signed
+# link that expires an hour later, so a browser, the persisted client store and
+# the server-rendered HTML can all keep it. The path redirects to a fresh link.
+
+def _branding_with(**keys):
+    now = datetime.now(timezone.utc)
+    branding = InstanceBranding(
+        id=uuid.uuid4(),
+        org_name="Acme",
+        powered_by_freeframe=True,
+        created_at=now,
+        updated_at=now,
+    )
+    for column, key in keys.items():
+        setattr(branding, column, key)
+    return branding
+
+
+def test_get_branding_returns_stable_logo_paths_not_signed_links(client, mock_db):
+    mock_db.first.return_value = _branding_with(
+        logo_light_key="branding/logo-light/3f6b0c1e",
+        favicon_key="branding/favicon/9a2d77e0",
+    )
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ) as sign:
+        r = client.get("/instance/branding")
+
+    assert r.status_code == 200
+    body = r.json()
+    # The key's last segment changes on every upload, so a replaced logo gets a new URL.
+    assert body["logo_light_url"] == "/instance/branding/logo/logo-light?v=3f6b0c1e"
+    assert body["favicon_url"] == "/instance/branding/logo/favicon?v=9a2d77e0"
+    assert body["logo_dark_url"] is None
+    assert body["apple_icon_url"] is None
+    assert body["login_logo_url"] is None
+    sign.assert_not_called()
+
+
+def test_logo_path_redirects_to_a_freshly_signed_url(client, mock_db):
+    """No sign-in: the sign-in and share pages show these logos too."""
+    mock_db.first.return_value = _branding_with(logo_dark_key="branding/logo-dark/k1")
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://s3.example.com/branding/logo-dark/k1?X-Amz-Signature=abc",
+    ) as sign:
+        r = client.get("/instance/branding/logo/logo-dark?v=k1", follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "https://s3.example.com/branding/logo-dark/k1?X-Amz-Signature=abc"
+    sign.assert_called_once()
+    assert sign.call_args.args[0] == "branding/logo-dark/k1"
+
+    # A cached redirect must never outlive the link it points at.
+    cache_control = r.headers["cache-control"]
+    assert "public" in cache_control
+    max_age = int(cache_control.split("max-age=")[1].split(",")[0])
+    expires_in = sign.call_args.kwargs["expires_in"]
+    assert 0 < max_age < expires_in
+
+
+@pytest.mark.parametrize(
+    "path,keys",
+    [
+        ("/instance/branding/logo/logo-light", {}),  # slot never set
+        ("/instance/branding/logo/logo-light", {"logo_light_key": "raw/p/a/v/original.mp4"}),  # not issued for it
+        ("/instance/branding/logo/logo-light", {"logo_light_key": "branding/logo-dark/k1"}),  # another slot's key
+        ("/instance/branding/logo/banana", {"logo_light_key": "branding/logo-light/k1"}),  # unknown slot
+    ],
+)
+def test_logo_path_answers_404_without_signing_anything(client, mock_db, path, keys):
+    mock_db.first.return_value = _branding_with(**keys)
+
+    with patch(
+        "apps.api.routers.instance_branding.s3_service.generate_presigned_get_url",
+        return_value="https://example.com/presigned-get",
+    ) as sign:
+        r = client.get(path, follow_redirects=False)
+
+    assert r.status_code == 404
+    sign.assert_not_called()
+
+
+def test_logo_path_answers_404_before_branding_is_saved(client, mock_db):
+    mock_db.first.return_value = None
+
+    r = client.get("/instance/branding/logo/favicon", follow_redirects=False)
+
+    assert r.status_code == 404
+    mock_db.add.assert_not_called()

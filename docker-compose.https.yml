@@ -1,0 +1,45 @@
+# ============================================================
+# FreeFrame - opt-in HTTPS (Let's Encrypt) for docker-compose.prod.yml
+# ============================================================
+# Usage:
+#   docker compose --env-file .env.prod \
+#     -f docker-compose.prod.yml -f docker-compose.https.yml up -d
+#
+# Requires DOMAIN and ACME_EMAIL in .env.prod, a DNS record for DOMAIN
+# pointing at this host, and ports 80 and 443 reachable from the internet
+# (port 80 is used for the HTTP-01 challenge).
+#
+# Why this file exists: Traefik takes the domains it requests certificates
+# for from Host() rules. The routers in docker-compose.prod.yml match on
+# PathPrefix() only, so Traefik logs `No domain parsed in provider ACME` and
+# never requests a certificate. This file adds Host() routers on the websecure
+# entrypoint and redirects plain http to https. It only adds to the base file:
+# the base routers stay as they are, so nothing changes for anyone who does
+# not pass this file.
+# ============================================================
+
+services:
+  traefik:
+    environment:
+      # The base Traefik command cannot change, so ACME_EMAIL is required here
+      # by interpolation instead. Traefik ignores this variable.
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required with docker-compose.https.yml (Let's Encrypt contact address)}
+
+  api:
+    labels:
+      # Redirect plain http to https first, then strip the prefix as before.
+      - traefik.http.routers.api.middlewares=https-redirect,strip-api-prefix
+      - traefik.http.routers.api-https.rule=Host(`${DOMAIN:?DOMAIN is required with docker-compose.https.yml}`) && PathPrefix(`/api`)
+      - traefik.http.routers.api-https.entrypoints=websecure
+      - traefik.http.routers.api-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.api-https.middlewares=strip-api-prefix
+      - traefik.http.routers.api-https.service=api
+
+  web:
+    labels:
+      - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
+      - traefik.http.routers.web.middlewares=https-redirect
+      - traefik.http.routers.web-https.rule=Host(`${DOMAIN:?DOMAIN is required with docker-compose.https.yml}`)
+      - traefik.http.routers.web-https.entrypoints=websecure
+      - traefik.http.routers.web-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.web-https.service=web

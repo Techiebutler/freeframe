@@ -1,12 +1,12 @@
 'use client'
 
 import * as React from 'react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   Folder,
   File,
   Download,
   Search,
-  ChevronRight,
   ChevronDown,
   Image as ImageIcon,
   Video,
@@ -24,7 +24,9 @@ import {
   Globe,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { withBasePath } from '@/lib/base-path'
+import { accentVars } from '@/lib/accent'
 import { buildCommentNumbers } from '@/lib/comment-numbers'
 import { getGuestCommentToken, removeGuestCommentToken } from '@/lib/guest-comment-tokens'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
@@ -32,17 +34,21 @@ import { useReviewStore } from '@/stores/review-store'
 import { useMobileReviewSplit } from '@/hooks/use-mobile-review-split'
 import { CommentThreadConnector } from '@/components/comments/comment-thread-connector'
 import { SharedAssetCard } from '@/components/shared/asset-card'
-import { useInstanceBranding } from '@/components/shared/global-branding'
+import { fetchDownloadUrl, fetchShareDownloadOptions, handleDownload, triggerDownload } from './share-download'
+import { DownloadMenu } from '@/components/shared/download-menu'
+import { ShareBrandMark } from './share-brand-mark'
+import { useBranding } from '@/components/shared/branding-provider'
+import { usePageTitle } from '@/hooks/use-page-title'
+import { SHARE_ASSETS_PAGE_SIZE } from '@/lib/share-page'
+import { Avatar } from '@/components/shared/avatar'
 import type {
   SharePermission,
   ShareLinkAppearance,
   FolderShareAssetsResponse,
   FolderShareAssetItem,
   FolderShareSubfolder,
-  ProjectBranding,
+  ShareBranding,
 } from '@/types'
-
-export type ShareBranding = ProjectBranding & { logo_url?: string | null }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -59,10 +65,13 @@ interface FolderShareViewerProps {
   createdByName?: string | null
   createdByAvatarUrl?: string | null
   viewerName?: string | null
+  viewerAvatarUrl?: string | null
+  viewerAvatarColor?: string | null
   permission: SharePermission
   allowDownload: boolean
   showVersions: boolean
   appearance: ShareLinkAppearance
+  /** The project's, sent for every link type: header logo, accent and footer. */
   branding: ShareBranding | null
   /** Opens this asset when the share is first loaded, then returns to the same root on back. */
   initialAssetId?: string | null
@@ -236,30 +245,7 @@ function getAssetTypeBadgeLabel(assetType: string): string {
 }
 
 // ─── Download handler ─────────────────────────────────────────────────────────
-
-function triggerDownload(url: string) {
-  // Let the server's Content-Disposition filename win — don't set `a.download`,
-  // since it would strip the extension the backend appended.
-  const a = document.createElement('a')
-  a.href = url
-  a.rel = 'noopener noreferrer'
-  a.style.display = 'none'
-  document.body.appendChild(a)
-  a.click()
-  setTimeout(() => a.remove(), 1000)
-}
-
-async function fetchDownloadUrl(token: string, assetId: string, shareSession?: string | null): Promise<string | null> {
-  const sp = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
-  try {
-    const response = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true${sp}`)
-    if (!response.ok) return null
-    const data = await response.json()
-    return data?.url ?? null
-  } catch {
-    return null
-  }
-}
+// triggerDownload / fetchDownloadUrl / handleDownload live in ./share-download.
 
 async function fetchSharePreviewUrl(token: string, assetId: string, shareSession?: string | null): Promise<string | null> {
   const params = new URLSearchParams({ _: '1' })
@@ -275,11 +261,6 @@ async function fetchSharePreviewUrl(token: string, assetId: string, shareSession
   const data = await response.json() as { url?: string }
   if (!data.url) return null
   return data.url.startsWith('/') ? `${API_URL}${data.url}` : data.url
-}
-
-async function handleDownload(token: string, assetId: string, shareSession?: string | null) {
-  const url = await fetchDownloadUrl(token, assetId, shareSession)
-  if (url) triggerDownload(url)
 }
 
 async function collectAllAssetsRecursive(
@@ -313,10 +294,12 @@ async function handleDownloadAll(
 ) {
   // Recursively collect all assets (including those in subfolders),
   // pre-fetch presigned URLs in parallel, then trigger downloads
-  // sequentially with a delay so the browser doesn't block them.
+  // sequentially with a delay so the browser doesn't block them. Same rule as
+  // bulk download on the project page: originals when the instance allows them,
+  // transcodes otherwise.
   const allAssets = await collectAllAssetsRecursive(token, folderId, shareSession)
   const urls = await Promise.all(
-    allAssets.map((a) => fetchDownloadUrl(token, a.id, shareSession)),
+    allAssets.map((a) => fetchDownloadUrl(token, a.id, shareSession, undefined, true)),
   )
   for (const url of urls) {
     if (!url) continue
@@ -337,7 +320,7 @@ function SubfolderCard({ subfolder, onClick }: SubfolderCardProps) {
 
   return (
     <button
-      className="group flex flex-col rounded-lg border border-border bg-bg-tertiary overflow-hidden text-left transition-all cursor-pointer hover:border-border-focus hover:bg-bg-hover"
+      className="group flex flex-col rounded-lg border border-border bg-bg-tertiary overflow-hidden text-left transition-all cursor-pointer [@media(hover:hover)]:hover:border-border-focus [@media(hover:hover)]:hover:bg-bg-hover"
       onClick={() => onClick(subfolder)}
     >
       {/* Thumbnail area */}
@@ -351,7 +334,7 @@ function SubfolderCard({ subfolder, onClick }: SubfolderCardProps) {
           <img
             src={thumbs[0]}
             alt={subfolder.name}
-            className="absolute inset-0 h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-200 [@media(hover:hover)]:group-hover:scale-[1.03]"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
           />
         ) : (
@@ -404,8 +387,6 @@ function ListRowThumb({ asset, TypeIcon }: { asset: FolderShareAssetItem; TypeIc
   )
 }
 
-// ─── Asset Grid Card (Frame.io style) ────────────────────────────────────────
-
 // ─── Section Header ──────────────────────────────────────────────────────────
 
 interface SectionHeaderProps {
@@ -446,13 +427,13 @@ interface RightPanelProps {
   onOpenAsset?: (asset: FolderShareAssetItem) => void
 }
 
-interface GuestComment {
+export interface GuestComment {
   id: string
   body: string
   guest_name: string
   guest_email: string
   author_name?: string
-  author?: { id: string; name: string; avatar_url?: string | null } | null
+  author?: { id: string; name: string; avatar_url?: string | null; avatar_color?: string | null } | null
   guest_author?: { id: string; name: string; email: string } | null
   created_at: string
   timecode_start?: number | null
@@ -533,7 +514,8 @@ interface ShareCommentListProps {
   onReply?: (commentId: string) => void
 }
 
-function ShareCommentList({ comments, loading, canComment, onReply }: ShareCommentListProps) {
+/** Exported for tests. */
+export function ShareCommentList({ comments, loading, canComment, onReply }: ShareCommentListProps) {
   const commentNumbers = React.useMemo(() => buildCommentNumbers(comments), [comments])
 
   if (loading) {
@@ -563,10 +545,17 @@ function ShareCommentList({ comments, loading, canComment, onReply }: ShareComme
           <CommentThreadConnector key={comment.id} active={Boolean(comment.replies?.length)}>
           <div className="relative rounded-lg border border-white/[0.06] bg-bg-primary/30 px-3 transition-colors hover:border-white/15 hover:bg-white/[0.02]">
             {/* Comment header */}
-              <div className="relative z-[1] flex items-start gap-2.5 py-3">
-              <div data-comment-thread-avatar className={cn('h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-text-primary shrink-0', color)}>
-                {name.charAt(0).toUpperCase()}
-              </div>
+            <div className="relative z-[1] flex items-start gap-2.5 py-3">
+              {/* Their picture, else initials on their own circle colour. The
+                  wrapper is the anchor the thread connector measures. */}
+              <span data-comment-thread-avatar className="inline-flex shrink-0">
+                <Avatar
+                  src={comment.author?.avatar_url}
+                  name={name}
+                  color={comment.author?.avatar_color}
+                  className={cn('font-bold', color)}
+                />
+              </span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-[13px] font-semibold text-text-primary">{name}</span>
@@ -596,9 +585,14 @@ function ShareCommentList({ comments, loading, canComment, onReply }: ShareComme
                   const rColor = getAvatarColor(rName)
                   return (
                     <div key={r.id} className="relative z-[1] flex items-start gap-2.5 py-3">
-                      <div data-comment-thread-avatar className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-text-inverse', rColor)}>
-                        {rName.charAt(0).toUpperCase()}
-                      </div>
+                      <span data-comment-thread-avatar className="mt-0.5 inline-flex shrink-0">
+                        <Avatar
+                          src={r.author?.avatar_url}
+                          name={rName}
+                          color={r.author?.avatar_color}
+                          className={cn('text-[11px] font-bold', rColor)}
+                        />
+                      </span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-[13px] font-semibold text-text-primary">{rName}</span>
@@ -620,105 +614,6 @@ function ShareCommentList({ comments, loading, canComment, onReply }: ShareComme
   )
 }
 
-// ─── Share Comment Input ─────────────────────────────────────────────────────
-
-interface ShareCommentInputProps {
-  token: string
-  assetId: string
-  onCommentPosted: () => void
-}
-
-function ShareCommentInput({ token, assetId, onCommentPosted }: ShareCommentInputProps) {
-  const [body, setBody] = React.useState('')
-  const [guestName, setGuestName] = React.useState('')
-  const [guestEmail, setGuestEmail] = React.useState('')
-  const [submitting, setSubmitting] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-
-  // Check if user is logged in
-  const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
-
-  async function handleSubmit() {
-    if (!body.trim()) return
-    if (!isLoggedIn && (!guestName.trim() || !guestEmail.trim())) {
-      setError('Please enter your name and email')
-      return
-    }
-
-    setSubmitting(true)
-    setError(null)
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      const accessToken = localStorage.getItem('ff_access_token')
-      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-
-      const payload: Record<string, unknown> = { body: body.trim(), asset_id: assetId }
-      if (!isLoggedIn) {
-        payload.guest_name = guestName.trim()
-        payload.guest_email = guestEmail.trim()
-      }
-
-      const res = await fetch(`${API_URL}/share/${token}/comment`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.detail || 'Failed to post comment')
-      }
-      setBody('')
-      onCommentPosted()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to post')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div className="border-t border-border p-3 shrink-0 space-y-2">
-      {!isLoggedIn && (
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={guestName}
-            onChange={(e) => setGuestName(e.target.value)}
-            placeholder="Your name"
-            className="flex-1 h-8 rounded-md border border-border bg-bg-hover px-2.5 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
-          />
-          <input
-            type="email"
-            value={guestEmail}
-            onChange={(e) => setGuestEmail(e.target.value)}
-            placeholder="Email"
-            className="flex-1 h-8 rounded-md border border-border bg-bg-hover px-2.5 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
-          />
-        </div>
-      )}
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() } }}
-          placeholder="Leave a comment…"
-          disabled={submitting}
-          className="flex-1 h-8 rounded-md border border-border bg-bg-hover px-2.5 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
-        />
-        <button
-          onClick={handleSubmit}
-          disabled={submitting || !body.trim()}
-          className="h-8 px-3 rounded-md bg-accent text-text-primary text-xs font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors shrink-0"
-        >
-          {submitting ? '...' : 'Post'}
-        </button>
-      </div>
-      {error && <p className="text-2xs text-red-400">{error}</p>}
-    </div>
-  )
-}
-
 // ─── Asset Viewer (full-screen media viewer for shared assets) ───────────────
 
 interface AssetViewerProps {
@@ -729,6 +624,8 @@ interface AssetViewerProps {
   allowDownload: boolean
   showVersions: boolean
   parentPath?: string
+  theme: 'dark' | 'light'
+  projectLogoUrl: string | null
   onBack: () => void
 }
 
@@ -762,7 +659,7 @@ function HlsVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={videoRef} controls className={className} />
 }
 
-function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, parentPath, onBack }: AssetViewerProps) {
+function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, parentPath, theme, projectLogoUrl, onBack }: AssetViewerProps) {
   // Use the same ReviewProvider as the project review page, but with shareToken
   // This gives us the same video player, image viewer, comment panel, etc.
   return (
@@ -776,17 +673,34 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, sh
         allowDownload={allowDownload}
         showVersions={showVersions}
         parentPath={parentPath}
+        theme={theme}
+        projectLogoUrl={projectLogoUrl}
         onBack={onBack}
       />
     </div>
   )
 }
 
-/** Lazy-imported review components to avoid circular deps */
+/**
+ * The review screen a share link shows for one asset.
+ *
+ * Upstream moved this into share-review-screen.tsx (#117, #123) with a mobile
+ * bottom sheet. This fork keeps it here because it carries fork-only behaviour:
+ * the resizable mobile split (useMobileReviewSplit), the folder path in the top
+ * bar, guest comment edit/delete via the guest edit token, and the approve /
+ * reject actions. Upstream's fixes are ported in: the share brand mark in the
+ * header, the download menu, no comment export or Internal toggle for guests,
+ * and replies that keep their text until the guest has named themselves.
+ */
 export function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, parentPath, onBack,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, parentPath, theme = 'dark', projectLogoUrl, onBack,
 }: {
-  token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; parentPath?: string; onBack?: () => void
+  token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; parentPath?: string
+  /** The link's theme, which the page renders in; picks the logo variant. Dark, the share pages' default, when not given. */
+  theme?: 'dark' | 'light'
+  /** The project's logo from the link's branding, shown ahead of the instance's. */
+  projectLogoUrl?: string | null
+  onBack?: () => void
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
   const [VideoPlayer, setVideoPlayer] = React.useState<any>(null)
@@ -820,7 +734,7 @@ export function ShareReviewScreen({
   }, [])
 
   if (!loaded || !ReviewProvider) {
-    return <div className="flex items-center justify-center h-screen bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
+    return <div className="flex items-center justify-center h-dvh bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
   }
 
   return (
@@ -833,6 +747,8 @@ export function ShareReviewScreen({
         allowDownload={allowDownload}
         showVersions={showVersions}
         parentPath={parentPath}
+        theme={theme}
+        projectLogoUrl={projectLogoUrl}
         onBack={onBack}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
@@ -845,14 +761,25 @@ export function ShareReviewScreen({
   )
 }
 
+/** Signed in, or a guest who has already given a name and email. */
+function hasIdentity(): boolean {
+  try {
+    return !!localStorage.getItem('ff_access_token') || !!localStorage.getItem('ff_guest_identity')
+  } catch {
+    return false
+  }
+}
+
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, showVersions, parentPath, onBack,
+  token, shareSession, assetName, permission, allowDownload, showVersions, parentPath, theme, projectLogoUrl, onBack,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId } = useReviewStore()
-  // On small screens the comments panel is part of the page flow, below the
-  // media, rather than a hidden overlay. Desktop keeps the collapsible sidebar.
+  // An asset opens on its comments: that pane is the reason an asset link
+  // exists. On small screens the comments panel is part of the page flow,
+  // below the media, rather than a hidden overlay. Desktop keeps the
+  // collapsible sidebar.
   const [sidebarOpen, setSidebarOpen] = React.useState(true)
   const mobileSplit = useMobileReviewSplit()
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
@@ -875,7 +802,14 @@ function ShareReviewInner({
   // Guest identity flow for non-authenticated users
   const [guestIdentity, setGuestIdentity] = React.useState<{ name: string; email: string } | null>(null)
   const [showGuestPrompt, setShowGuestPrompt] = React.useState(false)
-  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown>; parentId?: string } | null>(null)
+  // What was typed before the guest had a name. A reply also carries its parent
+  // and the promise its InlineReplyInput is waiting on, so the typed text stays
+  // in the box until it is really sent (or the prompt is dismissed).
+  const pendingCommentRef = React.useRef<{
+    body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown>
+    parentId?: string
+    settle?: { resolve: () => void; reject: (e: Error) => void }
+  } | null>(null)
   React.useEffect(() => {
     try {
       const stored = localStorage.getItem('ff_guest_identity')
@@ -887,23 +821,36 @@ function ShareReviewInner({
   const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
     const payload: CreateCommentPayload = { body }
     if (currentVersion?.id) payload.version_id = currentVersion.id
+    if (parentId) payload.parent_id = parentId
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
     if (annotationData) payload.annotation = { drawing_data: annotationData }
-    if (parentId) payload.parent_id = parentId
     await addComment(payload)
-    refetchComments().catch(() => {})
+    // The optimistic append only ever shows top-level rows (CommentPanel renders
+    // replies from their parent), so a reply is not on screen until the refetch.
+    if (parentId) await refetchComments().catch(() => {})
+    else refetchComments().catch(() => {})
   }, [addComment, currentVersion, refetchComments])
 
   const submitWithIdentity = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
-    const hasAuth = !!localStorage.getItem('ff_access_token')
-    const hasGuest = !!localStorage.getItem('ff_guest_identity')
-    if (!hasAuth && !hasGuest) {
+    if (!hasIdentity()) {
       pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData, parentId }
       setShowGuestPrompt(true)
       return
     }
     await submitComment(body, timecodeStart, timecodeEnd, annotationData, parentId)
+  }, [submitComment])
+
+  const submitReply = React.useCallback(async (parentId: string, body: string) => {
+    if (!hasIdentity()) {
+      // Resolved once the guest names themselves and the reply is sent; until
+      // then the reply box keeps what was typed.
+      return new Promise<void>((resolve, reject) => {
+        pendingCommentRef.current = { body, parentId, settle: { resolve, reject } }
+        setShowGuestPrompt(true)
+      })
+    }
+    await submitComment(body, undefined, undefined, undefined, parentId)
   }, [submitComment])
 
   const handleGuestIdentitySave = React.useCallback(async (name: string, email: string) => {
@@ -914,27 +861,34 @@ function ShareReviewInner({
 
     // Auto-submit the pending comment
     if (pendingCommentRef.current) {
-      const { body, timecodeStart, timecodeEnd, annotationData, parentId } = pendingCommentRef.current
+      const { body, timecodeStart, timecodeEnd, annotationData, parentId, settle } = pendingCommentRef.current
       pendingCommentRef.current = null
-      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData, parentId), 50)
+      setTimeout(() => {
+        submitComment(body, timecodeStart, timecodeEnd, annotationData, parentId)
+          .then(() => settle?.resolve())
+          .catch((e) => settle?.reject(e instanceof Error ? e : new Error('Failed to post comment')))
+      }, 50)
     }
   }, [submitComment])
 
   if (isLoading || !asset) {
-    return <div className="flex items-center justify-center h-screen bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
+    return <div className="flex items-center justify-center h-dvh bg-bg-primary"><Loader2 className="h-8 w-8 animate-spin text-text-tertiary" /></div>
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-bg-primary text-text-primary">
+    <div className="flex flex-col h-dvh bg-bg-primary text-text-primary pl-safe pr-safe">
       {/* Top bar — same style as project review */}
       <div className="flex items-center justify-between border-b border-border px-3 h-12 bg-bg-secondary shrink-0">
-        <div className="flex items-center gap-1 min-w-0 flex-1">
+        <div className="flex items-center gap-1 sm:gap-2 min-w-0 flex-1">
           {onBack && (
             <button onClick={onBack} className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0">
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
-          <span className="text-[13px] font-medium text-text-primary truncate">
+          <ShareBrandMark theme={theme} projectLogoUrl={projectLogoUrl} />
+          {/* The name gives way last: the logo shrinks first (ShareBrandMark),
+              and Download is icon-only on a phone. */}
+          <span className="text-[13px] font-medium text-text-primary truncate min-w-[4rem]">
             {parentPath && <span className="text-text-secondary">{parentPath} <span className="px-1 text-text-tertiary">/</span></span>}
             {assetName}
           </span>
@@ -951,12 +905,19 @@ function ShareReviewInner({
             </>
           )}
           {allowDownload && (
-            <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
-              <Download className="h-3 w-3" /> Download
-            </button>
+            <DownloadMenu
+              load={() => fetchShareDownloadOptions(token, asset.id, shareSession)}
+              onPick={(rendition) => handleDownload(token, asset.id, shareSession, rendition)}
+            >
+              <button aria-label="Download" className="flex items-center gap-1.5 h-7 px-2 sm:px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors">
+                <Download className="h-3 w-3" /> <span className="hidden sm:inline">Download</span>
+                <ChevronDown className="h-3 w-3 opacity-70" />
+              </button>
+            </DownloadMenu>
           )}
           <button
             onClick={() => setSidebarOpen(v => !v)}
+            title={sidebarOpen ? 'Hide panel' : 'Show panel'}
             className={cn(
               'mobile-touch-target flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-bg-hover',
               sidebarOpen ? 'text-accent hover:text-accent' : 'text-text-secondary hover:text-text-primary',
@@ -1051,6 +1012,9 @@ function ShareReviewInner({
               <>
                 <CommentPanel
                   comments={comments}
+                  // A guest has no access token, and `exportComments` sends
+                  // nothing else, so the control could only ever 401 here.
+                  canExport={false}
                   onResolve={() => {}}
                   canManageComment={(comment: any) => !!getGuestCommentToken(token, comment.id)}
                   onUpdate={async (commentId: string, body: string) => {
@@ -1080,7 +1044,8 @@ function ShareReviewInner({
                   onAddReaction={() => {}}
                   onRemoveReaction={() => {}}
                   onReply={() => {}}
-                  onSubmitReply={async (parentId: string, body: string) => submitWithIdentity(body, undefined, undefined, undefined, parentId)}
+                  // Undefined on a view-only link, which also hides Reply (#439).
+                  onSubmitReply={canComment ? submitReply : undefined}
                   disableAttachments
                 />
                 {permission === 'approve' && (
@@ -1091,6 +1056,9 @@ function ShareReviewInner({
                     assetId={asset.id}
                     projectId=""
                     assetType={asset.asset_type}
+                    // An internal comment is team-only: the share listing never
+                    // returns one and the API refuses one from a guest.
+                    allowInternal={false}
                     onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => submitWithIdentity(body, timecodeStart, timecodeEnd, annotationData, parentId)}
                     allowAttachments={false}
                   />
@@ -1105,7 +1073,12 @@ function ShareReviewInner({
       {showGuestPrompt && (
         <GuestIdentityPrompt
           onSave={handleGuestIdentitySave}
-          onCancel={() => { setShowGuestPrompt(false); pendingCommentRef.current = null }}
+          onCancel={() => {
+            setShowGuestPrompt(false)
+            // A quiet abort: the reply box keeps its text and shows no error.
+            pendingCommentRef.current?.settle?.reject(new Error(''))
+            pendingCommentRef.current = null
+          }}
         />
       )}
     </div>
@@ -1169,7 +1142,7 @@ function GuestIdentityPrompt({ onSave, onCancel }: { onSave: (name: string, emai
             placeholder="Your name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+            className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
             autoFocus
           />
           <input
@@ -1177,7 +1150,7 @@ function GuestIdentityPrompt({ onSave, onCancel }: { onSave: (name: string, emai
             placeholder="Email address"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+            className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
           />
         </div>
         <div className="flex items-center justify-end gap-2 mt-4">
@@ -1197,6 +1170,22 @@ function GuestIdentityPrompt({ onSave, onCancel }: { onSave: (name: string, emai
   )
 }
 
+// ─── Document-level effects (share page only) ────────────────────────────────
+
+/**
+ * The link's theme and accent on the whole document, and the tab title.
+ *
+ * Only the share page mounts this. The embedded preview in the dashboard
+ * (share-link detail) leaves the document alone and relies on the scoped
+ * `data-theme` and accent variables on its own root instead.
+ */
+function ShareDocumentEffects({ title, accentColor, isDark }: { title: string; accentColor: string | null | undefined; isDark: boolean }) {
+  // Re-applied once branding loads and when React remounts the metadata title.
+  usePageTitle(title)
+  useShareAppearance(accentColor, isDark)
+  return null
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function FolderShareViewer({
@@ -1208,6 +1197,8 @@ export function FolderShareViewer({
   createdByName,
   createdByAvatarUrl,
   viewerName,
+  viewerAvatarUrl,
+  viewerAvatarColor,
   permission,
   allowDownload,
   showVersions,
@@ -1220,7 +1211,6 @@ export function FolderShareViewer({
   onTitleCommit,
   onDescriptionCommit,
 }: FolderShareViewerProps) {
-  const { data: instanceBranding } = useInstanceBranding()
   // Build share_session query param for all API calls
   const sessionParam = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
   const [currentSubfolderId, setCurrentSubfolderId] = React.useState<string | null>(null)
@@ -1228,6 +1218,11 @@ export function FolderShareViewer({
   const [searchQuery, setSearchQuery] = React.useState('')
   const [foldersExpanded, setFoldersExpanded] = React.useState(true)
   const [assetsExpanded, setAssetsExpanded] = React.useState(true)
+  // The comments pane starts closed. A guest following a link came to look at
+  // the media, and on a laptop the pane took a third of the grid before they
+  // had picked anything — it showed "Select an asset to view comments". The
+  // panel belongs to the asset viewer, where ShareReviewScreen opens its own
+  // sidebar by default; here it stays behind the header toggle.
   const [panelOpen, setPanelOpen] = React.useState(false)
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
   const pendingInitialAssetId = React.useRef(initialAssetId)
@@ -1239,13 +1234,8 @@ export function FolderShareViewer({
     zoom: appearance.header_banner_zoom ?? 1,
   }
 
-  // The embedded preview must not replace the dashboard's browser title.
-  React.useEffect(() => {
-    if (embedded) return
-    const orgName = instanceBranding?.org_name ?? 'FreeFrame'
-    document.title = title ? `${title} – ${orgName}` : orgName
-    return () => { document.title = orgName }
-  }, [embedded, title, instanceBranding?.org_name])
+  // Page title: set by ShareDocumentEffects below, which the embedded preview
+  // does not mount so it never replaces the dashboard's browser title.
   const [selectedAsset, setSelectedAsset] = React.useState<FolderShareAssetItem | null>(null)
 
   const [assets, setAssets] = React.useState<FolderShareAssetItem[]>([])
@@ -1256,21 +1246,28 @@ export function FolderShareViewer({
   const [loadingMore, setLoadingMore] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
+  const accentColor = appearance.accent_color ?? branding?.primary_color
+  // No fallback: a link with no accent of its own, on an instance with no
+  // accent of its own, keeps the stylesheet's. Substituting a colour here
+  // would repaint every share link that already exists.
   const isDark = appearance.theme !== 'light'
-  const accentColor = appearance.accent_color ?? branding?.primary_color ?? instanceBranding?.primary_color ?? '#6366f1'
-  const shareLogo = branding?.logo_url ?? (isDark ? instanceBranding?.logo_dark_url ?? instanceBranding?.logo_light_url : instanceBranding?.logo_light_url ?? instanceBranding?.logo_dark_url)
-  const previewThemeStyle = React.useMemo(() => ({
-    '--accent': accentColor,
-    '--accent-hover': `color-mix(in srgb, ${accentColor} 82%, ${isDark ? 'white' : 'black'})`,
-    '--accent-muted': `color-mix(in srgb, ${accentColor} 22%, transparent)`,
-    '--border-focus': accentColor,
-  }) as React.CSSProperties, [accentColor, isDark])
+  // The same theme and accent, scoped to this subtree, so the embedded preview
+  // in the dashboard shows the link's look without repainting the dashboard.
+  // The scoped `data-theme` redefines --accent to the palette's stock colour,
+  // which would hide the instance accent the document carries (BrandingHead),
+  // so with no link or project accent the subtree restates the instance's.
+  // Still no fallback beyond that: an unbranded instance keeps the palette's.
+  const { primaryColor: instanceAccent } = useBranding()
+  const previewThemeStyle = React.useMemo(
+    () => (accentVars(accentColor ?? instanceAccent) ?? {}) as React.CSSProperties,
+    [accentColor, instanceAccent],
+  )
   const cardSize = appearance.card_size ?? 'm'
   const aspectRatio = appearance.aspect_ratio ?? 'landscape'
   const thumbnailScale = appearance.thumbnail_scale ?? 'fill'
   const showCardInfo = appearance.show_card_info !== false
   const isGridLayout = appearance.layout !== 'list'
-  const perPage = 24
+  const perPage = SHARE_ASSETS_PAGE_SIZE
 
   // Grid column classes based on card_size
   const gridCols = cardSize === 's'
@@ -1285,6 +1282,12 @@ export function FolderShareViewer({
     : aspectRatio === 'portrait'
     ? 'aspect-[3/4]'
     : 'aspect-[16/10]'
+
+  // On the share page itself, the link's theme and accent also apply to the
+  // document (portalled menus included) and hold the tab title.
+  const documentEffects = embedded ? null : (
+    <ShareDocumentEffects title={title} accentColor={accentColor} isDark={isDark} />
+  )
 
   // Whether clicking opens viewer
   const openInViewer = appearance.open_in_viewer !== false
@@ -1414,30 +1417,53 @@ export function FolderShareViewer({
   ]
   const assetParentPath = locationItems.map((item) => item.name).join(' / ')
 
+  // One search box. It sits in the Assets header, or in the Folders header
+  // when no asset matches, or above the empty state.
+  const searchBox = (
+    <div className="relative">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
+      <input
+        type="text"
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        placeholder="Search assets…"
+        aria-label="Search assets"
+        className="h-8 w-52 rounded-md border border-border bg-bg-tertiary pl-8 pr-3 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
+      />
+    </div>
+  )
+
 
   // Asset viewer overlay
   if (viewingAsset) {
     return (
-      <div
-        data-theme={isDark ? 'dark' : 'light'}
-        style={previewThemeStyle}
-        className={cn('bg-bg-primary text-text-primary', embedded ? 'h-full min-h-0' : 'min-h-screen')}
-      >
-        <AssetViewer
-          token={token}
-          shareSession={shareSession}
-          asset={viewingAsset}
-          permission={permission}
-          allowDownload={allowDownload}
-          showVersions={showVersions}
-          parentPath={assetParentPath}
-          onBack={() => setViewingAsset(null)}
-        />
-      </div>
+      <>
+        {documentEffects}
+        <div
+          data-theme={isDark ? 'dark' : 'light'}
+          style={previewThemeStyle}
+          className={cn('bg-bg-primary text-text-primary', embedded ? 'h-full min-h-0' : 'min-h-screen')}
+        >
+          <AssetViewer
+            token={token}
+            shareSession={shareSession}
+            asset={viewingAsset}
+            permission={permission}
+            allowDownload={allowDownload}
+            showVersions={showVersions}
+            parentPath={assetParentPath}
+            theme={isDark ? 'dark' : 'light'}
+            projectLogoUrl={branding?.logo_url ?? null}
+            onBack={() => setViewingAsset(null)}
+          />
+        </div>
+      </>
     )
   }
 
   return (
+    <>
+    {documentEffects}
     <div
       data-theme={isDark ? 'dark' : 'light'}
       style={previewThemeStyle}
@@ -1456,59 +1482,61 @@ export function FolderShareViewer({
               className="h-7 w-7 rounded-full object-cover shrink-0"
             />
           ) : viewerName ? (
-            <div className="relative group shrink-0">
-              <button className="flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold text-text-primary bg-green-600 hover:ring-2 hover:ring-green-400/50 transition-all">
-                {viewerName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
-              </button>
-              {/* Dropdown */}
-              <div className="hidden group-hover:block absolute left-0 top-full mt-1 z-50 w-56 rounded-lg border border-border bg-bg-elevated shadow-xl py-1">
-                <div className="px-3 py-2 border-b border-border">
-                  <p className="text-sm font-medium text-text-primary">{viewerName}</p>
-                </div>
-                <button
-                  onClick={() => {
-                    // Ensure cookie is set from localStorage before navigating
-                    if (typeof window !== 'undefined') {
-                      const token = localStorage.getItem('ff_access_token')
-                      if (token) {
-                        document.cookie = `ff_access_token=${token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button className="shrink-0 rounded-full [@media(hover:hover)]:hover:ring-2 [@media(hover:hover)]:hover:ring-green-400/50 transition-all outline-none">
+                  {/* Their picture, else initials on their own circle colour */}
+                  <Avatar
+                    src={viewerAvatarUrl}
+                    name={viewerName}
+                    color={viewerAvatarColor}
+                    className="h-7 w-7 text-[10px] font-bold bg-green-600"
+                  />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  align="start"
+                  sideOffset={4}
+                  className="z-50 w-56 rounded-lg border border-border bg-bg-elevated shadow-xl py-1 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+                >
+                  <div className="px-3 py-2 border-b border-border">
+                    <p className="text-sm font-medium text-text-primary">{viewerName}</p>
+                  </div>
+                  <DropdownMenu.Item
+                    onSelect={() => {
+                      // Ensure cookie is set from localStorage before navigating
+                      if (typeof window !== 'undefined') {
+                        const token = localStorage.getItem('ff_access_token')
+                        if (token) {
+                          document.cookie = `ff_access_token=${token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
+                        }
+                        window.location.href = withBasePath('/projects')
                       }
-                      window.location.href = withBasePath('/projects')
-                    }
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-tertiary transition-colors"
-                >
-                  Back to Dashboard
-                </button>
-                <button
-                  onClick={() => {
-                    if (typeof window !== 'undefined') {
-                      localStorage.removeItem('ff_access_token')
-                      localStorage.removeItem('ff_refresh_token')
-                      document.cookie = 'ff_access_token=; path=/; max-age=0'
-                      window.location.href = withBasePath('/login')
-                    }
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
-                >
-                  Log out
-                </button>
-              </div>
-            </div>
-          ) : shareLogo ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={shareLogo}
-              alt=""
-              className="h-7 w-7 rounded-full object-cover shrink-0"
-            />
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-tertiary cursor-pointer outline-none transition-colors"
+                  >
+                    Back to Dashboard
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    onSelect={() => {
+                      if (typeof window !== 'undefined') {
+                        localStorage.removeItem('ff_access_token')
+                        localStorage.removeItem('ff_refresh_token')
+                        document.cookie = 'ff_access_token=; path=/; max-age=0'
+                        window.location.href = withBasePath('/login')
+                      }
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 cursor-pointer outline-none transition-colors"
+                  >
+                    Log out
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
           ) : (
-            <div
-              className="flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold text-text-primary shrink-0"
-              style={{ backgroundColor: accentColor }}
-            >
-              {(branding?.custom_title ?? instanceBranding?.org_name ?? folderName ?? 'FF').substring(0, 2).toUpperCase()}
-            </div>
+            // The same mark the asset view shows once one is opened (#308).
+            <ShareBrandMark theme={isDark ? 'dark' : 'light'} projectLogoUrl={branding?.logo_url} />
           )}
 
           {/* Location breadcrumb */}
@@ -1643,17 +1671,25 @@ export function FolderShareViewer({
               <div className="flex items-center justify-center py-24">
                 <p className="text-sm text-text-tertiary">{error}</p>
               </div>
-            ) : filteredSubfolders.length === 0 && filteredAssets.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-24 gap-3">
-                <Folder className="h-12 w-12 text-text-tertiary" />
-                <p className="text-sm text-text-tertiary">
-                  {searchQuery.trim() ? 'No results found' : 'This folder is empty'}
-                </p>
-              </div>
+            ) : subfolders.length === 0 && assets.length === 0 ? (
+              <>
+                <div className="flex justify-end py-2">{searchBox}</div>
+                <div className="flex flex-col items-center justify-center py-24 gap-3">
+                  <Folder className="h-12 w-12 text-text-tertiary" />
+                  <p className="text-sm text-text-tertiary">
+                    {searchQuery.trim() ? 'No results found' : 'This folder is empty'}
+                  </p>
+                </div>
+              </>
             ) : (
               <>
+                {/* Where the search box sits depends only on what the folder
+                    holds, never on what the query matches, so typing a query
+                    that matches nothing does not remount (and blur) the box:
+                    the Assets header, or the Folders header when the folder
+                    holds no assets. */}
                 {/* Subfolders section */}
-                {filteredSubfolders.length > 0 && (
+                {subfolders.length > 0 && (filteredSubfolders.length > 0 || assets.length === 0) && (
                   <section className="mb-6">
                     <SectionHeader
                       label={filteredSubfolders.length === 1 ? 'Folder' : 'Folders'}
@@ -1661,8 +1697,12 @@ export function FolderShareViewer({
                       totalSize={totalFolderSize}
                       expanded={foldersExpanded}
                       onToggle={() => setFoldersExpanded((v) => !v)}
+                      actions={assets.length === 0 ? searchBox : undefined}
                     />
-                    {foldersExpanded && (
+                    {foldersExpanded && filteredSubfolders.length === 0 && (
+                      <p className="py-8 text-center text-sm text-text-tertiary">No results found</p>
+                    )}
+                    {foldersExpanded && filteredSubfolders.length > 0 && (
                       <div className={cn('grid gap-3 mt-2', gridCols)}>
                         {filteredSubfolders.map((subfolder) => (
                           <SubfolderCard
@@ -1677,7 +1717,7 @@ export function FolderShareViewer({
                 )}
 
                 {/* Assets section */}
-                {filteredAssets.length > 0 && (
+                {assets.length > 0 && (
                   <section>
                     <SectionHeader
                       label={filteredAssets.length === 1 ? 'Asset' : 'Assets'}
@@ -1685,24 +1725,14 @@ export function FolderShareViewer({
                       totalSize={totalAssetSize}
                       expanded={assetsExpanded}
                       onToggle={() => setAssetsExpanded((v) => !v)}
-                      actions={
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
-                          <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Search assets…"
-                            aria-label="Search assets"
-                            className="h-8 w-52 rounded-md border border-border bg-bg-tertiary pl-8 pr-3 text-sm text-text-primary placeholder:text-text-tertiary focus:border-border-focus focus:outline-none"
-                          />
-                        </div>
-                      }
+                      actions={searchBox}
                     />
 
                     {assetsExpanded && (
                       <>
-                        {isGridLayout ? (
+                        {filteredAssets.length === 0 ? (
+                          <p className="py-8 text-center text-sm text-text-tertiary">No results found</p>
+                        ) : isGridLayout ? (
                           <div className={cn('grid gap-3 mt-2', gridCols)}>
                             {filteredAssets.map((asset) => (
                               <SharedAssetCard
@@ -1748,7 +1778,7 @@ export function FolderShareViewer({
                                 <div
                                   key={asset.id}
                                   className={cn(
-                                    'group flex items-center gap-4 py-2 px-1 cursor-pointer transition-colors hover:bg-bg-hover',
+                                    'group flex items-center gap-4 py-2 px-1 cursor-pointer transition-colors [@media(hover:hover)]:hover:bg-bg-hover',
                                     selectedAsset?.id === asset.id && 'bg-accent/5',
                                     i !== filteredAssets.length - 1 && 'border-b border-border',
                                   )}
@@ -1778,14 +1808,19 @@ export function FolderShareViewer({
                                   </span>
                                   {/* Download */}
                                   {allowDownload && (
-                                    <button
-                                      className="w-7 shrink-0 flex items-center justify-center h-7 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-text-primary transition-all"
-                                      onClick={(e) => { e.stopPropagation(); handleDownload(token, asset.id, shareSession) }}
-                                      onPointerUp={(e) => e.stopPropagation()}
-                                      title="Download"
+                                    <DownloadMenu
+                                      load={() => fetchShareDownloadOptions(token, asset.id, shareSession)}
+                                      onPick={(rendition) => handleDownload(token, asset.id, shareSession, rendition)}
                                     >
-                                      <Download className="h-4 w-4" />
-                                    </button>
+                                      <button
+                                        className="w-7 shrink-0 flex items-center justify-center h-7 rounded text-text-tertiary opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:hover:text-text-primary data-[state=open]:opacity-100 transition-all"
+                                        onClick={(e) => e.stopPropagation()}
+                                        onPointerUp={(e) => e.stopPropagation()}
+                                        title="Download"
+                                      >
+                                        <Download className="h-4 w-4" />
+                                      </button>
+                                    </DownloadMenu>
                                   )}
                                 </div>
                               )
@@ -1814,6 +1849,14 @@ export function FolderShareViewer({
             )}
           </div>
 
+          {/* The project's footer text (branding, sent for every link type).
+              This fork dropped the item-count footer, so the bar only shows
+              when the project has footer text. */}
+          {branding?.custom_footer && (
+            <footer className="border-t border-border px-5 py-3 shrink-0">
+              <p className="text-xs text-text-tertiary">{branding.custom_footer}</p>
+            </footer>
+          )}
         </div>
 
         {/* ─── Right Panel ───────────────────────────────────────────── */}
@@ -1830,5 +1873,6 @@ export function FolderShareViewer({
         )}
       </div>
     </div>
+    </>
   )
 }

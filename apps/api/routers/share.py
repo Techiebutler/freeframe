@@ -1,3 +1,4 @@
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,9 @@ from ..middleware.rate_limit import rate_limit
 from ..models.user import User
 from ..models.asset import Asset
 from ..models.folder import Folder
-from ..models.share import AssetShare, ShareLink, ShareLinkItem, SharePermission, ShareLinkActivity, ShareActivityAction
+from ..models.share import (
+    AssetShare, ShareLink, ShareLinkAlias, ShareLinkItem, SharePermission, ShareLinkActivity, ShareActivityAction,
+)
 from ..models.activity import ActivityLog, ActivityAction
 from ..models.branding import ProjectBranding
 from ..models.instance_settings import (
@@ -24,7 +27,7 @@ from ..models.instance_settings import (
     InstanceSettings,
 )
 from ..models.asset import AssetVersion, AssetType, MediaFile, ProcessingStatus
-from ..models.comment import Comment
+from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.share import (
     DirectShareCreate,
     DirectShareResponse,
@@ -32,6 +35,7 @@ from ..schemas.share import (
     FolderShareAssetsResponse,
     FolderShareSubfolder,
     ShareAssetVersionItem,
+    ShareBranding,
     MultiShareCreate,
     ShareLinkActivityResponse,
     ShareLinkCreate,
@@ -42,15 +46,26 @@ from ..schemas.share import (
     ShareLinkResponse,
     ShareLinkUpdate,
     ShareLinkValidateResponse,
+    ShareVerifyRequest,
 )
 from ..services.permissions import (
     require_project_role, validate_share_link, validate_share_link_with_session,
-    validate_asset_in_share, _is_descendant_of,
+    creator_skips_link_password, share_session_key,
+    validate_asset_in_share, enforce_share_link_visibility, _is_descendant_of, folder_chain_is_live,
 )
 from ..services.share_link_aliases import get_active_custom_slug, set_custom_slug
-from ..services.redis_service import create_share_session
+from ..services.auth_service import bcrypt_password_bytes
+from ..services.redis_service import create_share_session, delete_share_sessions
+from ..services.search import escape_like
+from ..services.owned_keys import is_project_logo_key, sign_if_owned
+from ..services.avatar_keys import sign_avatar
 from ..services import s3_service
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
+from ..schemas.asset import DownloadOption
+from ..services.downloads import (
+    describe_choices, download_choices, download_filename, may_download_original,
+    original_allowed_for_download, pick_or_refuse,
+)
 from ..services.crypto_service import encrypt_password, decrypt_password
 from .hls_proxy import create_hls_token
 from ..models.project import Project, ProjectRole
@@ -59,25 +74,59 @@ from ..tasks.celery_app import send_task_safe
 from ..config import settings
 
 router = APIRouter(tags=["sharing"])
+logger = logging.getLogger(__name__)
 
 
-def _share_appearance_with_banner_url(appearance: dict | None) -> dict:
-    """Expose a temporary banner URL without leaking the private S3 key alone."""
+SHARE_BANNER_PREFIX = "share-banners/"
+
+
+def _share_banner_prefix(link_or_id) -> str:
+    """The storage prefix the header-banner upload step issues keys under for a link."""
+    link_id = getattr(link_or_id, "id", link_or_id)
+    return f"{SHARE_BANNER_PREFIX}{link_id}/"
+
+
+def _share_appearance_with_banner_url(appearance: dict | None, link_id=None) -> dict:
+    """Expose a temporary banner URL without leaking the private S3 key alone.
+
+    Only a key the banner upload step issued is signed: under this link's own
+    prefix when `link_id` is given (every call site does), otherwise under the
+    banner prefix at all. The appearance dict is client-supplied on create, so
+    signing whatever key it names would hand out a link to any object in the
+    bucket.
+    """
     result = dict(appearance or {})
     banner_key = result.get("header_banner_key")
-    if banner_key:
+    prefix = _share_banner_prefix(link_id) if link_id is not None else SHARE_BANNER_PREFIX
+    result["header_banner_url"] = None
+    if isinstance(banner_key, str) and banner_key.startswith(prefix):
         try:
             result["header_banner_url"] = generate_presigned_get_url(banner_key)
         except Exception:
             result["header_banner_url"] = None
-    else:
-        result["header_banner_url"] = None
     return result
 
 
-def _escape_like(s: str) -> str:
-    """Escape special LIKE pattern characters to prevent injection."""
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+def _end_share_sessions(db: Session, link: ShareLink) -> None:
+    """End every guest password session on this link.
+
+    Sessions are keyed by the identifier the guest opened the link with (see
+    permissions.share_session_key): the long token, the short code, or a custom
+    URL name. All of them go, so changing the password or disabling the link
+    revokes guests however they reached it.
+    """
+    identifiers = {link.token, link.short_code}
+    try:
+        identifiers.update(
+            slug for (slug,) in db.query(ShareLinkAlias.slug).filter(
+                ShareLinkAlias.share_link_id == link.id,
+            ).all()
+        )
+    except Exception:
+        logger.warning("Could not list the custom URLs of a share link", exc_info=True)
+    for identifier in identifiers:
+        if isinstance(identifier, str) and identifier:
+            delete_share_sessions(identifier)
 
 
 def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
@@ -116,6 +165,7 @@ def _log_share_activity(
     actor_name: Optional[str] = None,
     asset_id: Optional[uuid.UUID] = None,
     asset_name: Optional[str] = None,
+    rendition: Optional[str] = None,
     dedup_seconds: int = 30,
 ):
     """Log share activity, skipping duplicates within dedup_seconds window."""
@@ -126,6 +176,8 @@ def _log_share_activity(
             ShareLinkActivity.action == action,
             ShareLinkActivity.actor_email == actor_email,
             ShareLinkActivity.asset_id == asset_id,
+            # The original and then the transcode are two downloads, not one.
+            ShareLinkActivity.rendition.is_(None) if rendition is None else ShareLinkActivity.rendition == rendition,
             ShareLinkActivity.created_at >= cutoff,
         ).first()
         if existing:
@@ -137,6 +189,7 @@ def _log_share_activity(
             actor_name=actor_name,
             asset_id=asset_id,
             asset_name=asset_name,
+            rendition=rendition,
         )
         db.add(activity)
         db.commit()
@@ -157,8 +210,7 @@ def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFi
 
 
 def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
-    """Count comments on an asset's latest ready version — matches the version-scoped
-    folder/grid preview, which has no version picker."""
+    """Count public comments rendered in the asset's share-grid preview."""
     version = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset_id,
         AssetVersion.deleted_at.is_(None),
@@ -166,12 +218,36 @@ def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
     ).order_by(AssetVersion.version_number.desc()).first()
     if not version:
         return 0
-    return db.query(sa_func.count(Comment.id)).filter(
+
+    # Match list_share_comments: a visible parent is required to reach a reply,
+    # and the response builder stops at COMMENT_TREE_MAX_DEPTH.
+    comment_tree = sqlalchemy.select(
+        Comment.id.label("id"),
+        Comment.parent_id.label("parent_id"),
+        sqlalchemy.literal(0).label("depth"),
+    ).where(
+        Comment.asset_id == asset_id,
+        Comment.version_id == version.id,
+        Comment.parent_id.is_(None),
+        Comment.deleted_at.is_(None),
+        Comment.visibility != "internal",
+    ).cte(name="visible_share_comments", recursive=True)
+    visible_replies = sqlalchemy.select(
+        Comment.id.label("id"),
+        Comment.parent_id.label("parent_id"),
+        (comment_tree.c.depth + 1).label("depth"),
+    ).join(
+        comment_tree,
+        Comment.parent_id == comment_tree.c.id,
+    ).where(
         Comment.asset_id == asset_id,
         Comment.version_id == version.id,
         Comment.deleted_at.is_(None),
-    ).scalar() or 0
-
+        Comment.visibility != "internal",
+        comment_tree.c.depth < COMMENT_TREE_MAX_DEPTH,
+    )
+    comment_tree = comment_tree.union_all(visible_replies)
+    return db.query(sa_func.count(comment_tree.c.id)).select_from(comment_tree).scalar() or 0
 
 def _ready_version_count(db: Session, asset_id: uuid.UUID) -> int:
     """Number of ready versions available for an asset (shown on the share preview card)."""
@@ -196,7 +272,7 @@ def create_share_link(
 
     token = secrets.token_urlsafe(32)
     if body.password:
-        pwd_bytes = body.password[:72].encode('utf-8')
+        pwd_bytes = bcrypt_password_bytes(body.password)
         salt = bcrypt.gensalt()
         password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
         password_encrypted = encrypt_password(body.password)
@@ -226,7 +302,7 @@ def create_share_link(
     db.add(ActivityLog(user_id=current_user.id, asset_id=asset_id, action=ActivityAction.shared))
     db.commit()
     db.refresh(link)
-    return link
+    return _share_link_response(link)
 
 
 @router.get("/assets/{asset_id}/shares", response_model=list[ShareLinkResponse])
@@ -237,64 +313,68 @@ def list_share_links(
 ):
     asset = _get_asset(db, asset_id)
     require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
-    return db.query(ShareLink).filter(
+    links = db.query(ShareLink).filter(
         ShareLink.asset_id == asset_id,
         ShareLink.deleted_at.is_(None),
     ).all()
+    return [_share_link_response(link) for link in links]
 
 
-@router.get("/share/{token}", response_model=ShareLinkValidateResponse, dependencies=[Depends(rate_limit("share_validate", 30, 60))])
-def validate_share_link_endpoint(
-    token: str,
-    password: Optional[str] = None,
+def _share_branding(db: Session, project_id: uuid.UUID) -> Optional[ShareBranding]:
+    """The project branding a share page shows, the same for every link type.
+
+    The logo is a link the browser can load, never a storage key: the project's
+    cover when the owner chose it and there is one, otherwise the project's own
+    uploaded logo, otherwise null so the page falls back to the instance logo.
+    """
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if project is None:
+        return None
+    branding = db.query(ProjectBranding).filter(ProjectBranding.project_id == project_id).first()
+    if branding is None:
+        return ShareBranding()
+
+    logo_url = None
+    if branding.use_cover_as_logo and project.poster_s3_key:
+        try:
+            logo_url = generate_presigned_get_url(project.poster_s3_key)
+        except Exception:
+            logo_url = None
+    if logo_url is None:
+        # Only this project's own uploaded logo, the rule GET /projects/{id}/branding applies.
+        logo_url = sign_if_owned(is_project_logo_key(project_id, branding.logo_s3_key), branding.logo_s3_key)
+    return ShareBranding(
+        logo_url=logo_url,
+        primary_color=branding.primary_color,
+        custom_footer=branding.custom_footer,
+    )
+
+
+def _build_share_validate_response(
+    db: Session,
+    link: ShareLink,
+    current_user: Optional[User],
+    session_id: Optional[str] = None,
     log_open: bool = False,
-    db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_optional_user),
-):
-    """Public endpoint — optional auth. For secure links, requires authenticated user."""
-    link = validate_share_link(db, token)
+) -> ShareLinkValidateResponse:
+    """Build the full ShareLinkValidateResponse for a validated link.
 
-    # Check secure visibility — requires authenticated user
-    if link.visibility == "secure":
-        if not current_user:
-            return ShareLinkValidateResponse(
-                requires_auth=True,
-                requires_password=False,
-                title=link.title,
-                permission=link.permission,
-                visibility=link.visibility,
-            )
-
-    # Resolve folder name if this is a folder share
+    Called by both GET /share/{token} (no password verification) and
+    POST /share/{token}/verify (password verification).
+    """
+    # Resolve folder / project names
     folder_name = None
     project_name = None
+    branding_project_id = link.project_id
     if link.folder_id:
         folder = db.query(Folder).filter(Folder.id == link.folder_id, Folder.deleted_at.is_(None)).first()
         if folder:
             folder_name = folder.name
+            branding_project_id = folder.project_id
     if link.project_id:
         project = db.query(Project).filter(Project.id == link.project_id, Project.deleted_at.is_(None)).first()
         if project:
             project_name = project.name
-
-    session_id = None
-    if link.password_hash:
-        if not password:
-            return ShareLinkValidateResponse(
-                requires_password=True,
-                title=link.title,
-                permission=link.permission,
-            )
-        try:
-            plain_bytes = password[:72].encode('utf-8')
-            hashed_bytes = link.password_hash.encode('utf-8')
-            if not bcrypt.checkpw(plain_bytes, hashed_bytes):
-                raise HTTPException(status_code=403, detail="Incorrect password")
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Incorrect password")
-        # Password verified — create a session so subsequent requests skip re-verification
-        session_id = secrets.token_urlsafe(32)
-        create_share_session(token, session_id)
 
     if log_open:
         actor_email = current_user.email if current_user else "anonymous"
@@ -303,7 +383,6 @@ def validate_share_link_endpoint(
 
     # Build asset details for asset shares
     asset_data = None
-    branding_data = None
     if link.asset_id:
         asset = _get_asset(db, link.asset_id)
         # Get thumbnail URL
@@ -332,26 +411,16 @@ def validate_share_link_endpoint(
             "thumbnail_url": thumbnail_url,
             "stream_url": stream_url,
         }
-        # Get project branding
-        branding = db.query(ProjectBranding).filter(
-            ProjectBranding.project_id == asset.project_id
-        ).first()
-        if branding:
-            branding_data = {
-                "logo_url": branding.logo_s3_key,
-                "primary_color": branding.primary_color,
-                "custom_title": branding.custom_title,
-                "custom_footer": branding.custom_footer,
-            }
+        branding_project_id = asset.project_id
+
+    branding_data = _share_branding(db, branding_project_id) if branding_project_id else None
 
     # Resolve creator name
     creator = db.query(User).filter(User.id == link.created_by).first()
     created_by_name = creator.name if creator else None
-    created_by_avatar_url = (
-        generate_presigned_get_url(creator.avatar_url)
-        if creator and creator.avatar_url and not creator.avatar_url.startswith("http")
-        else (creator.avatar_url if creator else None)
-    )
+    # Signed only if it is the creator's own uploaded avatar (services/avatar_keys),
+    # the same rule every user response follows; anything else shows no picture.
+    created_by_avatar_url = sign_avatar(creator.id, creator.avatar_url) if creator else None
     return ShareLinkValidateResponse(
         asset_id=link.asset_id,
         folder_id=link.folder_id,
@@ -365,26 +434,138 @@ def validate_share_link_endpoint(
         allow_download=link.allow_download,
         show_versions=link.show_versions,
         show_watermark=link.show_watermark,
-        appearance=_share_appearance_with_banner_url(link.appearance),
+        appearance=_share_appearance_with_banner_url(link.appearance, link.id),
         requires_password=False,
         created_by_name=created_by_name,
         created_by_avatar_url=created_by_avatar_url,
         viewer_name=current_user.name if current_user else None,
         viewer_email=current_user.email if current_user else None,
+        # Signed only if it is this user's own uploaded avatar, like every
+        # other user response.
+        viewer_avatar_url=sign_avatar(current_user.id, current_user.avatar_url) if current_user else None,
+        viewer_avatar_color=current_user.avatar_color if current_user else None,
         asset=asset_data,
         branding=branding_data,
         share_session=session_id,
     )
 
 
-def _share_link_response(link: ShareLink, db: Session | None = None) -> ShareLinkResponse:
-    """Build ShareLinkResponse from ORM model, computing has_password and decrypting password."""
+@router.get("/share/{token}", response_model=ShareLinkValidateResponse, dependencies=[Depends(rate_limit("share_validate", 30, 60))])
+def validate_share_link_endpoint(
+    token: str,
+    log_open: bool = False,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Public endpoint — optional auth. For secure links, requires authenticated user.
+
+    Does NOT verify the share-link password. Password-protected links return
+    `requires_password=True`; the caller must POST /share/{token}/verify with
+    the password in the body to obtain a `share_session`. The password used to
+    be a query parameter on this GET, which leaked it into nginx access logs,
+    browser history, Referer headers, and Cloudflare Tunnel logs.
+    """
+    link = validate_share_link(db, token)
+
+    # Check secure visibility — requires authenticated user. This is the one
+    # place that answers with requires_auth instead of raising, so the client
+    # can render a sign-in prompt; every other endpoint enforces the same rule
+    # via permissions.enforce_share_link_visibility.
+    if link.visibility == "secure":
+        if not current_user:
+            return ShareLinkValidateResponse(
+                requires_auth=True,
+                requires_password=False,
+                title=link.title,
+                permission=link.permission,
+                visibility=link.visibility,
+            )
+
+    # Password-protected links: short-circuit and request POST /verify.
+    # The link's creator bypasses the password (dashboard preview) while they
+    # still manage links in its project.
+    if link.password_hash:
+        if creator_skips_link_password(db, link, current_user):
+            return _build_share_validate_response(db, link, current_user, log_open=log_open)
+        return ShareLinkValidateResponse(
+            requires_password=True,
+            title=link.title,
+            permission=link.permission,
+        )
+
+    return _build_share_validate_response(db, link, current_user, log_open=log_open)
+
+
+@router.post(
+    "/share/{token}/verify",
+    response_model=ShareLinkValidateResponse,
+    dependencies=[Depends(rate_limit("share_verify", 30, 60))],
+)
+def verify_share_link_password(
+    token: str,
+    body: ShareVerifyRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Verify a share-link password and return the full validate response
+    with a `share_session` for subsequent requests.
+
+    The password is sent in the request body (not as a query string param)
+    so it isn't logged by nginx, browser history, Referer headers, or proxy
+    logs. See SECURITY_AUDIT H3.
+    """
+    link = validate_share_link(db, token)
+
+    # Check secure visibility — requires authenticated user (same gate as
+    # the GET endpoint). Without this, an anonymous caller who knows the
+    # password of a secure+password link could POST /verify and get the
+    # full response including asset_id and presigned stream URLs, bypassing
+    # the login requirement.
+    enforce_share_link_visibility(link, current_user)
+
+    # The link's creator bypasses the password (dashboard preview) while they
+    # still manage links in its project.
+    if not creator_skips_link_password(db, link, current_user):
+        if not link.password_hash:
+            # No password set — nothing to verify. Return the validate response.
+            return _build_share_validate_response(db, link, current_user)
+        try:
+            plain_bytes = bcrypt_password_bytes(body.password)
+            hashed_bytes = link.password_hash.encode('utf-8')
+            if not bcrypt.checkpw(plain_bytes, hashed_bytes):
+                raise HTTPException(status_code=403, detail="Incorrect password")
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Incorrect password")
+
+    # Password verified (or creator bypass) — create a session so
+    # subsequent /share/{token}/assets, /comments, etc. skip re-verification.
+    session_id = secrets.token_urlsafe(32)
+    create_share_session(share_session_key(link, token), session_id)
+
+    return _build_share_validate_response(
+        db, link, current_user, session_id=session_id, log_open=body.log_open
+    )
+
+
+def _share_link_response(
+    link: ShareLink, db: Session | None = None, *, reveal_password: bool = False,
+) -> ShareLinkResponse:
+    """Build ShareLinkResponse from the ORM row, with has_password computed.
+
+    With `db`, the link's active custom URL name is filled in as `custom_slug`.
+
+    The password itself (`password_value`) is decrypted only when the caller
+    passes `reveal_password=True`, which is for people who manage the link
+    (editor or owner). Everyone else who can read the link, a viewer or a
+    reviewer among them, gets None and reads has_password instead.
+    """
     response = ShareLinkResponse.model_validate(link)
     if db:
         response.custom_slug = get_active_custom_slug(db, link.id)
-    response.appearance = _share_appearance_with_banner_url(link.appearance)
+    response.appearance = _share_appearance_with_banner_url(link.appearance, link.id)
     response.has_password = link.password_hash is not None and link.password_hash != ''
-    if link.password_encrypted:
+    response.password_value = None
+    if reveal_password and link.password_encrypted:
         try:
             response.password_value = decrypt_password(link.password_encrypted)
         except Exception:
@@ -418,6 +599,11 @@ def get_public_share_metadata(
     )
 
 
+def _manages_links(member) -> bool:
+    """Whether a project member may change share links, and so see their passwords."""
+    return member.role in (ProjectRole.owner, ProjectRole.editor)
+
+
 # ── Authenticated share link details (for settings panel) ────────────────────
 
 @router.get("/share/{token}/details", response_model=ShareLinkResponse)
@@ -434,8 +620,8 @@ def get_share_link_details(
     if not link:
         raise HTTPException(status_code=404, detail="Share link not found")
     project_id = _get_project_id_from_link(db, link)
-    require_project_role(db, project_id, current_user, ProjectRole.viewer)
-    return _share_link_response(link, db)
+    member = require_project_role(db, project_id, current_user, ProjectRole.viewer)
+    return _share_link_response(link, db, reveal_password=_manages_links(member))
 
 
 @router.post(
@@ -464,7 +650,7 @@ def get_header_banner_upload_url(
         "image/png": "png",
         "image/webp": "webp",
     }[body.content_type]
-    key = f"share-banners/{link.id}/{uuid.uuid4()}.{extension}"
+    key = f"{_share_banner_prefix(link)}{uuid.uuid4()}.{extension}"
     return ShareLinkBannerUploadResponse(
         upload_url=s3_service.generate_presigned_put_url(key, content_type=body.content_type),
         key=key,
@@ -487,6 +673,9 @@ def update_share_link(
     require_project_role(db, project_id, current_user, ProjectRole.editor)
 
     updates = body.model_dump(exclude_unset=True)
+    # A session is granted under the password and the link being on. When either
+    # changes, the sessions from before end with it (see delete_share_sessions).
+    ends_sessions = "password" in updates or updates.get("is_enabled") is False
 
     if "custom_slug" in updates:
         set_custom_slug(db, link, updates.pop("custom_slug"))
@@ -495,7 +684,7 @@ def update_share_link(
     if "password" in updates:
         raw_password = updates.pop("password")
         if raw_password:
-            pwd_bytes = raw_password[:72].encode('utf-8')
+            pwd_bytes = bcrypt_password_bytes(raw_password)
             salt = bcrypt.gensalt()
             link.password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
             link.password_encrypted = encrypt_password(raw_password)
@@ -509,7 +698,7 @@ def update_share_link(
         previous_banner_key = (link.appearance or {}).get("header_banner_key")
         updates["appearance"] = body.appearance.model_dump(exclude={"header_banner_url"})
         banner_key = updates["appearance"].get("header_banner_key")
-        if banner_key and not banner_key.startswith(f"share-banners/{link.id}/"):
+        if banner_key and not banner_key.startswith(_share_banner_prefix(link)):
             raise HTTPException(status_code=400, detail="Invalid header banner")
 
     for key, value in updates.items():
@@ -517,13 +706,20 @@ def update_share_link(
 
     db.commit()
     db.refresh(link)
+    if ends_sessions:
+        _end_share_sessions(db, link)
     new_banner_key = (link.appearance or {}).get("header_banner_key")
-    if previous_banner_key and previous_banner_key != new_banner_key:
+    if (
+        isinstance(previous_banner_key, str)
+        and previous_banner_key.startswith(_share_banner_prefix(link))
+        and previous_banner_key != new_banner_key
+    ):
         try:
             s3_service.delete_object(previous_banner_key)
         except Exception:
             pass
-    return _share_link_response(link, db)
+    # Editor-gated above, so the caller manages the link.
+    return _share_link_response(link, db, reveal_password=True)
 
 
 @router.delete("/share/{token}", status_code=status.HTTP_204_NO_CONTENT)
@@ -539,6 +735,7 @@ def revoke_share_link(
     require_project_role(db, project_id, current_user, ProjectRole.editor)
     link.deleted_at = datetime.now(timezone.utc)
     db.commit()
+    _end_share_sessions(db, link)
 
 
 # ── Folder share links ───────────────────────────────────────────────────────
@@ -555,7 +752,7 @@ def create_folder_share_link(
 
     token = secrets.token_urlsafe(32)
     if body.password:
-        pwd_bytes = body.password[:72].encode('utf-8')
+        pwd_bytes = bcrypt_password_bytes(body.password)
         salt = bcrypt.gensalt()
         password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
         password_encrypted = encrypt_password(body.password)
@@ -573,6 +770,7 @@ def create_folder_share_link(
         password_hash=password_hash,
         password_encrypted=password_encrypted,
         permission=body.permission,
+        visibility=body.visibility,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
         show_watermark=body.show_watermark,
@@ -583,7 +781,7 @@ def create_folder_share_link(
     set_custom_slug(db, link, body.custom_slug)
     db.commit()
     db.refresh(link)
-    return link
+    return _share_link_response(link)
 
 
 @router.post("/projects/{project_id}/share", response_model=ShareLinkResponse, status_code=status.HTTP_201_CREATED)
@@ -601,7 +799,7 @@ def create_project_share_link(
 
     token = secrets.token_urlsafe(32)
     if body.password:
-        pwd_bytes = body.password[:72].encode('utf-8')
+        pwd_bytes = bcrypt_password_bytes(body.password)
         salt = bcrypt.gensalt()
         password_hash = bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
         password_encrypted = encrypt_password(body.password)
@@ -619,6 +817,7 @@ def create_project_share_link(
         password_hash=password_hash,
         password_encrypted=password_encrypted,
         permission=body.permission,
+        visibility=body.visibility,
         allow_download=body.allow_download,
         show_versions=body.show_versions,
         show_watermark=body.show_watermark,
@@ -629,7 +828,7 @@ def create_project_share_link(
     set_custom_slug(db, link, body.custom_slug)
     db.commit()
     db.refresh(link)
-    return link
+    return _share_link_response(link)
 
 
 @router.get("/projects/{project_id}/shares", response_model=list[ShareLinkResponse])
@@ -643,10 +842,12 @@ def list_project_root_share_links(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     require_project_role(db, project_id, current_user, ProjectRole.viewer)
-    return db.query(ShareLink).filter(
+    links = db.query(ShareLink).filter(
         ShareLink.project_id == project_id,
         ShareLink.deleted_at.is_(None),
     ).all()
+    # Viewer-gated, so the password itself is never revealed here; has_password is.
+    return [_share_link_response(link) for link in links]
 
 
 @router.post("/projects/{project_id}/share/user", response_model=DirectShareResponse, status_code=status.HTTP_201_CREATED)
@@ -710,10 +911,11 @@ def list_folder_share_links(
 ):
     folder = _get_folder(db, folder_id)
     require_project_role(db, folder.project_id, current_user, ProjectRole.viewer)
-    return db.query(ShareLink).filter(
+    links = db.query(ShareLink).filter(
         ShareLink.folder_id == folder_id,
         ShareLink.deleted_at.is_(None),
     ).all()
+    return [_share_link_response(link) for link in links]
 
 
 # ── Folder direct user/team sharing ──────────────────────────────────────────
@@ -993,10 +1195,19 @@ def share_with_team(
 def list_project_share_links(
     project_id: uuid.UUID,
     search: Optional[str] = Query(default=None),
+    asset_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     require_project_role(db, project_id, current_user, ProjectRole.viewer)
+
+    asset = None
+    if asset_id:
+        asset = db.query(Asset).filter(
+            Asset.id == asset_id, Asset.project_id == project_id, Asset.deleted_at.is_(None),
+        ).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
 
     # Subquery for view_count and last_viewed_at
     activity_stats = db.query(
@@ -1019,6 +1230,8 @@ def list_project_share_links(
             Asset.name.label("target_name"),
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
+            ShareLink.created_at,
+            ShareLink.expires_at,
         )
         .join(Asset, ShareLink.asset_id == Asset.id)
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
@@ -1043,6 +1256,8 @@ def list_project_share_links(
             Folder.name.label("target_name"),
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
+            ShareLink.created_at,
+            ShareLink.expires_at,
         )
         .join(Folder, ShareLink.folder_id == Folder.id)
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
@@ -1064,9 +1279,17 @@ def list_project_share_links(
             ShareLink.is_enabled,
             ShareLink.permission,
             sqlalchemy.literal("folder").label("share_type"),
-            ShareLink.title.label("target_name"),
+            # A project-root link has no target row, so its own title stands in.
+            # It must be a distinct expression, not ShareLink.title relabelled:
+            # with the bare column already selected above, the nested
+            # Query.union_all() adapts both result columns to `target_name`
+            # and every asset and folder link came back titled with its
+            # target's name. coalesce() is a no-op here (title is NOT NULL).
+            sa_func.coalesce(ShareLink.title, "").label("target_name"),
             sa_func.coalesce(activity_stats.c.view_count, 0).label("view_count"),
             activity_stats.c.last_viewed_at,
+            ShareLink.created_at,
+            ShareLink.expires_at,
         )
         .outerjoin(activity_stats, ShareLink.id == activity_stats.c.share_link_id)
         .filter(
@@ -1076,12 +1299,24 @@ def list_project_share_links(
     )
 
     if search:
-        escaped = _escape_like(search)
+        escaped = escape_like(search)
         asset_query = asset_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
         folder_query = folder_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
         project_query = project_query.filter(ShareLink.title.ilike(f"%{escaped}%"))
 
     results = asset_query.union_all(folder_query).union_all(project_query).all()
+    # Newest first, ties broken by id so the order is fully deterministic. The
+    # union has no order of its own, and sorting here avoids ORDER BY column
+    # adaptation on a legacy Query union.
+    results = sorted(results, key=lambda row: (row.created_at, str(row.id)), reverse=True)
+
+    # Same rule validate_share_link applies, so "expired" here means the share page refuses it.
+    now = datetime.now(timezone.utc)
+
+    contains: dict[uuid.UUID, Optional[str]] = {}
+    if asset is not None and results:
+        links = db.query(ShareLink).filter(ShareLink.id.in_([row.id for row in results])).all()
+        contains = {link.id: _link_shows_asset(db, link, asset) for link in links}
 
     return [
         ShareLinkListItem(
@@ -1096,6 +1331,10 @@ def list_project_share_links(
             target_name=row.target_name,
             view_count=row.view_count,
             last_viewed_at=row.last_viewed_at,
+            created_at=row.created_at,
+            expires_at=row.expires_at,
+            is_expired=bool(row.expires_at and row.expires_at < now),
+            contains_asset=contains.get(row.id),
         )
         for row in results
     ]
@@ -1125,6 +1364,29 @@ def get_share_link_activity(
 
 
 # ── Add asset to existing share link ──────────────────────────────────────────
+
+def _link_shows_asset(db: Session, link: ShareLink, asset: Asset) -> Optional[str]:
+    """How a share link shows an asset: "direct" when the link is that asset or lists it as
+    an item, "indirect" when it reaches it through a folder or the whole project, None when
+    it does not show it.
+
+    "indirect" is whatever validate_asset_in_share accepts beyond that, so the answer agrees
+    with what the share page actually serves.
+    """
+    if link.asset_id == asset.id:
+        return "direct"
+    listed = db.query(ShareLinkItem.id).filter(
+        ShareLinkItem.share_link_id == link.id,
+        ShareLinkItem.asset_id == asset.id,
+    ).first()
+    if listed:
+        return "direct"
+    try:
+        validate_asset_in_share(db, link, asset)
+    except HTTPException:
+        return None
+    return "indirect"
+
 
 @router.post("/share/{token}/add-asset/{asset_id}", status_code=status.HTTP_200_OK)
 def add_asset_to_share_link(
@@ -1156,17 +1418,11 @@ def add_asset_to_share_link(
     if link_project_id and asset.project_id != link_project_id:
         raise HTTPException(status_code=403, detail="Asset does not belong to this share link's project")
 
-    # Check if asset is already the direct target
-    if link.asset_id == asset_id:
-        return {"detail": "Asset already included in this share link"}
-
-    # Check if asset is already in share_link_items
-    existing_item = db.query(ShareLinkItem).filter(
-        ShareLinkItem.share_link_id == link.id,
-        ShareLinkItem.asset_id == asset_id,
-    ).first()
-    if existing_item:
-        return {"detail": "Asset already included in this share link"}
+    # A link that already shows the asset is left alone. Through a folder or the whole
+    # project counts too: adding an item there would convert a folder link, or shrink a
+    # whole-project link to the items it lists.
+    if _link_shows_asset(db, link, asset) is not None:
+        return {"detail": "Asset already included in this share link", "added": False}
 
     # If this is a single-asset share link, migrate to multi-item mode
     if link.asset_id and not link.project_id:
@@ -1194,7 +1450,7 @@ def add_asset_to_share_link(
     # Add the new asset
     db.add(ShareLinkItem(share_link_id=link.id, asset_id=asset_id))
     db.commit()
-    return {"detail": "Asset added to share link"}
+    return {"detail": "Asset added to share link", "added": True}
 
 
 @router.post("/projects/{project_id}/share/multi", response_model=ShareLinkResponse, status_code=status.HTTP_201_CREATED)
@@ -1235,12 +1491,16 @@ def create_multi_share_link(
     password_hash = None
     password_encrypted = None
     if body.password:
-        plain_bytes = body.password[:72].encode("utf-8")
+        plain_bytes = bcrypt_password_bytes(body.password)
         password_hash = bcrypt.hashpw(plain_bytes, bcrypt.gensalt()).decode("utf-8")
         try:
             password_encrypted = encrypt_password(body.password)
-        except Exception:
-            pass
+        except Exception as exc:
+            # The hash above is what guests are checked against, so the link is
+            # still protected; only the settings panel cannot show the password.
+            logger.warning(
+                "Could not encrypt a share link password for display: %s", type(exc).__name__,
+            )
 
     link = ShareLink(
         project_id=project_id,
@@ -1271,7 +1531,7 @@ def create_multi_share_link(
 
     db.commit()
     db.refresh(link)
-    return link
+    return _share_link_response(link)
 
 
 # ── Folder share public endpoints ─────────────────────────────────────────────
@@ -1401,8 +1661,14 @@ def get_folder_share_assets(
         if is_project_share:
             # Project share: validate folder belongs to this project
             f = db.query(Folder).filter(Folder.id == folder_id, Folder.deleted_at.is_(None)).first()
-            if not f or f.project_id != link.project_id:
+            if not f or f.project_id != link.project_id or not folder_chain_is_live(db, folder_id):
                 raise HTTPException(status_code=403, detail="Folder is not within the shared project")
+            # Multi-share: only the shared folders and their descendants, the same rule
+            # validate_asset_in_share applies to assets
+            if is_multi_share:
+                multi_folder_ids = [item.folder_id for item in multi_share_items if item.folder_id]
+                if not any(folder_id == fid or _is_descendant_of(db, folder_id, fid) for fid in multi_folder_ids):
+                    raise HTTPException(status_code=403, detail="Folder is not in the shared items")
         elif folder_id != link.folder_id and not _is_descendant_of(db, folder_id, link.folder_id):
             raise HTTPException(status_code=403, detail="Folder is not within the shared folder")
         target_folder_id = folder_id
@@ -1512,6 +1778,63 @@ def get_folder_share_assets(
     )
 
 
+def _share_media_file(db: Session, link, asset, version_id: Optional[uuid.UUID]) -> MediaFile:
+    """The media file a share link serves for an asset.
+
+    When the share link enables "Show all versions", `version_id` selects a specific ready
+    version; otherwise (or when omitted/invalid) the latest ready version is served.
+    """
+    media_file = None
+    if version_id and link.show_versions:
+        version = db.query(AssetVersion).filter(
+            AssetVersion.id == version_id,
+            AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+            AssetVersion.processing_status == ProcessingStatus.ready,
+        ).first()
+        if version:
+            media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+    if not media_file:
+        # No (or non-visible) version requested — fall back to the latest ready version.
+        media_file = _get_latest_media_file(db, asset.id)
+    if not media_file:
+        raise HTTPException(status_code=404, detail="No ready media file found")
+    return media_file
+
+
+@router.get(
+    "/share/{token}/downloads/{asset_id}",
+    response_model=list[DownloadOption],
+    # Each call reads the master playlist and HEADs storage, and needs no sign-in.
+    dependencies=[Depends(rate_limit("share_downloads", 30, 60))],
+)
+def list_share_download_options(
+    token: str,
+    asset_id: uuid.UUID,
+    version_id: Optional[uuid.UUID] = Query(default=None),
+    share_session: Optional[str] = Query(None, alias="share_session"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Public endpoint — optional auth. The files an asset in a share link can be
+    downloaded as: the original, then each transcode."""
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+    if not link.allow_download:
+        raise HTTPException(status_code=403, detail="Downloads are not allowed for this share link")
+    asset = _get_asset(db, asset_id)
+    validate_asset_in_share(db, link, asset)
+    media_file = _share_media_file(db, link, asset, version_id)
+    choices = download_choices(
+        asset.asset_type, media_file,
+        allow_original=may_download_original(db, asset, current_user),
+    )
+    describe_choices(asset.asset_type, media_file, choices)
+    return [
+        DownloadOption(id=c.id, label=c.label, format=c.format, size_bytes=c.size_bytes)
+        for c in choices
+    ]
+
+
 @router.get("/share/{token}/stream/{asset_id}")
 def get_share_stream_url(
     token: str,
@@ -1519,6 +1842,11 @@ def get_share_stream_url(
     version_id: Optional[uuid.UUID] = Query(default=None),
     share_session: Optional[str] = Query(None, alias="share_session"),
     download: bool = Query(default=False),
+    # Which file a download serves: an id from GET /share/{token}/downloads/{asset_id}.
+    rendition: Optional[str] = Query(default=None, max_length=32),
+    # Bulk downloads: the original when the instance allows originals outside a
+    # project, else the default. Members included; see original_allowed_for_download.
+    prefer_original: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
@@ -1538,38 +1866,30 @@ def get_share_stream_url(
     # Validate asset belongs to this share
     validate_asset_in_share(db, link, asset)
 
-    media_file = None
-    if version_id and link.show_versions:
-        version = db.query(AssetVersion).filter(
-            AssetVersion.id == version_id,
-            AssetVersion.asset_id == asset.id,
-            AssetVersion.deleted_at.is_(None),
-            AssetVersion.processing_status == ProcessingStatus.ready,
-        ).first()
-        if version:
-            media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
-    if not media_file:
-        # No (or non-visible) version requested — fall back to the latest ready version.
-        media_file = _get_latest_media_file(db, asset.id)
-    if not media_file:
-        raise HTTPException(status_code=404, detail="No ready media file found")
+    media_file = _share_media_file(db, link, asset, version_id)
 
-    if asset.asset_type == AssetType.video and media_file.s3_key_processed:
-        if download:
-            s3_key = media_file.s3_key_raw or media_file.s3_key_processed
-            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
-            url = generate_presigned_get_url(s3_key, download_filename=filename)
-        else:
-            # Route through /stream/hls so S3 can stay private (#51)
-            hls_token = create_hls_token(media_file.s3_key_processed)
-            url = f"/stream/hls/master.m3u8?token={hls_token}"
+    choice = None
+    if download:
+        # The MP4 remuxed from the top rung unless another file was chosen,
+        # falling back to the camera master for versions that predate it (see
+        # routers/assets.py). The original by name only where the instance
+        # lets people outside the project have it.
+        choice = pick_or_refuse(
+            asset, media_file, rendition,
+            allow_original=original_allowed_for_download(
+                db, asset, current_user, rendition, prefer_original,
+            ),
+            prefer_original=prefer_original,
+        )
+        url = generate_presigned_get_url(
+            choice.s3_key, download_filename=download_filename(asset, media_file, choice),
+        )
+    elif asset.asset_type == AssetType.video and media_file.s3_key_processed:
+        # Route through /stream/hls so S3 can stay private (#51)
+        hls_token = create_hls_token(media_file.s3_key_processed)
+        url = f"/stream/hls/master.m3u8?token={hls_token}"
     else:
-        s3_key = media_file.s3_key_processed or media_file.s3_key_raw
-        if download:
-            filename = build_download_filename(asset.name, media_file.original_filename or s3_key)
-            url = generate_presigned_get_url(s3_key, download_filename=filename)
-        else:
-            url = generate_presigned_get_url(s3_key)
+        url = generate_presigned_get_url(media_file.s3_key_processed or media_file.s3_key_raw)
 
     # Log activity
     activity_action = ShareActivityAction.downloaded if download else ShareActivityAction.viewed_asset
@@ -1579,6 +1899,7 @@ def get_share_stream_url(
         actor_name=current_user.name if current_user else None,
         asset_id=asset.id,
         asset_name=asset.name,
+        rendition=choice.id if choice else None,
     )
 
     # Get thumbnail URL

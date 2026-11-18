@@ -69,10 +69,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: apps/api/requirements.txt
+          cache-dependency-path: apps/api/requirements-dev.txt
 
       - name: Install dependencies
-        run: pip install -r apps/api/requirements.txt
+        run: pip install -r apps/api/requirements-dev.txt
 
       - name: Verify test files exist
         run: |
@@ -147,7 +147,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version-file: .nvmrc
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -170,12 +170,31 @@ jobs:
           done
           echo "All critical frontend files present"
 
+      # docker-compose.dev.yml runs `npm install` on this manifest while every
+      # other install path is pnpm, so an override npm rejects outright
+      # (EOVERRIDE, #366) would otherwise go green. Resolution only, so
+      # --ignore-scripts. A clean dir, because npm 10.x also crashes
+      # ('edgesOut') next to a pnpm node_modules and a stray lockfile would hide
+      # a real failure. npm 11 is pinned so the resolve does not run on the npm
+      # bundled with whatever Node .nvmrc names: npm 10.9.8 crashes from scratch
+      # on any manifest (#417). Drop the pin once the .nvmrc Node bundles an npm
+      # other than 10.9.8. The outer `npx` is still that bundled npm, and it also
+      # parses the package.json in this dir, so the pin narrows the dependency on
+      # the bundled npm rather than removing it.
+      - name: npm can still resolve apps/web
+        run: |
+          dir="$RUNNER_TEMP/npm-resolve"
+          rm -rf "$dir" && mkdir -p "$dir"
+          cp package.json "$dir/"
+          cd "$dir"
+          npx -y npm@11 --version
+          npx -y npm@11 install --package-lock-only --ignore-scripts
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Type check
         run: pnpm exec tsc --noEmit
-        continue-on-error: true
 
       - name: Run tests
         run: pnpm test
@@ -207,6 +226,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Every workflow, with shellcheck on their run: blocks (the image bundles
+      # it). The release workflows only run on a release or by hand, so this is
+      # the only place a mistake in them shows before it matters.
+      - name: Lint GitHub workflows
+        run: docker run --rm -v "${PWD}:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -223,7 +248,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version-file: .nvmrc
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -235,7 +260,36 @@ jobs:
       - name: Lint frontend
         run: pnpm lint
         working-directory: apps/web
-        continue-on-error: true
+
+  # ─── E2E type check ───────────────────────────────────────────────────────────
+  # The Playwright suite in e2e/ drives a running stack, so CI does not run it,
+  # but it must keep compiling. A standalone package with its own lockfile;
+  # nothing here installs a browser.
+  e2e-typecheck:
+    name: E2E Type Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: e2e
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Type check
+        run: pnpm typecheck
 
   # ─── Docker Build ─────────────────────────────────────────────────────────────
   docker-build:
@@ -251,6 +305,19 @@ jobs:
       - name: Build API image (prod)
         run: docker build -t freeframe-api:prod -f apps/api/Dockerfile.prod .
 
+      - name: Test tooling is in the dev image and not the prod one
+        run: |
+          # The dev image is what every documented way of running the suite goes
+          # through, and the prod image is where pytest must never ship. Both
+          # directions are asserted, because a change that fixes one by breaking
+          # the other looks green otherwise.
+          docker run --rm freeframe-api:test python -m pytest --version
+          if docker run --rm freeframe-api:prod python -m pytest --version 2>/dev/null; then
+            echo "::error::pytest is installed in the production image"
+            exit 1
+          fi
+          echo "dev has pytest, prod does not"
+
       - name: Build Web image (dev)
         run: docker build -t freeframe-web:test -f apps/web/Dockerfile apps/web/
 
@@ -262,3 +329,217 @@ jobs:
           # Validate compose file syntax (skip env file resolution)
           python3 -c "import yaml; yaml.safe_load(open('docker-compose.dev.yml'))" && echo "Dev compose YAML is valid"
           python3 -c "import yaml; yaml.safe_load(open('docker-compose.prod.yml'))" && echo "Prod compose YAML is valid"
+          python3 -c "import yaml; yaml.safe_load(open('docker-compose.https.yml'))" && echo "HTTPS compose YAML is valid"
+          python3 -c "import yaml; yaml.safe_load(open('docker-compose.images.yml'))" && echo "Images compose YAML is valid"
+          python3 -c "import yaml; yaml.safe_load(open('docker-compose.storage.yml'))" && echo "Storage compose YAML is valid"
+          python3 -c "import yaml; yaml.safe_load(open('docker-compose.gpu.yml'))" && echo "GPU compose YAML is valid"
+
+      - name: Verify the HTTPS compose override merges and needs DOMAIN
+        run: |
+          cp .env.example .env.prod
+          https() { docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.https.yml "$@"; }
+          DOMAIN=review.example.com ACME_EMAIL=ops@example.com https config -q
+          echo "HTTPS override merges with the prod compose"
+          # An empty DOMAIN has to fail loudly; without it the router would
+          # match Host(``) and no certificate would be requested.
+          if err=$(DOMAIN='' ACME_EMAIL=ops@example.com https config -q 2>&1); then
+            echo "::error::an empty DOMAIN was accepted by docker-compose.https.yml"
+            exit 1
+          fi
+          echo "$err" | grep -q DOMAIN || { echo "::error::the error does not name DOMAIN: $err"; exit 1; }
+          echo "an empty DOMAIN is refused and named"
+
+      - name: Verify the images, storage and GPU compose files merge
+        run: |
+          cp .env.example .env.prod
+          base() { docker compose --env-file .env.prod -f docker-compose.prod.yml "$@"; }
+          base -f docker-compose.images.yml config -q
+          echo "images file merges with the prod compose"
+          base -f docker-compose.images.yml -f docker-compose.storage.yml config -q
+          echo "images and storage files merge with the prod compose"
+          DOMAIN=review.example.com ACME_EMAIL=ops@example.com \
+            STORAGE_DOMAIN=storage.review.example.com STORAGE_ROUTED=true \
+            base -f docker-compose.images.yml -f docker-compose.https.yml -f docker-compose.storage.yml config -q
+          echo "images, https and storage files merge with the prod compose"
+          # The GPU file renders on a runner without a GPU (config starts
+          # nothing), alone and with every other file, and the reservation
+          # reaches the worker only.
+          base -f docker-compose.images.yml -f docker-compose.gpu.yml config -q
+          echo "images and GPU files merge with the prod compose"
+          DOMAIN=review.example.com ACME_EMAIL=ops@example.com \
+            STORAGE_DOMAIN=storage.review.example.com STORAGE_ROUTED=true \
+            base -f docker-compose.images.yml -f docker-compose.https.yml -f docker-compose.storage.yml \
+            -f docker-compose.gpu.yml config -q
+          echo "images, https, storage and GPU files merge with the prod compose"
+          gpu_services=$(base -f docker-compose.images.yml -f docker-compose.gpu.yml config --format json |
+            python3 -c 'import json, sys; s = json.load(sys.stdin)["services"]; print(" ".join(sorted(n for n in s if s[n].get("deploy", {}).get("resources", {}).get("reservations", {}).get("devices"))))')
+          if [ "$gpu_services" != "worker" ]; then
+            echo "::error::the GPU reservation reaches '$gpu_services', expected only the worker"
+            exit 1
+          fi
+          echo "only the worker reserves the GPU"
+
+  # ─── Installer ────────────────────────────────────────────────────────────────
+  # deploy/freeframe and install.sh: ShellCheck and the bats suite, on the OS
+  # the installer targets. Both tools are pinned, not taken from apt: Ubuntu
+  # 22.04's bats (1.2.1) cannot run the suite (no BATS_TEST_TMPDIR), and an
+  # apt version moves with the runner image. The suite runs on the runner
+  # itself, not in the bats/bats image, so it meets GNU coreutils, flock,
+  # setsid, systemd-analyze and the real `docker compose config`, which the
+  # Alpine image lacks and skips.
+  installer:
+    name: Installer Lint and Unit Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      BATS_VERSION: v1.14.0
+      BATS_COMMIT: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install pinned ShellCheck and bats-core
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz
+          sudo install -m 755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$BATS_VERSION" https://github.com/bats-core/bats-core.git bats-core
+          commit=$(git -C bats-core rev-parse HEAD)
+          if [ "$commit" != "$BATS_COMMIT" ]; then
+            echo "::error::bats-core ${BATS_VERSION} is commit ${commit}, expected ${BATS_COMMIT}"
+            exit 1
+          fi
+          sudo ./bats-core/install.sh /usr/local
+          command -v shellcheck bats
+          shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION#v}"
+          bats --version | grep -qx "Bats ${BATS_VERSION#v}"
+          shellcheck --version | sed -n 2p
+          bats --version
+
+      - name: ShellCheck
+        run: shellcheck -x install.sh deploy/freeframe deploy/tests/ci-e2e.sh
+
+      - name: bats
+        run: |
+          set -euo pipefail
+          # The floor guards against the suite being deleted or gutted.
+          count=$(bats --count deploy/tests)
+          echo "bats tests: $count"
+          if [ "$count" -lt 450 ]; then
+            echo "::error::Expected at least 450 bats tests but found $count; tests may have been deleted"
+            exit 1
+          fi
+          bats --timing deploy/tests
+
+  # Whether the installer end to end has anything to test: on a pull request,
+  # only when it touches the installer, the compose files, the prod images or
+  # this workflow (plain git diff against the PR base, no third-party action).
+  # A push to main always runs it. When in doubt (no base, a failed diff) it
+  # runs. Skipped, installer-e2e shows as skipped, not failed.
+  installer-changes:
+    name: Installer E2E Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      e2e: ${{ steps.gate.outputs.e2e }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The whole history, so the PR base commit is there to diff against.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Does this change touch the installer, compose files or prod images?
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          e2e=false
+          if [ "$EVENT" != pull_request ]; then
+            echo "A $EVENT event: the installer e2e always runs."
+            e2e=true
+          elif [ -z "$BASE" ] || ! files=$(git diff --name-only "$BASE" HEAD); then
+            echo "::warning::Could not list the files changed against the PR base (${BASE:-none}), so the installer e2e runs."
+            e2e=true
+          else
+            echo "Files changed against the PR base $BASE:"
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case $f in
+                deploy/* | install.sh | docker-compose*.yml | apps/*/Dockerfile.prod* | apps/*/docker-entrypoint.sh | *.dockerignore | .github/workflows/ci.yml)
+                  echo "  $f (the installer e2e covers it)"
+                  e2e=true
+                  ;;
+                *) echo "  $f" ;;
+              esac
+            done <<<"$files"
+          fi
+          echo "Installer e2e: $e2e"
+          echo "e2e=$e2e" >>"$GITHUB_OUTPUT"
+
+  # The installer for real, on a fresh runner (Docker 24+ with compose is
+  # preinstalled, so it installs no Docker): both prod images are built from
+  # this checkout as version `ci`, so nothing comes from the registry, and
+  # each step below is one phase of deploy/tests/ci-e2e.sh, which says what it
+  # checks. About 15 minutes, most of it the two image builds.
+  installer-e2e:
+    name: Installer End to End
+    needs: installer-changes
+    if: needs.installer-changes.outputs.e2e == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      E2E_ADMIN_EMAIL: ci@example.com
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check the runner and make the admin password
+        run: bash deploy/tests/ci-e2e.sh prepare
+
+      - name: Install refuses a FreeFrame set up by hand (exit 3, nothing written)
+        run: bash deploy/tests/ci-e2e.sh foreign
+
+      - name: Build the prod images as version ci
+        run: bash deploy/tests/ci-e2e.sh build
+
+      - name: Install (plain HTTP, storage on this server, unattended)
+        run: bash deploy/tests/ci-e2e.sh install
+
+      - name: Health, admin sign-in and a first project
+        run: bash deploy/tests/ci-e2e.sh api
+
+      - name: Backup, then restore drops a project made after it
+        run: bash deploy/tests/ci-e2e.sh backup-restore
+
+      - name: Update at the same version keeps the secrets
+        run: bash deploy/tests/ci-e2e.sh update
+
+      - name: Install again says already installed and changes nothing
+        run: bash deploy/tests/ci-e2e.sh rerun
+
+      - name: Status
+        run: bash deploy/tests/ci-e2e.sh status
+
+      - name: Diagnostics
+        if: failure() || cancelled()
+        run: bash deploy/tests/ci-e2e.sh diagnose

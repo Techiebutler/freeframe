@@ -1,0 +1,39 @@
+# ============================================================
+# FreeFrame - optional NVIDIA GPU for video processing
+# ============================================================
+# Usage: add it to the -f files you already use, for example
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml \
+#     -f docker-compose.images.yml -f docker-compose.gpu.yml up -d
+# (use the same -f flags for every later command). The installer adds it
+# itself when FREEFRAME_GPU=nvidia is in .env.prod (sudo freeframe configure
+# turns it on and off).
+#
+# It needs, on the host:
+#   * a working NVIDIA driver: nvidia-smi answers (on WSL2, the Windows
+#     driver; nothing is installed inside WSL);
+#   * the NVIDIA Container Toolkit, set up for Docker:
+#       sudo nvidia-ctk runtime configure --runtime=docker
+#       sudo systemctl restart docker
+# The published API image needs nothing more: its ffmpeg has NVENC, which
+# loads the driver's libraries that the toolkit mounts into the container.
+#
+# Only the transcoding worker gets the GPU. NVENC needs the "video" driver
+# capability, and nvidia-smi (how the transcoder and `freeframe status` see
+# the GPU) needs "utility"; Docker passes the capabilities below on as
+# NVIDIA_DRIVER_CAPABILITIES, which is also set to the same value.
+# TRANSCODER_PIPELINE=NVIDIA prefers NVENC, and the transcoder still falls
+# back to the CPU when no GPU answers or a GPU attempt fails. A
+# TRANSCODER_PIPELINE set in .env.prod wins over this default.
+
+services:
+  worker:
+    environment:
+      TRANSCODER_PIPELINE: ${TRANSCODER_PIPELINE:-NVIDIA}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility, video]

@@ -157,6 +157,80 @@ describe('WipeViewer', () => {
   })
 })
 
+/** WipeViewer driven by a live useSharedTransform, as CompareOverlay mounts it. */
+function WipeHarness() {
+  const transform = useSharedTransform()
+  return <WipeViewer urlA="/a.webp" urlB="/b.webp" badgeA="v1" badgeB="v3" transform={transform} />
+}
+
+describe('WipeViewer double-click reset (#170)', () => {
+  it('double-clicking the stage resets zoom and pan, like side-by-side', () => {
+    render(<WipeHarness />)
+    const stage = screen.getByTestId('wipe-stage')
+    fireEvent.wheel(stage, { deltaY: -100 })
+    expect(screen.getByAltText('v1').parentElement!.style.transform).toBe('translate(0px, 0px) scale(1.2)')
+
+    fireEvent.doubleClick(stage)
+    expect(screen.getByAltText('v1').parentElement!.style.transform).toBe('translate(0px, 0px) scale(1)')
+    expect(screen.getByAltText('v3').parentElement!.style.transform).toBe('translate(0px, 0px) scale(1)')
+  })
+
+  it('double-clicking the divider leaves the zoom alone', () => {
+    render(<WipeHarness />)
+    fireEvent.wheel(screen.getByTestId('wipe-stage'), { deltaY: -100 })
+    fireEvent.doubleClick(screen.getByTestId('wipe-divider'))
+    expect(screen.getByAltText('v1').parentElement!.style.transform).toBe('translate(0px, 0px) scale(1.2)')
+  })
+})
+
+describe('WipeViewer divider keyboard (#170)', () => {
+  it('is a focusable slider reporting the split', () => {
+    renderWipe()
+    const slider = screen.getByRole('slider')
+    expect(slider).toBe(screen.getByTestId('wipe-divider'))
+    expect(slider).toHaveAttribute('tabindex', '0')
+    expect(slider).toHaveAttribute('aria-valuemin', '0')
+    expect(slider).toHaveAttribute('aria-valuemax', '100')
+    expect(slider).toHaveAttribute('aria-valuenow', '50')
+    expect(slider).toHaveAccessibleName()
+  })
+
+  it('arrow keys move the divider one step, Shift and Page keys ten, clamped to 0..100', () => {
+    renderWipe()
+    const slider = screen.getByRole('slider')
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' })
+    expect(slider).toHaveAttribute('aria-valuenow', '49')
+    fireEvent.keyDown(slider, { key: 'ArrowRight', shiftKey: true })
+    expect(slider).toHaveAttribute('aria-valuenow', '59')
+    fireEvent.keyDown(slider, { key: 'ArrowUp' })
+    expect(slider).toHaveAttribute('aria-valuenow', '60')
+    fireEvent.keyDown(slider, { key: 'PageDown' })
+    expect(slider).toHaveAttribute('aria-valuenow', '50')
+    fireEvent.keyDown(slider, { key: 'ArrowDown' })
+    expect(slider).toHaveAttribute('aria-valuenow', '49')
+    fireEvent.keyDown(slider, { key: 'PageUp' })
+    expect(slider).toHaveAttribute('aria-valuenow', '59')
+    // The clip follows the keyboard as it does the pointer.
+    expect(screen.getByAltText('v3').parentElement!.parentElement!.style.clipPath).toBe('inset(0 0 0 59%)')
+
+    fireEvent.keyDown(slider, { key: 'Home' })
+    expect(slider).toHaveAttribute('aria-valuenow', '0')
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' })
+    expect(slider).toHaveAttribute('aria-valuenow', '0')
+    fireEvent.keyDown(slider, { key: 'End' })
+    expect(slider).toHaveAttribute('aria-valuenow', '100')
+    fireEvent.keyDown(slider, { key: 'ArrowRight', shiftKey: true })
+    expect(slider).toHaveAttribute('aria-valuenow', '100')
+  })
+
+  it('claims the keys it handles so the page does not also scroll', () => {
+    renderWipe()
+    const slider = screen.getByRole('slider')
+    expect(fireEvent.keyDown(slider, { key: 'ArrowRight' })).toBe(false)
+    expect(fireEvent.keyDown(slider, { key: 'Tab' })).toBe(true)
+  })
+})
+
 describe('useSharedTransform', () => {
   it('zooms with wheel within [1, 8] and resets', () => {
     const { result } = renderHook(() => useSharedTransform())

@@ -47,7 +47,7 @@ function NotificationItem({ notification }: { notification: Notification }) {
       <div
         className={cn(
           'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
-          notification.type === 'mention' && 'bg-accent-muted text-accent',
+          notification.type === 'mention' && 'bg-accent-muted text-text-primary',
           notification.type === 'approval' && 'bg-status-success/15 text-status-success',
           notification.type === 'comment' && 'bg-bg-tertiary text-text-secondary',
           (notification.type === 'assignment' || notification.type === 'due_soon') &&

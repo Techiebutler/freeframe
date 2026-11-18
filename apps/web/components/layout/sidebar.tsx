@@ -15,16 +15,20 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
-import { useUploadStore } from '@/stores/upload-store'
+import { useUploadStore, visibleFiles, isOnItsWay, uploadsThatWouldStop } from '@/stores/upload-store'
 import { useNotificationStore } from '@/stores/notification-store'
-import { useThemeStore } from '@/stores/theme-store'
+import { useBranding } from '@/components/shared/branding-provider'
+import { useResolvedTheme } from '@/hooks/use-resolved-theme'
+import { resolveBrandingLogo } from '@/lib/branding-logo'
 import { Avatar } from '@/components/shared/avatar'
+import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
 import { NotificationDrawer } from './notification-drawer'
 import useSWR from 'swr'
 import { api } from '@/lib/api'
 import { StorageUsage, StorageRing } from '@/components/shared/storage-usage'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { useAfterClose } from '@/components/shared/item-menu'
 import type { InstanceSettings } from '@/types'
-import { useInstanceBranding } from '@/components/shared/global-branding'
 
 interface NavItem {
   href: string
@@ -44,155 +48,185 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname()
   const { user, logout, isSuperAdmin } = useAuthStore()
-  const { files: uploadFiles, togglePanel, panelOpen } = useUploadStore()
+  const togglePanel = useUploadStore((s) => s.togglePanel)
+  const setPanelOpen = useUploadStore((s) => s.setPanelOpen)
+  const panelOpen = useUploadStore((s) => s.panelOpen)
+  // Only when open: every store write is a write of the persisted upload rows.
+  const closeUploadsPanel = () => { if (panelOpen) setPanelOpen(false) }
+  // A count, not the rows, so progress writes don't re-render the sidebar.
+  // The signed-in account's uploads only, though another's may still be running.
+  const activeUploads = useUploadStore((s) => visibleFiles(s).filter(isOnItsWay).length)
   const { unreadCount, fetchNotifications } = useNotificationStore()
-  const { data: branding } = useInstanceBranding()
-  const { theme } = useThemeStore()
-  // Pick logo based on resolved theme; fall back to the other if only one is set
-  const orgName = branding?.org_name ?? 'FreeFrame'
-  const customLogo = theme === 'light'
-    ? (branding?.logo_light_url ?? branding?.logo_dark_url)
-    : (branding?.logo_dark_url ?? branding?.logo_light_url)
+  const { orgName, orgLogoDark, orgLogoLight } = useBranding()
+  // Resolved, not the raw preference: 'system' is neither 'light' nor 'dark',
+  // so comparing it directly handed a system-light viewer the dark-background
+  // logo on a light page.
+  const theme = useResolvedTheme()
+  const customLogo = resolveBrandingLogo({
+    theme,
+    darkUrl: orgLogoDark,
+    lightUrl: orgLogoLight,
+  })
   const [notifOpen, setNotifOpen] = React.useState(false)
-  const activeUploads = uploadFiles.filter((f) => f.status === 'uploading' || f.status === 'pending' || f.status === 'queued' || f.status === 'processing').length
+  // The Log out confirmation, and how many uploads it says will stop. Counted
+  // when the item is picked and left alone after, so the sentence does not
+  // change under the pointer, or while the dialog fades out.
+  const [logoutAsk, setLogoutAsk] = React.useState({ open: false, uploads: 0 })
+
+  // Logging out loads /login, which takes every upload this tab is running or
+  // holding with it, so ask first. Nothing is cleared until the answer is yes.
+  //
+  // The question is asked once the menu has fully closed, not from inside the
+  // pick: a dialog that opens while the closing menu still holds <body> at
+  // `pointer-events: none` saves that lock as the value to restore, and the
+  // page can stay unclickable after Cancel. See `useAfterClose`.
+  const { schedule: afterMenuCloses, onCloseAutoFocus } = useAfterClose()
+  function requestLogout() {
+    const n = uploadsThatWouldStop()
+    if (n === 0) logout()
+    else afterMenuCloses(() => setLogoutAsk({ open: true, uploads: n }))
+  }
   const { data: instance } = useSWR<InstanceSettings>(
     '/instance/settings',
     () => api.get<InstanceSettings>('/instance/settings'),
   )
 
-  // Fetch notifications on mount
-  React.useEffect(() => { fetchNotifications() }, [fetchNotifications])
+  React.useEffect(() => {
+    fetchNotifications()
+  }, [fetchNotifications])
 
   return (
     <>
-    <aside
-      className={cn(
-        'fixed left-0 top-0 z-30 flex h-screen flex-col border-r border-border',
-        'bg-bg-secondary transition-[width] duration-200 overflow-hidden',
-        collapsed ? 'w-[52px]' : 'w-[220px]',
-      )}
-    >
-      {/* Logo */}
-      <div
+      <aside
         className={cn(
-          'flex h-12 items-center shrink-0 border-b border-border',
-          collapsed ? 'justify-center px-0' : 'px-4 gap-2.5',
+          'fixed left-0 top-0 z-30 flex h-screen flex-col border-r border-border',
+          'bg-bg-secondary transition-[width] duration-200 overflow-hidden',
+          collapsed ? 'w-[52px]' : 'w-[220px]',
         )}
       >
-        {/* Logo: theme-aware custom logo, or default FreeFrame icons */}
-        {customLogo ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={customLogo}
-            alt={orgName}
-            className="h-7 w-7 shrink-0 object-contain rounded"
-          />
-        ) : (
-          <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
+        {/* Logo */}
+        <div
+          className={cn(
+            'flex h-12 items-center shrink-0 border-b border-border',
+            collapsed ? 'justify-center px-0' : 'px-4 gap-2.5',
+          )}
+        >
+          {customLogo ? (
+            // eslint-disable-next-line @next/next/no-img-element
             <img
-              src="/logo-icon.png"
+              src={customLogo}
               alt={orgName}
-              className="h-7 w-7 shrink-0 object-contain logo-dark"
+              className="h-7 w-7 shrink-0 object-contain rounded"
             />
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo-icon-dark.png"
+          ) : (
+            <ThemedDefaultLogo
+              variant="icon"
               alt={orgName}
-              className="h-7 w-7 shrink-0 object-contain logo-light"
+              className="h-7 w-7 shrink-0 object-contain"
             />
-          </>
-        )}
-        {!collapsed && (
-          <span className="text-sm font-semibold text-text-primary tracking-tight">
-            {orgName}
-          </span>
-        )}
-      </div>
+          )}
+          {!collapsed && (
+            <span className="text-sm font-semibold text-text-primary tracking-tight truncate">
+              {orgName}
+            </span>
+          )}
+        </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 px-2 space-y-0.5">
-        {navItems.map((item) => {
-          const isActive =
-            item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
-          const Icon = item.icon
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setNotifOpen(false)}
-              className={cn(
-                'group relative flex items-center rounded-md transition-colors duration-100',
-                collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2.5 h-9',
-                isActive
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary',
-              )}
-              title={collapsed ? item.label : undefined}
-            >
-              <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={isActive ? 2 : 1.5} />
-              {!collapsed && (
-                <span className={cn('text-[13px]', isActive && 'font-medium')}>
-                  {item.label}
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 px-2 space-y-0.5">
+          {navItems.map((item) => {
+            const isActive =
+              item.href === '/'
+                ? pathname === '/'
+                : pathname.startsWith(item.href)
+            const Icon = item.icon
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => { setNotifOpen(false); closeUploadsPanel() }}
+                className={cn(
+                  'group relative flex items-center rounded-md transition-colors duration-100',
+                  collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2.5 h-9',
+                  isActive
+                    ? 'bg-bg-hover text-text-primary'
+                    : 'text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary',
+                )}
+                title={collapsed ? item.label : undefined}
+              >
+                <Icon
+                  className="h-[18px] w-[18px] shrink-0"
+                  strokeWidth={isActive ? 2 : 1.5}
+                />
+                {!collapsed && (
+                  <span
+                    className={cn('text-[13px]', isActive && 'font-medium')}
+                  >
+                    {item.label}
+                  </span>
+                )}
+              </Link>
+            )
+          })}
+
+          {/* Notifications button. The rail stays live beside the uploads
+              panel, and the drawer opens in the panel's place, so it closes the
+              panel rather than opening on top of it. */}
+          <button
+            onClick={() => { closeUploadsPanel(); setNotifOpen((v) => !v) }}
+            className={cn(
+              'group relative flex w-full items-center rounded-md transition-colors duration-100',
+              collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2.5 h-9',
+              notifOpen
+                ? 'bg-bg-hover text-text-primary'
+                : 'text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary',
+            )}
+            title={collapsed ? 'Notifications' : undefined}
+          >
+            <div className="relative shrink-0">
+              <Bell
+                className="h-[18px] w-[18px]"
+                strokeWidth={notifOpen ? 2 : 1.5}
+              />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-status-error px-0.5 text-[9px] font-bold text-white">
+                  {unreadCount}
                 </span>
               )}
-            </Link>
-          )
-        })}
-
-        {/* Notifications button */}
-        <button
-          onClick={() => setNotifOpen((v) => !v)}
-          className={cn(
-            'group relative flex w-full items-center rounded-md transition-colors duration-100',
-            collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2.5 h-9',
-            notifOpen
-              ? 'bg-bg-hover text-text-primary'
-              : 'text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary',
-          )}
-          title={collapsed ? 'Notifications' : undefined}
-        >
-          <div className="relative shrink-0">
-            <Bell className="h-[18px] w-[18px]" strokeWidth={notifOpen ? 2 : 1.5} />
-            {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-status-error px-0.5 text-[9px] font-bold text-white">
-                {unreadCount}
+            </div>
+            {!collapsed && (
+              <span className={cn('text-[13px]', notifOpen && 'font-medium')}>
+                Notifications
               </span>
             )}
-          </div>
-          {!collapsed && (
-            <span className={cn('text-[13px]', notifOpen && 'font-medium')}>
-              Notifications
-            </span>
-          )}
-        </button>
+          </button>
 
-        {/* Uploads button */}
-        <button
-          onClick={() => { setNotifOpen(false); togglePanel() }}
-          className={cn(
-            'group relative flex w-full items-center rounded-md transition-colors duration-100',
-            collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2.5 h-9',
-            panelOpen
-              ? 'bg-bg-hover text-text-primary'
-              : 'text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary',
-          )}
-          title={collapsed ? 'Uploads' : undefined}
-        >
-          <div className="relative shrink-0">
-            <Upload className="h-[18px] w-[18px]" strokeWidth={panelOpen ? 2 : 1.5} />
-            {activeUploads > 0 && (
-              <span className="absolute -top-1 -right-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.5 text-[9px] font-bold text-white">
-                {activeUploads}
+          {/* Uploads button */}
+          <button
+            onClick={() => { setNotifOpen(false); togglePanel() }}
+            className={cn(
+              'group relative flex w-full items-center rounded-md transition-colors duration-100',
+              collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2.5 h-9',
+              panelOpen
+                ? 'bg-bg-hover text-text-primary'
+                : 'text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary',
+            )}
+            title={collapsed ? 'Uploads' : undefined}
+          >
+            <div className="relative shrink-0">
+              <Upload className="h-[18px] w-[18px]" strokeWidth={panelOpen ? 2 : 1.5} />
+              {activeUploads > 0 && (
+                <span className="absolute -top-1 -right-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.5 text-[9px] font-bold text-white">
+                  {activeUploads}
+                </span>
+              )}
+            </div>
+            {!collapsed && (
+              <span className={cn('text-[13px]', panelOpen && 'font-medium')}>
+                Uploads
               </span>
             )}
-          </div>
-          {!collapsed && (
-            <span className={cn('text-[13px]', panelOpen && 'font-medium')}>
-              Uploads
-            </span>
-          )}
-        </button>
+          </button>
       </nav>
 
       {/* Bottom section */}
@@ -214,88 +248,105 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             )}
           </div>
         )}
-        {/* User dropdown */}
+
         <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
-            <button
-              className={cn(
-                'flex w-full items-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors',
-                collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2 py-1.5',
-              )}
-              title={collapsed ? (user?.name ?? 'Account') : undefined}
-            >
-              <Avatar
-                src={user?.avatar_url}
-                name={user?.name}
-                size="sm"
-              />
-              {!collapsed && (
-                <div className="flex flex-col items-start overflow-hidden min-w-0">
-                  <span className="truncate text-[13px] font-medium text-text-primary leading-tight w-full text-left">
-                    {user?.name ?? 'User'}
-                  </span>
-                  <span className="truncate text-[10px] text-text-tertiary leading-tight w-full text-left">
-                    {user?.email ?? ''}
-                  </span>
-                </div>
-              )}
-            </button>
-          </DropdownMenu.Trigger>
-
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="top"
-              align={collapsed ? 'start' : 'end'}
-              sideOffset={8}
-              className="z-50 min-w-[180px] rounded-lg border border-border bg-bg-elevated p-1 shadow-xl animate-slide-up"
-            >
-              <DropdownMenu.Item asChild>
-                <Link
-                  href="/settings/profile"
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-text-secondary hover:bg-bg-hover hover:text-text-primary focus:outline-none"
-                >
-                  <User className="h-4 w-4" />
-                  Profile
-                </Link>
-              </DropdownMenu.Item>
-              <DropdownMenu.Item asChild>
-                <Link
-                  href={isSuperAdmin ? '/settings/admin' : '/settings/appearance'}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-text-secondary hover:bg-bg-hover hover:text-text-primary focus:outline-none"
-                >
-                  <Settings className="h-4 w-4" />
-                  Settings
-                </Link>
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator className="my-1 h-px bg-border" />
-              <DropdownMenu.Item
-                onSelect={logout}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-status-error hover:bg-status-error/10 focus:outline-none"
+            <DropdownMenu.Trigger asChild>
+              <button
+                className={cn(
+                  'flex w-full items-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors',
+                  collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-2.5 px-2 py-1.5',
+                )}
+                title={collapsed ? (user?.name ?? 'Account') : undefined}
               >
-                <LogOut className="h-4 w-4" />
-                Log out
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+                <Avatar src={user?.avatar_url} name={user?.name} color={user?.avatar_color} size="sm" />
+                {!collapsed && (
+                  <div className="flex flex-col items-start overflow-hidden min-w-0">
+                    <span className="truncate text-[13px] font-medium text-text-primary leading-tight w-full text-left">
+                      {user?.name ?? 'User'}
+                    </span>
+                    <span className="truncate text-[10px] text-text-tertiary leading-tight w-full text-left">
+                      {user?.email ?? ''}
+                    </span>
+                  </div>
+                )}
+              </button>
+            </DropdownMenu.Trigger>
 
-        {/* Collapse toggle */}
-        <button
-          onClick={onToggle}
-          className={cn(
-            'flex w-full items-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors',
-            collapsed ? 'justify-center h-8 w-8 mx-auto' : 'gap-2 px-2.5 h-8',
-          )}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          <ChevronsLeft className={cn('h-4 w-4 transition-transform', collapsed && 'rotate-180')} />
-          {!collapsed && <span className="text-xs">Collapse</span>}
-        </button>
-      </div>
-    </aside>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="top"
+                align={collapsed ? 'start' : 'end'}
+                sideOffset={8}
+                className="z-50 min-w-[180px] rounded-lg border border-border bg-bg-elevated p-1 shadow-xl animate-slide-up"
+                onCloseAutoFocus={onCloseAutoFocus}
+              >
+                <DropdownMenu.Item asChild>
+                  <Link
+                    href="/settings/profile"
+                    onClick={closeUploadsPanel}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-text-secondary hover:bg-bg-hover hover:text-text-primary focus:outline-none"
+                  >
+                    <User className="h-4 w-4" />
+                    Profile
+                  </Link>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item asChild>
+                  <Link
+                    href={isSuperAdmin ? '/settings/admin' : '/settings/appearance'}
+                    onClick={closeUploadsPanel}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-text-secondary hover:bg-bg-hover hover:text-text-primary focus:outline-none"
+                  >
+                    <Settings className="h-4 w-4" />
+                    Settings
+                  </Link>
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator className="my-1 h-px bg-border" />
+                <DropdownMenu.Item
+                  onSelect={requestLogout}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-status-error hover:bg-status-error/10 focus:outline-none"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Log out
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
 
-    {/* Notification Drawer */}
-    <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
-  </>
+          {/* Collapse toggle */}
+          <button
+            onClick={onToggle}
+            className={cn(
+              'flex w-full items-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-secondary transition-colors',
+              collapsed ? 'justify-center h-8 w-8 mx-auto' : 'gap-2 px-2.5 h-8',
+            )}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <ChevronsLeft
+              className={cn(
+                'h-4 w-4 transition-transform',
+                collapsed && 'rotate-180',
+              )}
+            />
+            {!collapsed && <span className="text-xs">Collapse</span>}
+          </button>
+        </div>
+      </aside>
+
+      {/* Notification Drawer */}
+      <NotificationDrawer
+        open={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        railCollapsed={collapsed}
+      />
+
+      <ConfirmDialog
+        open={logoutAsk.open}
+        onOpenChange={(open) => setLogoutAsk((ask) => ({ ...ask, open }))}
+        title={`${logoutAsk.uploads} ${logoutAsk.uploads === 1 ? 'upload' : 'uploads'} will stop. Log out anyway?`}
+        confirmLabel="Log out"
+        variant="danger"
+        onConfirm={logout}
+      />
+    </>
   )
 }

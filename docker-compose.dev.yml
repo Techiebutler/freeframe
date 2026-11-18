@@ -27,33 +27,31 @@ services:
       timeout: 5s
       retries: 5
 
+  # S3 storage. Silo is a maintained fork of MinIO: the minio/minio and minio/mc
+  # images can no longer be pulled from Docker Hub (#461). It reads the same
+  # MINIO_* variables and opens an existing miniodata volume as is, so the
+  # service keeps its name and S3_ENDPOINT stays http://minio:9000.
+  # Browser CORS is not set here: the API writes the bucket's CORS rules at
+  # startup from FRONTEND_URL and CORS_ALLOW_ORIGINS.
   minio:
-    # See docker-compose.coolify.yml: MinIO's public Docker Hub image was
-    # removed, so development uses Coolify's maintained multi-arch rebuild.
-    image: coollabsio/minio:latest
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-      MINIO_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ALLOW_ORIGIN:-http://localhost:3000}
-      MINIO_CORS_ALLOW_METHODS: GET,PUT,POST,DELETE,HEAD
-      MINIO_CORS_ALLOW_HEADERS: "*"
-      MINIO_CORS_EXPOSE_HEADERS: ETag,Content-Length,x-amz-request-id
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - miniodata:/data
     healthcheck:
-      # Match production: the maintained MinIO image includes `mc`, not curl.
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   minio-init:
-    # The same image includes `mc` for bucket initialization.
-    image: coollabsio/minio:latest
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
     depends_on:
       minio:
         condition: service_healthy
@@ -156,7 +154,8 @@ services:
   #
   # NOTE: this means your local stack really does delete things on a schedule.
   # Within the hour, reap_stale_uploads soft-deletes AssetVersions stuck in
-  # uploading/failed past STALE_UPLOAD_TIMEOUT_HOURS and drops their S3 objects;
+  # uploading/failed past STALE_UPLOAD_TIMEOUT_HOURS and drops their S3 objects
+  # (a failed version whose original is still in storage is kept);
   # at 03:00 UTC, cleanup_soft_deleted hard-deletes anything soft-deleted past
   # SOFT_DELETE_RETENTION_DAYS, cascade and S3 reclaim included. Both take `0`
   # in your .env to switch them off if you keep long-lived local data.
@@ -217,7 +216,14 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-      - INTERNAL_API_URL=http://api:8000
+      # Sub-path deployments: empty serves the app from the domain root.
+      - NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH:-}
+      # Server-to-server, for the branding Next renders into the first byte.
+      # NEXT_PUBLIC_API_URL is written for the browser, and inside this
+      # container `localhost:8000` is this container, not the API.
+      - API_INTERNAL_URL=${API_INTERNAL_URL:-http://api:8000}
+      # Older name for the same address, read by the share-link preview metadata.
+      - INTERNAL_API_URL=${INTERNAL_API_URL:-${API_INTERNAL_URL:-http://api:8000}}
       - NODE_ENV=development
       - HOSTNAME=0.0.0.0
       # Docker Desktop on Windows can miss bind-mount file events; poll for
@@ -230,7 +236,14 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
+      # See docker-compose.prod.yml: `/` is a 404 when a base path is set.
+      # 127.0.0.1, not localhost: busybox wget may resolve localhost to ::1,
+      # where `next dev --hostname 0.0.0.0` is not listening.
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider \"http://127.0.0.1:3000${NEXT_PUBLIC_BASE_PATH:-}/login\"",
+        ]
       interval: 30s
       timeout: 10s
       retries: 10

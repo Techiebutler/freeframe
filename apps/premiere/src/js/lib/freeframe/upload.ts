@@ -1,14 +1,15 @@
 /**
  * Uploads a rendered file from disk to FreeFrame as a new asset version.
  *
- * The panel has Node access, so the render is streamed off disk 10 MB at a
- * time — the same part size the web uploader uses — instead of being loaded
- * into memory whole.
+ * The panel has Node access, so the render is streamed off disk one part at
+ * a time instead of being loaded into memory whole. The server picks the part
+ * size when the upload starts and pins it to the version; 10 MB is the
+ * fallback for servers that do not report one.
  */
 import { fs, path } from "../cep/node";
 import { FreeFrameApi } from "./api";
 
-const CHUNK_SIZE = 10 * 1024 * 1024;
+const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024;
 const MAX_PART_ATTEMPTS = 3;
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -34,9 +35,14 @@ export const mimeForPath = (filePath: string): string =>
   MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? "";
 
 /** Reads one part off disk without pulling the whole file into memory. */
-const readPart = (filePath: string, partNumber: number, fileSize: number): Uint8Array => {
-  const start = (partNumber - 1) * CHUNK_SIZE;
-  const length = Math.min(CHUNK_SIZE, fileSize - start);
+const readPart = (
+  filePath: string,
+  partNumber: number,
+  fileSize: number,
+  chunkSize: number
+): Uint8Array => {
+  const start = (partNumber - 1) * chunkSize;
+  const length = Math.min(chunkSize, fileSize - start);
   const buffer = Buffer.alloc(length);
   const fd = fs.openSync(filePath, "r");
   try {
@@ -90,7 +96,11 @@ export const uploadFile = async (
     folder_id: folderId ?? undefined,
   });
 
-  const totalParts = Math.ceil(fileSize / CHUNK_SIZE);
+  const chunkSize =
+    initiated.chunk_size_bytes && initiated.chunk_size_bytes > 0
+      ? initiated.chunk_size_bytes
+      : DEFAULT_CHUNK_SIZE;
+  const totalParts = Math.ceil(fileSize / chunkSize);
   const parts: { PartNumber: number; ETag: string }[] = [];
 
   try {
@@ -102,7 +112,7 @@ export const uploadFile = async (
         initiated.upload_id,
         partNumber
       );
-      const body = readPart(filePath, partNumber, fileSize);
+      const body = readPart(filePath, partNumber, fileSize, chunkSize);
 
       let etag = "";
       for (let attempt = 1; attempt <= MAX_PART_ATTEMPTS; attempt++) {

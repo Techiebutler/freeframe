@@ -83,6 +83,36 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # ---------------------------------------------------------------------
+  # E2E suite — e2e/package.json + its own pnpm-lock.yaml (a standalone
+  # package, not part of apps/web). Configured the way apps/web is.
+  # ---------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: monthly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    # The web app's browser suite; the repository has no `e2e` label.
+    labels: ["dependencies", "frontend"]
+    cooldown:
+      default-days: 7
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      e2e-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ---------------------------------------------------------------------
   # GitHub Actions — .github/workflows/*
   # Majors are deliberately NOT ignored. For actions the major tag is the
   # ordinary release channel (setup-node v6 -> v7 is a runner/Node bump, not

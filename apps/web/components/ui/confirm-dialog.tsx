@@ -15,6 +15,12 @@ interface ConfirmDialogProps {
   cancelLabel?: string
   variant?: 'danger' | 'default'
   loading?: boolean
+  /** Message from a rejected onConfirm — the dialog stays open so the caller can explain the failure. */
+  error?: string | null
+  /** Holds the confirm button disabled, e.g. until a typed confirmation matches. */
+  confirmDisabled?: boolean
+  /** Extra content between the description and the buttons, such as a confirmation field. */
+  children?: React.ReactNode
   onConfirm: () => void | Promise<void>
 }
 
@@ -27,11 +33,15 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'default',
   loading = false,
+  error,
+  confirmDisabled = false,
+  children,
   onConfirm,
 }: ConfirmDialogProps) {
   const [isLoading, setIsLoading] = React.useState(false)
 
   async function handleConfirm() {
+    if (confirmDisabled) return
     setIsLoading(true)
     try {
       await onConfirm()
@@ -46,12 +56,12 @@ export function ConfirmDialog({
   const busy = loading || isLoading
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={(next) => { if (!busy) onOpenChange(next) }}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <Dialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2',
+            'fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%]',
             'rounded-xl border border-border bg-bg-secondary shadow-xl p-6',
             'data-[state=open]:animate-in data-[state=closed]:animate-out',
             'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
@@ -76,6 +86,12 @@ export function ConfirmDialog({
             </div>
           </div>
 
+          {children && <div className="mt-4">{children}</div>}
+
+          {error && (
+            <p role="alert" className="mt-3 text-xs text-status-error">{error}</p>
+          )}
+
           <div className="flex items-center justify-end gap-2 mt-5">
             <Button
               variant="secondary"
@@ -90,6 +106,7 @@ export function ConfirmDialog({
               size="sm"
               onClick={handleConfirm}
               loading={busy}
+              disabled={confirmDisabled}
             >
               {confirmLabel}
             </Button>

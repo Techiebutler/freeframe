@@ -15,6 +15,7 @@ from ..models.activity import Mention, Notification
 from ..models.comment import Comment
 from ..schemas.asset import AssetResponse, NotificationResponse
 from ..routers.assets import _build_asset_response, _build_asset_responses_bulk
+from ..services.search import escape_like
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -95,9 +96,12 @@ def list_my_assets(
             )
         )
 
+    # Nothing from a project in the trash, whichever filter found it.
+    query = query.join(Project, Project.id == Asset.project_id).filter(Project.deleted_at.is_(None))
+
     # Apply search filter
     if q and q.strip():
-        query = query.filter(Asset.name.ilike(f"%{q.strip()}%"))
+        query = query.filter(Asset.name.ilike(f"%{escape_like(q.strip())}%"))
 
     assets = query.order_by(Asset.created_at.desc()).offset(skip).limit(limit).all()
     return _build_asset_responses_bulk(assets, db)
@@ -116,12 +120,13 @@ def search_my_folders(
         ProjectMember.deleted_at.is_(None),
     ).subquery()
 
-    query = db.query(Folder).filter(
+    query = db.query(Folder).join(Project, Project.id == Folder.project_id).filter(
         Folder.project_id.in_(project_ids),
         Folder.deleted_at.is_(None),
+        Project.deleted_at.is_(None),
     )
     if q and q.strip():
-        query = query.filter(Folder.name.ilike(f"%{q.strip()}%"))
+        query = query.filter(Folder.name.ilike(f"%{escape_like(q.strip())}%"))
 
     folders = query.order_by(Folder.name).limit(limit).all()
 

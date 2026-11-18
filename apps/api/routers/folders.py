@@ -1,31 +1,53 @@
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
-from ..models.asset import Asset
+from ..models.asset import Asset, AssetVersion, ProcessingStatus
 from ..models.folder import Folder
 from ..models.project import Project, ProjectRole
 from ..models.user import User
 from ..schemas.folder import (
     AssetMoveRequest,
     BulkMoveRequest,
+    EnsuredFolder,
+    EnsureFoldersRequest,
+    EnsureFoldersResponse,
     FolderCreate,
     FolderResponse,
     FolderTreeNode,
     FolderUpdate,
 )
-from ..services.permissions import require_project_role, get_project_member, is_public_project
+from ..services.folder_paths import (
+    MAX_ENSURE_NODES,
+    MAX_FOLDER_DEPTH,
+    _get_depth,
+    distinct_prefixes,
+    ensure_folder_paths,
+    lock_project_folders,
+)
+from ..services.restore_rules import (
+    restore_asset_row,
+    was_ever_usable,
+)
+from ..services.permissions import (
+    folder_chain_is_live,
+    require_project_role,
+    require_project_visible,
+)
 from ..tasks.cleanup_tasks import PurgeCounts, _purge_asset, _purge_folder
 
 router = APIRouter(tags=["folders"])
 
-MAX_FOLDER_DEPTH = 10
+# MAX_FOLDER_DEPTH and _get_depth live in services/folder_paths, shared with
+# the folder-upload ensure service.
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -41,6 +63,51 @@ def _get_folder(db: Session, folder_id: uuid.UUID) -> Folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     return folder
 
+
+def _folder_name_conflict(name: Optional[str]) -> HTTPException:
+    if name is None:
+        return HTTPException(status_code=409, detail="A folder with that name already exists here")
+    return HTTPException(status_code=409, detail=f"A folder named '{name}' already exists here")
+
+
+def _ensure_folder_name_free(
+    db: Session,
+    project_id: uuid.UUID,
+    parent_id: Optional[uuid.UUID],
+    name: str,
+    exclude_ids: tuple[uuid.UUID, ...] = (),
+) -> None:
+    """Refuse a second live folder of `name` under `parent_id`.
+
+    `uq_folder_name_per_parent` allows one live folder per name and parent, and a
+    trashed folder frees its name. Left to the index, the collision is a 500.
+    Root level is exempt, as in the index: a NULL parent is never equal to another.
+    """
+    if parent_id is None:
+        return
+    query = db.query(Folder.id).filter(
+        Folder.project_id == project_id,
+        Folder.parent_id == parent_id,
+        Folder.name == name,
+        Folder.deleted_at.is_(None),
+    )
+    if exclude_ids:
+        query = query.filter(Folder.id.notin_(exclude_ids))
+    if query.first() is not None:
+        raise _folder_name_conflict(name)
+
+
+@contextmanager
+def _folder_name_guard(db: Session, name: Optional[str]):
+    """Turn the index's own refusal into the same 409, for a sibling a
+    concurrent request created after `_ensure_folder_name_free` looked."""
+    try:
+        yield
+    except IntegrityError as e:
+        db.rollback()
+        if "uq_folder_name_per_parent" not in str(e.orig):
+            raise
+        raise _folder_name_conflict(name) from e
 
 
 def _get_descendant_ids(db: Session, folder_id: uuid.UUID) -> list[uuid.UUID]:
@@ -58,19 +125,6 @@ def _get_descendant_ids(db: Session, folder_id: uuid.UUID) -> list[uuid.UUID]:
             descendants.append(child_id)
             queue.append(child_id)
     return descendants
-
-
-def _get_depth(db: Session, folder_id: Optional[uuid.UUID]) -> int:
-    """Count depth from root to folder_id."""
-    depth = 0
-    current_id = folder_id
-    while current_id:
-        depth += 1
-        folder = db.query(Folder).filter(Folder.id == current_id).first()
-        if not folder:
-            break
-        current_id = folder.parent_id
-    return depth
 
 
 def _compute_item_count(db: Session, folder_id: uuid.UUID) -> int:
@@ -158,6 +212,8 @@ def create_folder(
                 detail=f"Maximum folder depth of {MAX_FOLDER_DEPTH} exceeded",
             )
 
+    _ensure_folder_name_free(db, project_id, body.parent_id, body.name)
+
     folder = Folder(
         project_id=project_id,
         parent_id=body.parent_id,
@@ -165,9 +221,78 @@ def create_folder(
         created_by=current_user.id,
     )
     db.add(folder)
-    db.commit()
+    with _folder_name_guard(db, body.name):
+        db.commit()
     db.refresh(folder)
     return _folder_to_response(db, folder)
+
+
+@router.post("/projects/{project_id}/folders/ensure", response_model=EnsureFoldersResponse)
+def ensure_folders(
+    project_id: uuid.UUID,
+    body: EnsureFoldersRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find or create each folder path under `parent_id` (None: the project
+    root), for a folder upload. Each segment reuses the live folder of that
+    name under that parent, or is created, so uploading the same folder twice
+    merges. Paths deeper than MAX_FOLDER_DEPTH allows, counted from the project
+    root, are cut; a null folder_id means the parent itself.
+
+    Editor or above. The parent must be a live folder of this project with no
+    trashed folder above it.
+    """
+    require_project_role(db, project_id, current_user, ProjectRole.editor)
+
+    paths = body.normalized_paths()
+    if distinct_prefixes(paths) > MAX_ENSURE_NODES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "too_many_folders",
+                "message": (
+                    f"This upload names more than {MAX_ENSURE_NODES} folders. "
+                    "Upload fewer folders at a time."
+                ),
+            },
+        )
+
+    # Checked under the project lock that delete_folder also takes, so a delete
+    # of the parent either finishes first and is seen here, or waits for this
+    # transaction and then trashes the folders it made along with the rest.
+    lock_project_folders(db, project_id)
+    if body.parent_id is not None:
+        parent = (
+            db.query(Folder.id)
+            .filter(
+                Folder.id == body.parent_id,
+                Folder.project_id == project_id,
+                Folder.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if parent is None or not folder_chain_is_live(db, body.parent_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "folder_not_in_project",
+                    "message": (
+                        "The folder you are uploading into is no longer in this project. "
+                        "Refresh the page and try again."
+                    ),
+                },
+            )
+
+    ensured = ensure_folder_paths(db, project_id, body.parent_id, paths, current_user.id)
+    db.commit()
+
+    return EnsureFoldersResponse(
+        folders=[
+            EnsuredFolder(path=sent, folder_id=ensured[normalized])
+            for sent, normalized in zip(body.paths, paths)
+        ]
+    )
 
 
 @router.get("/projects/{project_id}/folders", response_model=list[FolderResponse])
@@ -178,9 +303,7 @@ def list_folders(
     current_user: User = Depends(get_current_user),
 ):
     # Allow access if user is a project member OR the project is public
-    member = get_project_member(db, project_id, current_user.id)
-    if not member and not is_public_project(db, project_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a project member")
+    require_project_visible(db, project_id, current_user)
 
     query = db.query(Folder).filter(
         Folder.project_id == project_id,
@@ -203,9 +326,7 @@ def get_folder_tree(
     current_user: User = Depends(get_current_user),
 ):
     # Allow access if user is a project member OR the project is public
-    member = get_project_member(db, project_id, current_user.id)
-    if not member and not is_public_project(db, project_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a project member")
+    require_project_visible(db, project_id, current_user)
 
     all_folders = (
         db.query(Folder)
@@ -260,8 +381,8 @@ def update_folder(
     folder = _get_folder(db, folder_id)
     require_project_role(db, folder.project_id, current_user, ProjectRole.editor)
 
-    if body.name is not None:
-        folder.name = body.name
+    name = body.name if body.name is not None else folder.name
+    parent_id = folder.parent_id
 
     # Handle parent_id move (only if explicitly set)
     if "parent_id" in body.model_fields_set:
@@ -282,9 +403,14 @@ def update_folder(
                     status_code=400,
                     detail=f"Move would exceed maximum folder depth of {MAX_FOLDER_DEPTH}",
                 )
-        folder.parent_id = new_parent_id
+        parent_id = new_parent_id
 
-    db.commit()
+    _ensure_folder_name_free(db, folder.project_id, parent_id, name, exclude_ids=(folder_id,))
+
+    folder.name = name
+    folder.parent_id = parent_id
+    with _folder_name_guard(db, name):
+        db.commit()
     db.refresh(folder)
     return _folder_to_response(db, folder)
 
@@ -297,18 +423,21 @@ def delete_folder(
 ):
     folder = _get_folder(db, folder_id)
     require_project_role(db, folder.project_id, current_user, ProjectRole.editor)
+    # Wait for any folder ensure in flight, so the descendants listed below
+    # include the folders it is making inside this one.
+    lock_project_folders(db, folder.project_id)
 
     now = datetime.now(timezone.utc)
 
     # Cascade soft-delete: folder + all descendants + their assets
     all_folder_ids = [folder_id] + _get_descendant_ids(db, folder_id)
 
-    db.query(Folder).filter(Folder.id.in_(all_folder_ids)).update(
-        {"deleted_at": now}, synchronize_session="fetch"
-    )
-    db.query(Asset).filter(Asset.folder_id.in_(all_folder_ids)).update(
-        {"deleted_at": now}, synchronize_session="fetch"
-    )
+    db.query(Folder).filter(
+        Folder.id.in_(all_folder_ids), Folder.deleted_at.is_(None)
+    ).update({"deleted_at": now}, synchronize_session="fetch")
+    db.query(Asset).filter(
+        Asset.folder_id.in_(all_folder_ids), Asset.deleted_at.is_(None)
+    ).update({"deleted_at": now}, synchronize_session="fetch")
 
     db.commit()
 
@@ -371,6 +500,8 @@ def bulk_move(
             a.folder_id = body.target_folder_id
 
     # Move folders
+    # The name a collision at commit is reported under: unknown when several moved.
+    moved_name: Optional[str] = None
     if body.folder_ids:
         descendants = set()
         if body.target_folder_id:
@@ -389,19 +520,44 @@ def bulk_move(
         if len(folders) != len(body.folder_ids):
             raise HTTPException(status_code=400, detail="Some folders not found in this project")
 
+        moving_ids = tuple(f.id for f in folders)
+        moving_names: set[str] = set()
         for f in folders:
             if f.id in descendants or f.id == body.target_folder_id:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot move folder '{f.name}' into itself or a subfolder",
                 )
+            if body.target_folder_id is not None and f.name in moving_names:
+                raise _folder_name_conflict(f.name)
+            moving_names.add(f.name)
+            _ensure_folder_name_free(
+                db, project_id, body.target_folder_id, f.name, exclude_ids=moving_ids,
+            )
+        for f in folders:
             f.parent_id = body.target_folder_id
+        if len(folders) == 1:
+            moved_name = folders[0].name
 
-    db.commit()
+    with _folder_name_guard(db, moved_name):
+        db.commit()
     return {"ok": True, "moved_assets": len(body.asset_ids), "moved_folders": len(body.folder_ids)}
 
 
 # ─── Trash & Restore ─────────────────────────────────────────────────────────
+
+
+def _can_restore_folder_asset():
+    """Whether a folder cascade may restore usable work or a live upload."""
+    has_live_version = (
+        select(AssetVersion.id)
+        .where(
+            AssetVersion.asset_id == Asset.id,
+            AssetVersion.deleted_at.is_(None),
+        )
+        .exists()
+    )
+    return or_(was_ever_usable(), has_live_version)
 
 
 @router.get("/projects/{project_id}/trash", response_model=dict)
@@ -425,7 +581,11 @@ def list_trash(
 
     deleted_assets = (
         db.query(Asset)
-        .filter(Asset.project_id == project_id, Asset.deleted_at.isnot(None))
+        .filter(
+            Asset.project_id == project_id,
+            Asset.deleted_at.isnot(None),
+            was_ever_usable(),
+        )
         .order_by(Asset.deleted_at.desc())
         .offset(skip)
         .limit(limit)
@@ -462,7 +622,9 @@ def restore_asset(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.isnot(None)).first()
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id, Asset.deleted_at.isnot(None), was_ever_usable(),
+    ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Deleted asset not found")
 
@@ -474,17 +636,14 @@ def restore_asset(
     if project is None or project.deleted_at is not None:
         raise HTTPException(status_code=409, detail="Cannot restore: the project has been deleted")
 
-    # If parent folder is deleted, move to root
-    if asset.folder_id:
-        parent_folder = (
-            db.query(Folder)
-            .filter(Folder.id == asset.folder_id, Folder.deleted_at.is_(None))
-            .first()
-        )
-        if not parent_folder:
-            asset.folder_id = None
-
-    asset.deleted_at = None
+    # Everything about *how* it comes back is one rule, shared with the admin
+    # panel's bulk restore: a trashed folder means root, and an upload that was
+    # never usable work does not come back at all. The two used to differ, and
+    # the panel's version left the asset naming a trashed folder, where the
+    # retention collector hard-deleted it. See `services/restore_rules`.
+    if not restore_asset_row(db, asset_id):
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Deleted asset not found")
     db.commit()
     return {"ok": True}
 
@@ -506,28 +665,43 @@ def restore_folder(
         raise HTTPException(status_code=409, detail="Cannot restore: the project has been deleted")
 
     # If parent folder is deleted, restore to root
-    if folder.parent_id:
+    parent_id = folder.parent_id
+    if parent_id:
         parent = (
             db.query(Folder)
-            .filter(Folder.id == folder.parent_id, Folder.deleted_at.is_(None))
+            .filter(Folder.id == parent_id, Folder.deleted_at.is_(None))
             .first()
         )
         if not parent:
-            folder.parent_id = None
+            parent_id = None
 
-    # Restore folder and all its descendants + their assets
-    folder.deleted_at = None
-    descendant_ids = _get_descendant_ids_including_deleted(db, folder_id)
-    all_ids = [folder_id] + descendant_ids
+    # Its name may have been taken while it was in the trash.
+    _ensure_folder_name_free(db, folder.project_id, parent_id, folder.name)
 
-    db.query(Folder).filter(Folder.id.in_(all_ids)).update(
-        {"deleted_at": None}, synchronize_session="fetch"
-    )
-    db.query(Asset).filter(Asset.folder_id.in_(all_ids), Asset.deleted_at.isnot(None)).update(
-        {"deleted_at": None}, synchronize_session="fetch"
-    )
+    # Keep the cascade timestamp as the marker for which descendants this restore owns.
+    # Rows already in the trash have an earlier timestamp and must remain there.
+    restore_timestamp = folder.deleted_at
+    with _folder_name_guard(db, folder.name):
+        # Guarded like restore_asset: the retention purge may have hard-deleted the folder since
+        # it was read above, and then there is nothing left to restore.
+        restored = db.query(Folder).filter(
+            Folder.id == folder_id, Folder.deleted_at == restore_timestamp
+        ).update({"deleted_at": None, "parent_id": parent_id}, synchronize_session="fetch")
+        if not restored:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Deleted folder not found")
 
-    db.commit()
+        descendant_ids = _get_descendant_ids_including_deleted(db, folder_id)
+        db.query(Folder).filter(
+            Folder.id.in_(descendant_ids), Folder.deleted_at == restore_timestamp
+        ).update({"deleted_at": None}, synchronize_session="fetch")
+        db.query(Asset).filter(
+            Asset.folder_id.in_([folder_id] + descendant_ids),
+            Asset.deleted_at == restore_timestamp,
+            _can_restore_folder_asset(),
+        ).update({"deleted_at": None}, synchronize_session="fetch")
+
+        db.commit()
     return {"ok": True}
 
 

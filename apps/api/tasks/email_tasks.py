@@ -18,12 +18,18 @@ jinja_env = Environment(
     autoescape=True,
 )
 
+from ..services.branding_service import DEFAULT_ORG_NAME, resolve_org_name
+
 
 def render_template(template_name: str, **context) -> str:
     """Render an email template with context."""
-    from ..services.branding_service import resolve_org_name
     context.setdefault("year", datetime.now().year)
-    context.setdefault("org_name", resolve_org_name())
+    # base.html brands every email header and footer with the instance name, so
+    # it must always be set. Resolving it here rather than in each send function
+    # is what makes the six that never passed one (mention, comment, assignment,
+    # share, approval, project_added) white-label too.
+    if not context.get("org_name"):
+        context["org_name"] = resolve_org_name()
     template = jinja_env.get_template(template_name)
     return template.render(**context)
 
@@ -40,20 +46,19 @@ def _send_email(to_email: str, subject: str, html_body: str, text_body: Optional
 # ============================================================================
 
 @shared_task(bind=True, queue="email_high", max_retries=3, default_retry_delay=30)
-def send_magic_code_email(self, to_email: str, code: str, expiry_minutes: int = 10):
+def send_magic_code_email(self, to_email: str, code: str, expiry_minutes: int = 10, org_name: Optional[str] = None):
     """Send magic code email - high priority, immediate delivery."""
+    label = org_name or resolve_org_name()
     try:
-        from ..services.branding_service import resolve_org_name
-        org_name = resolve_org_name()
-        subject = f"Your {org_name} login code: {code}"
+        subject = f"Your {label} login code: {code}"
         html_body = render_template(
             "email/magic_code.html",
             subject=subject,
             code=code,
             expiry_minutes=expiry_minutes,
-            org_name=org_name,
+            org_name=label,
         )
-        text_body = f"Your {org_name} login code is: {code}. This code expires in {expiry_minutes} minutes."
+        text_body = f"Your {label} login code is: {code}. This code expires in {expiry_minutes} minutes."
         
         success = _send_email(to_email, subject, html_body, text_body)
         if not success:
@@ -75,7 +80,7 @@ def send_invite_email(
 ):
     """Send organization/team invite email - high priority."""
     try:
-        subject = f"You've been invited to join {org_name} on FreeFrame"
+        subject = f"You've been invited to join {org_name}"
         html_body = render_template(
             "email/invite.html",
             subject=subject,
@@ -85,7 +90,7 @@ def send_invite_email(
             invite_link=invite_link,
             expiry_days=expiry_days,
         )
-        text_body = f"{inviter_name} has invited you to join {org_name} on FreeFrame. Accept here: {invite_link}"
+        text_body = f"{inviter_name} has invited you to join {org_name}. Accept here: {invite_link}"
         
         success = _send_email(to_email, subject, html_body, text_body)
         if not success:

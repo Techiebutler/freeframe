@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { use, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import { ReviewProvider, useReview } from '@/components/review/review-provider'
@@ -20,8 +20,11 @@ import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
 import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
-import { useUploadStore } from '@/stores/upload-store'
+import { projectFolderHref } from '@/lib/project-links'
+import { useUploadStore, visibleFiles } from '@/stores/upload-store'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
+import { useViewStore } from '@/stores/view-store'
+import { sortAssets } from '@/lib/sort-assets'
 import { canCompare } from '@/lib/compare-time'
 import {
   ArrowLeft,
@@ -36,6 +39,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useMobileReviewSplit } from '@/hooks/use-mobile-review-split'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -103,7 +107,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
       : []
 
     setExtraCrumbs([
-      ...folderPath.map((f) => ({ label: f.name, href: `/projects/${projectId}?folder=${f.id}` })),
+      ...folderPath.map((f) => ({ label: f.name, href: projectFolderHref(projectId, f.id) })),
       { label: asset.name }, // asset name — no href (current page)
     ])
   }, [asset?.id, asset?.name, asset?.folder_id, folderTree, setExtraCrumbs])
@@ -130,13 +134,23 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const currentMember = members?.find((m) => m.user_id === user?.id)
   const currentRole = currentMember?.role ?? 'viewer'
   const canComment = currentRole !== 'viewer'
-  const canDeleteAnyComment = user?.is_superadmin || currentRole === 'owner'
+  // delete_comment lets a project owner (or a superadmin) remove anyone's
+  // comment; editing stays with the author.
+  const canModerate = Boolean(user?.is_superadmin) || currentRole === 'owner'
   const canManageVersions = user?.is_superadmin || currentRole === 'owner' || currentRole === 'editor'
 
-  // Fetch all assets for navigation (1 of N)
-  const { data: allAssets } = useSWR<AssetResponse[]>(
-    `/projects/${projectId}/assets`,
-    () => api.get<AssetResponse[]>(`/projects/${projectId}/assets`),
+  // Prev/next walks the asset's own folder in the order the project view shows
+  // it, not the whole project. Same key as the project page, so the list is
+  // usually already cached.
+  const { data: folderAssets } = useSWR<AssetResponse[]>(
+    asset ? `/projects/${projectId}/assets?folder_id=${asset.folder_id ?? 'root'}` : null,
+    (key: string) => api.get<AssetResponse[]>(key),
+  )
+  const sortKey = useViewStore((s) => s.sortKey)
+  const sortDirection = useViewStore((s) => s.sortDirection)
+  const navAssets = useMemo(
+    () => (folderAssets ? sortAssets(folderAssets, sortKey, sortDirection) : undefined),
+    [folderAssets, sortKey, sortDirection],
   )
 
   const {
@@ -195,8 +209,10 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   useSSE(asset?.project_id, {
     onTranscodeProgress: (d) => {
       if (
+        !d.version_id ||
+        !latestVersion ||
         d.asset_id !== asset?.id ||
-        d.version_id !== latestVersion?.id ||
+        d.version_id !== latestVersion.id ||
         latestVersion.processing_status !== 'processing'
       ) return
       setProcessingProgress({ versionId: d.version_id, percent: d.percent })
@@ -222,6 +238,47 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   useEffect(() => {
     setProcessingProgress(null)
   }, [asset?.id])
+  // Transcode events are not the only thing that changes this list. Discarding
+  // an upload deletes its version and produces no event at all, so the switcher
+  // went on offering a version that was gone -- still labelled "Uploading",
+  // which was the one thing it certainly was not.
+  //
+  // The store says when it has changed versions behind the panel -- a discard,
+  // or a cancel, which is sent as one -- and says it after the server has
+  // answered, since refetching earlier would race the request that does the
+  // deleting and fetch the version back.
+  const versionsRevision = useUploadStore((s) => s.versionsRevision)
+  const lastVersionsRevision = useRef(versionsRevision)
+  // Not gated on `asset` having loaded. The ref moves either way, so a bump
+  // arriving while `GET /assets/{id}` was in flight used to be dropped for good,
+  // and `refetchVersions` needs only the route's `assetId`.
+  useEffect(() => {
+    if (lastVersionsRevision.current === versionsRevision) return
+    lastVersionsRevision.current = versionsRevision
+    refetchVersions()
+  }, [versionsRevision, refetchVersions])
+
+  // A New Version file waits for its turn behind the other uploads. Until its
+  // initiate has answered there is no version to show, so the page says what
+  // is going on instead of looking as if nothing was picked. The same counter
+  // as above is bumped when the version exists, which is when the list is
+  // refetched: no guess at how long the wait is.
+  //
+  // Only this asset's own version rows: a queued new asset has no `assetId`.
+  //
+  // The row the queue is holding on (the probe) says why instead, as it does in
+  // the panel: "waiting for other uploads" is not true of it. A string, so the
+  // selector is stable between renders.
+  const assetIdForQueue = asset?.id
+  const versionQueueLine = useUploadStore((s) => {
+    if (assetIdForQueue === undefined) return ''
+    const queued = visibleFiles(s).filter((f) => f.status === 'queued' && f.assetId === assetIdForQueue)
+    if (queued.length === 0) return ''
+    const reason = queued.find((f) => f.holdReason)?.holdReason
+    if (reason === 'connection') return 'Waiting for connection'
+    if (reason === 'storage') return 'Waiting for storage'
+    return 'New version queued, waiting for other uploads'
+  })
 
   // Deep-link to a specific comment from notification (?commentId=...)
   // Runs once after comments are loaded — seeks to timecode, focuses comment, shows annotation
@@ -242,19 +299,20 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   }, [comments, searchParams, seekTo, setFocusedCommentId, setActiveAnnotation])
 
   // Version-compare overlay: driven entirely by the ?compare= URL param so it
-  // survives refresh/deep-link. closeCompare strips all four compare params.
+  // survives refresh/deep-link (?right= names the right pane, see ReviewPage).
+  // closeCompare strips all the compare params.
   const compareOpen = Boolean(searchParams.get('compare'))
   const closeCompare = useCallback(() => {
     const p = new URLSearchParams(searchParams.toString())
-    p.delete('compare'); p.delete('mode'); p.delete('offA'); p.delete('offB')
+    p.delete('compare'); p.delete('right'); p.delete('mode'); p.delete('offA'); p.delete('offB'); p.delete('offFor')
     router.replace(`${pathname}?${p.toString()}`, { scroll: false })
   }, [router, pathname, searchParams])
 
   // Asset navigation
-  const currentIndex = allAssets?.findIndex((a) => a.id === asset?.id) ?? -1
-  const totalAssets = allAssets?.length ?? 0
-  const prevAsset = currentIndex > 0 ? allAssets?.[currentIndex - 1] : null
-  const nextAsset = currentIndex < totalAssets - 1 ? allAssets?.[currentIndex + 1] : null
+  const currentIndex = navAssets?.findIndex((a) => a.id === asset?.id) ?? -1
+  const totalAssets = navAssets?.length ?? 0
+  const prevAsset = currentIndex > 0 ? navAssets?.[currentIndex - 1] : null
+  const nextAsset = currentIndex < totalAssets - 1 ? navAssets?.[currentIndex + 1] : null
 
   const navigateAsset = (assetId: string) => {
     router.push(`/projects/${projectId}/assets/${assetId}`)
@@ -426,49 +484,195 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     }
   }
 
+  // The comment panel's pieces, rendered by the sidebar (a column beside the
+  // media above `md`, the lower half of the resizable split below it).
+  const panelTabs = (
+    <>
+      {/* Tabs (Frame.io pill style) */}
+      <div className="px-4 pt-3 pb-2 shrink-0">
+        <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
+          <button
+            onClick={() => setActiveTab('comments')}
+            className={cn(
+              'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
+              activeTab === 'comments'
+                ? 'bg-bg-hover text-text-primary shadow-sm'
+                : 'text-text-tertiary hover:text-text-secondary',
+            )}
+          >
+            Comments
+          </button>
+          <button
+            onClick={() => setActiveTab('fields')}
+            className={cn(
+              'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
+              activeTab === 'fields'
+                ? 'bg-bg-hover text-text-primary shadow-sm'
+                : 'text-text-tertiary hover:text-text-secondary',
+            )}
+          >
+            Fields
+          </button>
+        </div>
+      </div>
+    </>
+  )
+
+  const commentPanelNode = (
+    <CommentPanel
+      comments={comments as any}
+      currentUserId={user?.id}
+      newCommentIds={newCommentIds}
+      canModerate={canModerate}
+      onResolve={resolveComment}
+      onUpdate={updateComment}
+      onDelete={deleteComment}
+      onAddReaction={addReaction}
+      onRemoveReaction={removeReaction}
+      onReply={() => {}}
+      onSubmitReply={handleSubmitReply}
+      onAttachmentsUploaded={refetchComments}
+      onDeleteAttachment={async (commentId, attachmentId) => {
+        await api.delete(`/comments/${commentId}/attachments/${attachmentId}`)
+        await refetchComments()
+      }}
+    />
+  )
+
+  const commentInputNode = canComment ? (
+    <CommentInput
+      assetId={asset.id}
+      projectId={asset.project_id}
+      assetType={asset.asset_type}
+      onSubmit={handleSubmitComment}
+      annotationData={annotationData}
+      onAttachmentsUploaded={refetchComments}
+    />
+  ) : null
+
+  const fieldsBody = (
+    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-tertiary">Name</span>
+          <span className="text-xs text-text-primary font-medium truncate ml-4">{asset.name}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-tertiary">Type</span>
+          <span className="text-xs text-text-primary capitalize">{asset.asset_type.replace('_', ' ')}</span>
+        </div>
+        {currentVersion && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-tertiary">Version</span>
+            <span className="text-xs text-text-primary">v{currentVersion.version_number}</span>
+          </div>
+        )}
+        {currentVersion && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-tertiary">Processing</span>
+            <span className={cn(
+              'text-xs capitalize',
+              currentVersion.processing_status === 'ready' && 'text-status-success',
+              currentVersion.processing_status === 'processing' && 'text-status-warning',
+              currentVersion.processing_status === 'queued' && 'text-status-info',
+              currentVersion.processing_status === 'failed' && 'text-status-error',
+              currentVersion.processing_status === 'uploading' && 'text-text-tertiary',
+            )}>
+              {currentVersion.processing_status}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
       {/* ─── Top bar (Frame.io style) ──────────────────────────────────── */}
       <div className="flex items-center justify-between border-b border-border px-3 h-12 bg-bg-secondary shrink-0">
-        {/* Left: back + breadcrumb */}
-        <div className="flex items-center gap-1 min-w-0 flex-1">
+        {/* Left: back + breadcrumb. The name is the first thing the bar gives
+            up; `min-w-7` keeps the back arrow, which at zero width spilled out
+            into the centre group and had the navigator drawn over it. */}
+        <div className="flex items-center gap-1 min-w-7 flex-1">
+          {/* Back to the folder the asset is in, as a share link's back arrow
+              does; it used to go to the project root from anywhere. */}
           <Link
-            href={`/projects/${asset.project_id}`}
+            href={projectFolderHref(asset.project_id, asset.folder_id)}
+            aria-label={asset.folder_id ? 'Back to folder' : 'Back to project'}
+            title={asset.folder_id ? 'Back to folder' : 'Back to project'}
             className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
 
-          {/* Asset name only */}
-          <span className="text-[13px] text-text-primary font-medium truncate">
+          {/* Asset name only. Truncated, so it needs a title: this is the only
+              place the full name is shown, and it is the first thing the bar
+              gives up when the window is narrow. */}
+          <span
+            className="text-[13px] text-text-primary font-medium truncate"
+            title={asset.name}
+          >
             {asset.name}
           </span>
         </div>
 
-        {/* Center: asset navigation */}
-        {totalAssets > 1 && (
-          <div className="hidden sm:flex items-center gap-1 shrink-0">
-            <button
-              onClick={() => prevAsset && navigateAsset(prevAsset.id)}
-              disabled={!prevAsset}
-              className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Previous asset (←)"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="text-xs text-text-secondary tabular-nums px-1">
-              {currentIndex + 1} of {totalAssets}
-            </span>
-            <button
-              onClick={() => nextAsset && navigateAsset(nextAsset.id)}
-              disabled={!nextAsset}
-              className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Next asset (→)"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-        )}
+        {/* Center: asset navigation, then the credit.
+
+            One group, not two things each centred on its own. The credit used
+            to be absolutely positioned at the middle of the bar, and the
+            navigator lands there too -- the blocks either side of it are both
+            flex-1 -- so on any asset with a neighbour "Powered by FreeFrame"
+            was drawn straight across "5 of 7", and won the hit test on the
+            chevron. What is centred now is the group: with a neighbour the
+            navigator therefore sits a little left of the bar's centre line,
+            which is the cost of the two not overlapping. With no neighbour the
+            navigator is not rendered and the credit is centred alone, exactly
+            as before.
+
+            The block on the right does not shrink, and anything that leaves
+            the bar past its right edge is clipped by the page root's
+            `overflow-hidden`, where no scroll reaches it -- the sidebar toggle
+            first. So once the asset name is down to nothing, the credit is
+            what gives way: this group can shrink (`min-w-0`, no `shrink-0`),
+            the navigator inside it cannot, and the credit truncates its text.
+            Gating the credit on viewport width alone did not cover it: the bar
+            is also 168px narrower with the rail expanded, and a raised browser
+            text size grows every rem while the `lg` media query stays put. At
+            1024px, rail expanded, Compare and the navigator showing, 57px of
+            name was all that was left, and at a 20px text size the toggle was
+            off-screen.
+
+            The credit is still `hidden` below `lg`, where the room it would
+            take is room the controls need at every width. Out of flow there,
+            the thresholds are the ones this page had before the credit joined
+            the bar at all. */}
+        <div className="flex items-center gap-3 min-w-0">
+          {totalAssets > 1 && (
+            <div className="hidden sm:flex items-center gap-1 shrink-0">
+              <button
+                onClick={() => prevAsset && navigateAsset(prevAsset.id)}
+                disabled={!prevAsset}
+                className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Previous asset (←)"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="text-xs text-text-secondary tabular-nums px-1">
+                {currentIndex + 1} of {totalAssets}
+              </span>
+              <button
+                onClick={() => nextAsset && navigateAsset(nextAsset.id)}
+                disabled={!nextAsset}
+                className="flex items-center justify-center h-7 w-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Next asset (→)"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          <PoweredByBadge showIcon className="hidden lg:inline-flex min-w-0 [&>span]:truncate" />
+        </div>
 
         {/* Right: version, share, sidebar toggle */}
         <div className="flex items-center gap-2 shrink-0 flex-1 justify-end">
@@ -481,12 +685,14 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             onChange={async (e) => {
               const file = e.target.files?.[0]
               if (!file || !asset) return
-              startVersionUpload(file, asset.id, asset.name, asset.project_id)
+              // No row without a session: the upload would belong to nobody.
+              if (startVersionUpload(file, asset.id, asset.name, asset.project_id, project?.name) === null) {
+                toast.error('Sign in to upload')
+              }
               e.target.value = ''
-              // Surface the newly-created version (starts as "uploading") quickly;
-              // SSE transcode events then drive it through processing → ready (#118).
-              setTimeout(() => refetchVersions(), 800)
-              setTimeout(() => refetchVersions(), 2500)
+              // The new version (it starts as "uploading") is fetched when the
+              // upload store says it exists, through `versionsRevision`; SSE
+              // transcode events then drive it through processing → ready (#118).
             }}
           />
           <div className="hidden md:block">
@@ -518,6 +724,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
                 if (!prev) return
                 const p = new URLSearchParams(searchParams.toString())
                 p.set('compare', prev.id)
+                p.set('right', cur.id)
                 router.replace(`${pathname}?${p.toString()}`, { scroll: false })
               }}
               className="hidden md:inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
@@ -554,7 +761,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 
       {/* ─── Main content: viewer + sidebar ────────────────────────────── */}
       {compareOpen && asset && currentVersion && canCompare(asset.asset_type, versions) ? (
-        <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} />
+        <CompareOverlay asset={asset} versions={versions} rightVersion={currentVersion} onClose={closeCompare} canComment={canComment} canModerate={canModerate} />
       ) : (
       <div ref={mobileSplit.containerRef} className="flex flex-1 min-h-0 flex-col overflow-hidden md:flex-row">
         {/* Left: viewer column */}
@@ -562,6 +769,23 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
           className={cn('flex min-h-[220px] flex-col bg-bg-primary overflow-hidden min-w-0 md:min-h-0 md:flex-1', sidebarOpen ? 'flex-none' : 'flex-1')}
           style={mobileSplit.isMobile && sidebarOpen ? { height: `${mobileSplit.mediaPercent}%` } : undefined}
         >
+          {/* What a New Version is waiting for, over the media and not over the
+              comments beside it. A zero-height anchor rather than a row, so it
+              never changes the stage's size. The region is always mounted and
+              only its text changes: one created together with its text is not
+              reliably announced. */}
+          <div className="relative z-10 h-0 shrink-0">
+            <div
+              role="status"
+              className="pointer-events-none absolute inset-x-0 top-2 flex justify-center px-3"
+            >
+              {versionQueueLine ? (
+                <span className="rounded-md border border-border bg-bg-secondary/95 px-3 py-1.5 text-xs text-text-secondary shadow-lg">
+                  {versionQueueLine}
+                </span>
+              ) : null}
+            </div>
+          </div>
           {/* Media viewer */}
           {renderMediaViewer()}
         </div>
@@ -591,103 +815,17 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             className="w-full min-h-0 flex flex-col border-t border-border bg-bg-secondary shrink-0 md:w-[360px] md:min-h-0 md:border-t-0 md:border-l animate-in slide-in-from-right-2 duration-150"
             style={mobileSplit.isMobile ? { height: `${100 - mobileSplit.mediaPercent}%` } : undefined}
           >
-            {/* Tabs (Frame.io pill style) */}
-            <div className="px-4 pt-3 pb-2 shrink-0">
-              <div className="flex items-center bg-bg-tertiary rounded-lg p-0.5">
-                <button
-                  onClick={() => setActiveTab('comments')}
-                  className={cn(
-                    'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
-                    activeTab === 'comments'
-                      ? 'bg-bg-hover text-text-primary shadow-sm'
-                      : 'text-text-tertiary hover:text-text-secondary',
-                  )}
-                >
-                  Comments
-                </button>
-                <button
-                  onClick={() => setActiveTab('fields')}
-                  className={cn(
-                    'flex-1 py-1.5 text-[13px] font-medium rounded-md transition-all',
-                    activeTab === 'fields'
-                      ? 'bg-bg-hover text-text-primary shadow-sm'
-                      : 'text-text-tertiary hover:text-text-secondary',
-                  )}
-                >
-                  Fields
-                </button>
-              </div>
-            </div>
+            {panelTabs}
 
             {/* Content */}
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {activeTab === 'comments' ? (
                 <>
-                  <CommentPanel
-                    comments={comments as any}
-                    currentUserId={user?.id}
-                    newCommentIds={newCommentIds}
-                    canDeleteComment={(comment) =>
-                      canDeleteAnyComment || comment.author_id === user?.id
-                    }
-                    onResolve={resolveComment}
-                    onUpdate={updateComment}
-                    onDelete={deleteComment}
-                    onAddReaction={addReaction}
-                    onRemoveReaction={removeReaction}
-                    onReply={() => {}}
-                    onSubmitReply={handleSubmitReply}
-                    onAttachmentsUploaded={refetchComments}
-                    onDeleteAttachment={async (commentId, attachmentId) => {
-                      await api.delete(`/comments/${commentId}/attachments/${attachmentId}`)
-                      await refetchComments()
-                    }}
-                  />
-                  {canComment && (
-                    <CommentInput
-                      assetId={asset.id}
-                      projectId={asset.project_id}
-                      assetType={asset.asset_type}
-                      onSubmit={handleSubmitComment}
-                      annotationData={annotationData}
-                      onAttachmentsUploaded={refetchComments}
-                    />
-                  )}
+                  {commentPanelNode}
+                  {commentInputNode}
                 </>
               ) : (
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-text-tertiary">Name</span>
-                      <span className="text-xs text-text-primary font-medium truncate ml-4">{asset.name}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-text-tertiary">Type</span>
-                      <span className="text-xs text-text-primary capitalize">{asset.asset_type.replace('_', ' ')}</span>
-                    </div>
-                    {currentVersion && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-text-tertiary">Version</span>
-                        <span className="text-xs text-text-primary">v{currentVersion.version_number}</span>
-                      </div>
-                    )}
-                    {currentVersion && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-text-tertiary">Processing</span>
-                        <span className={cn(
-                          'text-xs capitalize',
-                          currentVersion.processing_status === 'ready' && 'text-status-success',
-                          currentVersion.processing_status === 'processing' && 'text-status-warning',
-                          currentVersion.processing_status === 'queued' && 'text-status-info',
-                          currentVersion.processing_status === 'failed' && 'text-status-error',
-                          currentVersion.processing_status === 'uploading' && 'text-text-tertiary',
-                        )}>
-                          {currentVersion.processing_status}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                fieldsBody
               )}
             </div>
           </div>
@@ -710,12 +848,16 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
 export default function ReviewPage({
   params,
 }: {
-  params: { id: string; assetId: string }
+  params: Promise<{ id: string; assetId: string }>
 }) {
-  const { id: projectId, assetId } = params
+  const { id: projectId, assetId } = use(params)
+  // The right compare pane is the store's current version, which a reload does
+  // not keep, so a compare URL names it and the provider opens on it (#299).
+  const searchParams = useSearchParams()
+  const initialVersionId = searchParams.get('compare') ? searchParams.get('right') : null
 
   return (
-    <ReviewProvider assetId={assetId}>
+    <ReviewProvider assetId={assetId} initialVersionId={initialVersionId}>
       <ReviewScreenInner projectId={projectId} />
     </ReviewProvider>
   )

@@ -62,14 +62,21 @@ class AssetVersion(Base):
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     processing_status: Mapped[ProcessingStatus] = mapped_column(Enum(ProcessingStatus), default=ProcessingStatus.uploading)
     # The S3 multipart upload backing this version while it is being uploaded.
-    # NULL for rows created before this was recorded, and for versions whose
-    # upload has been completed or aborted -- treat NULL as "unknown", never as
-    # "no upload exists".
+    # NULL for rows created before this was recorded -- treat NULL as "unknown",
+    # never as "no upload exists". It is never cleared, so a non-NULL value says
+    # nothing about whether the upload completed.
     upload_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # Last time a part was signed for this upload. The reaper ages uploads by
     # this rather than by created_at, so a transfer slower than the window is not
     # aborted while it is still making progress.
     last_activity_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The part size this upload was started with, pinned so a resume cannot use a
+    # different one. R2 requires every non-final part to be exactly the same size,
+    # and a release that changed the client's constant would otherwise leave an
+    # in-flight upload with part numbers that no longer map to the same byte
+    # ranges. NULL means the row predates this being recorded; callers derive the
+    # size from the parts already held rather than assuming today's constant.
+    chunk_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -80,7 +87,21 @@ class FileType(str, PyEnum):
     video = "video"
 
 class MediaFile(Base):
+    """The one file a version is made of.
+
+    One row per version, enforced by `uq_media_files_version_id`. Every write
+    path has only ever created one (`routers/upload.py`, `routers/assets.py`),
+    and `derived_size_bytes` below depends on it: the bytes it holds are
+    measured for the *version's* output prefix, so a second row on the same
+    version would make the storage overview count that prefix twice. If a
+    version ever has to hold several files, that total belongs on
+    `asset_versions` first; the constraint is there to make this a decision
+    rather than a silently wrong figure.
+    """
     __tablename__ = "media_files"
+    __table_args__ = (
+        UniqueConstraint("version_id", name="uq_media_files_version_id"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("asset_versions.id"), nullable=False, index=True)
     file_type: Mapped[FileType] = mapped_column(Enum(FileType), nullable=False)
@@ -89,7 +110,24 @@ class MediaFile(Base):
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     s3_key_raw: Mapped[str] = mapped_column(String(1000), nullable=False)
     s3_key_processed: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    # The single downloadable file for a video: one MP4 remuxed from the top HLS
+    # rung. NULL for every version transcoded before this existed, for any
+    # transcode where the remux failed, and for audio and stills (whose
+    # `s3_key_processed` is already a single object). Treat NULL as "fall back to
+    # the raw master", never as "this version has no download".
+    s3_key_download: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     s3_key_thumbnail: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    # Bytes of everything the transcode produced for this version: the HLS
+    # renditions under `s3_key_processed`, the single-file MP4/MP3/WebP, the
+    # poster thumbnail and the audio waveform. Measured once, by listing the
+    # version's output prefix when the job finishes, because the alternative is
+    # a bucket listing on every page view of the storage overview.
+    #
+    # NULL means "not measured", never "nothing derived": every row written
+    # before this column existed is NULL until the backfill task
+    # (`backfill_media_derived_size`) has summed its prefix, and the overview
+    # reports those rows as unmeasured rather than as zero.
+    derived_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

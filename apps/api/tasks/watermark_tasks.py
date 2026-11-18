@@ -14,6 +14,11 @@ from ..config import settings
 from ..services import event_service
 
 
+def _publish_event(project_id: str, event_type: str, payload: dict):
+    """Publish an SSE event from Celery worker context (best-effort)."""
+    return event_service.publish_sync(project_id, event_type, payload)
+
+
 @celery_app.task(name="apply_watermark", bind=True, max_retries=3, default_retry_delay=60)
 def apply_watermark(
     self,
@@ -25,6 +30,7 @@ def apply_watermark(
 ):
     """Burn a text watermark into a video/image asset and upload the result to S3."""
     from ..services.s3_service import get_s3_client, put_object
+    from packages.transcoder.ffmpeg_transcoder import get_cpu_budget, thread_plan
 
     db = SessionLocal()
     try:
@@ -86,13 +92,28 @@ def apply_watermark(
                 )
 
             if vf_filters:
+                # 4:2:0 needs even dimensions; without the pad libx264 refuses
+                # an odd-sized source once -pix_fmt pins the output to it.
+                vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
                 cmd = [
                     "ffmpeg", "-y",
                     "-i", local_path,
                     "-vf", ",".join(vf_filters),
-                    "-c:a", "copy",
-                    output_path,
                 ]
+                # drawtext forces a full re-encode on the transcoding queue, so
+                # it takes the same TRANSCODER_CPU_LIMIT budget as a transcode
+                # (#396). This is a -vf graph, whose option is -filter_threads:
+                # ffmpeg accepts -filter_complex_threads here without complaint
+                # and leaves the graph unbounded.
+                cpu_plan = thread_plan(get_cpu_budget(), 1)
+                if cpu_plan is not None:
+                    cmd += ["-filter_threads", str(cpu_plan[1])]
+                # Chosen rather than left to ffmpeg's defaults, which keep a
+                # 10-bit source at High 10 and no mainstream browser plays it.
+                cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+                if cpu_plan is not None:
+                    cmd += ["-threads:v:0", str(cpu_plan[0][0])]
+                cmd += ["-c:a", "copy", output_path]
                 subprocess.run(cmd, check=True, timeout=600)
             else:
                 # No watermark text — copy as-is
@@ -101,15 +122,19 @@ def apply_watermark(
             # Upload watermarked file back to S3
             wm_key = f"watermarked/{asset_id}/output{output_ext}"
             with open(output_path, "rb") as f:
-                put_object(wm_key, f.read(), "video/mp4")
+                put_object(wm_key, f.read(), "video/mp4", media=True)
 
         # Publish SSE event (best-effort)
-        event_service.publish_sync(
+        _publish_event(
             str(asset.project_id),
             "watermark_complete",
             {"asset_id": asset_id, "key": wm_key},
         )
 
+    except subprocess.TimeoutExpired:
+        # A retry starts the encode again from zero and would hold a
+        # transcoding slot for another ten minutes, up to three times over.
+        raise
     except Exception as exc:
         raise self.retry(exc=exc)
     finally:

@@ -164,7 +164,9 @@ def test_both_initiate_paths_record_the_upload_id(real_db, monkeypatch, path):
         monkeypatch.setattr(mod, "create_multipart_upload", lambda k, m: "brand-new-upload",
                             raising=False)
     monkeypatch.setattr(upload_module, "upload_guard_error", lambda db, n: None)
+    monkeypatch.setattr(upload_module, "choose_part_size", lambda db, n: (10 * 1024 * 1024, None))
     monkeypatch.setattr(assets_module, "upload_guard_error", lambda db, n: None, raising=False)
+    monkeypatch.setattr(assets_module, "choose_part_size", lambda db, n: (10 * 1024 * 1024, None), raising=False)
     monkeypatch.setattr(upload_module, "require_project_role", lambda db, pid, u, r: None)
 
     if path == "new_asset":

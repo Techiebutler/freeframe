@@ -1,7 +1,6 @@
 """Tests for share-link expiry: the conservative expire sweep + enforcement regression (#65)."""
 import uuid
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -59,25 +58,28 @@ def test_expire_share_links_disabled_when_zero(monkeypatch):
     db.query.assert_not_called()
 
 
-def _mock_db_returning(link):
-    db = MagicMock()
-    db.query.return_value = db
-    db.filter.return_value = db
-    db.first.return_value = link
-    return db
+def _project(db, owner):
+    project = Project(name="t", project_type=ProjectType.personal, created_by=owner.id)
+    db.add(project); db.flush()
+    return project
 
 
-def test_validate_share_link_rejects_expired():
-    link = MagicMock(is_enabled=True,
-                     expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
+def test_validate_share_link_rejects_expired(real_db):
+    owner = _owner(real_db)
+    link = _link(real_db, owner, _project(real_db, owner))
+    link.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    real_db.flush()
     with pytest.raises(HTTPException) as exc:
-        validate_share_link(_mock_db_returning(link), "tok")
+        validate_share_link(real_db, link.token)
     assert exc.value.status_code == 410
 
 
-def test_validate_share_link_allows_future_and_none_expiry():
-    future = MagicMock(is_enabled=True,
-                       expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
-    assert validate_share_link(_mock_db_returning(future), "tok") is future
-    never = MagicMock(is_enabled=True, expires_at=None)
-    assert validate_share_link(_mock_db_returning(never), "tok") is never
+def test_validate_share_link_allows_future_and_none_expiry(real_db):
+    owner = _owner(real_db)
+    project = _project(real_db, owner)
+    future = _link(real_db, owner, project)
+    future.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    real_db.flush()
+    assert validate_share_link(real_db, future.token) is future
+    never = _link(real_db, owner, project)
+    assert validate_share_link(real_db, never.token) is never

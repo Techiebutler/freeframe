@@ -40,7 +40,7 @@ def test_batched_builds_nested_tree_with_related_data():
         drawing_data={"objects": []}, frame_number=None, carousel_position=None,
     )
     reaction = SimpleNamespace(comment_id=parent.id, emoji="👍", user_id=AUTHOR)
-    author = SimpleNamespace(id=AUTHOR, name="Alice", avatar_url=None)
+    author = SimpleNamespace(id=AUTHOR, name="Alice", avatar_url=None, avatar_color=None)
 
     db = _mock_db([
         [parent, reply],   # all_comments
@@ -67,7 +67,7 @@ def test_batched_uses_a_fixed_number_of_queries_regardless_of_comment_count():
     # 1 top-level + 50 replies must NOT scale the query count (the whole point).
     parent = _comment(uuid.uuid4())
     replies = [_comment(uuid.uuid4(), parent_id=parent.id) for _ in range(50)]
-    author = SimpleNamespace(id=AUTHOR, name="Alice", avatar_url=None)
+    author = SimpleNamespace(id=AUTHOR, name="Alice", avatar_url=None, avatar_color=None)
 
     db = _mock_db([
         [parent, *replies],  # all_comments

@@ -12,8 +12,7 @@ import {
   ChevronRight,
   Check,
   Repeat,
-  Settings,
-  Gauge,
+  MoreHorizontal,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -22,6 +21,8 @@ import { renderedMediaBox } from "@/lib/media-frame";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
+import { useShuttle } from "@/hooks/use-shuttle";
+import { useMediaQuery, MEDIA_SM } from "@/hooks/use-media-query";
 import { useReview } from "./review-provider";
 import { ProgressBar } from "./progress-bar";
 import type { Comment } from "@/types";
@@ -55,7 +56,7 @@ export function VideoFrameConstraint({
   videoRef,
   children,
 }: {
-  videoRef: React.RefObject<HTMLVideoElement>;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   children: React.ReactNode;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -116,7 +117,7 @@ export function VideoFrameConstraint({
   }, [videoRef]);
 
   return (
-    <div ref={wrapperRef} style={style} className="overflow-hidden">
+    <div ref={wrapperRef} style={style} className="overflow-hidden pointer-events-auto">
       {children}
     </div>
   );
@@ -125,8 +126,11 @@ export function VideoFrameConstraint({
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+// Fork: a second click within the window on the left/right edge of the
+// picture seeks back/forward 2s instead of toggling playback.
 const EDGE_SEEK_ZONE = 0.18;
 const EDGE_SECOND_CLICK_WINDOW_MS = 400;
+// Fork: Ctrl+wheel / pinch / the Zoom menu scale the picture (and its overlay).
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
@@ -154,7 +158,6 @@ export function VideoPlayer({
   initialStreamUrl,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mediaAreaRef = useRef<HTMLDivElement>(null);
   const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<{ distance: number; zoom: number } | null>(null);
   const didZoomGestureRef = useRef(false);
@@ -164,14 +167,72 @@ export function VideoPlayer({
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
   const edgeClickRef = useRef<{ side: number; at: number } | null>(null);
 
-  const { isDrawingMode, timeFormat, setTimeFormat, setPlayheadTime, currentVersion } =
-    useReviewStore();
-  const { registerPauseHandler } = useReview();
+  const {
+    isDrawingMode,
+    timeFormat,
+    setTimeFormat,
+    setPlayheadTime,
+    setActiveAnnotation,
+    seekTarget,
+    currentVersion,
+  } = useReviewStore();
+  const { registerPauseHandler, registerTogglePlayHandler } = useReview();
   const [timeFormatOpen, setTimeFormatOpen] = useState(false);
+  // The media's own width/height ratio, used to size the stage on a portrait
+  // phone. 16/9 until `loadedmetadata` lands, so nothing jumps in the common
+  // case. See the stage below for why this is needed at all.
+  const [mediaAspect, setMediaAspect] = useState(16 / 9);
+
+  // Below `sm` the transport row runs out of width and the controls crowd, so
+  // the secondary ones move behind an overflow menu and the primary ones get a
+  // 44px touch target instead of 28px.
+  const compact = !useMediaQuery(MEDIA_SM);
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  // The Quality row in the overflow menu swaps the menu's rows for the list of
+  // rungs; the menu starts on its own rows each time it opens.
+  const [qualityListOpen, setQualityListOpen] = useState(false);
+  const overflowRef = useRef<HTMLDivElement>(null);
   const timeFormatRef = useRef<HTMLDivElement>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsView, setSettingsView] = useState<"main" | "quality" | "speed" | "zoom">("main");
-  const settingsRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const swallowStageClickRef = useRef(false);
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const zoomMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close the overflow menu on an outside press. `pointerdown`, not
+  // `mousedown`: the scrubber calls preventDefault on its own pointer events,
+  // and a touch there would otherwise never produce the compatibility mouse
+  // event this needs to hear.
+  useEffect(() => {
+    if (!overflowOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!overflowRef.current?.contains(e.target as Node)) {
+        setOverflowOpen(false);
+        if (stageRef.current?.contains(e.target as Node)) {
+          swallowStageClickRef.current = true;
+        }
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [overflowOpen]);
+
+  useEffect(() => {
+    if (!overflowOpen) setQualityListOpen(false);
+  }, [overflowOpen]);
+
+  useEffect(() => {
+    if (!zoomMenuOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!zoomMenuRef.current?.contains(e.target as Node)) {
+        setZoomMenuOpen(false);
+        if (stageRef.current?.contains(e.target as Node)) {
+          swallowStageClickRef.current = true;
+        }
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [zoomMenuOpen]);
 
   // Close time format dropdown on outside click
   useEffect(() => {
@@ -180,24 +241,16 @@ export function VideoPlayer({
       if (
         timeFormatRef.current &&
         !timeFormatRef.current.contains(e.target as Node)
-      )
+      ) {
         setTimeFormatOpen(false);
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [timeFormatOpen]);
-
-  useEffect(() => {
-    if (!settingsOpen) return;
-    const handleClick = (event: MouseEvent) => {
-      if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
-        setSettingsOpen(false);
-        setSettingsView("main");
+        if (stageRef.current?.contains(e.target as Node)) {
+          swallowStageClickRef.current = true;
+        }
       }
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [settingsOpen]);
+  }, [timeFormatOpen]);
 
   function displayTime(seconds: number): string {
     switch (timeFormat) {
@@ -265,24 +318,77 @@ export function VideoPlayer({
     playbackRate,
     qualityLevels,
     currentQuality,
+    selectedQuality,
     isLoading,
     isFullscreen,
     error,
-    pause,
-    togglePlay,
     seek,
     fastSeek,
-    setPlaybackRate,
     setQuality,
     setVolume,
     toggleMute,
     toggleFullscreen,
   } = player;
 
+  // J/K/L shuttle. Its togglePlay and pause also stop reverse playback, so
+  // every play control goes through it rather than the player's own.
+  const {
+    reverseRate,
+    shuttleForward,
+    shuttleReverse,
+    togglePlay,
+    pause,
+    setPlaybackRate,
+    cycleReverseRate,
+  } = useShuttle(player);
+  const playing = isPlaying || reverseRate > 0;
+  const speedLabel = reverseRate ? `-${reverseRate}x` : `${playbackRate}x`;
+
+  const currentQualityLabel = qualityLevels.find((level) => level.index === currentQuality)?.label;
+  const autoQualityLabel = currentQualityLabel ? "Auto (" + currentQualityLabel + ")" : "Auto";
+  const selectedQualityLabel = selectedQuality === -1
+    ? autoQualityLabel
+    : qualityLevels.find((level) => level.index === selectedQuality)?.label ?? "Auto";
+
+  // A source can be vertical or 4:3, so the stage must not assume 16:9.
+  // `resize` covers a version switch that changes the dimensions without
+  // remounting the element.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const read = () => {
+      if (video.videoWidth && video.videoHeight) {
+        setMediaAspect(video.videoWidth / video.videoHeight);
+      }
+    };
+    read();
+    video.addEventListener("loadedmetadata", read);
+    video.addEventListener("resize", read);
+    return () => {
+      video.removeEventListener("loadedmetadata", read);
+      video.removeEventListener("resize", read);
+    };
+  }, [videoRef, streamUrl]);
+
   // Register pause handler with review provider
   useEffect(() => {
     registerPauseHandler(pause);
   }, [registerPauseHandler, pause]);
+
+  // A seek that pauses (clicking a comment) lands and holds; the player pauses
+  // the element, but reverse keeps it paused anyway and would walk on from
+  // the comment's time.
+  // Once per seek, by its id, so it never pauses playback that started after.
+  const handledSeekRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!seekTarget?.pause || handledSeekRef.current === seekTarget.id) return;
+    handledSeekRef.current = seekTarget.id;
+    pause();
+  }, [seekTarget, pause]);
+
+  // And the toggle, for the mobile comment sheet's play/pause button, so it
+  // gets the same first-tap retry and pause disarm as this player's own.
+  useEffect(() => registerTogglePlayHandler(togglePlay), [registerTogglePlayHandler, togglePlay]);
 
   // Sync video currentTime to review store so comment input shows same timecode
   const lastSyncRef = useRef(0);
@@ -294,7 +400,18 @@ export function VideoPlayer({
     }
   }, [currentTime, setPlayheadTime]);
 
-  const arrowSequence = useRef({ direction: '', time: 0, step: 0 });
+  // Keyboard shortcuts
+  //
+  // The arrow keys read the time through a ref, not from the effect's scope:
+  // the display now updates once per presented frame, and `currentTime` in
+  // the dependency list rebound the window listener on every one of them.
+  const currentTimeRef = useRef(currentTime);
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+  // Fork: arrow seeks step up (1s, 2s, ... 10s) on quick repeated presses and
+  // flash how far they went.
+  const arrowSequence = useRef({ direction: "", time: 0, step: 0 });
   const [seekFeedback, setSeekFeedback] = useState({ seconds: 0, visible: false });
   const seekFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -302,7 +419,6 @@ export function VideoPlayer({
     if (seekFeedbackTimer.current) clearTimeout(seekFeedbackTimer.current);
   }, []);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -313,6 +429,11 @@ export function VideoPlayer({
       ) {
         return;
       }
+
+      // Shuttle keys: each press of J or L is one step faster in that
+      // direction, so a held key's auto-repeat is ignored, and so is a
+      // browser or app shortcut such as Cmd+K or Ctrl+L.
+      const shuttleKey = !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey;
 
       switch (e.code) {
         case "Digit0":
@@ -333,43 +454,58 @@ export function VideoPlayer({
           e.preventDefault();
           const now = Date.now();
           const previous = arrowSequence.current;
-          const step = e.repeat ? 1 : previous.direction === e.code && now - previous.time < 1000 ? Math.min(previous.step + 1, 10) : 1;
+          const step = e.repeat
+            ? 1
+            : previous.direction === e.code && now - previous.time < 1000
+              ? Math.min(previous.step + 1, 10)
+              : 1;
           arrowSequence.current = { direction: e.code, time: now, step: e.repeat ? 0 : step };
-          const seconds = e.code === 'ArrowRight' ? step : -step;
-          seek((videoRef.current?.currentTime ?? currentTime) + seconds);
+          const seconds = e.code === "ArrowRight" ? step : -step;
+          seek(currentTimeRef.current + seconds);
           setSeekFeedback({ seconds, visible: true });
           if (seekFeedbackTimer.current) clearTimeout(seekFeedbackTimer.current);
-          seekFeedbackTimer.current = setTimeout(() => setSeekFeedback((feedback) => ({ ...feedback, visible: false })), 700);
+          seekFeedbackTimer.current = setTimeout(
+            () => setSeekFeedback((feedback) => ({ ...feedback, visible: false })),
+            700,
+          );
           break;
         }
         case "ArrowUp":
         case "ArrowDown":
           if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) break;
           e.preventDefault();
-          setVolume(Math.min(1, Math.max(0, (videoRef.current?.volume ?? volume) + (e.code === 'ArrowUp' ? 0.1 : -0.1))));
+          setVolume(
+            Math.min(1, Math.max(0, (videoRef.current?.volume ?? volume) + (e.code === "ArrowUp" ? 0.1 : -0.1))),
+          );
           break;
         case "KeyJ":
-          seek(currentTime - 10);
+          if (shuttleKey) {
+            shuttleReverse();
+            // As forward playback does, so a comment's drawing doesn't sit
+            // over frames it wasn't drawn on.
+            setActiveAnnotation(null);
+          }
           break;
         case "KeyK":
-          togglePlay();
+          if (shuttleKey) togglePlay();
           break;
         case "KeyL":
-          seek(currentTime + 10);
+          if (shuttleKey) shuttleForward();
           break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, seek, currentTime, isDrawingMode, setVolume, videoRef, volume]);
+  }, [togglePlay, shuttleForward, shuttleReverse, setActiveAnnotation, seek, isDrawingMode, setVolume, videoRef, volume]);
 
+  // ── Zoom (fork) ──
   const changeZoom = useCallback((amount: number) => {
     setZoom((current) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, current + amount)));
   }, []);
 
   const setZoomOriginFromPoint = useCallback((clientX: number, clientY: number) => {
-    const rect = mediaAreaRef.current?.getBoundingClientRect();
+    const rect = stageRef.current?.getBoundingClientRect();
     if (!rect || !rect.width || !rect.height) return;
     setZoomOrigin({
       x: Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100)),
@@ -385,8 +521,8 @@ export function VideoPlayer({
   // Prevent Ctrl + wheel from changing browser zoom while the pointer is over
   // the player, and use it to scale the media instead.
   useEffect(() => {
-    const mediaArea = mediaAreaRef.current;
-    if (!mediaArea) return;
+    const stage = stageRef.current;
+    if (!stage) return;
 
     const handleWheel = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
@@ -395,11 +531,11 @@ export function VideoPlayer({
       changeZoom(event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
     };
 
-    mediaArea.addEventListener("wheel", handleWheel, { passive: false });
-    return () => mediaArea.removeEventListener("wheel", handleWheel);
+    stage.addEventListener("wheel", handleWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", handleWheel);
   }, [changeZoom, setZoomOriginFromPoint]);
 
-  const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+  const handleStagePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (activePointersRef.current.size === 2) {
       const [first, second] = Array.from(activePointersRef.current.values());
@@ -410,7 +546,7 @@ export function VideoPlayer({
     }
   }, [zoom]);
 
-  const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+  const handleStagePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!activePointersRef.current.has(event.pointerId)) return;
     activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (activePointersRef.current.size !== 2 || !pinchRef.current) return;
@@ -431,12 +567,18 @@ export function VideoPlayer({
     }
   }, [setZoomOriginFromPoint, zoom]);
 
-  const handlePointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+  const handleStagePointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     activePointersRef.current.delete(event.pointerId);
     if (activePointersRef.current.size < 2) pinchRef.current = null;
   }, []);
 
   const handleContainerClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    // A press that only dismissed a menu over the stage is not a play toggle.
+    if (swallowStageClickRef.current) {
+      swallowStageClickRef.current = false;
+      return;
+    }
+    // Nor is the click that ends a pinch.
     if (didZoomGestureRef.current) {
       didZoomGestureRef.current = false;
       return;
@@ -454,12 +596,12 @@ export function VideoPlayer({
     const now = Date.now();
     const side = Math.sign(delta);
     if (isRapidRepeatEdgeClick(edgeClickRef.current, side, now)) {
-      seek(currentTime + delta);
+      seek(currentTimeRef.current + delta);
       edgeClickRef.current = null;
       return;
     }
     edgeClickRef.current = { side, at: now };
-  }, [togglePlay, seek, currentTime, isDrawingMode]);
+  }, [togglePlay, seek, isDrawingMode]);
 
   const handleFullscreen = useCallback(() => {
     if (containerRef.current) {
@@ -467,19 +609,37 @@ export function VideoPlayer({
     }
   }, [toggleFullscreen]);
 
-  const qualityLabel = currentQuality === -1
-    ? "Auto"
-    : qualityLevels.find((level) => level.index === currentQuality)?.label ?? "Auto";
+  // In reverse the button shows, and so steps, the reverse speed.
+  const handleSpeedCycle = useCallback(() => {
+    if (reverseRate) {
+      cycleReverseRate();
+      return;
+    }
+    const idx = SPEED_OPTIONS.indexOf(
+      playbackRate as (typeof SPEED_OPTIONS)[number],
+    );
+    const next = SPEED_OPTIONS[(idx + 1) % SPEED_OPTIONS.length];
+    setPlaybackRate(next);
+  }, [reverseRate, cycleReverseRate, playbackRate, setPlaybackRate]);
 
-  const closeSettings = useCallback(() => {
-    setSettingsOpen(false);
-    setSettingsView("main");
-  }, []);
+  const zoomStyle: React.CSSProperties | undefined = zoom === MIN_ZOOM
+    ? undefined
+    : { transform: `scale(${zoom})`, transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%` };
+  const zoomLabel = zoom === MIN_ZOOM ? "Fit" : `${Math.round(zoom * 100)}%`;
 
   return (
     <div
       ref={containerRef}
       className={cn(
+        // Top-aligned in portrait, deliberately. The stage is a fixed-ratio box,
+        // so on a portrait phone there is almost always leftover height, and how
+        // much depends entirely on the source: a 9:16 clip leaves ~65px, a
+        // cinematic one leaves ~470px because it is only ~180px tall at full
+        // width. Centring that much slack floats the picture in the middle of
+        // the screen with a large gap above it, and pushes the drawing surface
+        // away from the thumb. Keeping the media under the header puts the
+        // leftover between the controls and the comment sheet, which is where
+        // the sheet expands into anyway.
         "flex flex-col h-full w-full",
         isFullscreen && "fixed inset-0 z-50",
         className,
@@ -487,44 +647,80 @@ export function VideoPlayer({
     >
       {/* Video area — fills available space, object-contain preserves aspect ratio with letterbox */}
       <div
-        ref={mediaAreaRef}
-        className="flex-1 relative min-h-0 bg-black overflow-hidden cursor-pointer touch-none"
+        ref={stageRef}
+        onPointerDownCapture={() => {
+          swallowStageClickRef.current = false;
+        }}
+        onPointerDown={handleStagePointerDown}
+        onPointerMove={handleStagePointerMove}
+        onPointerUp={handleStagePointerEnd}
+        onPointerCancel={handleStagePointerEnd}
+        // On a portrait phone the stage used to be `flex-1` with no relationship
+        // to the media, so it took every pixel the column had left and
+        // `object-contain` letterboxed a 16:9 video inside a box twice its
+        // height: ~200px of black above and below, with the controls pushed off
+        // the bottom (#331). Below `md` in portrait it is sized from the media's
+        // own ratio instead. Everywhere else it fills the column exactly as
+        // before, so desktop is untouched.
+        className={cn(
+          "relative min-h-0 bg-black overflow-hidden cursor-pointer touch-manipulation",
+          // w-full is load-bearing. With only `aspect-ratio` + `max-height`, the
+          // clamped height makes the width definite via the ratio, so
+          // `align-items: stretch` no longer applies and the stage ends up
+          // narrower than the column and flush left: a 608x1080 source measured
+          // 302px wide in a 440px column on an iPhone 16 Pro Max, with all 138px
+          // of letterbox on the right. Pinning the width instead lets
+          // `object-contain` centre the picture and split the bands evenly.
+          // (Do not reach for `mx-auto` here: auto cross-axis margins also
+          // disable stretch, and the width then collapses to the content width,
+          // which is 0 because the video is absolutely positioned.)
+          // Fork: `flex-initial`, not `flex-none`. The review pages put the
+          // player in the top half of a resizable split, a column of a definite
+          // height the user can make shorter than the picture; the stage must
+          // then shrink (letterboxing via object-contain) instead of pushing
+          // the progress bar and transport row out of the column.
+          "flex-1 max-md:portrait:flex-initial max-md:portrait:w-full max-md:portrait:aspect-[var(--stage-aspect)]",
+          // A vertical source (9:16) is taller than the screen at full width, so
+          // the ratio alone would push the controls back off the bottom. Cap it
+          // and let `object-contain` do the rest.
+          // The consumer sets --ff-stage-max to the height actually left above
+          // the comment sheet, so the whole frame stays visible as the sheet
+          // opens. 70dvh is the fallback for surfaces with no sheet, where the
+          // only job is to stop a vertical source pushing the controls off.
+          "max-md:portrait:max-h-[var(--ff-stage-max,70dvh)]",
+        )}
+        style={{
+          "--stage-aspect": String(mediaAspect),
+          // Fork: pinch-zoom is the player's own (it scales the picture and
+          // its annotations together), so the browser must not take touches
+          // on the stage for its own pinch or pan: either would cancel the
+          // pointers mid-gesture. This also rules out double-tap zoom, which
+          // is what the touch-manipulation class is there for. The mobile
+          // split layout keeps the stage fixed, so nothing needs to scroll here.
+          touchAction: "none",
+        } as React.CSSProperties}
         onClick={handleContainerClick}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerEnd}
-        onPointerCancel={handlePointerEnd}
       >
-        <div
-          className="absolute inset-0 origin-center transition-transform duration-100 ease-out"
-          style={{
-            transform: `scale(${zoom})`,
-            transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
-          }}
-        >
-          <video
-            ref={videoRef}
-            className={cn(
-              "absolute inset-0 w-full h-full object-contain",
-              isDrawingMode ? "pointer-events-none" : "",
-            )}
-            playsInline
-            preload="metadata"
-          />
-
-          {/* Overlay slot (annotation canvas / overlay) — constrained to video frame */}
-          {overlay && (
-            <VideoFrameConstraint videoRef={videoRef}>
-              {overlay}
-            </VideoFrameConstraint>
+        <video
+          ref={videoRef}
+          className={cn(
+            "absolute inset-0 w-full h-full object-contain origin-center transition-transform duration-100 ease-out",
+            isDrawingMode ? "pointer-events-none" : "",
           )}
-        </div>
+          style={zoomStyle}
+          playsInline
+          preload="metadata"
+        />
 
         <div
           aria-hidden="true"
-          className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-lg bg-black/70 px-4 py-2 text-sm font-medium text-white transition-opacity duration-200', seekFeedback.seconds < 0 ? 'left-1/4' : 'right-1/4', seekFeedback.visible ? 'opacity-100' : 'opacity-0')}
+          className={cn(
+            "pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-lg bg-black/70 px-4 py-2 text-sm font-medium text-white transition-opacity duration-200",
+            seekFeedback.seconds < 0 ? "left-1/4" : "right-1/4",
+            seekFeedback.visible ? "opacity-100" : "opacity-0",
+          )}
         >
-          {seekFeedback.seconds > 0 ? '+' : ''}{seekFeedback.seconds}s
+          {seekFeedback.seconds > 0 ? "+" : ""}{seekFeedback.seconds}s
         </div>
 
         {/* Loading spinner */}
@@ -541,6 +737,19 @@ export function VideoPlayer({
           </div>
         )}
 
+        {/* Overlay slot (annotation canvas / overlay) — constrained to video
+            frame. The layer takes the same zoom as the <video> (same box, same
+            origin), so drawings stay on the frames they were drawn on. */}
+        {overlay && (
+          <div
+            className="absolute inset-0 pointer-events-none origin-center transition-transform duration-100 ease-out"
+            style={zoomStyle}
+          >
+            <VideoFrameConstraint videoRef={videoRef}>
+              {overlay}
+            </VideoFrameConstraint>
+          </div>
+        )}
       </div>
 
       {/* Progress bar */}
@@ -557,32 +766,66 @@ export function VideoPlayer({
       </div>
 
       {/* Bottom transport bar (matches audio player style) */}
-      <div className="flex items-center justify-between h-12 px-4 bg-bg-secondary/80 shrink-0">
-        {/* Left: Play, Volume */}
+      <div
+        className={cn(
+          "flex items-center justify-between bg-bg-secondary/80 shrink-0",
+          // min-h, not h: the row carries its own safe-area padding below, and a
+          // fixed height would let that padding eat into the 44px buttons rather
+          // than growing the row.
+          compact ? "min-h-12 gap-1 px-3" : "h-12 px-4",
+        )}
+        style={compact ? { paddingBottom: "env(safe-area-inset-bottom)" } : undefined}
+      >
+        {/* Left: Play, Loop, Speed, Volume */}
         <div className="flex items-center gap-2">
           <button
             onClick={togglePlay}
-            className="flex h-7 w-7 items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors"
-            aria-label={isPlaying ? "Pause" : "Play"}
+            className={cn("flex items-center justify-center rounded text-text-primary hover:bg-bg-hover transition-colors", compact ? "h-11 w-11" : "h-7 w-7")}
+            aria-label={playing ? "Pause" : "Play"}
           >
-            {isPlaying ? (
+            {playing ? (
               <Pause className="h-4 w-4" />
             ) : (
               <Play className="h-4 w-4" />
             )}
           </button>
 
-          <button
-            onClick={toggleMute}
-            className="flex h-7 w-7 items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
-            aria-label={isMuted ? "Unmute" : "Mute"}
-          >
-            {isMuted || volume === 0 ? (
-              <VolumeX className="h-4 w-4" />
-            ) : (
-              <Volume2 className="h-4 w-4" />
+            {!compact && (
+              <>
+            <button
+              onClick={() => setLoop((p) => !p)}
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded transition-colors",
+                loop
+                  ? "text-accent bg-accent/10"
+                  : "text-text-tertiary hover:text-text-secondary hover:bg-bg-hover",
+              )}
+              aria-label="Loop"
+            >
+              <Repeat className="h-4 w-4" />
+            </button>
+  
+            <button
+              onClick={handleSpeedCycle}
+              className="flex h-7 items-center justify-center rounded px-1.5 text-xs font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors tabular-nums"
+              aria-label="Playback speed"
+            >
+              {speedLabel}
+            </button>
+  
+            <button
+              onClick={toggleMute}
+              className="flex h-7 w-7 items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+              aria-label={isMuted ? "Unmute" : "Mute"}
+            >
+              {isMuted || volume === 0 ? (
+                <VolumeX className="h-4 w-4" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
+            </button>
+              </>
             )}
-          </button>
         </div>
 
         {/* Center: Timecode display with format picker */}
@@ -610,7 +853,7 @@ export function VideoPlayer({
             />
           </button>
           {timeFormatOpen && (
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 w-48 rounded-xl border border-white/10 bg-[#2a2a30] shadow-2xl py-1.5 animate-in fade-in zoom-in-95 duration-100">
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 slide-in-from-left-1/2 mb-2 z-50 w-48 rounded-xl border border-white/10 bg-[#2a2a30] shadow-2xl py-1.5 animate-in fade-in zoom-in-95 duration-100">
               <div className="px-3 py-2 text-[11px] text-text-tertiary uppercase tracking-wider font-medium">
                 Time Format
               </div>
@@ -644,144 +887,168 @@ export function VideoPlayer({
           )}
         </div>
 
-        {/* Right: Player settings, Fullscreen */}
+        {/* Right: Quality, Fullscreen */}
         <div className="flex items-center gap-2">
-          <div className="relative" ref={settingsRef}>
-            <button
-              onClick={() => {
-                setSettingsOpen((open) => !open);
-                setSettingsView("main");
-              }}
-              className="flex h-7 w-7 items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
-              aria-label="Player settings"
-              aria-expanded={settingsOpen}
-            >
-              <Settings className="h-4 w-4" />
-            </button>
-            {settingsOpen && (
-              <div className="absolute bottom-full right-0 mb-2 z-50 w-56 overflow-hidden rounded-xl border border-border bg-bg-elevated py-1 shadow-2xl animate-in fade-in zoom-in-95 duration-100">
-                {settingsView === "main" ? (
-                  <>
-                    {qualityLevels.length > 0 && (
+          {compact && (
+            <div className="relative" ref={overflowRef}>
+              <button
+                onClick={() => setOverflowOpen((p) => !p)}
+                className="flex h-11 w-11 items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                aria-label="More controls"
+                aria-expanded={overflowOpen}
+              >
+                <MoreHorizontal className="h-5 w-5" />
+              </button>
+              {overflowOpen && (
+                <div className="absolute bottom-full right-0 mb-2 z-50 w-44 rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5">
+                  {/* Quality lives here below sm rather than as an inline
+                      <select>: the select is ~69px wide, which the compact row
+                      has no room for at 360px, and its text-xs would trip
+                      iOS Safari's zoom-on-focus. Opening it replaces the rows
+                      rather than appending to them: the menu opens upward from
+                      a transport row that sits only ~190-245px below the top
+                      of the player on a portrait phone, and four rows (190px)
+                      is what fits there. Auto plus the ladder's at most three
+                      rungs is exactly four. */}
+                  {qualityListOpen ? (
+                    [{ index: -1, label: autoQualityLabel }, ...qualityLevels].map((level) => (
                       <button
-                        onClick={() => setSettingsView("quality")}
-                        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover transition-colors"
+                        key={level.index}
+                        onClick={() => { setQuality(level.index); setOverflowOpen(false); }}
+                        className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                        aria-label={`Quality ${level.label}`}
                       >
-                        <Settings className="h-4 w-4 text-text-tertiary" />
-                        <span className="flex-1">Quality</span>
-                        <span className="text-xs text-text-tertiary">{qualityLabel}</span>
-                        <ChevronRight className="h-4 w-4 text-text-tertiary" />
+                        {level.label}
+                        {selectedQuality === level.index && <Check className="h-4 w-4 text-accent" />}
                       </button>
-                    )}
-                    <button
-                      onClick={() => setSettingsView("speed")}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover transition-colors"
-                    >
-                      <Gauge className="h-4 w-4 text-text-tertiary" />
-                      <span className="flex-1">Playback speed</span>
-                      <span className="text-xs text-text-tertiary">{playbackRate}x</span>
-                      <ChevronRight className="h-4 w-4 text-text-tertiary" />
-                    </button>
-                    <button
-                      onClick={() => setSettingsView("zoom")}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover transition-colors"
-                    >
-                      <ZoomIn className="h-4 w-4 text-text-tertiary" />
-                      <span className="flex-1">Zoom</span>
-                      <span className="text-xs text-text-tertiary">
-                        {zoom === MIN_ZOOM ? "Fit" : `${Math.round(zoom * 100)}%`}
-                      </span>
-                      <ChevronRight className="h-4 w-4 text-text-tertiary" />
-                    </button>
-                    <button
-                      onClick={() => setLoop((enabled) => !enabled)}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover transition-colors"
-                    >
-                      <Repeat className="h-4 w-4 text-text-tertiary" />
-                      <span className="flex-1">Loop</span>
-                      <span className={cn("h-4 w-7 rounded-full p-0.5 transition-colors", loop ? "bg-accent" : "bg-bg-hover")}>
-                        <span className={cn("block h-3 w-3 rounded-full bg-white transition-transform", loop && "translate-x-3")} />
-                      </span>
-                    </button>
-                  </>
-                ) : settingsView === "zoom" ? (
-                  <>
-                    <button
-                      onClick={() => setSettingsView("main")}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-text-secondary hover:bg-bg-hover transition-colors"
-                    >
-                      <ChevronRight className="h-4 w-4 rotate-180" />
-                      Zoom
-                    </button>
-                    <button
-                      onClick={() => changeZoom(ZOOM_STEP)}
-                      disabled={zoom >= MAX_ZOOM}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
-                    >
-                      <ZoomIn className="h-4 w-4 text-text-tertiary" />
-                      <span className="flex-1">Zoom in</span>
-                      <span className="text-text-tertiary">+</span>
-                    </button>
-                    <button
-                      onClick={() => changeZoom(-ZOOM_STEP)}
-                      disabled={zoom <= MIN_ZOOM}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
-                    >
-                      <ZoomOut className="h-4 w-4 text-text-tertiary" />
-                      <span className="flex-1">Zoom out</span>
-                      <span className="text-text-tertiary">−</span>
-                    </button>
-                    <button
-                      onClick={resetZoom}
-                      disabled={zoom === MIN_ZOOM}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
-                    >
-                      <Settings className="h-4 w-4 text-text-tertiary" />
-                      <span className="flex-1">Zoom to 100%</span>
-                      <span className="rounded bg-bg-hover px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">Ctrl+0</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => setSettingsView("main")}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-text-secondary hover:bg-bg-hover transition-colors"
-                    >
-                      <ChevronRight className="h-4 w-4 rotate-180" />
-                      {settingsView === "quality" ? "Quality" : "Playback speed"}
-                    </button>
-                    {(settingsView === "quality"
-                      ? [...[...qualityLevels].reverse(), { index: -1, label: "Auto" }]
-                      : SPEED_OPTIONS.map((rate) => ({ index: rate, label: `${rate}x` }))
-                    ).map((option) => {
-                      const selected = settingsView === "quality"
-                        ? currentQuality === option.index
-                        : playbackRate === option.index;
-                      return (
+                    ))
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => { setLoop((v) => !v); setOverflowOpen(false); }}
+                        className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                      >
+                        Loop
+                        {loop && <Check className="h-4 w-4 text-accent" />}
+                      </button>
+                      <button
+                        onClick={() => { handleSpeedCycle(); }}
+                        className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                      >
+                        Speed
+                        <span className="tabular-nums text-text-tertiary">{speedLabel}</span>
+                      </button>
+                      <button
+                        onClick={() => { toggleMute(); setOverflowOpen(false); }}
+                        className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                      >
+                        {isMuted || volume === 0 ? 'Unmute' : 'Mute'}
+                        {isMuted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                      </button>
+                      {zoom !== MIN_ZOOM && (
                         <button
-                          key={option.index}
-                          onClick={() => {
-                            if (settingsView === "quality") setQuality(option.index);
-                            else setPlaybackRate(option.index);
-                            closeSettings();
-                          }}
-                          className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-text-primary hover:bg-bg-hover transition-colors"
+                          onClick={() => { resetZoom(); setOverflowOpen(false); }}
+                          className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
                         >
-                          {option.label}
-                          {selected && <Check className="h-4 w-4 text-accent" />}
+                          Reset zoom
+                          <span className="tabular-nums text-text-tertiary">{zoomLabel}</span>
                         </button>
-                      );
-                    })}
-                  </>
+                      )}
+                      {qualityLevels.length > 0 && (
+                        <button
+                          onClick={() => setQualityListOpen(true)}
+                          className="flex h-11 w-full items-center justify-between px-3 text-[13px] text-text-secondary hover:bg-bg-hover transition-colors"
+                        >
+                          Quality
+                          <span className="flex items-center gap-1 text-text-tertiary">
+                            {selectedQualityLabel}
+                            <ChevronRight className="h-3 w-3" />
+                          </span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {/* Quality selector (in the overflow menu when compact) */}
+          {!compact && qualityLevels.length > 0 && (
+            <select
+              value={selectedQuality}
+              onChange={(e) => setQuality(parseInt(e.target.value, 10))}
+              className="bg-transparent text-text-secondary text-xs border border-border rounded px-1.5 py-1 cursor-pointer shrink-0 hover:text-text-primary transition-colors"
+              aria-label="Quality"
+            >
+              <option value={-1} className="bg-bg-secondary">
+                {autoQualityLabel}
+              </option>
+              {qualityLevels.map((level) => (
+                <option
+                  key={level.index}
+                  value={level.index}
+                  className="bg-bg-secondary"
+                >
+                  {level.label}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Zoom (fork): also Ctrl+wheel, pinch, and Ctrl+0 to reset */}
+          {!compact && (
+            <div className="relative" ref={zoomMenuRef}>
+              <button
+                onClick={() => setZoomMenuOpen((open) => !open)}
+                className={cn(
+                  "flex h-7 items-center justify-center gap-1 rounded px-1.5 text-xs font-medium transition-colors tabular-nums",
+                  zoom === MIN_ZOOM
+                    ? "text-text-tertiary hover:text-text-primary hover:bg-bg-hover"
+                    : "text-accent bg-accent/10",
                 )}
-              </div>
-            )}
-          </div>
+                aria-label="Zoom"
+                aria-expanded={zoomMenuOpen}
+              >
+                <ZoomIn className="h-4 w-4" />
+                {zoom !== MIN_ZOOM && zoomLabel}
+              </button>
+              {zoomMenuOpen && (
+                <div className="absolute bottom-full right-0 mb-2 z-50 w-52 overflow-hidden rounded-xl border border-border bg-bg-elevated py-1 shadow-2xl animate-in fade-in zoom-in-95 duration-100">
+                  <button
+                    onClick={() => changeZoom(ZOOM_STEP)}
+                    disabled={zoom >= MAX_ZOOM}
+                    className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+                  >
+                    <ZoomIn className="h-4 w-4 text-text-tertiary" />
+                    <span className="flex-1">Zoom in</span>
+                    <span className="text-text-tertiary">+</span>
+                  </button>
+                  <button
+                    onClick={() => changeZoom(-ZOOM_STEP)}
+                    disabled={zoom <= MIN_ZOOM}
+                    className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+                  >
+                    <ZoomOut className="h-4 w-4 text-text-tertiary" />
+                    <span className="flex-1">Zoom out</span>
+                    <span className="text-text-tertiary">−</span>
+                  </button>
+                  <button
+                    onClick={() => { resetZoom(); setZoomMenuOpen(false); }}
+                    disabled={zoom === MIN_ZOOM}
+                    className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+                  >
+                    <span className="flex-1">Zoom to fit</span>
+                    <span className="rounded bg-bg-hover px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">Ctrl+0</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Fullscreen */}
           <button
             onClick={handleFullscreen}
-            className="flex h-7 w-7 items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+            className={cn("flex items-center justify-center rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors", compact ? "h-11 w-11" : "h-7 w-7")}
             aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
           >
             {isFullscreen ? (

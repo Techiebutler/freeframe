@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { setTokens, getAccessToken, getRefreshToken, clearTokens } from '../auth'
+import { setTokens, getAccessToken, getRefreshToken, clearTokens, onSessionEnded } from '../auth'
 
 describe('Token management', () => {
   beforeEach(() => {
@@ -58,5 +58,36 @@ describe('Token management', () => {
     clearTokens()
 
     expect(window.location.href).toBe('/login')
+  })
+
+  it('clearTokens tells onSessionEnded listeners after the tokens are gone and before the page leaves, even past one that throws', () => {
+    localStorage.setItem('ff_access_token', 'access-123')
+    let href = ''
+    const heard: string[] = []
+    Object.defineProperty(window, 'location', {
+      value: {
+        get href() { return href },
+        set href(v: string) {
+          heard.push(`leave ${v}`)
+          href = v
+        },
+      },
+      writable: true,
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const stopFirst = onSessionEnded(() => {
+      heard.push(`first ${String(localStorage.getItem('ff_access_token'))}`)
+      throw new Error('boom')
+    })
+    const stopSecond = onSessionEnded(() => heard.push('second'))
+
+    clearTokens()
+    stopFirst()
+    stopSecond()
+    clearTokens()
+
+    expect(heard).toEqual(['first null', 'second', 'leave /login', 'leave /login'])
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
   })
 })

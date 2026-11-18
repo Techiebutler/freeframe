@@ -1,11 +1,24 @@
 'use client'
 
 import * as React from 'react'
-import { AlertTriangle, Clock, Loader2, Lock } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { FolderShareViewer, type ShareBranding } from '@/components/share/folder-share-viewer'
+import {
+  Lock,
+  AlertTriangle,
+  Clock,
+  Loader2,
+} from 'lucide-react'
 import { withBasePath } from '@/lib/base-path'
-import type { Asset, ShareLinkAppearance, SharePermission } from '@/types'
+import { resolveBrandingLogo } from '@/lib/branding-logo'
+import { Button } from '@/components/ui/button'
+import { FolderShareViewer } from '@/components/share/folder-share-viewer'
+import { useBranding, useEnsureBranding } from '@/components/shared/branding-provider'
+import { useResolvedTheme } from '@/hooks/use-resolved-theme'
+import { PoweredByBadge } from '@/components/shared/powered-by-badge'
+import { ThemedDefaultLogo } from '@/components/shared/themed-default-logo'
+
+import type { Asset, SharePermission, ShareBranding, ShareLinkAppearance } from '@/types'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ShareValidateResponse {
   asset?: Asset
@@ -19,7 +32,9 @@ interface ShareValidateResponse {
   permission?: SharePermission
   allow_download?: boolean
   show_versions?: boolean
+  show_watermark?: boolean
   appearance?: ShareLinkAppearance | null
+  visibility?: string
   requires_password?: boolean
   requires_auth?: boolean
   share_session?: string | null
@@ -27,120 +42,376 @@ interface ShareValidateResponse {
   created_by_name?: string | null
   created_by_avatar_url?: string | null
   viewer_name?: string | null
+  viewer_email?: string | null
+  viewer_avatar_url?: string | null
+  viewer_avatar_color?: string | null
+  /** The project's branding, for every link type. */
   branding?: ShareBranding | null
   error?: string
 }
 
+// ─── Utility ──────────────────────────────────────────────────────────────────
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
-async function fetchShareInfo(token: string, password?: string, logOpen?: boolean): Promise<ShareValidateResponse> {
-  const params = new URLSearchParams()
-  if (password) params.set('password', password)
-  if (logOpen) params.set('log_open', 'true')
+async function fetchShareInfo(
+  token: string,
+  password?: string,
+  logOpen?: boolean,
+): Promise<ShareValidateResponse> {
+  // Include auth token if user is already logged in (for secure links)
   const headers: Record<string, string> = {}
-
+  let accessToken: string | null = null
   try {
-    const accessToken = localStorage.getItem('ff_access_token')
-    if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+    if (typeof window !== 'undefined') {
+      accessToken = localStorage.getItem('ff_access_token')
+    }
   } catch {}
-
-  const response = await fetch(`${API_URL}/share/${token}${params.size ? `?${params}` : ''}`, { headers })
-  if (response.ok) return response.json()
-  if (response.status === 410) return { expired: true }
-  if (response.status === 403) {
-    const data = await response.json().catch(() => ({}))
-    return { requires_password: true, error: data.detail === 'Incorrect password' ? data.detail : undefined }
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`
   }
-  return {}
+
+  // When a password is supplied, use POST /share/{token}/verify so the
+  // password travels in the request body — not as a query string, which
+  // would be logged by nginx, browser history, Referer headers, and
+  // proxy/tunnel logs (SECURITY_AUDIT H3).
+  if (password) {
+    headers['Content-Type'] = 'application/json'
+    const body = JSON.stringify({ password, log_open: !!logOpen })
+    const resp = await fetch(`${API_URL}/share/${token}/verify`, {
+      method: 'POST',
+      headers,
+      body,
+    })
+    if (!resp.ok) {
+      if (resp.status === 403) {
+        // /verify answers 403 both for a wrong password and for a `secure`
+        // link whose viewer isn't signed in. Reporting the latter as
+        // "Incorrect password" strands the viewer retyping a password that
+        // was never the problem — they need the sign-in prompt instead.
+        const detail = await resp
+          .json()
+          .then((d) => d?.detail)
+          .catch(() => null)
+        if (typeof detail === 'string' && detail.includes('Authentication required')) {
+          return { requires_auth: true }
+        }
+        return { requires_password: true, error: 'Incorrect password' }
+      }
+      if (resp.status === 410) return { expired: true }
+      return {}
+    }
+    return resp.json()
+  }
+
+  // No password — GET validates the link and either returns the full
+  // response (no password set / authenticated creator) or
+  // requires_password:true (password-protected, not yet verified).
+  const params = new URLSearchParams()
+  if (logOpen) params.set('log_open', 'true')
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  const response = await fetch(`${API_URL}/share/${token}${qs}`, { headers })
+  if (!response.ok) {
+    if (response.status === 410) return { expired: true }
+    return {}
+  }
+  return response.json()
 }
 
-function PasswordGate({ onSubmit, error, loading }: { onSubmit: (password: string) => void; error?: string; loading?: boolean }) {
+// ─── Password gate ────────────────────────────────────────────────────────────
+
+interface PasswordGateProps {
+  onSubmit: (password: string) => void
+  error?: string | null
+  loading?: boolean
+}
+
+function PasswordGate({ onSubmit, error, loading }: PasswordGateProps) {
   const [password, setPassword] = React.useState('')
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (password.trim()) onSubmit(password.trim())
+  }
+
+  const { orgName, loginLogoUrl, orgLogoLight, orgLogoDark } = useBranding()
+  const theme = useResolvedTheme()
+  const displayLogo = resolveBrandingLogo({
+    theme,
+    darkUrl: orgLogoDark,
+    lightUrl: orgLogoLight,
+    preferredUrl: loginLogoUrl,
+  })
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
       <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 shadow-xl">
-        <div className="mb-4 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-muted"><Lock className="h-5 w-5 text-accent" /></div>
-          <div><h1 className="text-sm font-semibold text-text-primary">Password required</h1><p className="text-xs text-text-tertiary">Enter the password to access this link</p></div>
+        <div className="mb-4 flex flex-col items-center gap-3">
+          {displayLogo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={displayLogo} alt={orgName} className="h-10 object-contain" />
+          ) : (
+            <ThemedDefaultLogo
+              variant="icon"
+              alt="FreeFrame"
+              className="h-10 w-10"
+            />
+          )}
+          <div className="text-center">
+            <h1 className="text-sm font-semibold text-text-primary">{orgName}</h1>
+            <p className="text-xs text-text-tertiary mt-1">Password required to access this link</p>
+          </div>
         </div>
-        <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (password.trim()) onSubmit(password.trim()) }}>
-          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter password…" autoFocus className="flex h-9 w-full rounded-md border border-border bg-bg-tertiary px-3 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-focus" />
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter password…"
+            autoFocus
+            className="flex h-9 w-full rounded-md border border-border bg-bg-tertiary px-3 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-focus"
+          />
           {error && <p className="text-xs text-status-error">{error}</p>}
-          <Button type="submit" size="sm" className="w-full" loading={loading}>Access link</Button>
+          <Button type="submit" size="sm" className="w-full" loading={loading}>
+            Access link
+          </Button>
         </form>
+        <PoweredByBadge className="mt-6 text-center justify-center" />
       </div>
     </div>
   )
 }
 
-function ErrorState({ expired }: { expired?: boolean }) {
+// ─── Error state ──────────────────────────────────────────────────────────────
+
+interface ErrorStateProps {
+  expired?: boolean
+}
+
+function ErrorState({ expired }: ErrorStateProps) {
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
       <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 text-center shadow-xl">
-        <div className="mb-4 flex justify-center"><div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-error/10">{expired ? <Clock className="h-6 w-6 text-status-error" /> : <AlertTriangle className="h-6 w-6 text-status-error" />}</div></div>
-        <h1 className="text-sm font-semibold text-text-primary">{expired ? 'Link expired' : 'Link not found'}</h1>
-        <p className="mt-1 text-xs text-text-tertiary">{expired ? 'This share link has expired and is no longer accessible.' : 'This share link is invalid or has been removed.'}</p>
+        <div className="mb-4 flex justify-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-error/10">
+            {expired ? (
+              <Clock className="h-6 w-6 text-status-error" />
+            ) : (
+              <AlertTriangle className="h-6 w-6 text-status-error" />
+            )}
+          </div>
+        </div>
+        <h1 className="text-sm font-semibold text-text-primary">
+          {expired ? 'Link expired' : 'Link not found'}
+        </h1>
+        <p className="mt-1 text-xs text-text-tertiary">
+          {expired
+            ? 'This share link has expired and is no longer accessible.'
+            : 'This share link is invalid or has been removed.'}
+        </p>
+        <PoweredByBadge className="mt-6" showOrgName />
       </div>
     </div>
   )
 }
 
-export default function SharePage({ params }: { params: { token: string } }) {
-  const { token } = params
+// A single-asset link opens straight on its asset inside FolderShareViewer
+// (`initialAssetId`), with Back leading to a root that holds only that asset.
+// This fork deliberately keeps that over upstream's separate single-asset
+// review screen (ab073f7); the review screen itself is the same either way.
+
+export default function SharePage({
+  params,
+}: {
+  params: Promise<{ token: string }>
+}) {
+  const { token } = React.use(params)
+
   type PageState =
     | { stage: 'loading' }
     | { stage: 'password_required'; error?: string; loading?: boolean }
     | { stage: 'expired' }
     | { stage: 'invalid' }
     | { stage: 'auth_required'; title?: string }
-    | { stage: 'folder_ready'; folderName: string; title: string; description: string | null; createdByName: string | null; createdByAvatarUrl: string | null; viewerName: string | null; permission: SharePermission; allowDownload: boolean; showVersions: boolean; appearance: ShareLinkAppearance; branding: ShareBranding | null; initialAssetId: string | null }
+    | {
+        stage: 'folder_ready'
+        folderName: string
+        title: string
+        description: string | null
+        createdByName: string | null
+        createdByAvatarUrl: string | null
+        viewerName: string | null
+        viewerAvatarUrl: string | null
+        viewerAvatarColor: string | null
+        permission: SharePermission
+        allowDownload: boolean
+        showVersions: boolean
+        appearance: ShareLinkAppearance
+        branding: ShareBranding | null
+        /** Set for a single-asset link: the viewer opens on it. */
+        initialAssetId: string | null
+      }
 
   const [state, setState] = React.useState<PageState>({ stage: 'loading' })
   const [shareSession, setShareSession] = React.useState<string | null>(null)
   const openLogged = React.useRef(false)
+  useEnsureBranding()
 
-  const validate = React.useCallback(async (password?: string) => {
-    if (password) setState({ stage: 'password_required', loading: true })
+  async function validate(password?: string) {
+    if (password) {
+      setState({ stage: 'password_required', loading: true })
+    }
     try {
-      const shouldLogOpen = !password && !openLogged.current
-      if (shouldLogOpen) openLogged.current = true
+      // Ask to log the open on whichever call first returns the full
+      // response. Gating this on `!password` meant a password-protected link
+      // never recorded one: the initial GET short-circuits at
+      // requires_password and drops log_open, and the /verify that follows
+      // always carried log_open:false because a password was supplied.
+      const shouldLogOpen = !openLogged.current
       const data = await fetchShareInfo(token, password, shouldLogOpen)
-      if (data.requires_auth) return setState({ stage: 'auth_required', title: data.title })
-      if (data.requires_password) return setState({ stage: 'password_required', error: data.error })
-      if (data.expired) return setState({ stage: 'expired' })
-      if (!data.permission) return setState({ stage: 'invalid' })
-      if (data.share_session) setShareSession(data.share_session)
-
-      if (!data.folder_id && !data.project_id && !data.asset_id) return setState({ stage: 'invalid' })
-
-      const folderName = data.folder_name ?? data.project_name ?? data.title ?? data.asset?.name ?? 'Shared'
-      const appearance: ShareLinkAppearance = {
-        layout: 'grid', theme: 'dark', accent_color: null, open_in_viewer: true,
-        sort_by: 'created_at', card_size: 'm', aspect_ratio: 'landscape', thumbnail_scale: 'fill', show_card_info: true, header_banner_key: null, header_banner_position_x: 50, header_banner_position_y: 50, header_banner_zoom: 1,
-        ...(data.appearance ?? {}),
+      if (data.requires_auth) {
+        setState({ stage: 'auth_required', title: data.title })
+        return
       }
+      if (data.requires_password) {
+        setState({ stage: 'password_required', error: data.error || undefined })
+        return
+      }
+      if (data.expired) {
+        setState({ stage: 'expired' })
+        return
+      }
+      if (!data.permission) {
+        setState({ stage: 'invalid' })
+        return
+      }
+
+      // Only now is the open actually recorded — the early returns above are
+      // all cases the server did not log.
+      if (shouldLogOpen) openLogged.current = true
+
+      // Store share session from password-protected link validation
+      if (data.share_session) {
+        setShareSession(data.share_session)
+      }
+
+      if (!data.folder_id && !data.project_id && !data.asset_id) {
+        setState({ stage: 'invalid' })
+        return
+      }
+
+      const defaultAppearance: ShareLinkAppearance = {
+        layout: 'grid',
+        theme: 'dark',
+        accent_color: null,
+        open_in_viewer: true,
+        sort_by: 'created_at',
+        card_size: 'm',
+        aspect_ratio: 'landscape',
+        thumbnail_scale: 'fill',
+        show_card_info: true,
+        header_banner_key: null,
+        header_banner_position_x: 50,
+        header_banner_position_y: 50,
+        header_banner_zoom: 1,
+      }
+      const folderName = data.folder_name ?? data.project_name ?? data.title ?? data.asset?.name ?? 'Shared'
       setState({
-        stage: 'folder_ready', folderName, title: data.title ?? folderName, description: data.description ?? null,
-        createdByName: data.created_by_name ?? null, createdByAvatarUrl: data.created_by_avatar_url ?? null, viewerName: data.viewer_name ?? null,
-        permission: data.permission, allowDownload: data.allow_download ?? false, showVersions: data.show_versions ?? true,
-        appearance, branding: data.branding ?? null, initialAssetId: data.asset_id ?? null,
+        stage: 'folder_ready',
+        folderName,
+        title: data.title ?? folderName,
+        description: data.description ?? null,
+        createdByName: data.created_by_name ?? null,
+        createdByAvatarUrl: data.created_by_avatar_url ?? null,
+        viewerName: data.viewer_name ?? null,
+        viewerAvatarUrl: data.viewer_avatar_url ?? null,
+        viewerAvatarColor: data.viewer_avatar_color ?? null,
+        permission: data.permission,
+        allowDownload: data.allow_download ?? false,
+        showVersions: data.show_versions ?? true,
+        appearance: { ...defaultAppearance, ...(data.appearance ?? {}) },
+        branding: data.branding ?? null,
+        initialAssetId: data.asset_id ?? null,
       })
     } catch {
       setState({ stage: 'invalid' })
     }
+  }
+
+  React.useEffect(() => {
+    validate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
-  React.useEffect(() => { void validate() }, [validate])
+  if (state.stage === 'loading') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary">
+        <Loader2 className="h-8 w-8 animate-spin text-text-tertiary" />
+      </div>
+    )
+  }
 
-  if (state.stage === 'loading') return <div className="flex min-h-screen items-center justify-center bg-zinc-950"><Loader2 className="h-8 w-8 animate-spin text-zinc-500" /></div>
-  if (state.stage === 'password_required') return <PasswordGate onSubmit={validate} error={state.error} loading={state.loading} />
-  if (state.stage === 'expired') return <ErrorState expired />
-  if (state.stage === 'invalid') return <ErrorState />
+  if (state.stage === 'password_required') {
+    return (
+      <PasswordGate
+        onSubmit={(pw) => validate(pw)}
+        error={state.error}
+        loading={state.loading}
+      />
+    )
+  }
+
+  if (state.stage === 'expired') {
+    return <ErrorState expired />
+  }
+
+  if (state.stage === 'invalid') {
+    return <ErrorState />
+  }
+
   if (state.stage === 'auth_required') {
-    return <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4"><div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 shadow-xl text-center"><div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent-muted"><Lock className="h-6 w-6 text-accent" /></div><h1 className="text-lg font-semibold text-text-primary">{state.title || 'Secure Share Link'}</h1><p className="mt-2 text-sm text-text-tertiary">This link is private. Please sign in to view the shared content.</p><a href={withBasePath('/login')} className="mt-4 inline-flex w-full items-center justify-center rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:bg-accent/90 transition-colors">Sign in to continue</a></div></div>
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary p-4">
+        <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-6 shadow-xl text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent-muted">
+            <Lock className="h-6 w-6 text-accent" />
+          </div>
+          <h1 className="text-lg font-semibold text-text-primary">
+            {state.title || 'Secure Share Link'}
+          </h1>
+          <p className="mt-2 text-sm text-text-tertiary">
+            This link is private. Please sign in to view the shared content.
+          </p>
+          <a
+            href={withBasePath('/login')}
+            className="mt-4 inline-flex w-full items-center justify-center rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:bg-accent/90 transition-colors"
+          >
+            Sign in to continue
+          </a>
+        </div>
+      </div>
+    )
   }
-  if (state.stage === 'folder_ready') {
-    return <FolderShareViewer token={token} shareSession={shareSession} folderName={state.folderName} title={state.title} description={state.description} createdByName={state.createdByName} createdByAvatarUrl={state.createdByAvatarUrl} viewerName={state.viewerName} permission={state.permission} allowDownload={state.allowDownload} showVersions={state.showVersions} appearance={state.appearance} branding={state.branding} initialAssetId={state.initialAssetId} />
-  }
+
+  return (
+    <FolderShareViewer
+      token={token}
+      shareSession={shareSession}
+      folderName={state.folderName}
+      title={state.title}
+      description={state.description}
+      createdByName={state.createdByName}
+      createdByAvatarUrl={state.createdByAvatarUrl}
+      viewerName={state.viewerName}
+      viewerAvatarUrl={state.viewerAvatarUrl}
+      viewerAvatarColor={state.viewerAvatarColor}
+      permission={state.permission}
+      allowDownload={state.allowDownload}
+      showVersions={state.showVersions}
+      appearance={state.appearance}
+      branding={state.branding}
+      initialAssetId={state.initialAssetId}
+    />
+  )
 }

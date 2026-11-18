@@ -1,0 +1,451 @@
+name: Publish images
+
+# Builds the API and web images for a release on native amd64 and arm64
+# runners, pushes each platform by digest, joins them into one multi-arch
+# index per image, attests it, and tags it (docs/RELEASING.md):
+#
+#   X.Y.Z, vX.Y.Z  every release
+#   X.Y            non-prerelease, unless a newer X.Y patch is already released
+#   latest         only when this is GitHub's latest release
+#
+# `stable` is never set here; promote-stable.yml retags it.
+#
+# After both images are tagged, the `latest` branch moves to the release, under
+# the same is-latest rule. If any build fails, neither the `latest` image nor
+# the `latest` branch moves.
+#
+# Run it by hand (workflow_dispatch) to publish an existing release, or to
+# rebuild one, for example after a base-image security fix. A rebuild
+# overwrites the version's own tags and re-points `X.Y`, `latest` and `stable`
+# only where they still point at the version's old digest.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish images for (e.g. v1.21.0)"
+        required: true
+        type: string
+
+# Two runs for the same tag queue instead of racing.
+concurrency:
+  group: publish-images-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+# Each job declares what it needs.
+permissions: {}
+
+env:
+  API_TITLE: FreeFrame API
+  API_DESCRIPTION: "FreeFrame API server, also run as the Celery workers and beat. Self-hosted media review, annotation and approval."
+  WEB_TITLE: FreeFrame web
+  WEB_DESCRIPTION: "FreeFrame web app. Self-hosted media review, annotation and approval."
+
+jobs:
+  resolve:
+    name: Resolve release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      is_latest: ${{ steps.resolve.outputs.is_latest }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      tags: ${{ steps.resolve.outputs.tags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve tag, commit and image tags
+        id: resolve
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          EVENT: ${{ github.event_name }}
+          EVENT_PRERELEASE: ${{ github.event.release.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ "${EVENT}" = "release" ]; then
+            PRERELEASE="${EVENT_PRERELEASE}"
+          else
+            release="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isPrerelease,isDraft)"
+            if [ "$(jq -r .isDraft <<<"$release")" = "true" ]; then
+              echo "::error::${TAG} is a draft release; publish it first."
+              exit 1
+            fi
+            PRERELEASE="$(jq -r .isPrerelease <<<"$release")"
+          fi
+
+          # `latest` only for GitHub's latest release, so re-publishing an
+          # older tag never moves it backwards. Right after a release is
+          # published the endpoint may still name the previous one, so a
+          # release event retries a few times before deciding it is a backport.
+          latest_release() { gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name; }
+          LATEST="$(latest_release)"
+          if [ "${EVENT}" = "release" ] && [ "${PRERELEASE}" = "false" ]; then
+            for _ in 1 2 3; do
+              [ "${LATEST}" = "${TAG}" ] && break
+              sleep 10
+              LATEST="$(latest_release)"
+            done
+          fi
+          if [ "${LATEST}" = "${TAG}" ]; then IS_LATEST=true; else IS_LATEST=false; fi
+
+          # Every published, non-prerelease release: `X.Y` is only set when no
+          # newer patch of the line exists. The release being published is
+          # added in case the list does not show it yet.
+          releases="${RUNNER_TEMP}/releases.txt"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '.[] | select(.draft | not) | select(.prerelease | not) | .tag_name' > "${releases}"
+          echo "${TAG}" >> "${releases}"
+
+          # Also refuses a tag that is not vX.Y.Z[-suffix], before anything is built.
+          TAGS="$(python3 .github/scripts/image_tags.py "${TAG}" \
+            --prerelease "${PRERELEASE}" --latest "${IS_LATEST}" --releases-file "${releases}")"
+
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          SHA="$(git rev-list -n1 "refs/tags/${TAG}")"
+
+          {
+            echo "tag=${TAG}"
+            echo "version=${TAG#v}"
+            echo "prerelease=${PRERELEASE}"
+            echo "is_latest=${IS_LATEST}"
+            echo "sha=${SHA}"
+            echo "tags<<EOF_TAGS"
+            echo "${TAGS}"
+            echo "EOF_TAGS"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "### ${TAG} (${SHA})"
+            echo ""
+            echo "- prerelease: ${PRERELEASE}"
+            echo "- GitHub latest release: ${LATEST} (is_latest: ${IS_LATEST})"
+            echo "- image tags: $(echo "${TAGS}" | paste -sd ' ' -)"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  build:
+    name: Build ${{ matrix.image }} (${{ matrix.arch.platform }})
+    needs: resolve
+    runs-on: ${{ matrix.arch.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [api, web]
+        arch:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+        include:
+          - image: api
+            context: .
+            file: apps/api/Dockerfile.prod
+          # No build args: the image keeps the Dockerfile defaults
+          # (NEXT_PUBLIC_API_URL=/api, empty base path).
+          - image: web
+            context: apps/web
+            file: apps/web/Dockerfile.prod
+    env:
+      IMAGE: ghcr.io/techiebutler/freeframe-${{ matrix.image }}
+    steps:
+      - name: Prepare
+        env:
+          PLATFORM: ${{ matrix.arch.platform }}
+        run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "${GITHUB_ENV}"
+
+      # The commit the tag resolved to, so the image, its revision label and
+      # the `latest` branch all name the same source.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: type=raw,value=${{ needs.resolve.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.sha }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.title=${{ matrix.image == 'api' && env.API_TITLE || env.WEB_TITLE }}
+            org.opencontainers.image.description=${{ matrix.image == 'api' && env.API_DESCRIPTION || env.WEB_DESCRIPTION }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Pushed by digest only: no tag exists until the merge job joins both
+      # platforms, so a half-finished run never leaves a single-arch tag.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.arch.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.IMAGE }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Tag ${{ matrix.image }}
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      # One image failing must not cancel the other halfway through tagging.
+      fail-fast: false
+      matrix:
+        image: [api, web]
+    # One tagging job per image at a time, across all tags: two releases
+    # published close together, or a rebuild running beside a release, must
+    # not interleave reading and moving `latest` or the aliases. (Actions keeps
+    # one pending job per group, so a third queued run is cancelled; re-run it.)
+    concurrency:
+      group: publish-images-merge-${{ matrix.image }}
+      cancel-in-progress: false
+    env:
+      IMAGE: ghcr.io/techiebutler/freeframe-${{ matrix.image }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Decide tags
+        env:
+          RESOLVED_TAGS: ${{ needs.resolve.outputs.tags }}
+          PRERELEASE: ${{ needs.resolve.outputs.prerelease }}
+          WAS_LATEST: ${{ needs.resolve.outputs.is_latest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags="${RUNNER_TEMP}/tags.txt"
+
+          # Decided again here, under the per-image lock, because a newer
+          # release may have been published while this one built: it owns
+          # `latest` (and `X.Y`, if it is a newer patch of this line) now, and
+          # taking them here would move them backwards. This can only drop
+          # `latest`, never add it, since move-latest is gated on the resolve
+          # job's answer and the branch and the image must agree.
+          IS_LATEST=false
+          if [ "${WAS_LATEST}" = "true" ] && \
+             [ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)" = "${TAG}" ]; then
+            IS_LATEST=true
+          fi
+          releases="${RUNNER_TEMP}/releases.txt"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '.[] | select(.draft | not) | select(.prerelease | not) | .tag_name' > "${releases}"
+          echo "${TAG}" >> "${releases}"
+          python3 .github/scripts/image_tags.py "${TAG}" \
+            --prerelease "${PRERELEASE}" --latest "${IS_LATEST}" --releases-file "${releases}" > "${tags}"
+          if [ "$(cat "${tags}")" != "${RESOLVED_TAGS}" ]; then
+            echo "::warning::A newer release appeared during the build; tagging $(paste -sd ' ' - < "${tags}") instead of $(echo "${RESOLVED_TAGS}" | paste -sd ' ' -)."
+          fi
+
+          # Where each alias points before anything is pushed. A rebuild uses
+          # this to move only the aliases still on the version's old digest.
+          [[ "${TAG}" =~ ^v([0-9]+)\.([0-9]+)\. ]]
+          minor="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          : > "${RUNNER_TEMP}/before.tsv"
+          for alias in "${VERSION}" "${TAG}" "${minor}" latest stable; do
+            digest="$(.github/scripts/image_digest.sh "${IMAGE}:${alias}")"
+            printf '%s\t%s\n' "${alias}" "${digest}" >> "${RUNNER_TEMP}/before.tsv"
+          done
+          cat "${RUNNER_TEMP}/before.tsv"
+
+      # Only the version's own tags are created here. The annotations are set
+      # at creation so the index digest made here is the final one, and is the
+      # digest that gets attested; the aliases follow only after the
+      # attestation exists, so none ever points at an unattested digest.
+      - name: Create the multi-arch index
+        id: create
+        env:
+          DESCRIPTION: ${{ matrix.image == 'api' && env.API_DESCRIPTION || env.WEB_DESCRIPTION }}
+        run: |
+          set -euo pipefail
+          sources=()
+          for file in "${RUNNER_TEMP}"/digests/*; do
+            sources+=("${IMAGE}@sha256:$(basename "${file}")")
+          done
+          if [ "${#sources[@]}" -ne 2 ]; then
+            echo "::error::Expected 2 platform digests, found ${#sources[@]}."
+            exit 1
+          fi
+          docker buildx imagetools create -t "${IMAGE}:${VERSION}" -t "${IMAGE}:${TAG}" \
+            --annotation "index:org.opencontainers.image.description=${DESCRIPTION}" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --annotation "index:org.opencontainers.image.licenses=MIT" \
+            "${sources[@]}"
+
+          digest="$(.github/scripts/image_digest.sh "${IMAGE}:${VERSION}")"
+          if [ -z "${digest}" ]; then
+            echo "::error::${IMAGE}:${VERSION} is missing right after it was created."
+            exit 1
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+
+      - name: Attest
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.create.outputs.digest }}
+          push-to-registry: true
+
+      # The aliases this release takes (`X.Y`, `latest`), then any a rebuild
+      # must re-point because they were still on the version's old digest. A
+      # retag from a single index without --annotation keeps its digest, so
+      # every alias carries the attestation made above.
+      - name: Point the aliases at the attested digest
+        env:
+          DIGEST: ${{ steps.create.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/image_tags.py repoint "${TAG}" \
+            --tags-file "${RUNNER_TEMP}/tags.txt" --digests-file "${RUNNER_TEMP}/before.tsv" \
+            > "${RUNNER_TEMP}/repointed.txt"
+          while read -r alias; do
+            [ -z "${alias}" ] && continue
+            if [ "${alias}" = "${VERSION}" ] || [ "${alias}" = "${TAG}" ]; then
+              continue # created with the index
+            fi
+            echo "Pointing ${alias} at ${DIGEST}"
+            docker buildx imagetools create -t "${IMAGE}:${alias}" "${IMAGE}@${DIGEST}"
+          done < <(cat "${RUNNER_TEMP}/tags.txt" "${RUNNER_TEMP}/repointed.txt")
+
+      - name: Check and summarise
+        env:
+          DIGEST: ${{ steps.create.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### ${IMAGE}"
+            echo ""
+            echo "| tag | before | now |"
+            echo "|-----|--------|-----|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          failed=0
+          while read -r t; do
+            [ -z "${t}" ] && continue
+            before="$(awk -F'\t' -v a="${t}" '$1 == a {print $2}' "${RUNNER_TEMP}/before.tsv")"
+            now="$(.github/scripts/image_digest.sh "${IMAGE}:${t}")"
+            echo "| \`${t}\` | \`${before:-none}\` | \`${now:-missing}\` |" >> "${GITHUB_STEP_SUMMARY}"
+            if [ "${now}" != "${DIGEST}" ]; then
+              echo "::error::${IMAGE}:${t} points at ${now:-nothing}, expected ${DIGEST}."
+              failed=1
+            fi
+          done < <(cat "${RUNNER_TEMP}/tags.txt" "${RUNNER_TEMP}/repointed.txt")
+          exit "${failed}"
+
+  # The `latest` branch follows the `latest` image: it moves only after both
+  # images are tagged, and only for GitHub's latest release, so a failed build
+  # or a backport leaves it where it was. The job always runs once both images
+  # are tagged and decides inside the step: a job skipped by `if:` leaves a
+  # `skipped` check-run on the tag commit, and promote-stable.yml's CI gate
+  # would then refuse to promote a backport.
+  move-latest:
+    name: Move latest branch
+    needs: [resolve, merge]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Move `latest` to the released tag
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          COMMIT: ${{ needs.resolve.outputs.sha }}
+          IS_LATEST: ${{ needs.resolve.outputs.is_latest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${IS_LATEST}" != "true" ]; then
+            echo "::notice::${TAG} is not GitHub's latest release; the latest branch was left where it was."
+            exit 0
+          fi
+          # Same re-check as the tagging job: a newer release published during
+          # the build owns the branch now.
+          now="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          if [ "${now}" != "${TAG}" ]; then
+            echo "::warning::${now} is now the latest release; leaving the latest branch alone."
+            exit 0
+          fi
+          # The checkout is the workflow's own commit at depth 1 (main's HEAD on
+          # a manual run), which need not contain the tag's commit: fetch it, or
+          # the push fails with "bad object".
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          if [ "$(git rev-list -n1 "refs/tags/${TAG}")" != "${COMMIT}" ]; then
+            echo "::error::${TAG} moved during the run (now $(git rev-list -n1 "refs/tags/${TAG}"), images built from ${COMMIT}); not moving latest."
+            exit 1
+          fi
+          echo "Moving latest -> ${TAG} (${COMMIT})"
+          git push --force origin "${COMMIT}:refs/heads/latest"
+          echo "::notice::latest now points at ${TAG} (${COMMIT})"

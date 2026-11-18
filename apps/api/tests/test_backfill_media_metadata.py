@@ -33,13 +33,15 @@ def test_backfill_updates_video_row():
 
     with patch("apps.api.tasks.transcode_tasks.SessionLocal", return_value=db), \
          patch("apps.api.tasks.transcode_tasks.get_s3_client") as s3, \
-         patch("subprocess.run", return_value=probe):
+         patch("subprocess.run", return_value=probe) as run_probe:
         s3.return_value.generate_presigned_url.return_value = "https://example/presigned"
         result = backfill_media_metadata.apply().get()
 
     assert result == {"updated": 1, "skipped": 0}
     assert media_file.width == 3840
     assert abs(media_file.fps - 29.97002997) < 0.001
+    probe_cmd = run_probe.call_args.args[0]
+    assert probe_cmd[probe_cmd.index("-select_streams") + 1] == "V:0"
     db.commit.assert_called()
 
 

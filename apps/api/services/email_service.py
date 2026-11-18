@@ -29,7 +29,19 @@ class EmailService:
     def __init__(self):
         self.provider = settings.mail_provider
         self.from_address = settings.mail_from_address
-        self.from_name = settings.mail_from_name
+
+    @property
+    def from_name(self) -> str:
+        """Display name on the From line of every email.
+
+        MAIL_FROM_NAME wins when an operator has set it. Left unset, this
+        follows the instance branding, so a white-labelled instance doesn't
+        announce itself as FreeFrame in the recipient's inbox. Resolved per
+        send rather than at init so a branding change takes effect without a
+        worker restart.
+        """
+        from .branding_service import resolve_org_name
+        return (settings.mail_from_name or "").strip() or resolve_org_name()
     
     def _get_ses_client(self):
         """Create AWS SES client."""
@@ -136,12 +148,12 @@ class EmailService:
     
     def send_invite_email(self, to_email: str, inviter_name: str, org_name: str, invite_link: str) -> bool:
         """Send organization invite email."""
-        subject = f"You've been invited to join {org_name} on FreeFrame"
+        subject = f"You've been invited to join {org_name}"
         html_body = f"""
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
             <h2>You're invited!</h2>
-            <p><strong>{inviter_name}</strong> has invited you to join <strong>{org_name}</strong> on FreeFrame.</p>
+            <p><strong>{inviter_name}</strong> has invited you to join <strong>{org_name}</strong>.</p>
             <p>
                 <a href="{invite_link}" 
                    style="display: inline-block; padding: 12px 24px; background-color: #4F46E5; 
@@ -155,7 +167,7 @@ class EmailService:
         </body>
         </html>
         """
-        text_body = f"{inviter_name} has invited you to join {org_name} on FreeFrame. Click here to accept: {invite_link}"
+        text_body = f"{inviter_name} has invited you to join {org_name}. Accept here: {invite_link}"
         return self.send_email(to_email, subject, html_body, text_body)
     
     def send_comment_notification(

@@ -1,8 +1,26 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uuid
 from datetime import datetime
 from typing import Optional, Literal
 from ..models.share import SharePermission, ShareVisibility
+
+
+# A link's password is kept twice: a bcrypt hash that guests are checked against,
+# and an encrypted copy so the settings panel can show it to the link's managers.
+# The copy grows with the password and has to fit share_links.password_encrypted
+# (String(512)), which holds about 319 bytes of password. The limit counts UTF-8
+# bytes, not characters, since that is what the column fills up with.
+SHARE_PASSWORD_MAX_BYTES = 128
+# Verifying only reads the hash, and links made before the limit can hold longer
+# passwords, so verify gets a looser bound that still refuses absurd bodies.
+SHARE_VERIFY_PASSWORD_MAX_BYTES = 1024
+
+
+def _bounded_password(value: Optional[str], limit: int) -> Optional[str]:
+    # The message must not quote the value: it is returned in the 422 body.
+    if value is not None and len(value.encode("utf-8")) > limit:
+        raise ValueError(f"Password must be at most {limit} bytes")
+    return value
 
 
 class ShareLinkAppearance(BaseModel):
@@ -32,26 +50,36 @@ class ShareLinkBannerUploadResponse(BaseModel):
 
 
 class ShareLinkCreate(BaseModel):
-    # Review links should support the core feedback loop by default. Downloads
-    # remain opt-in because they expose the original file outside the viewer.
+    # Commenting is the core loop of a review link: a viewer who cannot comment
+    # needs a deliberately read-only link, which is the niche case rather than the
+    # default. Downloads stay off, because commenting affects what happens inside
+    # the review page while downloading pulls the original out of it, and a share
+    # link is the most exposed surface there is (anyone with the URL, no auth).
+    # Whoever needs downloads flips one toggle. (#266)
     permission: SharePermission = SharePermission.comment
     visibility: str = "public"
     expires_at: Optional[datetime] = None
     password: Optional[str] = None
     allow_download: bool = False
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=255)
     custom_slug: Optional[str] = Field(default=None, max_length=120)
     description: Optional[str] = None
     show_versions: bool = True
     show_watermark: bool = False
     appearance: ShareLinkAppearance = ShareLinkAppearance()
 
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: Optional[str]) -> Optional[str]:
+        return _bounded_password(v, SHARE_PASSWORD_MAX_BYTES)
+
 
 class MultiShareCreate(BaseModel):
     asset_ids: list[uuid.UUID] = []
     folder_ids: list[uuid.UUID] = []
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=255)
     custom_slug: Optional[str] = Field(default=None, max_length=120)
+    # Same default as ShareLinkCreate; see the note there. (#266)
     permission: SharePermission = SharePermission.comment
     visibility: str = "public"
     expires_at: Optional[datetime] = None
@@ -60,6 +88,11 @@ class MultiShareCreate(BaseModel):
     show_versions: bool = True
     show_watermark: bool = False
     appearance: ShareLinkAppearance = ShareLinkAppearance()
+
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: Optional[str]) -> Optional[str]:
+        return _bounded_password(v, SHARE_PASSWORD_MAX_BYTES)
 
 
 class ShareLinkResponse(BaseModel):
@@ -82,8 +115,18 @@ class ShareLinkResponse(BaseModel):
     expires_at: Optional[datetime] = None
     created_at: datetime
     has_password: bool = False
-    password_value: Optional[str] = None  # Decrypted password for admin display only
+    # The link's password, set only for callers who manage the link (editor or
+    # owner); everyone else gets None and reads has_password.
+    password_value: Optional[str] = None
     model_config = {"from_attributes": True}
+
+
+class ShareBranding(BaseModel):
+    """The project's branding, as a share page shows it. A null field means
+    the page falls back to the instance's own (logo, accent) or shows none."""
+    logo_url: Optional[str] = None  # loadable link: the cover or the uploaded logo
+    primary_color: Optional[str] = None
+    custom_footer: Optional[str] = None
 
 
 class ShareLinkValidateResponse(BaseModel):
@@ -106,8 +149,10 @@ class ShareLinkValidateResponse(BaseModel):
     created_by_avatar_url: Optional[str] = None
     viewer_name: Optional[str] = None  # Logged-in user's name (if authenticated)
     viewer_email: Optional[str] = None  # Logged-in user's email (if authenticated)
+    viewer_avatar_url: Optional[str] = None  # Logged-in user's picture, already signed
+    viewer_avatar_color: Optional[str] = None  # Logged-in user's circle colour
     asset: Optional[dict] = None  # Full asset details for asset shares
-    branding: Optional[dict] = None  # Project branding info
+    branding: Optional[ShareBranding] = None  # Set on every full response, for every link type
     share_session: Optional[str] = None  # Session token for password-protected links
 
 
@@ -116,8 +161,24 @@ class ShareLinkMetadataResponse(BaseModel):
     description: str
 
 
+class ShareVerifyRequest(BaseModel):
+    """Body for POST /share/{token}/verify.
+
+    Carries the share-link password in the request body instead of as a
+    query string parameter so it isn't logged in nginx access logs,
+    browser history, Referer headers, or proxy/tunnel logs.
+    """
+    password: str
+    log_open: bool = False
+
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: str) -> str:
+        return _bounded_password(v, SHARE_VERIFY_PASSWORD_MAX_BYTES)
+
+
 class ShareLinkUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=255)
     custom_slug: Optional[str] = Field(default=None, max_length=120)
     description: Optional[str] = None
     permission: Optional[SharePermission] = None
@@ -129,6 +190,11 @@ class ShareLinkUpdate(BaseModel):
     password: Optional[str] = None
     expires_at: Optional[datetime] = None
     allow_download: Optional[bool] = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_size(cls, v: Optional[str]) -> Optional[str]:
+        return _bounded_password(v, SHARE_PASSWORD_MAX_BYTES)
 
 
 class ShareLinkListItem(BaseModel):
@@ -143,6 +209,14 @@ class ShareLinkListItem(BaseModel):
     target_name: str
     view_count: int = 0
     last_viewed_at: Optional[datetime] = None
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    # True once expires_at has passed: the share page no longer opens the link.
+    is_expired: bool = False
+    # Set only when the list is asked about one asset (`?asset_id=`): "direct" when the
+    # link is that asset or lists it, "indirect" when it shows it through a folder or the
+    # whole project, None when it does not show it.
+    contains_asset: Optional[Literal["direct", "indirect"]] = None
     model_config = {"from_attributes": True}
 
 
@@ -154,6 +228,8 @@ class ShareLinkActivityResponse(BaseModel):
     actor_name: Optional[str] = None
     asset_id: Optional[uuid.UUID] = None
     asset_name: Optional[str] = None
+    # For a download: "original" or "transcode". None for older rows.
+    rendition: Optional[str] = None
     created_at: datetime
     model_config = {"from_attributes": True}
 

@@ -12,6 +12,7 @@ interface WipeViewerProps {
     styleFor(): React.CSSProperties
     onWheel(e: { deltaY: number; preventDefault(): void }): void
     onPointerDown(e: React.PointerEvent): void
+    reset(): void
   }
   /**
    * Extra stage layer rendered ABOVE both image layers, inside the shared
@@ -56,6 +57,23 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay, ove
     window.addEventListener('pointerup', up)
   }
 
+  // WAI-ARIA slider keys: arrows step 1%, Shift+arrow and PageUp/PageDown 10%,
+  // Home/End jump to either edge.
+  const onDividerKeyDown = (e: React.KeyboardEvent) => {
+    const big = e.shiftKey ? 10 : 1
+    const next =
+      e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? split - big
+        : e.key === 'ArrowRight' || e.key === 'ArrowUp' ? split + big
+          : e.key === 'PageDown' ? split - 10
+            : e.key === 'PageUp' ? split + 10
+              : e.key === 'Home' ? 0
+                : e.key === 'End' ? 100
+                  : null
+    if (next === null) return
+    e.preventDefault()
+    setSplit(Math.min(Math.max(Math.round(next), 0), 100))
+  }
+
   return (
     <div
       ref={stageRef}
@@ -63,6 +81,7 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay, ove
       className="relative h-full w-full overflow-hidden bg-black select-none"
       onWheel={(e) => transform.onWheel(e)}
       onPointerDown={transform.onPointerDown}
+      onDoubleClick={transform.reset}
     >
       {/* Side A (left of divider) */}
       <div className="absolute inset-0 flex items-center justify-center" style={transform.styleFor()}>
@@ -107,16 +126,26 @@ export function WipeViewer({ urlA, urlB, badgeA, badgeB, transform, overlay, ove
           </div>
         </div>
       )}
-      {/* Divider */}
+      {/* Divider. A double-click here is a grab, not a request to reset the
+          zoom, so it stops short of the stage's handler. */}
       <div
         data-testid="wipe-divider"
         data-split={String(Math.round(split))}
+        role="slider"
+        tabIndex={0}
+        aria-label={`Wipe divider between ${badgeA} and ${badgeB}`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(split)}
+        aria-valuetext={`${badgeA} ${Math.round(split)}%, ${badgeB} ${100 - Math.round(split)}%`}
         onPointerDown={onDividerDown}
-        className="absolute top-0 bottom-0 z-10 w-4 -translate-x-1/2 cursor-col-resize"
+        onKeyDown={onDividerKeyDown}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className="group absolute top-0 bottom-0 z-10 w-4 -translate-x-1/2 cursor-col-resize focus-visible:outline-none"
         style={{ left: `${split}%` }}
       >
         <div className="mx-auto h-full w-0.5 bg-white/90" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white p-1.5 shadow-lg">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white p-1.5 shadow-lg group-focus-visible:ring-2 group-focus-visible:ring-accent group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-black">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2">
             <path d="m9 7-5 5 5 5M15 7l5 5-5 5" />
           </svg>

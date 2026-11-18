@@ -80,6 +80,21 @@ describe('Notification store', () => {
     expect(state.isLoading).toBe(false)
   })
 
+  it('fetchNotifications keeps the current state when the request fails', async () => {
+    vi.mocked(api.get).mockRejectedValue(new Error('Not authenticated'))
+    useNotificationStore.setState({
+      notifications: mockNotifications,
+      unreadCount: 1,
+    })
+
+    await expect(useNotificationStore.getState().fetchNotifications()).resolves.toBeUndefined()
+
+    const state = useNotificationStore.getState()
+    expect(state.notifications).toEqual(mockNotifications)
+    expect(state.unreadCount).toBe(1)
+    expect(state.isLoading).toBe(false)
+  })
+
   it('markAllRead resets unread count to 0', async () => {
     vi.mocked(api.post).mockResolvedValue(undefined)
     useNotificationStore.setState({

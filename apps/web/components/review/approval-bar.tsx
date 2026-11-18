@@ -191,6 +191,7 @@ export function ApprovalBar({ assetId, versionId, currentUserId, className }: Ap
                     <Avatar
                       src={approval.user?.avatar_url}
                       name={approval.user?.name}
+                      color={approval.user?.avatar_color}
                       size="sm"
                     />
                     <span className={cn('shrink-0', config.className)}>

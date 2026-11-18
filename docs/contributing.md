@@ -10,7 +10,8 @@ Thanks for your interest in contributing! This guide will help you get set up fo
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
 - [Git](https://git-scm.com/)
-- [Node.js 18+](https://nodejs.org/) (optional, for running frontend outside Docker)
+- [Node.js 20.19+ or 22 LTS](https://nodejs.org/) (optional, for running frontend outside Docker — the
+  vite/vitest test toolchain requires it; `apps/web`'s `engines` field enforces the same)
 - [Python 3.11+](https://python.org/) (optional, for running backend outside Docker)
 
 ### Getting Started
@@ -30,7 +31,7 @@ docker compose -f docker-compose.dev.yml up --build
 open http://localhost:3000
 ```
 
-All services start automatically: PostgreSQL, Redis, MinIO (S3), API, Celery workers, and the Next.js frontend.
+All services start automatically: PostgreSQL, Redis, Silo (S3, a MinIO fork), API, Celery workers, and the Next.js frontend.
 
 ### Dev Services
 
@@ -39,7 +40,7 @@ All services start automatically: PostgreSQL, Redis, MinIO (S3), API, Celery wor
 | Frontend       | http://localhost:3000       | Next.js (hot reload) |
 | API            | http://localhost:8000       | FastAPI              |
 | API Docs       | http://localhost:8000/docs  | Swagger UI           |
-| MinIO Console  | http://localhost:9001       | S3 storage UI        |
+| Silo console   | http://localhost:9001       | S3 storage UI (MinIO fork) |
 | PostgreSQL     | localhost:5433              | Database             |
 
 ---

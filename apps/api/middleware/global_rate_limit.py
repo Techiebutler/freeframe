@@ -11,7 +11,7 @@ Separate limits for read (GET/HEAD/OPTIONS) vs write (POST/PUT/PATCH/DELETE).
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from jose import jwt, JWTError
+import jwt
 
 from ..config import settings
 from ..services.redis_service import get_redis
@@ -73,7 +73,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                 user_id = payload.get("sub")
                 if user_id:
                     return f"user:{user_id}"
-            except JWTError:
+            except jwt.InvalidTokenError:
                 pass
 
         # Fall back to IP

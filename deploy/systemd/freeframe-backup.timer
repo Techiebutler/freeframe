@@ -1,0 +1,15 @@
+# Installed by `freeframe install` into /etc/systemd/system. Runs
+# freeframe-backup.service every night at 03:00 server time, a random 0 to 15
+# minutes later, and catches up at boot when the server was off at 03:00.
+# See when it runs next with: systemctl list-timers freeframe-backup.timer
+
+[Unit]
+Description=Nightly FreeFrame database backup
+
+[Timer]
+OnCalendar=*-*-* 03:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

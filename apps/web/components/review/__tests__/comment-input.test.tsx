@@ -212,3 +212,41 @@ describe('CommentInput compare drawing props (annotationActive / onToggleAnnotat
     expect(screen.getByTitle('Draw annotation').className).not.toContain('text-accent')
   })
 })
+
+describe('CommentInput iOS auto-zoom guard', () => {
+  it('sizes the textarea at the 16px iOS zoom threshold, and reverts to compact only under a real hover/pointer query — never a viewport-width breakpoint', () => {
+    render(<CommentInput assetId="a1" projectId="p1" assetType="video" onSubmit={vi.fn()} />)
+    const textarea = screen.getByPlaceholderText('Leave your comment...')
+    expect(textarea.className).toContain('text-[16px]')
+    // A `md:` (or any other width) breakpoint here would still trigger Safari's
+    // auto-zoom on a landscape phone, which is wider than the breakpoint.
+    expect(textarea.className).not.toMatch(/\bmd:text-/)
+    expect(textarea.className).toContain('[@media(hover:hover)]:text-[13px]')
+  })
+})
+
+describe('CommentInput visibility toggle', () => {
+  it('offers Public / Internal by default and submits the chosen visibility', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(<CommentInput assetId="a1" projectId="p1" assetType="video" onSubmit={onSubmit} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Public' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Internal' }))
+    await typeAndSubmit('team only')
+
+    expect(onSubmit.mock.calls[0][5]).toBe('internal')
+  })
+
+  it('shows no toggle and always submits public when allowInternal is false', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommentInput assetId="a1" projectId="p1" assetType="video" allowInternal={false} onSubmit={onSubmit} />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Public' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Internal' })).toBeNull()
+    await typeAndSubmit('from a share link')
+
+    expect(onSubmit.mock.calls[0][5]).toBe('public')
+  })
+})

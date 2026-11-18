@@ -24,6 +24,7 @@ from ..schemas.metadata import (
     MetadataFieldResponse,
 )
 from ..services.permissions import require_project_role
+from ..services.search import escape_like
 
 router = APIRouter(tags=["metadata"])
 
@@ -47,7 +48,9 @@ def _apply_smart_filter(db: Session, project_id: uuid.UUID, rules: dict):
     if rules and "asset_type" in rules:
         q = q.filter(Asset.asset_type == rules["asset_type"])
     if rules and "name_contains" in rules:
-        q = q.filter(Asset.name.ilike(f"%{rules['name_contains']}%"))
+        # Escape wildcards: a smart collection saved with name_contains="%"
+        # would otherwise match every asset in the project.
+        q = q.filter(Asset.name.ilike(f"%{escape_like(str(rules['name_contains']))}%"))
     return q
 
 

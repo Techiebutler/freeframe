@@ -35,6 +35,8 @@ class ProjectBranding(Base):
     custom_footer: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     viewer_layout: Mapped[ViewerLayout] = mapped_column(Enum(ViewerLayout), default=ViewerLayout.grid)
     featured_field: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Share pages show the project's cover image as their logo, in place of logo_s3_key.
+    use_cover_as_logo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

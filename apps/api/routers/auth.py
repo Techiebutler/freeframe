@@ -10,7 +10,8 @@ from ..schemas.auth import (
     SendMagicCodeRequest, SendMagicCodeResponse,
     VerifyMagicCodeRequest, SetPasswordRequest,
     AcceptInviteRequest, InviteInfoResponse,
-    ChangePasswordRequest, PreferencesUpdate,
+    ChangePasswordRequest,
+    PreferencesUpdate,
 )
 from ..services.auth_service import (
     hash_password, verify_password,
@@ -25,10 +26,24 @@ from ..services.redis_service import (
 from ..tasks.email_tasks import send_magic_code_email, send_invite_email
 from ..tasks.celery_app import send_task_safe
 from ..models.user import User, UserStatus
+from ..models.instance_branding import InstanceBranding
 from ..middleware.auth import get_current_user
 from ..middleware.rate_limit import rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# One message for every magic-code failure. Reporting "too many attempts"
+# separately would tell a caller which addresses are registered (only a real
+# account ever gets a code issued, so only a real account can exhaust its
+# attempts), so the wording covers the one recoverable case without revealing
+# which case actually occurred.
+MAGIC_CODE_FAILURE_DETAIL = (
+    "Invalid or expired code. Request a new code if you've tried several times."
+)
+INVITE_NOT_ACCEPTED_DETAIL = (
+    "You have a pending invite. Open the invite link from your email to accept it, "
+    "or ask an admin for a new link."
+)
 
 MAGIC_CODE_EXPIRY_MINUTES = MAGIC_CODE_EXPIRY_SECONDS // 60
 
@@ -56,16 +71,24 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
             email=body.email,
         )
 
-    # Generate and store magic code in Redis
+    # Generate and store magic code in Redis, keyed by the account rather than
+    # the typed address. An instance can hold two accounts differing only by
+    # case, and an address key (lowercased) would let one of them verify the
+    # other's code.
     code = generate_magic_code()
-    store_magic_code(body.email, code)
+    store_magic_code(str(user.id), code)
 
     # Queue email via Celery (async)
     try:
-        send_task_safe(send_magic_code_email, body.email, code, MAGIC_CODE_EXPIRY_MINUTES)
+        branding = db.query(InstanceBranding).first()
+        org_name = branding.org_name if branding else None
+        # To the stored address, not the typed one: the lookup ignores case. The
+        # response below still echoes what was typed, as it does for an unknown
+        # address, so the stored spelling never leaks.
+        send_task_safe(send_magic_code_email, user.email, code, MAGIC_CODE_EXPIRY_MINUTES, org_name)
     except Exception:
         pass  # Email delivery is best-effort; code is already in Redis
-    
+
     return SendMagicCodeResponse(
         message="Magic code sent to your email",
         email=body.email,
@@ -79,17 +102,27 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
     Returns needs_password=True if user hasn't set a password yet.
     """
     user = get_user_by_email(db, body.email)
-    
+
     # "No such user" and "deactivated" get the same generic failure as a wrong/expired code —
     # distinguishing them would let a caller enumerate registered or deactivated emails.
     if not user or user.status == UserStatus.deactivated:
-        raise HTTPException(status_code=401, detail="Invalid or expired code")
+        raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
 
     # Verify magic code from Redis
-    success, error = redis_verify_magic_code(body.email, body.code)
+    success, error = redis_verify_magic_code(str(user.id), body.code)
     if not success:
-        raise HTTPException(status_code=401, detail=error)
+        raise HTTPException(status_code=401, detail=MAGIC_CODE_FAILURE_DETAIL)
     
+    # An invite is accepted on the invite screen, not by signing in. Without
+    # this an invitee who used the login page got tokens and used the app while
+    # still listed as pending, and Revoke Invite deleted a working account.
+    # Checked after the code, so only the mailbox's owner learns of the invite.
+    # A pending row whose email is already verified is an invitee an earlier
+    # release let in by code: a working account, still signed in that way, or
+    # they would be locked out with no invite left to resend or revoke.
+    if user.status == UserStatus.pending_invite and not user.email_verified:
+        raise HTTPException(status_code=403, detail=INVITE_NOT_ACCEPTED_DETAIL)
+
     # Mark email as verified
     user.email_verified = True
     
@@ -130,7 +163,9 @@ def get_invite_info(token: str, db: Session = Depends(get_db)):
         User.deleted_at.is_(None),
     ).first()
     
-    if not user:
+    # A deactivated invitee gets the same 404 as an unknown token: deactivating
+    # withdraws the invite, and a different answer would reveal the account.
+    if not user or user.status == UserStatus.deactivated:
         raise HTTPException(status_code=404, detail="Invalid invite link")
     
     if user.invite_token_expires_at and user.invite_token_expires_at < datetime.now(timezone.utc):
@@ -150,13 +185,19 @@ def accept_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
         User.deleted_at.is_(None),
     ).first()
     
-    if not user:
+    # Without the status check a deactivated invitee walked past the
+    # deactivation: everything below sets status=active and hands out tokens.
+    if not user or user.status == UserStatus.deactivated:
         raise HTTPException(status_code=404, detail="Invalid invite link")
     
     if user.invite_token_expires_at and user.invite_token_expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invite link expired")
     
-    # Set password and activate user
+    # Set password, name and activate user. The name is the one the invitee
+    # typed; until now it was discarded and they kept whatever the invite
+    # dialog derived from their email address (issue #320). Already trimmed and
+    # checked non-blank by DisplayName.
+    user.name = body.name
     user.password_hash = hash_password(body.password)
     user.email_verified = True  # Invited users are pre-verified
     user.status = UserStatus.active
@@ -189,11 +230,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post(
-    "/refresh",
-    response_model=TokenResponse,
-    dependencies=[Depends(rate_limit("refresh_token", 30, 60))],
-)
+@router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(rate_limit("refresh_token", 30, 60))])
 def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
     payload = decode_token(body.refresh_token)
     if not payload or payload.get("type") != "refresh":
@@ -248,7 +285,10 @@ def update_preferences(
 ):
     """Update user preferences (theme, etc). Merges with existing preferences."""
     current_prefs = current_user.preferences or {}
-    current_prefs.update(body.model_dump(exclude_unset=True))
+    # Only known keys are accepted by PreferencesUpdate; merge them onto
+    # existing prefs so unspecified keys are preserved.
+    update_data = body.model_dump(exclude_unset=True)
+    current_prefs.update(update_data)
     current_user.preferences = current_prefs
     # Force SQLAlchemy to detect the JSON change
     from sqlalchemy.orm.attributes import flag_modified

@@ -1,0 +1,120 @@
+'use client'
+
+import * as React from 'react'
+import { useBranding, useEnsureBranding } from '@/components/shared/branding-provider'
+import { accentVars, ACCENT_VAR_NAMES } from '@/lib/accent'
+import { withBasePath } from '@/lib/base-path'
+
+const DATA_ATTR = 'data-ff-branding'
+
+
+/** Shown when an admin hasn't set one. The real mark, not a placeholder, so a
+ *  reset leaves a correct icon rather than a missing one. */
+const DEFAULT_FAVICON = '/logo-icon.png'
+const DEFAULT_APPLE_ICON = '/apple-icon.png'
+
+/**
+ * Make this instance's icon the only one the browser can choose.
+ *
+ * Next emits its own icon links for any icon file under `app/`: `rel="icon"`
+ * for icon.png and favicon.ico, `rel="apple-touch-icon"` for apple-icon.png.
+ * Those are React-managed hoistable resources, so removing them with
+ * `el.remove()` left React holding a reference to a detached node and it would
+ * throw `null is not an object (evaluating 'instance.parentNode.removeChild')`
+ * the next time it committed. Those files have therefore been moved out of
+ * `app/` (favicon.ico and apple-icon.png now live in `public/`, so they are
+ * still served at /favicon.ico and /apple-icon.png), and this component owns
+ * the icon links exclusively.
+ *
+ * The sweep below only ever removes icon links this component did NOT create,
+ * since the selector excludes [data-ff-branding]. That is safe because no icon
+ * file is left under `app/` and no metadata export sets `icons`, so React owns
+ * no icon link for it to detach. Keep it that way: re-adding an icon file under
+ * `app/` re-arms the crash above. What the sweep still catches is a stray icon
+ * link from outside React, which is why it is kept rather than deleted.
+ *
+ * The link is always present, pointing at the default when nothing custom is
+ * set, so clearing a favicon falls back cleanly instead of leaving the page
+ * with no icon at all.
+ */
+function setIcon(rel: string, href: string) {
+  document
+    .querySelectorAll<HTMLLinkElement>(`link[rel="${rel}"]:not([${DATA_ATTR}])`)
+    .forEach((el) => el.remove())
+
+  let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"][${DATA_ATTR}]`)
+  if (!link) {
+    link = document.createElement('link')
+    link.rel = rel
+    link.setAttribute(DATA_ATTR, '')
+    document.head.appendChild(link)
+  }
+  if (link.getAttribute('href') !== href) link.setAttribute('href', href)
+}
+
+export function BrandingHead() {
+  const { orgName, faviconUrl, appleIconUrl, primaryColor } = useBranding()
+  useEnsureBranding()
+
+  // The org name the tab title was last made for. The title only needs touching
+  // when this changes: on mount it already carries the right name, because
+  // `generateMetadata` and the first client render both read the server's copy
+  // (or both fall back to "FreeFrame" when the server had none).
+  const titledFor = React.useRef(orgName || 'FreeFrame')
+
+  React.useEffect(() => {
+    const org = orgName || 'FreeFrame'
+    // Mount, a StrictMode re-run, or nothing renamed. Writing here used to
+    // replace the sign-in tab's "FreeFrame — Auth" with a bare "FreeFrame", and
+    // it was only put back because React happened to re-insert its own metadata
+    // title a millisecond later. Nothing guarantees that order, so do not write.
+    if (titledFor.current === org) return
+    const from = titledFor.current
+    titledFor.current = org
+
+    const current = document.title
+    // Page titles are composed as "Page – Org" (usePageTitle); swap only the org
+    // suffix and keep the page part. Auth pages are "Org — Auth", with the org
+    // first; swap that prefix. Anything else is the bare org name.
+    const idx = current ? current.lastIndexOf(' – ') : -1
+    let next = org
+    if (idx !== -1) next = `${current.slice(0, idx)} – ${org}`
+    else if (current.startsWith(`${from} — `)) next = `${org}${current.slice(from.length)}`
+    if (document.title !== next) document.title = next
+  }, [orgName])
+
+  React.useEffect(() => {
+    const href = faviconUrl || withBasePath(DEFAULT_FAVICON)
+    setIcon('icon', href)
+    // Legacy rel too: without it a stale /favicon.ico can still win in some browsers.
+    setIcon('shortcut icon', href)
+  }, [faviconUrl])
+
+  React.useEffect(() => {
+    setIcon('apple-touch-icon', appleIconUrl || withBasePath(DEFAULT_APPLE_ICON))
+  }, [appleIconUrl])
+
+  React.useEffect(() => {
+    const root = document.documentElement
+    const vars = accentVars(primaryColor)
+
+    if (!vars) {
+      // Clearing the colour hands every surface back to the stylesheet default,
+      // rather than leaving the instance stuck on the last one set.
+      ACCENT_VAR_NAMES.forEach((v) => root.style.removeProperty(v))
+      root.style.removeProperty('--ff-primary')
+      return
+    }
+
+    // Overriding the accent tokens rather than a bespoke variable is what makes
+    // the colour reach the primary buttons, the download button on a share page
+    // and the post-comment button: they all resolve through --accent, which
+    // previously nothing branding-related ever touched. A share link with its
+    // own accent still wins, because it sets these !important.
+    Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v))
+    // Kept for anyone already keying off it in custom CSS.
+    root.style.setProperty('--ff-primary', primaryColor!)
+  }, [primaryColor])
+
+  return null
+}

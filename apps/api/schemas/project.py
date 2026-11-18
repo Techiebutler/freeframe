@@ -1,15 +1,15 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uuid
 from datetime import datetime
 from ..models.project import ProjectType, ProjectRole
 
 class ProjectCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=255)
     description: str | None = None
     project_type: ProjectType = ProjectType.personal
 
 class ProjectUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=255)
     description: str | None = None
     is_public: bool | None = None
 
@@ -33,6 +33,7 @@ class ProjectMemberResponse(BaseModel):
     project_id: uuid.UUID
     user_id: uuid.UUID
     role: ProjectRole
+    invited_at: datetime | None = None  # when the member joined the project
     model_config = {"from_attributes": True}
 
 class AddProjectMemberRequest(BaseModel):

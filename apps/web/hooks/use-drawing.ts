@@ -8,7 +8,7 @@ import { useReviewStore } from '@/stores/review-store'
 export type DrawingTool = 'pen' | 'rectangle' | 'arrow' | 'line'
 
 export interface UseDrawingReturn {
-  canvasRef: React.RefObject<HTMLCanvasElement>
+  canvasRef: React.RefObject<HTMLCanvasElement | null>
   resize: (width: number, height: number) => void
   clear: () => void
   undo: () => void

@@ -4,10 +4,11 @@ import os
 import asyncio
 import json
 import logging
-from celery.exceptions import Retry
 
 # Ensure the workspace root is on the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from celery.exceptions import Retry
 
 from .celery_app import celery_app
 from ..database import SessionLocal
@@ -67,20 +68,32 @@ def process_asset(self, asset_id: str, version_id: str):
         output_prefix = f"processed/{asset.project_id}/{asset_id}/{version_id}"
         s3 = get_s3_client()
 
+        # Whether this read of the source is the last one there will be. The
+        # handler below reads this same flag to decide `failed` -- but that
+        # happens after the transcode has already returned, and the transcoder
+        # needs to know beforehand: a check that cannot be certain has to give
+        # way on the last attempt rather than spend the master. One flag for
+        # both is deliberate, so they cannot drift apart. See TranscodeJob.
+        final_attempt = self.request.retries >= self.max_retries
+
         try:
             if asset.asset_type in (AssetType.video,):
-                _process_video(db, asset, version, media_file, s3, output_prefix)
+                _process_video(
+                    db, asset, version, media_file, s3, output_prefix,
+                    final_attempt=final_attempt,
+                )
             elif asset.asset_type == AssetType.audio:
                 _process_audio(db, asset, version, media_file, s3, output_prefix)
             elif asset.asset_type in (AssetType.image, AssetType.image_carousel):
                 _process_image(db, asset, version, media_file, s3, output_prefix)
 
+            _record_derived_size(db, media_file, output_prefix)
             version.processing_status = ProcessingStatus.ready
             db.commit()
             log.info("Transcode completed for asset %s version %s", asset_id, version_id)
 
             # Publish SSE event (best-effort)
-            event_service.publish_sync(str(asset.project_id), "transcode_complete", {
+            _publish_event(str(asset.project_id), "transcode_complete", {
                 "asset_id": asset_id,
                 "version_id": version_id,
             })
@@ -88,68 +101,177 @@ def process_asset(self, asset_id: str, version_id: str):
         except Exception as exc:
             log.exception("Transcode failed for asset %s version %s", asset_id, version_id)
 
-            def record_failure() -> None:
+            def _record_failure() -> None:
+                from packages.transcoder.redact import redact_presigned_urls
+
                 version.processing_status = ProcessingStatus.failed
                 db.commit()
-                event_service.publish_sync(str(asset.project_id), "transcode_failed", {
+                # Every subscriber to the project's stream receives this, not
+                # only the uploader, so never let a presigned URL through.
+                _publish_event(str(asset.project_id), "transcode_failed", {
                     "asset_id": asset_id,
                     "version_id": version_id,
-                    "error": str(exc),
+                    "error": redact_presigned_urls(str(exc)),
                 })
 
-            # A retry means processing is still active. Marking failed before
-            # every scheduled retry made the UI flap between failed/processing and
-            # allowed maintenance to treat a recoverable master as disposable.
-            if self.request.retries >= self.max_retries:
-                record_failure()
+            # `failed` is written only when nothing more is coming. Writing it
+            # before every retry made the version oscillate
+            # failed -> processing -> failed for the whole ladder (three retries
+            # a minute apart) while its raw object sat there intact, so
+            # /upload/complete's retry guard, the reaper and the client each got
+            # a different answer depending on when they asked.
+            if final_attempt:
+                _record_failure()
                 raise
 
             try:
                 raise self.retry(exc=exc)
             except Retry:
-                # Celery accepted the next attempt; preserve the truthful state.
+                # Scheduled. Leave the version at `processing`: that is true, and
+                # the next attempt will move it on.
                 raise
             except Exception:
-                # A retry can fail to be enqueued (for example, broker refusal).
-                # Nothing else will execute for this version, so record failure.
-                record_failure()
+                # self.retry() raises Reject when the broker will not take the
+                # message, so the retry never gets queued and nothing else will
+                # run for this version. Leaving it at `processing` here is what
+                # stranded uploads before -- record the failure we already know
+                # about rather than leaving it for the sweep to find.
+                _record_failure()
                 raise
 
     finally:
         db.close()
 
 
-def _process_video(db, asset, version, media_file, s3, output_prefix):
-    from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder
-    from packages.transcoder.base import TranscodeJob
+def _record_derived_size(db, media_file, output_prefix: str) -> None:
+    """Measure what this job wrote under `output_prefix` and store it on the
+    media file. Best effort.
 
-    transcoder = FFmpegTranscoder(s3, settings.s3_bucket, settings.s3_endpoint)
+    Once per job, so the storage overview is a grouped SUM over existing rows
+    instead of a bucket listing on every page view. The listing is the only
+    thing that can fail here, and failing it must not fail a transcode that
+    already produced its output: the column stays NULL and the overview reports
+    the file as unmeasured.
+
+    **Nothing re-measures it on its own.** The row stays unmeasured until
+    somebody runs `backfill_media_derived_size` (`POST /admin/storage/backfill`,
+    or the command in the upgrade notes); no schedule and no screen picks it up,
+    and `unmeasured_files` in `GET /admin/storage` is where it shows.
+
+    A re-transcode of the same version overwrites the value, which is correct —
+    the old objects were replaced under the same prefix.
+    """
+    from ..services.s3_service import prefix_size_bytes
+    from packages.transcoder.redact import redact_presigned_urls
+
+    try:
+        total = prefix_size_bytes(output_prefix)
+    except Exception as exc:
+        # The prefix, not the row: this runs on whatever `media_file` the job
+        # was handed, and reaching for another of its attributes here would
+        # turn a logged warning into a second exception.
+        log.warning(
+            "could not measure derived size under %s: %s",
+            output_prefix, redact_presigned_urls(str(exc)),
+        )
+        return
+    media_file.derived_size_bytes = total
+    db.flush()
+
+
+def _instance_compression_level(db):
+    """The compression level this instance has chosen, or None if it has not.
+
+    Read-only on purpose: a row created here would turn "nobody has chosen"
+    into a stored level the next reader cannot tell apart. And a settings
+    problem never fails an upload: the quality shift is a preference, and the
+    environment's answer is a perfectly good one.
+    """
+    from ..models.instance_settings import InstanceSettings
+
+    try:
+        row = db.query(InstanceSettings).first()
+    except Exception:
+        # Roll back before returning, or swallowing the error makes things
+        # worse than not catching it: a failed statement leaves the session's
+        # transaction aborted, Postgres then refuses every further statement on
+        # that connection, and the next db.flush() in _process_video fails the
+        # upload. Exactly the case this branch exists for is a new worker
+        # against a database the migration has not reached yet. The rollback is
+        # itself guarded, because a dead connection can raise here too.
+        try:
+            db.rollback()
+        except Exception:
+            log.warning(
+                "could not roll back the session after a failed compression-level read",
+                exc_info=True,
+            )
+        log.warning("could not read the instance compression level; "
+                    "using TRANSCODER_CRF_OFFSET", exc_info=True)
+        return None
+    return row.compression_level if row else None
+
+
+def _process_video(
+    db, asset, version, media_file, s3, output_prefix, *,
+    final_attempt: bool = False,
+):
+    from packages.transcoder.ffmpeg_transcoder import FFmpegTranscoder, parse_qualities
+    from packages.transcoder.base import TranscodeJob, crf_offset_for_level
+
+    transcoder = FFmpegTranscoder(
+        s3, settings.s3_bucket, settings.s3_endpoint, storage_class=settings.s3_storage_class,
+    )
+    # Progress is cosmetic; the transcode is not. If the broker stops answering,
+    # every publish costs the socket timeout, and this runs inside the loop
+    # draining ffmpeg's stdout -- so paying it ~100 times would stall the encode
+    # behind a full pipe. One failure is enough to stop trying for this job.
+    progress_ok = {"enabled": True, "high_water": -1}
+
+    def _on_progress(percent: int) -> None:
+        if not progress_ok["enabled"]:
+            return
+        # A hardware attempt that fails at runtime is retried on the software
+        # backend, and the second ffmpeg starts counting from zero. Clamp so the
+        # bar never runs backwards from the viewer's point of view.
+        if percent <= progress_ok["high_water"]:
+            return
+        progress_ok["high_water"] = percent
+        # The version as well as the asset: two versions of one asset can be
+        # transcoding at once, and the uploads panel shows a row for each.
+        delivered = _publish_event(str(asset.project_id), "transcode_progress", {
+            "asset_id": str(asset.id),
+            "version_id": str(version.id),
+            "percent": percent,
+        })
+        if delivered is False:
+            progress_ok["enabled"] = False
+
     job = TranscodeJob(
         media_id=str(asset.id),
         version_id=str(version.id),
         input_s3_key=media_file.s3_key_raw,
         output_s3_prefix=output_prefix,
-        qualities=["1080p", "720p", "360p"],
+        qualities=parse_qualities(settings.transcoder_qualities),
+        progress_cb=_on_progress,
+        final_attempt=final_attempt,
+        # Read per job, not once per worker process: an admin who moves the
+        # slider expects the next upload to follow, not the next deploy. None
+        # when no level is chosen, leaving TRANSCODER_CRF_OFFSET in charge.
+        crf_offset=crf_offset_for_level(_instance_compression_level(db)),
     )
+    result = _run_async(transcoder.transcode(job))
 
-    project_id, asset_id = str(asset.project_id), str(asset.id)
-
-    def _on_progress(percent: float):
-        # The web client already listens for this event (use-sse.ts) and renders
-        # `Processing {percent}%`; until now nothing ever emitted it, so the bar
-        # sat at "Processing..." for the whole job.
-        event_service.publish_sync(project_id, "transcode_progress", {
-            "asset_id": asset_id,
-            "version_id": str(version.id),
-            "percent": round(percent, 1),
-        })
-
-    result = _run_async(transcoder.transcode(job, progress_callback=_on_progress))
     if result.no_video_stream:
-        # MIME type identifies the container, not its tracks.  An audio-only
-        # MP4/MPEG is a valid upload, so correct its type and process it as
-        # audio rather than retrying a video encode that cannot succeed.
-        log.info("Asset %s has no video stream; routing it to audio", asset.id)
+        # The browser types a .mpg or .mp4 carrying only audio as video/*, so
+        # mime_to_asset_type routed it here. The file is perfectly good, it just
+        # is not video. Correct the asset and run it through the audio pipeline
+        # rather than failing an upload the user had no reason to think was
+        # wrong (#82).
+        log.info(
+            "asset %s has no video stream; re-routing to the audio pipeline",
+            asset.id,
+        )
         asset.asset_type = AssetType.audio
         db.flush()
         _process_audio(db, asset, version, media_file, s3, output_prefix)
@@ -159,6 +281,9 @@ def _process_video(db, asset, version, media_file, s3, output_prefix):
         raise RuntimeError(f"Transcode failed: {result.error}")
 
     media_file.s3_key_processed = result.hls_prefix
+    # None when the remux failed. Recorded either way so a re-run of a version
+    # that once had a download rung and now does not stops advertising it.
+    media_file.s3_key_download = result.mp4_key
     if result.thumbnail_keys:
         media_file.s3_key_thumbnail = result.thumbnail_keys[0]
     if result.duration_seconds:
@@ -174,7 +299,10 @@ def _process_video(db, asset, version, media_file, s3, output_prefix):
 
 def _process_audio(db, asset, version, media_file, s3, output_prefix):
     from packages.transcoder.image_processor import process_audio
-    result = process_audio(s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix)
+    result = process_audio(
+        s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix,
+        storage_class=settings.s3_storage_class,
+    )
     media_file.s3_key_processed = result.get("mp3_key")
     if result.get("waveform_key"):
         media_file.s3_key_thumbnail = result["waveform_key"]
@@ -185,10 +313,22 @@ def _process_audio(db, asset, version, media_file, s3, output_prefix):
 
 def _process_image(db, asset, version, media_file, s3, output_prefix):
     from packages.transcoder.image_processor import process_image
-    result = process_image(s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix)
+    result = process_image(
+        s3, settings.s3_bucket, media_file.s3_key_raw, output_prefix,
+        storage_class=settings.s3_storage_class,
+    )
     media_file.s3_key_processed = result.get("webp_key")
     media_file.s3_key_thumbnail = result.get("thumbnail_key")
     db.flush()
+
+
+def _publish_event(project_id: str, event_type: str, payload: dict):
+    """Publish an SSE event from Celery worker context.
+
+    Delegates to event_service so there is a single emit path; it is pooled and
+    already best-effort, which is what this needs.
+    """
+    return event_service.publish_sync(project_id, event_type, payload)
 
 
 def _eligible_media_rows(db):
@@ -214,7 +354,11 @@ def backfill_media_metadata(self):
     duration/width/height/fps on already-processed media. Idempotent —
     only touches rows where duration_seconds IS NULL."""
     import subprocess
-    from packages.transcoder.ffmpeg_transcoder import parse_probe_metadata
+    from packages.transcoder.ffmpeg_transcoder import (
+        _PRIMARY_VIDEO_STREAM,
+        parse_probe_metadata,
+    )
+    from packages.transcoder.redact import redact_presigned_urls
 
     db = SessionLocal()
     updated = skipped = 0
@@ -231,7 +375,7 @@ def backfill_media_metadata(self):
                 )
                 cmd = ["ffprobe", "-v", "error", "-print_format", "json", "-show_format"]
                 if asset_type == AssetType.video:
-                    cmd += ["-show_streams", "-select_streams", "v:0"]
+                    cmd += ["-show_streams", "-select_streams", _PRIMARY_VIDEO_STREAM]
                 probe = subprocess.run(cmd + [url], capture_output=True, text=True, timeout=300)
                 if probe.returncode != 0:
                     skipped += 1
@@ -258,7 +402,11 @@ def backfill_media_metadata(self):
             except Exception as exc:
                 db.rollback()
                 skipped += 1
-                log.warning("backfill: skipping media_file %s: %s", row_id, exc)
+                # A timeout quotes the probe's argv, presigned URL included.
+                log.warning(
+                    "backfill: skipping media_file %s: %s",
+                    row_id, redact_presigned_urls(str(exc)),
+                )
                 continue
         return {"updated": updated, "skipped": skipped}
     finally:
