@@ -36,8 +36,9 @@ export interface CommentResolvedEvent {
 
 export interface ApprovalUpdatedEvent {
   asset_id: string
-  user_id: string
-  status: string
+  version_id: string
+  /** Only on a given or changed verdict; clearing and removing send none. */
+  status?: string
 }
 
 export type SSEEventType =

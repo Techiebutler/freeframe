@@ -39,7 +39,9 @@ export type WatermarkContent = "email" | "name" | "custom_text";
 
 export type ViewerLayout = "grid" | "reel";
 
-export type ApprovalStatus = "approved" | "rejected" | "pending";
+/** What a reviewer can say about a version. Mirrors the API's `VerdictValue`;
+ *  `pending` is not a verdict and is never sent or returned. */
+export type VerdictValue = "approved" | "changes_requested" | "rejected";
 
 // ─── Core Entities ────────────────────────────────────────────────────────────
 
@@ -291,6 +293,8 @@ export interface AssetVersion {
 export interface AssetResponse extends Asset {
   latest_version: AssetVersion | null;
   thumbnail_url: string | null;
+  /** Verdicts on `latest_version`, from team listings. */
+  verdict_summary?: VerdictSummary | null;
 }
 
 export interface MediaFile {
@@ -396,15 +400,33 @@ export interface CommentReaction {
 
 // ─── Approvals & Sharing ──────────────────────────────────────────────────────
 
-export interface Approval {
+/** One verdict on one version, as GET .../verdicts returns it. No email, ever. */
+export interface Verdict {
   id: string;
-  asset_id: string;
   version_id: string;
-  user_id: string;
-  status: ApprovalStatus;
+  status: VerdictValue;
   note: string | null;
   created_at: string;
-  deleted_at: string | null;
+  updated_at: string;
+  who: {
+    /** `team` is a live project member; everyone else is `external`. */
+    kind: "team" | "external";
+    name: string;
+    avatar_url: string | null;
+    avatar_color: string | null;
+    /** A share-link guest with no account, as opposed to a signed-in non-member. */
+    is_guest: boolean;
+  };
+  /** The share link's title when the verdict was given, kept after the link is gone. */
+  via_link_title: string | null;
+  is_mine: boolean;
+}
+
+/** Verdicts per value on a version; team asset listings always send it. */
+export interface VerdictSummary {
+  approved: number;
+  changes_requested: number;
+  rejected: number;
 }
 
 export interface ShareLinkAppearance {
@@ -590,6 +612,8 @@ export interface Notification {
   actor_name: string | null;
   actor_is_guest?: boolean;
   comment_preview: string | null;
+  /** The verdict value on approval notifications. */
+  detail?: string | null;
   project_id: string | null;
 }
 
