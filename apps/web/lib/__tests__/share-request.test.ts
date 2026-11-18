@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  continueAsGuest, hasStoredToken, hasUsableToken, isSignInExpired, prepareShareWrite, resetShareRequestState,
+  continueAsGuest, hasStoredToken, isSignInExpired, prepareShareWrite, resetShareRequestState,
   SERVER_UNREACHABLE, shareCallerKey, shareRequest, SIGN_IN_EXPIRED,
 } from '../share-request'
 
@@ -66,33 +66,6 @@ describe('hasStoredToken', () => {
     expect(hasStoredToken()).toBe(false)
     localStorage.setItem('ff_access_token', jwt(-60))
     expect(hasStoredToken()).toBe(true)
-  })
-})
-
-describe('hasUsableToken', () => {
-  it('is false with no token', () => {
-    expect(hasUsableToken()).toBe(false)
-  })
-
-  it('is true for a token that has not expired', () => {
-    localStorage.setItem('ff_access_token', jwt(3600))
-    expect(hasUsableToken()).toBe(true)
-  })
-
-  it('is false for an expired token', () => {
-    localStorage.setItem('ff_access_token', jwt(-60))
-    expect(hasUsableToken()).toBe(false)
-  })
-
-  it('is false for a token inside the 10 s expiry skew', () => {
-    localStorage.setItem('ff_access_token', jwt(5))
-    expect(hasUsableToken()).toBe(false)
-  })
-
-  // Not ours to judge, as in the SSE hook: the server answers for it.
-  it('is true for a token it cannot decode', () => {
-    localStorage.setItem('ff_access_token', 'not-a-jwt')
-    expect(hasUsableToken()).toBe(true)
   })
 })
 
@@ -211,7 +184,7 @@ describe('shareRequest', () => {
     const err = await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest }).catch((e: unknown) => e)
     expect((err as Error).message).toBe(SIGN_IN_EXPIRED)
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(hasUsableToken()).toBe(false)
+    expect(shareCallerKey(guest)).toBe('lapsed') // the refused bearer is no longer sent
 
     continueAsGuest(err)
     respond(200, {})
@@ -339,7 +312,7 @@ describe('shareRequest', () => {
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
 
     await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SERVER_UNREACHABLE)
-    expect(hasUsableToken()).toBe(true)
+    expect(shareCallerKey(guest)).toBe('bearer:u1') // still the signed-in caller
     expect(localStorage.getItem('ff_access_token')).toBe(bearer)
   })
 
@@ -518,21 +491,29 @@ describe('shareCallerKey across accounts', () => {
 })
 
 describe('prepareShareWrite', () => {
-  it('refreshes a lapsed sign-in and says so', async () => {
+  it('refreshes a lapsed sign-in before the write', async () => {
+    const fresh = jwt(3600)
     localStorage.setItem('ff_access_token', jwt(-60))
     localStorage.setItem('ff_refresh_token', 'r')
-    respond(200, { access_token: jwt(3600), refresh_token: 'r2' })
-    await expect(prepareShareWrite()).resolves.toBe('refreshed')
+    respond(200, { access_token: fresh, refresh_token: 'r2' })
+    await prepareShareWrite()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('ff_access_token')).toBe(fresh)
+    expect(shareCallerKey(guest)).toBe('bearer:u1')
   })
 
-  it('is unchanged for a usable token, no token, or a refused refresh', async () => {
-    await expect(prepareShareWrite()).resolves.toBe('unchanged')
+  it('asks nothing of the server for a usable token or no token', async () => {
+    await prepareShareWrite()
     localStorage.setItem('ff_access_token', jwt(3600))
-    await expect(prepareShareWrite()).resolves.toBe('unchanged')
+    await prepareShareWrite()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves the sign-in lapsed when the refresh is refused', async () => {
     localStorage.setItem('ff_access_token', jwt(-60))
     localStorage.setItem('ff_refresh_token', 'r')
     respond(401, {})
-    await expect(prepareShareWrite()).resolves.toBe('unchanged')
+    await prepareShareWrite()
+    expect(shareCallerKey(guest)).toBe('lapsed')
   })
 })

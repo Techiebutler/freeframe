@@ -48,7 +48,7 @@ export const VERDICT_TONE_DOT_CLASS: Record<VerdictTone, string> = {
 }
 
 /** "3 verdicts", for assistive tech where only an icon and a number show. */
-export function verdictCountLabel(count: number): string {
+function verdictCountLabel(count: number): string {
   return `${count} ${count === 1 ? 'verdict' : 'verdicts'}`
 }
 

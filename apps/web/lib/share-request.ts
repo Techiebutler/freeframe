@@ -25,8 +25,9 @@ export interface ShareGuest {
 
 // ─── Who a share request goes out as ────────────────────────────────────────
 //
-// Module state, so it holds for the page: every verdict control on it, and
-// every version, agrees on it.
+// Module state, so every verdict control on the page, and every version, agrees
+// on which sign-ins were refused and which of those the person chose to
+// continue as a guest over.
 
 /**
  * Bearers the server refused even after a refresh, by token string. Such a
@@ -92,11 +93,6 @@ function usableAccessToken(): string | null {
  */
 export function hasStoredToken(): boolean {
   return !!storedAccessToken()
-}
-
-/** Whether a share request would go out with the stored bearer as it stands. */
-export function hasUsableToken(): boolean {
-  return usableAccessToken() !== null
 }
 
 /**
@@ -257,14 +253,12 @@ export async function shareRequest<T>(
 }
 
 /**
- * Before a write: if the stored sign-in has lapsed, refresh it now. Says
- * `refreshed` when the caller is now someone other than whoever the last read
- * went as, so the clear-or-give decision can be made again against a fresh
- * read of their own verdicts. Never asks and never throws.
+ * Before a write: if the stored sign-in has lapsed, refresh it now, so the
+ * caller the write goes as is settled before it is compared with whoever the
+ * list on screen was read as (`shareCallerKey`). Never asks and never throws.
  */
-export async function prepareShareWrite(): Promise<'refreshed' | 'unchanged'> {
+export async function prepareShareWrite(): Promise<void> {
   const stored = storedAccessToken()
-  if (!stored || usableAccessToken() || hasChosenGuest() || refusedBearers.has(stored)) return 'unchanged'
-  const caller = await resolveCaller()
-  return caller.kind === 'bearer' ? 'refreshed' : 'unchanged'
+  if (!stored || usableAccessToken() || hasChosenGuest() || refusedBearers.has(stored)) return
+  await resolveCaller()
 }
