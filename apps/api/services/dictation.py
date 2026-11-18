@@ -3,6 +3,7 @@
 Dictation v2 (docs/superpowers/specs/2026-11-09-review-dictation-v2.md): a fixed language (German unless told otherwise),
 a vocabulary prompt built from the lexicon (Gen's lexicon.json), and word + segment timestamps for sentence anchoring.
 """
+import difflib
 import json
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from ..config import settings
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 MODEL = "whisper-large-v3-turbo"
+CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+FIXUP_MODEL = "llama-3.1-8b-instant"
 MAX_BYTES = 25 * 1024 * 1024
 LANGS = {"de", "en", "auto"}
 # Whisper reads about 224 tokens of prompt; ~800 characters of German/English words stay inside that.
@@ -31,6 +34,40 @@ def build_prompt(hint: str = "", terms: list = TERMS, max_chars: int = MAX_PROMP
             break
         out, sep, first = nxt, ", ", False
     return "" if first and len(out) > max_chars else out
+
+
+def fix_terms(text: str) -> str:
+    """Cheap second pass on the same Groq key: repairs misheard lexicon words only ("Chatsuki" -> "ChatGPT"). Any failure keeps `text`."""
+    if not text or not settings.groq_api_key:
+        return text
+    system = ("You fix speech-to-text errors in a short German/English video-review note. Replace only words that were clearly misheard "
+              "versions of a term from the vocabulary. Never rephrase, translate, add or remove anything else. Reply with the note only.\n"
+              "Vocabulary: " + ", ".join(TERMS))
+    try:
+        r = httpx.request("POST", CHAT_URL, headers={"Authorization": f"Bearer {settings.groq_api_key}"}, timeout=20,
+                       json={"model": FIXUP_MODEL, "temperature": 0, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]})
+        fixed = str(r.json()["choices"][0]["message"]["content"]).strip() if r.status_code == 200 else ""
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
+        return text
+    # A reply far off the original length is a rephrase or an answer, not a fix.
+    return fixed if fixed and 0.7 <= len(fixed) / len(text) <= 1.4 else text
+
+
+def apply_fixes(raw: str, fixed: str, segments: list) -> list:
+    """Carry the fix-up into the segments (the embed builds notes from them): each 'replace' between raw and fixed tokens is applied
+    to a segment's text when its whole token sequence sits inside that segment. Timings are untouched."""
+    a, b = raw.split(), fixed.split()
+    swaps = [(a[i1:i2], b[j1:j2]) for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes() if op == "replace"]
+    for seg in segments:
+        toks = seg["text"].split()
+        for src, dst in swaps:
+            n = len(src)
+            for i in range(len(toks) - n + 1):
+                if toks[i:i + n] == src:
+                    toks[i:i + n] = dst
+                    break
+        seg["text"] = " ".join(toks)
+    return segments
 
 
 def transcribe(audio: bytes, filename: str, content_type: str, lang: str = "de") -> dict:
@@ -58,7 +95,13 @@ def transcribe(audio: bytes, filename: str, content_type: str, lang: str = "de")
                     for x in body.get("segments") or [] if str(x.get("text", "")).strip()]
         words = [{"start": float(x["start"]), "end": float(x["end"]), "word": str(x["word"]).strip()}
                  for x in body.get("words") or [] if str(x.get("word", "")).strip()]
-        result = {"text": str(body.get("text", "")).strip(), "segments": segments}
+        raw = str(body.get("text", "")).strip()
+        text = fix_terms(raw)
+        result = {"text": text, "segments": segments}
+        if text != raw:
+            apply_fixes(raw, text, segments)
+        if text != raw:  # the raw Whisper text stays available; absent when nothing was fixed
+            result["raw_text"] = raw
         if words:  # absent when the provider sent none, so the response shape of v1 clients is unchanged
             result["words"] = words
         return result
