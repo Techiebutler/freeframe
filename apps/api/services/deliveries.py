@@ -28,25 +28,58 @@ def share_url(d: Delivery) -> str:
     return f"{(settings.frontend_url or '').rstrip('/')}/d/{d.token}"
 
 
-def out(d: Delivery) -> dict:
-    return {"token": d.token, "share_url": share_url(d)}
+def out(d: Optional[Delivery]) -> Optional[dict]:
+    return {"token": d.token, "share_url": share_url(d)} if d is not None else None
 
 
-def on_approved(db: Session, asset: Asset, version_id: uuid.UUID, user: User) -> Delivery:
-    """The delivery of this version (one per version, created by the first approval); commits."""
-    find = lambda: db.query(Delivery).filter(Delivery.asset_id == asset.id, Delivery.version_id == version_id).first()  # noqa: E731
-    d = find()
-    if d is None:
-        req = feedback_rounds.request_for_asset(db, asset.id)
-        try:
-            with db.begin_nested():
-                db.add(Delivery(token=secrets.token_urlsafe(24), request_id=req.id if req else None, asset_id=asset.id,
-                                version_id=version_id, approved_by=user.name or user.email, approved_at=datetime.now(timezone.utc)))
-        except IntegrityError:  # a parallel approve created it first
-            pass
-        db.commit()
-        d = find()
-    return d
+def request_parts(db: Session, req: UploadRequest) -> list[tuple[uuid.UUID, uuid.UUID, bool]]:
+    """(asset_id, latest version_id, that version approved) for every current part of the request."""
+    latest = {}
+    for a_id, v_id, _n in db.query(AssetVersion.asset_id, AssetVersion.id, AssetVersion.version_number) \
+            .join(Asset, Asset.id == AssetVersion.asset_id) \
+            .filter(Asset.folder_id == req.folder_id, Asset.deleted_at.is_(None), AssetVersion.deleted_at.is_(None)) \
+            .order_by(AssetVersion.version_number):
+        latest[a_id] = v_id
+    done = {v for (v,) in db.query(Approval.version_id).filter(
+        Approval.version_id.in_(list(latest.values()) or [uuid.uuid4()]), Approval.status == ApprovalStatus.approved,
+        Approval.deleted_at.is_(None))}
+    return [(a, v, v in done) for a, v in latest.items()]
+
+
+def progress(db: Session, req: Optional[UploadRequest]) -> dict:
+    """{approved, total, complete}: a request without parts (or no request) counts as complete, so single files deliver as before."""
+    parts = request_parts(db, req) if req is not None else []
+    n = sum(1 for p in parts if p[2])
+    return {"approved": n, "total": len(parts), "complete": n == len(parts)}
+
+
+def parts_open(db: Session, req: Optional[UploadRequest]) -> bool:
+    return not progress(db, req)["complete"]
+
+
+def _deliver(db: Session, req: Optional[UploadRequest], asset_id: uuid.UUID, version_id: uuid.UUID, user: User) -> None:
+    if db.query(Delivery).filter(Delivery.asset_id == asset_id, Delivery.version_id == version_id).first() is not None:
+        return
+    try:
+        with db.begin_nested():
+            db.add(Delivery(token=secrets.token_urlsafe(24), request_id=req.id if req else None, asset_id=asset_id,
+                            version_id=version_id, approved_by=user.name or user.email, approved_at=datetime.now(timezone.utc)))
+    except IntegrityError:  # a parallel approve created it first
+        pass
+
+
+def on_approved(db: Session, asset: Asset, version_id: uuid.UUID, user: User) -> Optional[Delivery]:
+    """The delivery of this version (one per version); commits. A request with several parts delivers nothing until
+    EVERY current part is approved (the founder, 2026-11-18): then each part gets its delivery at once. None while parts are open."""
+    req = feedback_rounds.request_for_asset(db, asset.id)
+    if req is not None and parts_open(db, req):
+        return None
+    if req is not None:
+        for a_id, v_id, _ in request_parts(db, req):
+            _deliver(db, req, a_id, v_id, user)
+    _deliver(db, req, asset.id, version_id, user)
+    db.commit()
+    return db.query(Delivery).filter(Delivery.asset_id == asset.id, Delivery.version_id == version_id).first()
 
 
 def on_unapproved(db: Session, asset: Asset, version_id: Optional[uuid.UUID]) -> None:
@@ -58,6 +91,9 @@ def on_unapproved(db: Session, asset: Asset, version_id: Optional[uuid.UUID]) ->
         return
     db.query(Delivery).filter(Delivery.asset_id == asset.id, Delivery.version_id == version_id,
                               Delivery.handed_on_at.is_(None)).delete(synchronize_session=False)
+    req = feedback_rounds.request_for_asset(db, asset.id)
+    if req is not None:  # a part is open again: the request's other deliveries are not complete either
+        db.query(Delivery).filter(Delivery.request_id == req.id, Delivery.handed_on_at.is_(None)).delete(synchronize_session=False)
     db.commit()
 
 
@@ -72,7 +108,13 @@ def agent_events(db: Session, agent_user: User, project_id: uuid.UUID, cursor: O
     q = db.query(Delivery).join(UploadRequest, UploadRequest.id == Delivery.request_id).filter(
         UploadRequest.project_id == project_id, UploadRequest.id.in_(handed_in), Delivery.approved_at <= now - SETTLE)
     q = q.filter(Delivery.approved_at > cursor - SETTLE) if cursor is not None else q.filter(Delivery.handed_on_at.is_(None))
-    return q.order_by(Delivery.approved_at).all()
+    out, complete = [], {}
+    for d in q.order_by(Delivery.approved_at).all():
+        if d.request_id not in complete:
+            complete[d.request_id] = not parts_open(db, db.get(UploadRequest, d.request_id))
+        if complete[d.request_id]:
+            out.append(d)
+    return out
 
 
 def event(d: Delivery) -> dict:

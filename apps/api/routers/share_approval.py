@@ -14,7 +14,7 @@ from ..models.approval import ApprovalStatus
 from ..models.asset import Asset, AssetVersion
 from ..models.share import SharePermission
 from ..models.user import User
-from ..services import client_view, deliveries
+from ..services import client_view, deliveries, feedback_rounds
 from ..services.permissions import validate_asset_in_share, validate_share_link_with_session
 
 router = APIRouter(tags=["share"])
@@ -73,8 +73,9 @@ def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_ses
     _upsert_approval(db, asset, version.id, approver, ApprovalStatus.approved, None)
     db.add(ActivityLog(user_id=approver_id, asset_id=asset.id, action=ActivityAction.approved))
     db.commit()
-    return {"asset_id": str(asset.id), "version_id": str(version.id), "status": "approved",
-            "delivery": deliveries.out(deliveries.on_approved(db, asset, version.id, approver))}
+    delivery = deliveries.out(deliveries.on_approved(db, asset, version.id, approver))
+    return {"asset_id": str(asset.id), "version_id": str(version.id), "status": "approved", "delivery": delivery,
+            "parts": deliveries.progress(db, feedback_rounds.request_for_asset(db, asset.id))}
 
 
 @router.post("/share/{token}/assets/{asset_id}/feedback-done", status_code=204, dependencies=[Depends(rate_limit("share_feedback_done", 30, 600))])

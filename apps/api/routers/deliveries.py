@@ -20,6 +20,11 @@ def _delivery(db: Session, token: str) -> Delivery:
     d = db.query(Delivery).filter(Delivery.token == token).first()
     if d is None:
         raise HTTPException(404, "not_found")
+    if d.request_id is not None:  # the link works only while every part of its request is approved
+        from ..models.upload_request import UploadRequest
+        p = deliveries.progress(db, db.get(UploadRequest, d.request_id))
+        if not p["complete"]:
+            raise HTTPException(409, {"error": "parts_open", "approved": p["approved"], "total": p["total"]})
     return d
 
 

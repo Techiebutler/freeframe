@@ -673,3 +673,51 @@ describe('drop anywhere (spec 2026-11-16)', () => {
     expect(e.defaultPrevented).toBe(true)
   })
 })
+
+describe('FlowView embed: per-part approve, share link only when every part is approved (founder, 2026-11-18)', () => {
+  const parts = ['Hook 1', 'Hook 2', 'Hook 3', 'Body', 'CTA']
+  const embed = (over: Partial<FlowViewProps> = {}) => setup({ embed: true, files: parts.map((name, i) => ({ id: `a${i + 1}`, name })), onUndoApprove: vi.fn().mockResolvedValue(undefined), ...over })
+
+  it('approving one of five shows "1 of 5 approved" and no Copy share link, and Undo stays', async () => {
+    const view = embed({ parts: { approved: 0, total: 5 } })
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await screen.findByText('Approved')
+    view.rerender({ parts: { approved: 1, total: 5 } })
+    expect(screen.getByTestId('parts-progress')).toHaveTextContent('1 of 5 approved')
+    expect(screen.queryByRole('button', { name: 'Copy share link' })).toBeNull()
+    expect(screen.getByRole('button', { name: /^Undo/ })).toBeInTheDocument()
+    expect(screen.queryByTestId('confetti')).toBeNull()
+  })
+
+  it('the last part approved (server hands back the link) offers Copy share link', async () => {
+    embed({ parts: { approved: 4, total: 5 }, onApprove: vi.fn().mockResolvedValue({ token: 'tok', share_url: 'https://x/d/tok' }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    expect(await screen.findByRole('button', { name: 'Copy share link' })).toBeInTheDocument()
+  })
+
+  it('without comments Approve is the primary action', () => {
+    embed({ parts: { approved: 0, total: 5 }, unsentFeedback: 0 })
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Send feedback' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve this part' })).toBeNull()
+  })
+
+  it('with comments Send feedback is primary, closes the round, and Approve is a quiet per-part action', async () => {
+    const onSent = vi.fn()
+    const onApprove = vi.fn().mockResolvedValue(undefined)
+    embed({ parts: { approved: 1, total: 5 }, unsentFeedback: 3, onSent, onApprove })
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }))
+    await waitFor(() => expect(onSent).toHaveBeenCalledTimes(1))
+    expect(onApprove).not.toHaveBeenCalled()
+  })
+
+  it('"Approve this part" approves just this part while comments are open', async () => {
+    const onApprove = vi.fn().mockResolvedValue(undefined)
+    const onSent = vi.fn()
+    embed({ parts: { approved: 0, total: 5 }, unsentFeedback: 2, onApprove, onSent })
+    fireEvent.click(screen.getByRole('button', { name: 'Approve this part' }))
+    await waitFor(() => expect(onApprove).toHaveBeenCalledTimes(1))
+    expect(onSent).not.toHaveBeenCalled()
+  })
+})

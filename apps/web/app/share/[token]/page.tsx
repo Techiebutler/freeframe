@@ -806,7 +806,7 @@ interface ShareViewerProps {
   /** The upload request behind this share link; the embed names it in its hand-off events. */
   requestId?: string | null
   /** Folder embed: this asset's place in the folder, the stepper, and what the approve acts on. */
-  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** The segmented file switcher (components/share/module-tabs.tsx). */ nav?: React.ReactNode }
+  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** Parts approved so far, and the comments no Send has closed yet (all parts). */ approvedCount?: number; unsent?: number; onNoteSaved?: () => void; onSentAll?: () => void; /** The segmented file switcher (components/share/module-tabs.tsx). */ nav?: React.ReactNode }
 }
 
 function ShareViewer({
@@ -887,7 +887,8 @@ function ShareViewer({
     const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession, headers: authHeaders(await getUsableAccessToken()) })
     setFlowApproved(true)
     folder?.onApproved(true)
-    if (embed) { send({ type: 'ar:approved' }); handoff('approved') }
+    // The request is approved only when every part is: until the server hands back the delivery, nothing leaves the embed.
+    if (embed && made) { send({ type: 'ar:approved' }); handoff('approved') }
     return made
   }
 
@@ -931,11 +932,15 @@ function ShareViewer({
           canSave={!!identity}
           onNeedSave={() => setAskIdentity(true)}
           onApprove={flowApprove}
-          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }); handoff('round_sent') }}
-          onNoteSaved={(t) => { send({ type: 'ar:comment', t }); setCommentKey((k) => k + 1) }}
+          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }); handoff('round_sent'); folder?.onSentAll?.() }}
+          onNoteSaved={(t) => { send({ type: 'ar:comment', t }); setCommentKey((k) => k + 1); folder?.onNoteSaved?.() }}
           onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id, { shareSession: folder?.shareSession }); setFlowApproved(false); folder?.onApproved(false) }}
           sessionKey={token}
           approved={flowApproved}
+          parts={folder ? { approved: folder.approvedCount ?? 0, total: folder.count } : undefined}
+          unsentFeedback={folder?.unsent}
+          hasNext={!!folder && folder.index < folder.count - 1}
+          onNext={() => folder?.onStep(1)}
           dictate={(audio) => guestDictate(token, audio)}
         />
         {askIdentity && (
@@ -1059,6 +1064,7 @@ function ShareViewer({
 function FolderEmbed({ token, shareSession, permission, branding, requestId }: { token: string; shareSession: string | null; permission: SharePermission; branding: ProjectBranding | null; requestId: string | null }) {
   const [items, setItems] = React.useState<FolderShareAssetItem[] | null>(null)
   const [index, setIndex] = React.useState(0)
+  const [unsent, setUnsent] = React.useState(0)
   React.useEffect(() => {
     const ss = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
     fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500&embed=true${ss}`)
@@ -1068,6 +1074,7 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
         const sorted = chainOrder(videos) ?? videos
         setItems(sorted)
         setIndex(Math.max(0, sorted.findIndex((a) => !a.approved)))
+        setUnsent(sorted.reduce((n, a) => n + (a.comment_count || 0), 0))
       })
       .catch(() => setItems([]))
   }, [token, shareSession])
@@ -1092,7 +1099,7 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
       permission={permission}
       allowDownload={false}
       branding={branding}
-      folder={{ index, count: items.length, approved: !!current.approved, shareSession, onStep: (d) => go(index + d), nav: nav || undefined,
+      folder={{ index, count: items.length, approved: !!current.approved, approvedCount: items.filter((a) => a.approved).length, unsent, onNoteSaved: () => setUnsent((n) => n + 1), onSentAll: () => setUnsent(0), shareSession, onStep: (d) => go(index + d), nav: nav || undefined,
         onApproved: (v) => setItems((prev) => prev && prev.map((a) => (a.id === current.id ? { ...a, approved: v } : a))) }}
     />
   )

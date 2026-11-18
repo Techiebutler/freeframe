@@ -15,7 +15,7 @@ from ..services.permissions import require_asset_access, require_project_role
 from ..tasks.email_tasks import send_approval_email
 from ..tasks.celery_app import send_task_safe
 from ..config import settings
-from ..services import deliveries
+from ..services import deliveries, feedback_rounds
 
 router = APIRouter(tags=["approvals"])
 
@@ -95,6 +95,7 @@ def approve_asset(
             )
     db.commit()
     approval.delivery = deliveries.out(deliveries.on_approved(db, asset, body.version_id, current_user))
+    approval.parts = deliveries.progress(db, feedback_rounds.request_for_asset(db, asset.id))
 
     return approval
 
