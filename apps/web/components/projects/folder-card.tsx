@@ -4,6 +4,7 @@ import React, { useCallback, useState } from 'react'
 import useSWR from 'swr'
 import { Folder, Film, Music, Image as ImageIcon, Images, MoreHorizontal, Pencil, Trash, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FadeImage } from '@/components/shared/fade-image'
 import { api } from '@/lib/api'
 import { NameDialog } from './name-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -29,9 +30,8 @@ function ThumbCell({ asset, className }: { asset: AssetResponse; className?: str
   }
 
   return (
-    <div className={cn('overflow-hidden bg-bg-tertiary', className)}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+    <div className={cn('relative overflow-hidden bg-bg-tertiary', className)}>
+      <FadeImage
         src={asset.thumbnail_url}
         alt={asset.name}
         onError={() => setFailed(true)}

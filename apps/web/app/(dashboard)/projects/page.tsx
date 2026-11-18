@@ -154,7 +154,9 @@ function ProjectSection({
           </div>
         </button>
       ) : viewMode === "grid" ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        // auto-rows-fr: every row is as tall as a project card, so the
+        // "New Project" tile matches it instead of stretching the row.
+        <div className="grid grid-cols-2 auto-rows-fr gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {projects.map((project) => (
             <ProjectCard
               key={project.id}
@@ -167,7 +169,7 @@ function ProjectSection({
           {showNewButton && onNewProject && (
             <button
               onClick={onNewProject}
-              className="group flex flex-col items-center justify-center gap-2.5 rounded-xl border-2 border-dashed border-border bg-bg-secondary/30 aspect-[10/11] hover:border-accent/40 hover:bg-bg-secondary/60 transition-all duration-200"
+              className="group flex flex-col items-center justify-center gap-2.5 rounded-xl border-2 border-dashed border-border bg-bg-secondary/30 h-full min-h-[160px] hover:border-accent/40 hover:bg-bg-secondary/60 transition-all duration-200"
             >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-bg-tertiary text-text-tertiary group-hover:bg-accent group-hover:text-white transition-colors">
                 <Plus className="h-5 w-5" />

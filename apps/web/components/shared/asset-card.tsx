@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { Check, Download, Image as ImageIcon, Layers, MessageSquare, Music, Video } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FadeImage } from './fade-image'
 
 export interface SharedAssetCardData {
   id: string
@@ -129,13 +130,12 @@ export function SharedAssetCard({
             onThumbnailError={() => setImageFailed(true)}
           />
         ) : asset.thumbnailUrl && !imageFailed ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <FadeImage
             src={asset.thumbnailUrl}
             alt={asset.name}
             onError={() => setImageFailed(true)}
             className={cn(
-              'h-full w-full transition-transform duration-200 group-hover:scale-[1.02]',
+              'h-full w-full transition-[transform,opacity] duration-200 group-hover:scale-[1.02]',
               thumbnailScale === 'fill' ? 'object-cover' : 'object-contain',
             )}
           />
@@ -333,8 +333,7 @@ function ScrubbableVideoThumbnail({
         if (ready) seekToRatio(nextRatio)
       }}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <FadeImage
         src={thumbnailUrl}
         alt={name}
         className={cn(

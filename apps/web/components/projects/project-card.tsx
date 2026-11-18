@@ -8,6 +8,7 @@ import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { getGradientForProject } from '@/lib/gradient-utils'
 import { api } from '@/lib/api'
 import { ProjectSettingsDialog } from './project-settings-dialog'
+import { FadeImage } from '@/components/shared/fade-image'
 import type { Project } from '@/types'
 
 interface ProjectCardProps {
@@ -48,13 +49,12 @@ export function ProjectCard({
       <div className={cn('group relative', className)}>
         <Link
           href={`/projects/${project.id}`}
-          className="block rounded-xl overflow-hidden bg-bg-secondary border border-border hover:border-accent/40 transition-all duration-200 hover:shadow-lg hover:shadow-black/10"
+          className="flex h-full flex-col rounded-xl overflow-hidden bg-bg-secondary border border-border hover:border-accent/40 transition-all duration-200 hover:shadow-lg hover:shadow-black/10"
         >
           {/* Square poster area */}
-          <div className="relative aspect-square w-full overflow-hidden">
+          <div className="relative aspect-square w-full shrink-0 overflow-hidden">
             {project.poster_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              <FadeImage
                 src={project.poster_url}
                 alt={project.name}
                 className="h-full w-full object-cover"
@@ -97,7 +97,8 @@ export function ProjectCard({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between px-3 py-2.5">
+          {/* Footer: mt-auto keeps it (and the menu button over it) at the card's bottom edge. */}
+          <div className="mt-auto flex items-center justify-between py-2.5 pl-3 pr-11">
             <span className="text-2xs text-text-tertiary">
               {assetCount > 0
                 ? `${assetCount} item${assetCount !== 1 ? 's' : ''} · ${formatBytes(project.storage_bytes ?? 0)}`
@@ -111,7 +112,8 @@ export function ProjectCard({
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
-                className="absolute bottom-2 right-2.5 flex h-7 w-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-all opacity-0 group-hover:opacity-100"
+                aria-label="Project actions"
+                className="absolute bottom-[5px] right-2 flex h-7 w-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-all opacity-0 group-hover:opacity-100"
                 onClick={(e) => { e.preventDefault(); e.stopPropagation() }}
               >
                 <MoreHorizontal className="h-4 w-4" />
