@@ -332,10 +332,23 @@ def commit_initiated_upload(db: Session, s3_key: str, upload_id: str) -> None:
     one file on R2). Abort it before failing the request. Best-effort: an abort
     that fails is logged and the original error is what the caller gets, and the
     stale-upload reaper's bucket sweep is the backstop for what is left.
+
+    The rollback comes first. Until it runs, PostgreSQL holds the failed
+    transaction open, along with the key-share locks its inserts took on the
+    rows they reference, and the abort is a storage call that can take as long
+    as its retries do. A rollback that fails too (the connection is gone) is
+    logged and does not replace the commit's error either.
     """
     try:
         db.commit()
     except Exception:
+        try:
+            db.rollback()
+        except Exception as rollback_exc:  # noqa: BLE001 - must not mask the commit's error
+            logger.warning(
+                "could not roll back after the version for %s failed to save: %r",
+                s3_key, rollback_exc,
+            )
         try:
             abort_multipart_upload(s3_key, upload_id)
         except Exception as abort_exc:  # noqa: BLE001 - must not mask the commit's error
@@ -343,7 +356,6 @@ def commit_initiated_upload(db: Session, s3_key: str, upload_id: str) -> None:
                 "could not abort multipart upload for %s after its version failed to "
                 "save: %r", s3_key, abort_exc,
             )
-        db.rollback()
         raise
 
 

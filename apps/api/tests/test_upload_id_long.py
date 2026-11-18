@@ -185,6 +185,14 @@ def test_initiate_aborts_the_upload_it_started_when_the_commit_fails(
     def _refuse():
         raise OperationalError("COMMIT", {}, Exception("server closed the connection"))
 
+    # The route's rollback would otherwise end the fixture's own transaction, and
+    # its teardown would then roll back one that is no longer there. Fence the
+    # request in a savepoint and have the session's rollback end only that: what
+    # the route wrote is still really discarded.
+    savepoint = live_db.begin_nested()
+    monkeypatch.setattr(
+        live_db, "rollback", lambda: savepoint.rollback() if savepoint.is_active else None,
+    )
     monkeypatch.setattr(live_db, "commit", _refuse)
     if path == "new_asset":
         resp = client.post("/upload/initiate", json=_body(project))
@@ -194,6 +202,7 @@ def test_initiate_aborts_the_upload_it_started_when_the_commit_fails(
     assert resp.status_code == 500
     assert len(storage.created) == 1
     assert storage.aborted == [(storage.created[0], R2_UPLOAD_ID)]
+    assert not savepoint.is_active  # the route did roll back
 
 
 def test_the_original_commit_error_survives_an_abort_that_fails_too(caplog):
@@ -220,9 +229,34 @@ def test_the_original_commit_error_survives_an_abort_that_fails_too(caplog):
     finally:
         upload_module.abort_multipart_upload = original
 
-    assert calls == [("abort", "raw/p/a/v/original.mp4", R2_UPLOAD_ID), "rollback"]
+    # Rollback first: the failed transaction and its locks must not wait on storage.
+    assert calls == ["rollback", ("abort", "raw/p/a/v/original.mp4", R2_UPLOAD_ID)]
     assert "could not abort" in caplog.text
     assert "storage is down too" in caplog.text
+
+
+def test_the_original_commit_error_survives_a_rollback_that_fails_too(monkeypatch, caplog):
+    """A dead connection fails the rollback as well. That is logged, the upload
+    is still aborted, and the caller still gets the commit's error."""
+    aborted = []
+
+    class _Session:
+        def commit(self):
+            raise OperationalError("COMMIT", {}, Exception("server closed the connection"))
+
+        def rollback(self):
+            raise RuntimeError("connection is dead")
+
+    monkeypatch.setattr(
+        upload_module, "abort_multipart_upload",
+        lambda key, upload_id: aborted.append((key, upload_id)),
+    )
+    with pytest.raises(OperationalError, match="server closed the connection"):
+        upload_module.commit_initiated_upload(_Session(), "raw/p/a/v/original.mp4", R2_UPLOAD_ID)
+
+    assert aborted == [("raw/p/a/v/original.mp4", R2_UPLOAD_ID)]
+    assert "could not roll back" in caplog.text
+    assert "connection is dead" in caplog.text
 
 
 # -- (e) the model ------------------------------------------------------------

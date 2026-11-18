@@ -18,7 +18,13 @@ set to NULL instead, which is the state of a row from before v1.9.0 and is
 handled as "unknown" everywhere. What that costs those versions: an in-flight
 upload can no longer be resumed (GET /upload/{version_id}/parts answers 409),
 and presign-part, complete and abort go back to trusting the upload id the
-caller sends, as they did before v1.9.0. Narrowing is not catalog-only either:
+caller sends, as they did before v1.9.0. Nothing can abort such an upload by
+its id any more either: the stale-upload reaper and the retention purge both
+need the version's upload_id to do that. The reaper's bucket-wide sweep is
+the only backstop left, and it skips any key a media_files row still names,
+so it reaches the upload only after the retention purge has deleted that row,
+and only on a backend whose ListMultipartUploads works. Narrowing is not
+catalog-only either:
 PostgreSQL rewrites the table under an exclusive lock, for as long as the
 table's size takes.
 
