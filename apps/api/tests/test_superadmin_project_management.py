@@ -144,7 +144,7 @@ def test_a_deactivated_sole_owner_is_still_protected(seed, as_user, admin, how):
 
     refused = _try()
     assert refused.status_code == 400
-    assert "only owner" in refused.json()["detail"]
+    assert "No other owner of this project can sign in" in refused.json()["detail"]
 
     def live_owner_rows():
         return seed.db.query(ProjectMember).filter(
@@ -163,6 +163,46 @@ def test_a_deactivated_sole_owner_is_still_protected(seed, as_user, admin, how):
     assert added.status_code == 201
     assert _try().status_code in (200, 204)
     assert live_owner_rows() == 1
+
+
+@pytest.mark.parametrize("how", [("remove", 204), ("demote", 200)])
+def test_two_deactivated_owners_are_refused_without_claiming_an_only_owner(
+    seed, as_user, admin, how,
+):
+    """With two deactivated owners and no live one, removing either is refused, and the
+    refusal must not call the target the project's only owner, because it is not.
+    A live owner appointed first lifts the refusal."""
+    from apps.api.models.user import UserStatus
+
+    action, ok = how
+    first = seed.user()
+    project = seed.project(first)
+    second = seed.user()
+    seed.member(project, second, ProjectRole.owner)
+    first.status = UserStatus.deactivated
+    second.status = UserStatus.deactivated
+    seed.db.flush()
+    client = as_user(admin)
+
+    def _try():
+        if action == "remove":
+            return client.delete(f"/projects/{project.id}/members/{first.id}")
+        return client.patch(
+            f"/projects/{project.id}/members/{first.id}", json={"role": "editor"},
+        )
+
+    refused = _try()
+    assert refused.status_code == 400
+    detail = refused.json()["detail"]
+    assert "No other owner of this project can sign in" in detail
+    assert "only owner" not in detail
+
+    successor = seed.user(name="Successor")
+    added = client.post(f"/projects/{project.id}/members", json={
+        "user_id": str(successor.id), "role": "owner",
+    })
+    assert added.status_code == 201
+    assert _try().status_code == ok
 
 
 # ── two owners removing each other at the same moment ─────────────────────────

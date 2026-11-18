@@ -92,10 +92,14 @@ def _refuse_losing_last_owner(db: Session, project_id: uuid.UUID, user_id: uuid.
     # "Nobody else would be left", not "this is the one live owner": a sole owner
     # who is deactivated is absent from `owners` and still has to be kept.
     if not (owners - {user_id}):
-        raise HTTPException(
-            status_code=400,
-            detail="This is the project's only owner. Give someone else Full Access first.",
+        # A target outside `owners` is a deactivated owner, and there may be other
+        # deactivated owners beside it, so "only owner" would not be true.
+        detail = (
+            "This is the project's only owner. Give someone else Full Access first."
+            if user_id in owners
+            else "No other owner of this project can sign in. Give someone else Full Access first."
         )
+        raise HTTPException(status_code=400, detail=detail)
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(body: ProjectCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
