@@ -32,8 +32,10 @@ Enums
 Downgrade deletes every guest verdict. A guest row cannot satisfy NOT NULL on
 `user_id`, and there is no user to hand it to. Enum values cannot be removed from
 a PostgreSQL type without rewriting it, so `changes_requested` STAYS in both enums
-after a downgrade. A signed-in user's own `changes_requested` verdict survives the
-downgrade as `rejected`, which the previous release can read.
+after a downgrade. Rows holding it would not load in the previous release, whose
+enums lack the value, so the downgrade rewrites them to `rejected` (the closest old
+meaning: not approved): a signed-in user's own verdict in `approvals`, and every
+`changes_requested` entry in `share_link_activity`. Both then read back there.
 
 Revision ID: a7e3c5d90b42
 Revises: f4b9c2a7d105
@@ -103,6 +105,9 @@ def downgrade() -> None:
     # The previous release's enum has no `changes_requested`, so a surviving row of that status
     # would fail to load there. Map it to `rejected` (not approved); `pending` would read as "no decision".
     op.execute("UPDATE approvals SET status = 'rejected' WHERE status = 'changes_requested'")
+    # Same for the share activity log: GET /share/{token}/activity loads every row through
+    # Enum(ShareActivityAction), which the previous release defines without `changes_requested`.
+    op.execute("UPDATE share_link_activity SET action = 'rejected' WHERE action = 'changes_requested'")
 
     op.drop_column('notifications', 'detail')
     op.drop_column('notifications', 'actor_name')
