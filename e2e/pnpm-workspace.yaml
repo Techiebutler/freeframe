@@ -1,0 +1,5 @@
+# e2e is a standalone package with its own lockfile. This file makes it its own
+# workspace root, so pnpm does not fold it into the repo-root workspace
+# (apps/web, packages/*) and skip installing it.
+packages:
+  - .

@@ -286,11 +286,9 @@ def get_asset(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    asset = db.query(Asset).join(Project).filter(
-        Asset.id == asset_id,
-        Asset.deleted_at.is_(None),
-        Project.deleted_at.is_(None),
-    ).first()
+    # A deleted project is refused by require_asset_access (403), the same answer
+    # every other asset route gives (pinned by test_deleted_project_routes).
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     require_asset_access(db, asset, current_user)
