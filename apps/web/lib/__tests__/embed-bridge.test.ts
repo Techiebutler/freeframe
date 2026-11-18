@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { EMBED_PARENT_ORIGINS, parentOrigin, sendAutoreviewEvent, sendToParent } from '../embed-bridge'
+import { EMBED_PARENT_ORIGINS, isGenClose, parentOrigin, sendAutoreviewEvent, sendToParent } from '../embed-bridge'
 
 const framed = (ancestors: string[] | undefined, referrer = '') => {
   const postMessage = vi.fn()
   const win = { parent: { postMessage }, location: { ancestorOrigins: ancestors }, document: { referrer } } as unknown as Window
   return { win, postMessage }
 }
+
+const P = { approved: 1, total: 3, complete: false }
 
 describe('embed bridge', () => {
   it('posts to an allowlisted parent, addressed to that origin', () => {
@@ -44,23 +46,40 @@ describe('embed bridge', () => {
     })
     it('posts approved', () => {
       const { win, postMessage } = framed(['https://web.telegram.org'])
-      sendAutoreviewEvent({ event: 'approved', request_id: 'r1' }, win)
-      expect(postMessage).toHaveBeenCalledWith({ type: 'autoreview', event: 'approved', request_id: 'r1' }, 'https://web.telegram.org')
+      sendAutoreviewEvent({ event: 'approved', request_id: 'r1', parts: P }, win)
+      expect(postMessage).toHaveBeenCalledWith({ type: 'autoreview', event: 'approved', request_id: 'r1', parts: P }, 'https://web.telegram.org')
     })
     it('without a known parent origin posts to each allowlisted origin, never "*"', () => {
       const { win, postMessage } = framed(undefined)
-      sendAutoreviewEvent({ event: 'approved', request_id: 'r1' }, win)
+      sendAutoreviewEvent({ event: 'approved', request_id: 'r1', parts: P }, win)
       expect(postMessage).toHaveBeenCalledTimes(EMBED_PARENT_ORIGINS.length)
       expect(postMessage.mock.calls.map((c) => c[1])).toEqual(EMBED_PARENT_ORIGINS)
       expect(postMessage.mock.calls.some((c) => c[1] === '*')).toBe(false)
     })
     it('posts nothing for a foreign parent or without a request id', () => {
       const evil = framed(['https://evil.example'])
-      expect(sendAutoreviewEvent({ event: 'approved', request_id: 'r1' }, evil.win)).toBe(false)
+      expect(sendAutoreviewEvent({ event: 'approved', request_id: 'r1', parts: P }, evil.win)).toBe(false)
       const ok = framed(['https://gen.aditor.ai'])
       expect(sendAutoreviewEvent({ event: 'approved', request_id: '' }, ok.win)).toBe(false)
       expect(evil.postMessage).not.toHaveBeenCalled()
       expect(ok.postMessage).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('new events and the close message', () => {
+    it('approved carries parts, notes carries count', () => {
+      const { win, postMessage } = framed(['https://gen.aditor.ai'])
+      sendAutoreviewEvent({ event: 'approved', request_id: 'r1', asset_id: 'a1', parts: { approved: 3, total: 3, complete: true } }, win)
+      sendAutoreviewEvent({ event: 'notes', request_id: 'r1', count: 0 }, win)
+      expect(postMessage).toHaveBeenNthCalledWith(1, { type: 'autoreview', event: 'approved', request_id: 'r1', asset_id: 'a1', parts: { approved: 3, total: 3, complete: true } }, 'https://gen.aditor.ai')
+      expect(postMessage).toHaveBeenNthCalledWith(2, { type: 'autoreview', event: 'notes', request_id: 'r1', count: 0 }, 'https://gen.aditor.ai')
+    })
+    it('gen:close counts only from an allowlisted origin with reason left', () => {
+      expect(isGenClose({ data: { type: 'gen:close', reason: 'left' }, origin: 'https://gen.aditor.ai' })).toBe(true)
+      expect(isGenClose({ data: { type: 'gen:close', reason: 'left' }, origin: 'https://evil.example' })).toBe(false)
+      expect(isGenClose({ data: { type: 'gen:close', reason: 'other' }, origin: 'https://gen.aditor.ai' })).toBe(false)
+      expect(isGenClose({ data: null, origin: 'https://gen.aditor.ai' })).toBe(false)
+      expect(isGenClose({ data: 'gen:close', origin: 'https://gen.aditor.ai' })).toBe(false)
     })
   })
 })

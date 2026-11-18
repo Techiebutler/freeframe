@@ -1,6 +1,6 @@
 """Approve from a share link: Alan reviews on his phone through a folder link and approves right there."""
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel
@@ -78,13 +78,8 @@ def share_approve(token: str, asset_id: uuid.UUID, body: ShareApprove, share_ses
             "parts": deliveries.progress(db, feedback_rounds.request_for_asset(db, asset.id))}
 
 
-@router.post("/share/{token}/assets/{asset_id}/feedback-done", status_code=204, dependencies=[Depends(rate_limit("share_feedback_done", 30, 600))])
-def share_feedback_done(token: str, asset_id: uuid.UUID, share_session: Optional[str] = Query(None),
-                        db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
-    """The reviewer pressed Send: close the open feedback round now, so the agent starts at once instead of
-    after 5 idle minutes. No open round (no agent request, already closed) is fine: nothing to do."""
-    from datetime import datetime, timezone
-    from ..services import feedback_rounds
+def _round_asset(db: Session, token: str, asset_id: uuid.UUID, share_session, current_user) -> Asset:
+    """The asset behind a comment-or-better share link: the gate of every round endpoint here."""
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
     if link.permission == SharePermission.view:
         raise HTTPException(403, "comment_not_allowed")
@@ -95,7 +90,22 @@ def share_feedback_done(token: str, asset_id: uuid.UUID, share_session: Optional
         validate_asset_in_share(db, link, asset)
     except HTTPException:
         raise HTTPException(404, "not_found")
+    return asset
+
+
+@router.post("/share/{token}/assets/{asset_id}/feedback-done", status_code=204, dependencies=[Depends(rate_limit("share_feedback_done", 30, 600))])
+def share_feedback_done(token: str, asset_id: uuid.UUID, by: Literal["button", "left"] = Query("button"), share_session: Optional[str] = Query(None),
+                        db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
+    """The reviewer pressed Send (`by=button`): close the open feedback round now, so the agent starts at once instead of
+    after 5 idle minutes. `by=left` is the embed's `pagehide` beacon (navigator.sendBeacon sends no headers or JSON, so the
+    reason and the share session ride the query): it closes only a round with a note. No open round / already closed: nothing to do."""
+    from datetime import datetime, timezone
+    from ..services import feedback_rounds
+    asset = _round_asset(db, token, asset_id, share_session, current_user)
     req = feedback_rounds.request_for_asset(db, asset.id)
+    if req is not None and by == "left":
+        feedback_rounds.close_left(db, req, datetime.now(timezone.utc))
+        return Response(status_code=204)
     rnd = feedback_rounds.open_round(db, req.id, lock=True) if req else None
     if rnd is not None:
         try:
@@ -103,3 +113,16 @@ def share_feedback_done(token: str, asset_id: uuid.UUID, share_session: Optional
         except feedback_rounds.ImagesPending as e:
             raise HTTPException(409, {"error": "images_pending", "comment_ids": e.comment_ids})
     return Response(status_code=204)
+
+
+@router.post("/share/{token}/assets/{asset_id}/round-sync", dependencies=[Depends(rate_limit("share_round_sync", 120, 600))])
+def share_round_sync(token: str, asset_id: uuid.UUID, share_session: Optional[str] = Query(None),
+                     db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
+    """The embed asks after a note or an approve: close the round when every module has a note or an approval
+    (`closed_by: "all_reviewed"` only on the call that closed it), and say how many notes the open round holds."""
+    from datetime import datetime, timezone
+    from ..services import feedback_rounds
+    asset = _round_asset(db, token, asset_id, share_session, current_user)
+    req = feedback_rounds.request_for_asset(db, asset.id)
+    closed = feedback_rounds.close_if_all_reviewed(db, req, datetime.now(timezone.utc)) if req else False
+    return {"notes": feedback_rounds.notes_count(db, req), "closed_by": "all_reviewed" if closed else None}

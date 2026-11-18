@@ -36,7 +36,8 @@ import { REVIEW_HLS_CONFIG, pickPlaybackSource, pickReviewLevel } from '@/lib/hl
 import { useFirstFrame } from '@/hooks/use-first-frame'
 import { withFirstFrameHint } from '@/lib/first-frame'
 import { FrameLayer } from '@/components/review/frame-layer'
-import { sendToParent, sendAutoreviewEvent, type EmbedMessage } from '@/lib/embed-bridge'
+import { sendToParent, sendAutoreviewEvent, isGenClose, type AutoreviewPayload, type EmbedMessage } from '@/lib/embed-bridge'
+import { EmbedRoundState, createNotesReporter, roundSync } from '@/lib/embed-round'
 import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset, viewerPermission } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
 import type { Asset, SharePermission, ProjectBranding, ShareLinkAppearance, FolderShareAssetItem, FolderShareAssetsResponse } from '@/types'
@@ -895,13 +896,39 @@ function ShareViewer({
   const flow = (embed || isNarrow || phoneView) && asset.asset_type === 'video'
   const flowVideo = () => videoRef.current
   const send = (m: EmbedMessage) => sendToParent({ ...m, asset_id: asset.id })
-  const handoff = (event: 'round_sent' | 'approved') => { if (requestId) sendAutoreviewEvent({ event, request_id: requestId, asset_id: asset.id }) }
+  const handoff = (msg: AutoreviewPayload) => { if (requestId) sendAutoreviewEvent(msg) }
+  const shareSession = folder?.shareSession
+  // Embed round close (Gen spec ST3): the round closes as `left` when the iframe goes away, as `all_reviewed` when every module has a note or an approval.
+  const busyRef = React.useRef(false)
+  const leaveState = React.useRef(new EmbedRoundState())
+  const reportNotes = (n: number) => { if (requestId) createNotesReporter(requestId, (count) => handoff({ event: 'notes', request_id: requestId, count })).report(n) }
+  const syncRound = async () => {
+    const r = await roundSync(token, asset.id, shareSession)
+    if (!r || !requestId) return
+    if (r.closed_by) handoff({ event: 'round_sent', request_id: requestId, asset_id: asset.id })
+    reportNotes(r.notes)
+  }
+  React.useEffect(() => {
+    if (!embed || !requestId) return
+    const leave = () => leaveState.current.leave({ token, assetId: asset.id, shareSession, busy: busyRef.current })
+    const onMessage = (e: MessageEvent) => { if (isGenClose(e)) leave() }
+    window.addEventListener('pagehide', leave) // not visibilitychange: a phone app switch must not send
+    window.addEventListener('message', onMessage)
+    void syncRound()
+    return () => { window.removeEventListener('pagehide', leave); window.removeEventListener('message', onMessage) }
+  }, [embed, requestId, token, asset.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const flowApprove = async () => {
-    const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession, headers: authHeaders(await getUsableAccessToken()), onParts: folder?.onParts })
+    let parts: { approved: number; total: number } | null = null
+    const made = await approveSharedAsset(token, asset.id, { shareSession: folder?.shareSession, headers: authHeaders(await getUsableAccessToken()), onParts: (p) => { parts = p; folder?.onParts?.(p) } })
     setFlowApproved(true)
     folder?.onApproved(true)
-    // The request is approved only when every part is: until the server hands back the delivery, nothing leaves the embed.
-    if (embed && made) { send({ type: 'ar:approved' }); handoff('approved') }
+    if (embed) {
+      if (made) send({ type: 'ar:approved' })
+      // Every approve tap tells Gen; it decides "done" from parts.complete (the server counts the parts).
+      const pr = parts as { approved: number; total: number } | null
+      if (requestId && pr) handoff({ event: 'approved', request_id: requestId, asset_id: asset.id, parts: { ...pr, complete: pr.approved === pr.total } })
+      void syncRound()
+    }
     return made
   }
 
@@ -945,8 +972,9 @@ function ShareViewer({
           canSave={!!identity}
           onNeedSave={() => setAskIdentity(true)}
           onApprove={flowApprove}
-          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }); handoff('round_sent'); folder?.onSentAll?.() }}
-          onNoteSaved={(t) => { send({ type: 'ar:comment', t }); setCommentKey((k) => k + 1); folder?.onNoteSaved?.() }}
+          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }); handoff({ event: 'round_sent', request_id: requestId ?? '', asset_id: asset.id }); reportNotes(0); folder?.onSentAll?.() }}
+          onBusy={(b) => { busyRef.current = b }}
+          onNoteSaved={(t) => { send({ type: 'ar:comment', t }); setCommentKey((k) => k + 1); folder?.onNoteSaved?.(); void syncRound() }}
           onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id, { shareSession: folder?.shareSession }); setFlowApproved(false); folder?.onApproved(false) }}
           sessionKey={token}
           approved={flowApproved}

@@ -73,6 +73,8 @@ export interface FlowViewProps {
   embed?: boolean
   /** A note reached the server (embed: tells the parent page). */
   onNoteSaved?: (t: number) => void
+  /** Embed: true while a note is recording, transcribing or still uploading (leaving the page then must not close the round). */
+  onBusy?: (busy: boolean) => void
   /** Embed only: the folder stepper, shown under the Comment row while not recording. */
   embedNav?: React.ReactNode
   /** Embed only: AutoReview's comment list; `show` goes to a comment's time and plays its drawing on the video. */
@@ -248,6 +250,8 @@ export function FlowView(p: FlowViewProps) {
       if (!announced.current.has(e.id)) { announced.current.add(e.id); p.onNoteSaved?.((e.payload as { t?: number })?.t ?? 0) }
     }
   }, [ob.entries]) // eslint-disable-line react-hooks/exhaustive-deps
+  const busy = !!active || notes.some(n => n.status === 'recording' || n.status === 'transcribing') || ob.entries.some(e => e.status === 'queued' || e.status === 'sending')
+  React.useEffect(() => { p.onBusy?.(busy) }, [busy]) // eslint-disable-line react-hooks/exhaustive-deps
   const onNeedSave = React.useRef(p.onNeedSave)
   onNeedSave.current = p.onNeedSave
   const [playing, setPlaying] = React.useState(false)
