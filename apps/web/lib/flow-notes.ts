@@ -68,10 +68,12 @@ export const sendable = (notes: FlowNote[]) => notes.filter(n => n.status === 'r
 export const sendBlocked = (notes: FlowNote[]) => notes.some(n => n.status === 'recording' || n.status === 'transcribing' || (n.status === 'failed' && !n.text.trim()) || (n.status === 'ready' && !n.text.trim()))
 
 const FILLER = /^(s+|sh+|z+|hm+|h+m+|äh+m*|ähm|mm+|uh+m*|um+|ah+|oh+|e+h+)$/i
-/** Mic noise Whisper turned into text ("Ssort.", "Ss."): fewer than 2 real words (filler and sibilants don't count). */
+/** Mic noise Whisper turned into text ("Ssort.", "Ss."): only filler/sibilant tokens, or one token that starts with a doubled sibilant.
+ *  ponytail: deliberately narrow; a real one-word note ("Schneller.") must survive, a noise note can be deleted by hand. */
 export function isNoiseText(text: string): boolean {
-  const tokens = text.toLowerCase().replace(/[^\p{L}\p{N}\s'-]/gu, ' ').split(/\s+/).filter(Boolean)
-  return tokens.filter(t => t.length >= 2 && !FILLER.test(t)).length < 2
+  const tokens = text.toLowerCase().replace(/[^a-z0-9äöüß\s'-]/g, ' ').split(/\s+/).filter(Boolean)
+  if (!tokens.length || tokens.every(t => t.length < 2 || FILLER.test(t))) return true
+  return tokens.length === 1 && /^(ss|shh|schh|zz)/.test(tokens[0])
 }
 
 export interface NotePart { t: number; text: string; marks: InkMark[] }

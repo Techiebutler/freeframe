@@ -100,6 +100,10 @@ describe('notesFromDictation', () => {
     expect(notesFromDictation(play(0), 'x', segs, [], w).map(p => p.text)).toEqual(['Zu laut.', 'Cut weg.'])
     expect(notesFromDictation(play(0), 'Ssort.', [], [], w)).toEqual([])
   })
+  it('keeps a real one-word note', () => {
+    const w = [{ start: 0, end: 1, word: 'x' }]
+    expect(notesFromDictation(play(0), 'x', [{ start: 0, end: 1, text: 'Schneller.' }], [], w).map(p => p.text)).toEqual(['Schneller.'])
+  })
   it('noise with ink keeps the marks and empties the text', () => {
     const parts = notesFromDictation(play(0), 'x', [{ start: 0, end: 1, text: 'Ss.' }], [mk(100)], [{ start: 0, end: 1, word: 'Ss.' }])
     expect(parts).toHaveLength(1)
