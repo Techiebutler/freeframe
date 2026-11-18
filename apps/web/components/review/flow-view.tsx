@@ -340,7 +340,6 @@ export function FlowView(p: FlowViewProps) {
 
   /** Starts a recording at the playhead. Resolves false when there is no microphone (the note is dropped). */
   const startSegment = async (): Promise<boolean> => {
-    // The video keeps playing in the other views: talk and draw while it runs (H69).
     const id = newId()
     const t = p.getPlayhead()
     marks.current = []
@@ -350,7 +349,7 @@ export function FlowView(p: FlowViewProps) {
       levelRef.current = 0
       const rec = await start(v => { levelRef.current = v })
       // Embed: the video was played again while the mic was still opening; nothing was said, nothing is kept.
-      if (p.embed && dict.current.mic !== 'on') { rec.cancel(); dispatch({ type: 'remove', id }); return true }
+      if (dict.current.mic !== 'on') { rec.cancel(); dispatch({ type: 'remove', id }); return true }
       const startedAt = rec.startedAt ?? Date.now()
       tracker.current = trackVideo(rootRef.current?.querySelector('video') ?? null, startedAt)
       setActive({ id, t, rec, startedAt })
@@ -363,15 +362,6 @@ export function FlowView(p: FlowViewProps) {
       return true
     }
   }
-
-  // Non-embed: talk-while-it-plays (H69) stays, but the video's own sound must never reach the transcript: mute it for the recording.
-  React.useEffect(() => {
-    const v = active && !p.embed ? rootRef.current?.querySelector('video') : null
-    if (!v) return
-    const was = v.muted
-    v.muted = true
-    return () => { v.muted = was }
-  }, [active, p.embed])
 
   // Embed: the mic follows the video (lib/embed-dictation.ts). Paused = talk, playing = silence.
   const dict = React.useRef(dictInitial)
@@ -415,16 +405,17 @@ export function FlowView(p: FlowViewProps) {
   }
   const prevPlaying = React.useRef(false)
   React.useEffect(() => {
-    if (!p.embed || prevPlaying.current === playing) return
+    if (prevPlaying.current === playing) return
     prevPlaying.current = playing
-    dictate_(playing ? 'play' : 'pause')
+    // Embed: the mic follows the video both ways. Elsewhere only Comment starts it, but Play still ends the segment: pause = talk, play = silence.
+    if (p.embed) dictate_(playing ? 'play' : 'pause')
+    else { dict.current = { ...dict.current, video: playing ? 'playing' : 'paused' }; if (playing && dict.current.mic === 'on') dictate_('play') }
   }, [playing]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const tapComment = async () => {
     setError('')
-    if (p.embed) { dictate_('comment'); return }
-    if (activeRef.current) { await stopSegment(); return }
-    await startSegment()
+    if (!p.embed) dict.current = { ...dict.current, video: playing ? 'playing' : 'paused' }
+    dictate_('comment')
   }
 
   const blocked = sendBlocked(notes) || ob.summary.pending > 0 || ob.summary.failed > 0
