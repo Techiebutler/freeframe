@@ -12,7 +12,8 @@ class ApprovalResponse(BaseModel):
     id: uuid.UUID
     asset_id: uuid.UUID
     version_id: uuid.UUID
-    user_id: uuid.UUID
+    # None for a share-link guest's verdict, which has a guest_user_id instead.
+    user_id: Optional[uuid.UUID]
     status: ApprovalStatus
     note: Optional[str]
     created_at: datetime

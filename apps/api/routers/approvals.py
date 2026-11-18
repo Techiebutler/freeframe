@@ -1,21 +1,19 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
-from ..models.asset import Asset
-from ..models.approval import Approval, ApprovalStatus
-from ..models.activity import ActivityLog, ActivityAction, Notification, NotificationType
+from ..models.asset import Asset, AssetVersion
+from ..models.approval import Approval
 from ..models.project import ProjectRole
 from ..schemas.approval import ApprovalCreate, ApprovalResponse
-from ..services.permissions import require_asset_access, require_project_role
-from ..services import event_service
-from ..tasks.email_tasks import send_approval_email
-from ..tasks.celery_app import send_task_safe
-from ..config import settings
+from ..schemas.verdict import VerdictResponse, VerdictSet
+from ..services.permissions import require_asset_access, require_live_project, require_project_role
+from ..services.verdicts import Actor, clear_verdict, list_verdicts, remove_verdict, set_verdict
 
 router = APIRouter(tags=["approvals"])
 
@@ -27,41 +25,111 @@ def _get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
     return asset
 
 
-def _upsert_approval(
+def _live_version(db: Session, asset: Asset, version_id: uuid.UUID) -> AssetVersion:
+    """The version, or 404 unless it is a live version of this asset. A verdict is
+    about one version, so an id from another asset, a deleted version or an unknown
+    one all read the same."""
+    version = db.query(AssetVersion).filter(
+        AssetVersion.id == version_id,
+        AssetVersion.asset_id == asset.id,
+        AssetVersion.deleted_at.is_(None),
+    ).first()
+    if version is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return version
+
+
+def _clean_note(note: Optional[str]) -> Optional[str]:
+    """What is stored for a note: trimmed, and nothing at all when it was only space."""
+    if note is None:
+        return None
+    return note.strip() or None
+
+
+def _give(
     db: Session,
-    asset: Asset,
+    asset_id: uuid.UUID,
     version_id: uuid.UUID,
     user: User,
-    new_status: ApprovalStatus,
-    note: str | None,
-) -> Approval:
-    """Create or update an approval record for a user+version."""
-    existing = db.query(Approval).filter(
-        Approval.asset_id == asset.id,
-        Approval.version_id == version_id,
-        Approval.user_id == user.id,
-        Approval.deleted_at.is_(None),
-    ).first()
+    verdict: str,
+    note: Optional[str],
+) -> tuple[Asset, Approval]:
+    """The one path a signed-in team member gives a verdict by, shared by the new PUT
+    route and the legacy approve and reject routes."""
+    asset = _get_asset(db, asset_id)
+    # reviewer or above can give a verdict
+    require_project_role(db, asset.project_id, user, ProjectRole.reviewer)
+    version = _live_version(db, asset, version_id)
+    approval = set_verdict(db, asset, version, Actor(user=user), verdict, _clean_note(note))
+    return asset, approval
 
-    if existing:
-        existing.status = new_status
-        existing.note = note
-        db.commit()
-        db.refresh(existing)
-        return existing
 
-    approval = Approval(
-        asset_id=asset.id,
-        version_id=version_id,
-        user_id=user.id,
-        status=new_status,
-        note=note,
-    )
-    db.add(approval)
-    db.commit()
-    db.refresh(approval)
-    return approval
+@router.put("/assets/{asset_id}/verdict", response_model=VerdictResponse)
+def put_verdict(
+    asset_id: uuid.UUID,
+    body: VerdictSet,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Give, or change, the caller's verdict on one version."""
+    asset, approval = _give(db, asset_id, body.version_id, current_user, body.status, body.note)
+    # The service committed, so read the verdict back the way every reader sees it.
+    me = Actor(user=current_user)
+    given = next((v for v in list_verdicts(db, asset, approval.version_id, me=me)
+                  if v.id == approval.id), None)
+    if given is None:
+        # Cleared by someone else between the write and this read.
+        raise HTTPException(status_code=404, detail="Verdict not found")
+    return given
 
+
+@router.delete("/assets/{asset_id}/verdict", status_code=status.HTTP_204_NO_CONTENT)
+def clear_my_verdict(
+    asset_id: uuid.UUID,
+    version_id: uuid.UUID = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Withdraw the caller's own verdict on one version. 204 even when there was none."""
+    asset = _get_asset(db, asset_id)
+    require_project_role(db, asset.project_id, current_user, ProjectRole.reviewer)
+    version = _live_version(db, asset, version_id)
+    clear_verdict(db, asset, version, Actor(user=current_user))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/assets/{asset_id}/verdicts/{verdict_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_someones_verdict(
+    asset_id: uuid.UUID,
+    verdict_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """An owner or editor deletes anyone's verdict on the asset, a guest's included."""
+    asset = _get_asset(db, asset_id)
+    require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
+    remove_verdict(db, asset, verdict_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/assets/{asset_id}/verdicts", response_model=list[VerdictResponse])
+def get_verdicts(
+    asset_id: uuid.UUID,
+    version_id: uuid.UUID = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Every verdict on one version. Names and notes only, never an email: a viewer can read it."""
+    asset = _get_asset(db, asset_id)
+    # A deleted project is gone for everyone who was in it, so say so (404) ahead of
+    # the access check, which would answer 403.
+    require_live_project(db, asset.project_id)
+    require_asset_access(db, asset, current_user)
+    version = _live_version(db, asset, version_id)
+    return list_verdicts(db, asset, version.id, me=Actor(user=current_user))
+
+
+# ── Legacy routes, kept for existing clients ──────────────────────────────────
 
 @router.post("/assets/{asset_id}/approve", response_model=ApprovalResponse)
 def approve_asset(
@@ -70,37 +138,7 @@ def approve_asset(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    asset = _get_asset(db, asset_id)
-    # reviewer or above can approve
-    require_project_role(db, asset.project_id, current_user, ProjectRole.reviewer)
-
-    approval = _upsert_approval(db, asset, body.version_id, current_user, ApprovalStatus.approved, body.note)
-
-    # Activity + notification to asset creator
-    db.add(ActivityLog(user_id=current_user.id, asset_id=asset_id, action=ActivityAction.approved))
-    if asset.created_by != current_user.id:
-        db.add(Notification(user_id=asset.created_by, type=NotificationType.approval, asset_id=asset_id))
-        # Send approval email
-        creator = db.query(User).filter(User.id == asset.created_by).first()
-        if creator:
-            asset_link = f"{settings.frontend_url}/assets/{asset_id}"
-            send_task_safe(
-                send_approval_email,
-                to_email=creator.email,
-                reviewer_name=current_user.name,
-                asset_name=asset.name,
-                status="approved",
-                asset_link=asset_link,
-                note=body.note,
-            )
-    db.commit()
-
-    event_service.publish_sync(asset.project_id, "approval_updated", {
-        "asset_id": str(asset_id),
-        "user_id": str(current_user.id),
-        "status": "approved",
-    })
-
+    _, approval = _give(db, asset_id, body.version_id, current_user, "approved", body.note)
     return approval
 
 
@@ -111,35 +149,7 @@ def reject_asset(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    asset = _get_asset(db, asset_id)
-    require_project_role(db, asset.project_id, current_user, ProjectRole.reviewer)
-
-    approval = _upsert_approval(db, asset, body.version_id, current_user, ApprovalStatus.rejected, body.note)
-
-    db.add(ActivityLog(user_id=current_user.id, asset_id=asset_id, action=ActivityAction.rejected))
-    if asset.created_by != current_user.id:
-        db.add(Notification(user_id=asset.created_by, type=NotificationType.approval, asset_id=asset_id))
-        # Send rejection email
-        creator = db.query(User).filter(User.id == asset.created_by).first()
-        if creator:
-            asset_link = f"{settings.frontend_url}/assets/{asset_id}"
-            send_task_safe(
-                send_approval_email,
-                to_email=creator.email,
-                reviewer_name=current_user.name,
-                asset_name=asset.name,
-                status="rejected",
-                asset_link=asset_link,
-                note=body.note,
-            )
-    db.commit()
-
-    event_service.publish_sync(asset.project_id, "approval_updated", {
-        "asset_id": str(asset_id),
-        "user_id": str(current_user.id),
-        "status": "rejected",
-    })
-
+    _, approval = _give(db, asset_id, body.version_id, current_user, "rejected", body.note)
     return approval
 
 
