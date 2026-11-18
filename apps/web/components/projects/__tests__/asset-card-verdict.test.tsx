@@ -72,7 +72,7 @@ describe('verdict badge on project thumbnails', () => {
         projectId="p1"
       />,
     )
-    const badge = screen.getByRole('img', { name: '1 verdict' })
+    const badge = screen.getByRole('img', { name: '1 verdict, rejected' })
     expect(badge.textContent).toBe('1')
     expect(badge.getAttribute('data-tone')).toBe('rejected')
   })
@@ -84,7 +84,7 @@ describe('verdict badge on project thumbnails', () => {
         projectId="p1"
       />,
     )
-    const badge = screen.getByRole('img', { name: '3 verdicts' })
+    const badge = screen.getByRole('img', { name: '3 verdicts, changes needed' })
     expect(badge.textContent).toBe('3')
     expect(badge.getAttribute('data-tone')).toBe('changes')
   })
@@ -99,8 +99,8 @@ describe('verdict badge on project thumbnails', () => {
         projectId="p1"
       />,
     )
-    expect(screen.getByRole('img', { name: '1 verdict' }).getAttribute('data-tone')).toBe('approved')
-    expect(screen.getByRole('img', { name: '2 verdicts' }).getAttribute('data-tone')).toBe('rejected')
+    expect(screen.getByRole('img', { name: '1 verdict, approved' }).getAttribute('data-tone')).toBe('approved')
+    expect(screen.getByRole('img', { name: '2 verdicts, rejected' }).getAttribute('data-tone')).toBe('rejected')
   })
 
   it('shows nothing for an asset with no summary', () => {
@@ -124,7 +124,7 @@ describe('verdict badge on project thumbnails', () => {
         projectId="p1"
       />,
     )
-    expect(screen.getByRole('img', { name: '1 verdict' })).toBeTruthy()
+    expect(screen.getByRole('img', { name: '1 verdict, approved' })).toBeTruthy()
   })
 
   it('sits in the thumbnail’s free corner, clear of the comment count', () => {
@@ -132,7 +132,7 @@ describe('verdict badge on project thumbnails', () => {
     render(<AssetGrid assets={[asset]} projectId="p1" />)
     const comments = screen.getByTitle('4 comments')
     const pill = screen.getByTestId('card-verdict')
-    expect(pill.contains(screen.getByRole('img', { name: '1 verdict' }))).toBe(true)
+    expect(pill.contains(screen.getByRole('img', { name: '1 verdict, approved' }))).toBe(true)
     expect(pill.parentElement).toBe(comments.parentElement)
     // Top-right: the other three corners hold the checkbox, the comment count
     // and the duration.

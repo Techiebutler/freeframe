@@ -52,6 +52,21 @@ export function verdictCountLabel(count: number): string {
   return `${count} ${count === 1 ? 'verdict' : 'verdicts'}`
 }
 
+/** Each tone in the words its verdict reads as, so no label is a second copy. */
+const TONE_LABEL: Record<VerdictTone, string> = {
+  approved: VERDICT_LABEL.approved,
+  changes: VERDICT_LABEL.changes_requested,
+  rejected: VERDICT_LABEL.rejected,
+}
+
+/**
+ * "3 verdicts, changes needed": the count and the tone it is coloured in, for
+ * assistive tech. Colour alone must not be what says rejected from approved.
+ */
+export function verdictCountToneLabel(count: number, tone: VerdictTone): string {
+  return `${verdictCountLabel(count)}, ${TONE_LABEL[tone].toLowerCase()}`
+}
+
 /**
  * The SWR key for the verdicts on one version. One builder, because the asset
  * page revalidates it from an SSE event and a key that differs by a character

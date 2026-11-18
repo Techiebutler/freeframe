@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { verdictTone, VERDICT_LABEL } from '../verdicts'
+import { verdictTone, verdictCountToneLabel, VERDICT_LABEL } from '../verdicts'
 import type { Verdict, VerdictValue } from '@/types'
 
 function verdict(status: VerdictValue, id: string = status): Verdict {
@@ -49,5 +49,19 @@ describe('VERDICT_LABEL', () => {
       changes_requested: 'Changes needed',
       rejected: 'Rejected',
     })
+  })
+})
+
+describe('verdictCountToneLabel', () => {
+  it('names the count and the tone, in the words a verdict reads as', () => {
+    expect(verdictCountToneLabel(1, 'rejected')).toBe('1 verdict, rejected')
+    expect(verdictCountToneLabel(3, 'changes')).toBe('3 verdicts, changes needed')
+    expect(verdictCountToneLabel(2, 'approved')).toBe('2 verdicts, approved')
+  })
+
+  it('takes its words from VERDICT_LABEL, not a copy of them', () => {
+    expect(verdictCountToneLabel(1, 'changes')).toContain(VERDICT_LABEL.changes_requested.toLowerCase())
+    expect(verdictCountToneLabel(1, 'approved')).toContain(VERDICT_LABEL.approved.toLowerCase())
+    expect(verdictCountToneLabel(1, 'rejected')).toContain(VERDICT_LABEL.rejected.toLowerCase())
   })
 })

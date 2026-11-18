@@ -255,16 +255,29 @@ describe('VerdictBadge', () => {
     ...partial,
   })
 
-  it('shows the count in the tone of the most serious verdict', () => {
+  it('shows the count in the tone of the most serious verdict, and names that tone', () => {
     render(<VerdictBadge summary={summary({ approved: 2, rejected: 1 })} />)
-    const badge = screen.getByLabelText('3 verdicts')
+    const badge = screen.getByLabelText('3 verdicts, rejected')
     expect(badge).toHaveTextContent('3')
     expect(badge).toHaveAttribute('data-tone', 'rejected')
   })
 
   it('says verdict in the singular for one', () => {
     render(<VerdictBadge summary={summary({ approved: 1 })} />)
-    expect(screen.getByLabelText('1 verdict')).toHaveAttribute('data-tone', 'approved')
+    expect(screen.getByLabelText('1 verdict, approved')).toHaveAttribute('data-tone', 'approved')
+  })
+
+  // Colour alone must not be the signal: each tone is named in the label.
+  it.each([
+    ['rejected', summary({ rejected: 1 }), '1 verdict, rejected'],
+    ['changes', summary({ changes_requested: 3 }), '3 verdicts, changes needed'],
+    ['approved', summary({ approved: 2 }), '2 verdicts, approved'],
+  ])('names the %s tone in its label', (tone, value, label) => {
+    render(<VerdictBadge summary={value} />)
+    const badge = screen.getByLabelText(label)
+    expect(badge).toHaveAttribute('role', 'img')
+    expect(badge).toHaveAttribute('title', label)
+    expect(badge).toHaveAttribute('data-tone', tone)
   })
 
   it.each([

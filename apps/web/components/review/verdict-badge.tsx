@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils'
 import {
-  verdictCountLabel,
+  verdictCountToneLabel,
   verdictTone,
   VERDICT_TONE_DOT_CLASS,
   VERDICT_TONE_TEXT_CLASS,
@@ -17,7 +17,7 @@ export function VerdictBadge({ summary }: { summary?: VerdictSummary | null }) {
   if (!tone) return null
 
   const count = summary.approved + summary.changes_requested + summary.rejected
-  const label = verdictCountLabel(count)
+  const label = verdictCountToneLabel(count, tone)
 
   return (
     <span

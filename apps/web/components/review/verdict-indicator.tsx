@@ -5,7 +5,7 @@ import * as Popover from '@radix-ui/react-popover'
 import { Check, Pencil, X, type LucideIcon } from 'lucide-react'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import {
-  verdictCountLabel,
+  verdictCountToneLabel,
   verdictTone,
   VERDICT_LABEL,
   VERDICT_TONE_TEXT_CLASS,
@@ -130,14 +130,14 @@ function VerdictPopover({
     else close()
   }
 
-  const { Icon, label: toneLabel } = TONE_VIEW[tone]
+  const { Icon } = TONE_VIEW[tone]
 
   return (
     <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={`${verdictCountLabel(verdicts.length)}, ${toneLabel.toLowerCase()}`}
+          aria-label={verdictCountToneLabel(verdicts.length, tone)}
           data-tone={tone}
           onClick={handleTriggerClick}
           onPointerEnter={handleTriggerEnter}
