@@ -18,6 +18,8 @@ import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
+import { useFirstFrame } from "@/hooks/use-first-frame";
+import { FrameLayer } from "./frame-layer";
 import { useOptionalReview } from "./review-provider";
 import { ProgressBar } from "./progress-bar";
 import type { Comment } from "@/types";
@@ -219,6 +221,7 @@ export function VideoPlayer({
   }, [assetId, initialStreamUrl, versionId]);
 
   const player = useVideoPlayer(streamUrl, { preferBestQuality: compact });
+  const frame = useFirstFrame(player.videoRef, streamUrl);
 
   const {
     videoRef,
@@ -330,7 +333,7 @@ export function VideoPlayer({
     >
       {/* Video area — fills available space, object-contain preserves aspect ratio with letterbox */}
       <div
-        className="flex-1 relative min-h-0 bg-black overflow-hidden cursor-pointer"
+        className="flex-1 relative min-h-0 bg-bg-primary overflow-hidden cursor-pointer"
         onClick={handleContainerClick}
       >
         <video
@@ -342,6 +345,7 @@ export function VideoPlayer({
           playsInline
           preload="metadata"
         />
+        <FrameLayer covered={frame.covered} image={frame.image} />
 
         {/* Loading spinner */}
         {isLoading && (

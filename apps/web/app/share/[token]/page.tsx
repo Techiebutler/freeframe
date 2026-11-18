@@ -33,6 +33,9 @@ import { VideoFrameConstraint } from '@/components/review/video-player'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
 import { REVIEW_HLS_CONFIG, pickPlaybackSource, pickReviewLevel } from '@/lib/hls-review'
+import { useFirstFrame } from '@/hooks/use-first-frame'
+import { withFirstFrameHint } from '@/lib/first-frame'
+import { FrameLayer } from '@/components/review/frame-layer'
 import { sendToParent, sendAutoreviewEvent, type EmbedMessage } from '@/lib/embed-bridge'
 import { approveSharedAsset, guestDictate, shareFeedbackDone, undoApproveSharedAsset, viewerPermission } from '@/lib/share-flow'
 import { FolderShareViewer } from '@/components/share/folder-share-viewer'
@@ -434,9 +437,11 @@ interface ShareMediaViewerProps {
   overlay?: React.ReactNode
   /** Embed player: no native controls, the embed draws its own bar (components/review/embed-bar.tsx). */
   bare?: boolean
+  /** Poster for the first frame (stream API thumbnail_url); without one the video paints its own first frame. */
+  poster?: string | null
 }
 
-function ShareMediaViewer({ asset, token, streamUrl, streamLoading, proxyUrl, videoRef: externalVideoRef, overlay, bare }: ShareMediaViewerProps) {
+function ShareMediaViewer({ asset, token, streamUrl, streamLoading, proxyUrl, poster, videoRef: externalVideoRef, overlay, bare }: ShareMediaViewerProps) {
   const ownVideoRef = React.useRef<HTMLVideoElement>(null)
   const videoRef = externalVideoRef ?? ownVideoRef
   const audioRef = React.useRef<HTMLAudioElement>(null)
@@ -444,6 +449,8 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, proxyUrl, vi
   const [proxyBroken, setProxyBroken] = React.useState(false)
   const source = streamUrl && asset.asset_type === 'video' ? pickPlaybackSource(streamUrl, proxyBroken ? null : proxyUrl) : null
   const preparing = source?.kind === 'original'
+  // Frame 0 (or the last painted frame) stays over the video until the source has a decoded frame, then crossfades away.
+  const { covered, image } = useFirstFrame(videoRef, asset.asset_type === 'video' && streamUrl && !streamLoading && !fatalError ? (source?.url ?? null) : null, poster ?? asset.thumbnail_url)
 
   React.useEffect(() => {
     if (!streamUrl || streamLoading) return
@@ -522,7 +529,7 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, proxyUrl, vi
     } else if (mediaEl) {
       // crossOrigin keeps drawn-frame (canvas capture) working on the cross-origin proxy file.
       if (isProxy) (mediaEl as HTMLVideoElement).crossOrigin = 'anonymous'
-      mediaEl.src = resolvedUrl
+      mediaEl.src = isProxy ? withFirstFrameHint(resolvedUrl) : resolvedUrl
     }
 
     function handleMediaError() {
@@ -553,16 +560,16 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, proxyUrl, vi
   }, [streamUrl, streamLoading, asset.asset_type, source?.url, source?.kind])
 
   return (
-    <div className="relative flex-1 flex items-center justify-center bg-black min-h-0 overflow-hidden">
+    <div className="relative flex-1 flex items-center justify-center bg-[var(--bg-primary)] min-h-0 overflow-hidden">
       {preparing && (
         <p className="pointer-events-none absolute left-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs text-zinc-300">
           Preparing faster playback…
         </p>
       )}
       {asset.asset_type === 'video' && (
-        <div className="w-full h-full flex items-center justify-center">
+        <div className="relative w-full h-full flex items-center justify-center">
           {streamLoading ? (
-            <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
+            image ? <FrameLayer covered image={image} /> : <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
           ) : fatalError ? (
             <div className="flex flex-col items-center gap-2">
               <AlertTriangle className="h-10 w-10 text-red-500" />
@@ -574,18 +581,22 @@ function ShareMediaViewer({ asset, token, streamUrl, streamLoading, proxyUrl, vi
                 <video ref={videoRef} controls={!bare} className="absolute inset-0 h-full w-full object-contain" preload="metadata" playsInline>
                   Your browser does not support video playback.
                 </video>
+                <FrameLayer covered={covered} image={image} />
                 <VideoFrameConstraint videoRef={videoRef}>{overlay}</VideoFrameConstraint>
               </div>
             ) : (
-            <video
-              ref={videoRef}
-              controls
-              className="max-h-full max-w-full"
-              preload="metadata"
-              playsInline
-            >
-              Your browser does not support video playback.
-            </video>
+            <>
+              <video
+                ref={videoRef}
+                controls
+                className="max-h-full max-w-full"
+                preload="metadata"
+                playsInline
+              >
+                Your browser does not support video playback.
+              </video>
+              <FrameLayer covered={covered} image={image} />
+            </>
             )
           ) : (
             <div className="flex flex-col items-center gap-2">
@@ -824,6 +835,7 @@ function ShareViewer({
   const [streamUrl, setStreamUrl] = React.useState<string | null>(asset.stream_url ?? null)
   const [streamLoading, setStreamLoading] = React.useState(false)
   const [proxyUrl, setProxyUrl] = React.useState<string | null>(null)
+  const [poster, setPoster] = React.useState<string | null>(null)
   const [commentKey, setCommentKey] = React.useState(0)
   const [commentTimes, setCommentTimes] = React.useState<number[]>([])
   const [selectedComment, setSelectedComment] = React.useState<string | null>(null)
@@ -871,6 +883,7 @@ function ShareViewer({
         if (data?.stream_url) setStreamUrl(data.stream_url)
         else if (data?.url) setStreamUrl(data.url)
         setProxyUrl(data?.proxy_url ?? null)
+        setPoster(data?.thumbnail_url ?? null)
       })
       .catch(() => null)
       .finally(() => setStreamLoading(false))
@@ -906,7 +919,7 @@ function ShareViewer({
 
   if (flow && embed) {
     return (
-      <div className="absolute inset-0 overflow-hidden bg-black text-white">
+      <div className="absolute inset-0 overflow-hidden bg-[var(--bg-primary)] text-white">
         <FlowView
           embed
           embedNav={folder && folder.count > 1 ? folder.nav : undefined}
@@ -918,7 +931,7 @@ function ShareViewer({
           )}
           embedMarkers={commentTimes}
           renderMedia={(ink) => (
-            <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} proxyUrl={proxyUrl} videoRef={videoRef} overlay={ink} bare />
+            <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} proxyUrl={proxyUrl} poster={poster} videoRef={videoRef} overlay={ink} bare />
           )}
           files={[{ id: asset.id, name: asset.name }]}
           currentFileId={asset.id}
@@ -969,7 +982,7 @@ function ShareViewer({
           <div className={isNarrow ? 'h-full w-full max-w-[430px] md:border-x md:border-white/[0.06]' : 'h-full w-full'}>
             <FlowView
               renderMedia={(ink) => (
-                <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} proxyUrl={proxyUrl} videoRef={videoRef} overlay={ink} />
+                <ShareMediaViewer asset={asset} token={token} streamUrl={streamUrl} streamLoading={streamLoading} proxyUrl={proxyUrl} poster={poster} videoRef={videoRef} overlay={ink} />
               )}
               files={[{ id: asset.id, name: asset.name }]}
               currentFileId={asset.id}
@@ -1099,7 +1112,7 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
       embed
       requestId={requestId}
       token={token}
-      asset={{ id: current.id, name: current.name, asset_type: current.asset_type } as Asset}
+      asset={{ id: current.id, name: current.name, asset_type: current.asset_type, thumbnail_url: current.thumbnail_url ?? undefined } as unknown as Asset}
       permission={permission}
       allowDownload={false}
       branding={branding}
