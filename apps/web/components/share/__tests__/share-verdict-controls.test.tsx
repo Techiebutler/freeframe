@@ -13,11 +13,11 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
   signInAgain,
 }))
 
-function jwt(expSecondsFromNow: number): string {
+function jwt(expSecondsFromNow: number, sub = 'u1'): string {
   const b64url = (o: object) =>
     btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   const exp = Math.floor(Date.now() / 1000) + expSecondsFromNow
-  return `${b64url({ alg: 'HS256' })}.${b64url({ sub: 'u1', exp })}.sig`
+  return `${b64url({ alg: 'HS256' })}.${b64url({ sub, exp })}.sig`
 }
 
 function makeVerdict(partial: Partial<Verdict> & { id: string }): Verdict {
@@ -50,6 +50,8 @@ let refreshQueue: Array<{ status: number; body?: unknown } | null>
 let writeQueue: Array<{ status: number; body?: unknown }>
 /** When set, GET answers by who asked, as the server scopes it. */
 let listedFor: ((call: Call) => Verdict[]) | null
+/** When it says so, a GET gets no answer (the network drops it). */
+let getFails: ((call: Call) => boolean) | null
 
 beforeEach(() => {
   localStorage.clear()
@@ -59,6 +61,7 @@ beforeEach(() => {
   refreshQueue = []
   writeQueue = []
   listedFor = null
+  getFails = null
   resetShareRequestState()
   writeAnswer = { status: 200, body: {} }
   refreshAnswer = { status: 401, body: { detail: 'Invalid refresh token' } }
@@ -80,6 +83,7 @@ beforeEach(() => {
         body: typeof init.body === 'string' ? JSON.parse(init.body) : null,
       }
       calls.push(call)
+      if (method === 'GET' && getFails?.(call)) throw new TypeError('Failed to fetch')
       const answer =
         method === 'GET'
           ? { status: 200, body: listedFor ? listedFor(call) : listed }
@@ -422,6 +426,27 @@ describe('ShareVerdictControls', () => {
     })
 
     // Fix round 2, issue 1, through the controls.
+    // Fix round 3, issue 2: the guest's list could not be read, so there is
+    // nothing to decide against. The press stops; it is not decided against
+    // the signed-in list still on screen.
+    it('"Continue as guest" whose re-read as the guest fails sends nothing and says to try again', async () => {
+      refreshAnswer = { status: 401, body: {} }
+      const theirApproval = makeVerdict({ id: 'u1', status: 'approved', is_mine: true })
+      listedFor = (call) => (call.headers.Authorization ? [theirApproval] : [])
+      render(ui({ guestIdentity: dana }))
+      await waitFor(() => expect(button('Approve')).toHaveAttribute('aria-pressed', 'true'))
+      await userEvent.click(button('Approve'))
+      await screen.findByRole('alert')
+      expect(writes()).toHaveLength(1)
+
+      getFails = (call) => !!call.url.searchParams.get('guest_email')
+      await userEvent.click(button('Continue as guest'))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't reach the server. Try again.")
+      expect(gets().some((c) => c.url.searchParams.get('guest_email'))).toBe(true)
+      expect(writes()).toHaveLength(1)
+    })
+
     it('after the choice, a new token that lapses is refreshed and the press goes as them', async () => {
       refreshAnswer = { status: 401, body: {} }
       render(ui({ guestIdentity: dana }))
@@ -490,6 +515,43 @@ describe('ShareVerdictControls', () => {
     // Their own Approve was already given, so the press is the undo, as them.
     expect(writes()[0].method).toBe('DELETE')
     expect(writes()[0].headers.Authorization).toBe(`Bearer ${token}`)
+  })
+
+  // Fix round 3, issue 2, the other way round: read as the guest, signed in
+  // elsewhere, and their own list cannot be read. Nothing is sent.
+  it('a re-read as a newly signed-in person that fails sends nothing and says to try again', async () => {
+    const theirApproval = makeVerdict({ id: 'u1', status: 'approved', is_mine: true })
+    listedFor = (call) => (call.headers.Authorization ? [theirApproval] : [])
+    render(ui({ guestIdentity: dana }))
+    await waitFor(() => expect(gets()).toHaveLength(1))
+
+    localStorage.setItem('ff_access_token', jwt(3600))
+    getFails = (call) => !!call.headers.Authorization
+    await userEvent.click(button('Approve'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't reach the server. Try again.")
+    expect(writes()).toHaveLength(0)
+  })
+
+  // Fix round 3, issue 3: another account signed in in another tab. Its press
+  // is decided against its own list, read again as it, not the first one's.
+  it('re-reads as the account now signed in when it is not the one the list was read as', async () => {
+    const alice = jwt(3600, 'alice')
+    const bob = jwt(3600, 'bob')
+    localStorage.setItem('ff_access_token', alice)
+    const alicesApproval = makeVerdict({ id: 'a1', status: 'approved', is_mine: true })
+    listedFor = (call) => (call.headers.Authorization === `Bearer ${alice}` ? [alicesApproval] : [])
+    render(ui({ guestIdentity: null }))
+    await waitFor(() => expect(button('Approve')).toHaveAttribute('aria-pressed', 'true'))
+
+    localStorage.setItem('ff_access_token', bob)
+    await userEvent.click(button('Approve'))
+
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(gets().some((c) => c.headers.Authorization === `Bearer ${bob}`)).toBe(true)
+    // Bob has no verdict, so Approve gives one as Bob; it does not clear Alice's.
+    expect(writes()[0].method).toBe('PUT')
+    expect(writes()[0].headers.Authorization).toBe(`Bearer ${bob}`)
   })
 
   it('Changes needed asks for identity before its note box opens, and sends the note', async () => {

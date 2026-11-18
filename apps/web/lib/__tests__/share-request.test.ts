@@ -40,6 +40,15 @@ function respond(status: number, body?: unknown) {
   })
 }
 
+/**
+ * A lapsed sign-in whose refresh is refused, written through: the error the
+ * write throws, which "Continue as guest" is given. Uses one fetch answer.
+ */
+async function refusedWrite(): Promise<unknown> {
+  respond(401, { detail: 'Invalid refresh token' }) // /auth/refresh
+  return shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest }).catch((e: unknown) => e)
+}
+
 beforeEach(() => {
   localStorage.clear()
   resetShareRequestState()
@@ -170,7 +179,7 @@ describe('shareRequest', () => {
   it('with an expired token after "Continue as guest", sends the guest fields with no Authorization and no refresh', async () => {
     localStorage.setItem('ff_access_token', jwt(-60))
     localStorage.setItem('ff_refresh_token', 'the-refresh-token')
-    continueAsGuest()
+    continueAsGuest(await refusedWrite())
     respond(200, { id: 'v' })
 
     await shareRequest('tok', '/verdict', {
@@ -179,7 +188,8 @@ describe('shareRequest', () => {
       guest,
     })
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The refresh that was refused, then this write alone: no second refresh.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     const { headers, body } = lastCall()
     expect(headers.Authorization).toBeUndefined()
     expect(body).toEqual({ version_id: 'v1', status: 'approved', guest_name: 'Dana', guest_email: 'dana@client.example' })
@@ -198,11 +208,12 @@ describe('shareRequest', () => {
     respond(401, { detail: SIGN_IN_EXPIRED }) // PUT
     respond(403, { detail: 'User is deactivated' }) // /auth/refresh
 
-    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SIGN_IN_EXPIRED)
+    const err = await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest }).catch((e: unknown) => e)
+    expect((err as Error).message).toBe(SIGN_IN_EXPIRED)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(hasUsableToken()).toBe(false)
 
-    continueAsGuest()
+    continueAsGuest(err)
     respond(200, {})
     await shareRequest('tok', '/verdict', { method: 'PUT', body: { status: 'approved' }, guest })
 
@@ -219,8 +230,8 @@ describe('shareRequest', () => {
     localStorage.setItem('ff_refresh_token', 'the-refresh-token')
     respond(401, { detail: SIGN_IN_EXPIRED })
     respond(401, {})
-    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SIGN_IN_EXPIRED)
-    continueAsGuest()
+    const err = await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest }).catch((e: unknown) => e)
+    continueAsGuest(err)
     expect(shareCallerKey(guest)).toBe('guest:dana@client.example')
 
     // Signed in again elsewhere; that token has lapsed by now too.
@@ -239,13 +250,55 @@ describe('shareRequest', () => {
     expect(lastCall().body).toEqual({ status: 'approved' })
   })
 
+  // Fix round 3, issue 1: the choice binds the refused token, never whatever
+  // storage holds when the button is pressed. Here another tab signed in (T2)
+  // while the message was up; T2 is not bound, so when it lapses it is
+  // refreshed and used, not turned into the guest.
+  it('"Continue as guest" pressed while storage holds a good token binds nothing; that token lapsing is refreshed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      localStorage.setItem('ff_access_token', jwt(3600))
+      localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+      respond(401, { detail: SIGN_IN_EXPIRED }) // PUT
+      respond(401, {}) // /auth/refresh
+      const err = await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest }).catch((e: unknown) => e)
+
+      // Signed in again in another tab, with a token good for 100 s.
+      const t2 = jwt(100)
+      localStorage.setItem('ff_access_token', t2)
+      localStorage.setItem('ff_refresh_token', 'another-refresh-token')
+      continueAsGuest(err)
+      expect(shareCallerKey(guest)).toBe('bearer:u1')
+
+      // Ten minutes on, T2 has lapsed: it is refreshed, not read as the guest.
+      vi.setSystemTime(Date.now() + 600_000)
+      expect(shareCallerKey(guest)).toBe('lapsed')
+      const fresh = jwt(3600)
+      respond(200, { access_token: fresh, refresh_token: 'rotated' })
+      respond(200, {})
+      await shareRequest('tok', '/verdict', { method: 'PUT', body: { status: 'approved' }, guest })
+
+      expect(String(fetchMock.mock.calls.at(-2)![0])).toBe(`${API}/auth/refresh`)
+      expect(lastCall().headers.Authorization).toBe(`Bearer ${fresh}`)
+      expect(lastCall().body).toEqual({ status: 'approved' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('"Continue as guest" given anything but a refused-sign-in error binds nothing', () => {
+    localStorage.setItem('ff_access_token', jwt(-60))
+    continueAsGuest(new Error('something else'))
+    continueAsGuest({ refusedTokens: [localStorage.getItem('ff_access_token')] }) // named, but never refused
+    expect(shareCallerKey(guest)).toBe('lapsed')
+  })
+
   it('a new token in storage still wins over a refused one, guest chosen or not', async () => {
     localStorage.setItem('ff_access_token', jwt(3600))
     localStorage.setItem('ff_refresh_token', 'the-refresh-token')
     respond(401, { detail: SIGN_IN_EXPIRED })
     respond(401, {})
-    await expect(shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest })).rejects.toThrow(SIGN_IN_EXPIRED)
-    continueAsGuest()
+    continueAsGuest(await shareRequest('tok', '/verdict', { method: 'PUT', body: {}, guest }).catch((e: unknown) => e))
 
     // Signed in again, here or in another tab.
     const fresh = jwt(7200)
@@ -325,10 +378,11 @@ describe('shareRequest', () => {
 
   it('reads as the guest once "Continue as guest" is chosen', async () => {
     localStorage.setItem('ff_access_token', jwt(-60))
-    continueAsGuest()
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
+    continueAsGuest(await refusedWrite())
     respond(200, [])
     await shareRequest('tok', '/verdicts?version_id=v1', { method: 'GET', guest })
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(lastCall().url.searchParams.get('guest_email')).toBe('dana@client.example')
   })
 
@@ -434,15 +488,32 @@ describe('shareRequest', () => {
 })
 
 describe('shareCallerKey', () => {
-  it('names who a read goes as', () => {
+  it('names who a read goes as', async () => {
     expect(shareCallerKey(guest)).toBe('guest:dana@client.example')
     expect(shareCallerKey(null)).toBe('nobody')
     localStorage.setItem('ff_access_token', jwt(3600))
-    expect(shareCallerKey(guest)).toBe('bearer')
+    expect(shareCallerKey(guest)).toBe('bearer:u1')
+    localStorage.setItem('ff_access_token', 'not-a-jwt')
+    expect(shareCallerKey(guest)).toBe('bearer:not-a-jwt')
     localStorage.setItem('ff_access_token', jwt(-60))
+    localStorage.setItem('ff_refresh_token', 'the-refresh-token')
     expect(shareCallerKey(guest)).toBe('lapsed')
-    continueAsGuest()
+    continueAsGuest(await refusedWrite())
     expect(shareCallerKey(guest)).toBe('guest:dana@client.example')
+  })
+})
+
+describe('shareCallerKey across accounts', () => {
+  // Fix round 3, issue 3: another account signed in in another tab is a
+  // different caller, so its press is never decided against the first one's list.
+  it('differs between two accounts', () => {
+    const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+    const tokenFor = (sub: string) => `${b64url({ alg: 'HS256' })}.${b64url({ sub, exp: 9999999999 })}.sig`
+    localStorage.setItem('ff_access_token', tokenFor('alice'))
+    const asAlice = shareCallerKey(guest)
+    localStorage.setItem('ff_access_token', tokenFor('bob'))
+    expect(shareCallerKey(guest)).not.toBe(asAlice)
+    expect(shareCallerKey(guest)).toBe('bearer:bob')
   })
 })
 

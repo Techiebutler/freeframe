@@ -1,5 +1,6 @@
 import { isExpiringSoon } from '@/hooks/use-sse'
 import { refreshAccessTokenQuietly } from '@/lib/auth'
+import { subjectOf } from '@/lib/jwt-subject'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -36,16 +37,26 @@ const refusedBearers = new Set<string>()
 
 /**
  * The sign-ins "Continue as guest" was chosen over, by token string. The
- * choice covers only the token it was made for: a different one in storage
- * (signed in again, here or in another tab, even if it has since lapsed too)
- * is refreshed and used as normal, never quietly turned into the guest.
+ * choice covers only the refused token it was made for: a different one in
+ * storage (signed in again, here or in another tab, even if it has since
+ * lapsed too) is refreshed and used as normal, never quietly turned into the
+ * guest.
  */
 const guestChosenOver = new Set<string>()
 
-/** The person chose "Continue as guest" over the sign-in stored now. */
-export function continueAsGuest(): void {
-  const stored = storedAccessToken()
-  if (stored) guestChosenOver.add(stored)
+/**
+ * The person chose "Continue as guest" over the refused sign-in `error` was
+ * about (the `SIGN_IN_EXPIRED` failure `shareRequest` threw). Only the tokens
+ * it names that are known refused are bound: never whatever happens to be in
+ * storage when the button is pressed, which another tab may have replaced
+ * with a good sign-in meanwhile.
+ */
+export function continueAsGuest(error: unknown): void {
+  const tokens = (error as { refusedTokens?: unknown } | null | undefined)?.refusedTokens
+  if (!Array.isArray(tokens)) return
+  for (const token of tokens) {
+    if (typeof token === 'string' && refusedBearers.has(token)) guestChosenOver.add(token)
+  }
 }
 
 /** Whether "Continue as guest" covers the sign-in stored now. */
@@ -89,11 +100,15 @@ export function hasUsableToken(): boolean {
 }
 
 /**
- * Who a read would go as right now, for a cache key: `bearer`, the guest's
- * email, `lapsed` (a sign-in that is not usable: read as nobody), or `nobody`.
+ * Who a read would go as right now, for a cache key: `bearer:<account>`, the
+ * guest's email, `lapsed` (a sign-in that is not usable: read as nobody), or
+ * `nobody`. The account is part of it, so a switch to another account in
+ * another tab is a different caller, read again before anything is decided.
  */
 export function shareCallerKey(guest: ShareGuest | null | undefined): string {
-  if (usableAccessToken()) return 'bearer'
+  const usable = usableAccessToken()
+  // A token with no readable subject is keyed by itself: still one account.
+  if (usable) return `bearer:${subjectOf(usable) ?? usable}`
   if (storedAccessToken() && !hasChosenGuest()) return 'lapsed'
   return guest ? `guest:${guest.email}` : 'nobody'
 }
@@ -103,7 +118,9 @@ type Caller =
   | { kind: 'guest' }
   /** A lapsed sign-in reading: no bearer, and not the guest either. */
   | { kind: 'nobody' }
-  | { kind: 'failed'; why: 'refused' | 'transient' }
+  /** `refused` names the tokens refused, for "Continue as guest" to bind. */
+  | { kind: 'failed'; why: 'refused'; tokens: string[] }
+  | { kind: 'failed'; why: 'transient' }
 
 /**
  * Who this request goes as. A lapsed sign-in is never turned into a guest
@@ -122,21 +139,27 @@ async function resolveCaller(): Promise<Caller> {
   const usable = usableAccessToken()
   if (usable) return { kind: 'bearer', token: usable }
   if (hasChosenGuest()) return { kind: 'guest' }
-  if (refusedBearers.has(stored)) return { kind: 'failed', why: 'refused' }
+  if (refusedBearers.has(stored)) return { kind: 'failed', why: 'refused', tokens: [stored] }
 
   const outcome = await refreshAccessTokenQuietly()
   if ('token' in outcome && !refusedBearers.has(outcome.token)) return { kind: 'bearer', token: outcome.token }
   if ('token' in outcome || outcome.failed === 'refused') {
+    // The token this page held, not whatever storage holds now: another tab
+    // may have signed in as someone else while the refresh was out.
     refusedBearers.add(stored)
-    return { kind: 'failed', why: 'refused' }
+    return { kind: 'failed', why: 'refused', tokens: [stored] }
   }
   return { kind: 'failed', why: 'transient' }
 }
 
-function failure(why: 'refused' | 'transient'): Error {
-  return why === 'refused'
-    ? Object.assign(new Error(SIGN_IN_EXPIRED), { status: 401, detail: SIGN_IN_EXPIRED })
-    : Object.assign(new Error(SERVER_UNREACHABLE), { detail: SERVER_UNREACHABLE })
+/** A refused sign-in, naming the refused tokens for `continueAsGuest`. */
+function refused(tokens: string[]): Error {
+  return Object.assign(new Error(SIGN_IN_EXPIRED), { status: 401, detail: SIGN_IN_EXPIRED, refusedTokens: tokens })
+}
+
+/** No answer worth acting on: try again, nothing to sign in again for. */
+export function unreachable(): Error {
+  return Object.assign(new Error(SERVER_UNREACHABLE), { detail: SERVER_UNREACHABLE })
 }
 
 /**
@@ -169,7 +192,7 @@ export async function shareRequest<T>(
 ): Promise<T> {
   const isRead = init.method === 'GET'
   const caller = await resolveCaller()
-  if (caller.kind === 'failed' && !isRead) throw failure(caller.why)
+  if (caller.kind === 'failed' && !isRead) throw caller.why === 'refused' ? refused(caller.tokens) : unreachable()
 
   const send = (bearer: string | null) => {
     const guest = caller.kind === 'guest' ? init.guest ?? null : null
@@ -206,13 +229,13 @@ export async function shareRequest<T>(
       if (res.status === 401) {
         refusedBearers.add(bearer)
         refusedBearers.add(outcome.token)
-        throw failure('refused')
+        throw refused([bearer, outcome.token])
       }
     } else if ('failed' in outcome && outcome.failed === 'transient') {
-      throw failure('transient')
+      throw unreachable()
     } else {
       refusedBearers.add(bearer)
-      throw failure('refused')
+      throw refused([bearer])
     }
   }
 

@@ -6,8 +6,8 @@ import { VerdictControlsView } from '@/components/review/verdict-controls'
 import { signInAgain } from '@/lib/auth'
 import { withBasePath } from '@/lib/base-path'
 import {
-  continueAsGuest, hasChosenGuest, hasStoredToken, isSignInExpired, prepareShareWrite, shareCallerKey,
-  shareRequest, type ShareGuest,
+  continueAsGuest, hasStoredToken, isSignInExpired, prepareShareWrite, shareCallerKey,
+  shareRequest, unreachable, type ShareGuest,
 } from '@/lib/share-request'
 import type { Verdict, VerdictValue } from '@/types'
 
@@ -63,9 +63,10 @@ function ShareVerdictControlsFor({
   // on the next render (the screen stores what was saved), but the press that
   // asked is already running with the old one.
   const named = React.useRef<ShareGuest | null>(null)
-  // Mirrors `hasChosenGuest()` (page-wide, in `lib/share-request`) so that
-  // choosing it renders again and the read below moves to the guest's key.
-  const [, setGuestChosen] = React.useState(hasChosenGuest)
+  // The guest choice itself lives in `lib/share-request`, bound to the refused
+  // token it was made over. This only renders again once it is made, so the
+  // read below moves to the guest's key.
+  const [, rerender] = React.useReducer((n: number) => n + 1, 0)
 
   /** The guest to send as, read at call time so a just-saved identity counts. */
   const sendAs = () => guestIdentity ?? named.current
@@ -105,19 +106,27 @@ function ShareVerdictControlsFor({
   // Only someone with neither is asked for a name first, and a cancelled
   // prompt sends nothing.
   //
-  // Then clear-or-give must be decided against the presser's own verdict. The
-  // list on screen was read as whoever `readAs` was at that render; a lapse, a
-  // refresh, a sign-in or sign-out in another tab, naming yourself, or choosing
-  // to go on as a guest can each have changed that since. So a lapsed sign-in
-  // is refreshed now, and if the caller is no longer who the list was read as,
-  // it is read again as them and the press decides against that.
+  // Then clear-or-give is decided against the presser's own verdict. The list
+  // on screen was read as `readAs` (an account, a guest, or nobody) at that
+  // render. A lapsed sign-in is refreshed now, and if the caller, by that same
+  // key, is no longer who the list was read as, it is read again as them and
+  // the press decides against that. A re-read that fails stops the press with
+  // its message, and nothing is sent. What this does not cover: the caller
+  // changing again (another tab) in the moment between this read and the write.
   const beforePress = async (): Promise<boolean | Verdict[]> => {
     if (!hasStoredToken() && !sendAs() && !(await askWhoTheyAre())) return false
     await prepareShareWrite()
     if (shareCallerKey(sendAs()) === readAs) return true
-    const fresh = await readList(sendAs()).catch(() => null)
+    let fresh: Verdict[]
+    try {
+      fresh = await readList(sendAs())
+    } catch (err) {
+      // The server's own words when it gave some; otherwise "try again".
+      const detail = (err as { detail?: unknown } | null)?.detail
+      throw typeof detail === 'string' && detail ? err : unreachable()
+    }
     void revalidate()
-    return fresh ?? true
+    return fresh
   }
 
   // A lapsed sign-in that would not refresh (or a bearer the server could not
@@ -149,8 +158,8 @@ function ShareVerdictControlsFor({
               dismiss()
               if (!(await askWhoTheyAre())) return
             }
-            continueAsGuest()
-            setGuestChosen(true)
+            continueAsGuest(error)
+            rerender()
             // The press again, as the guest: re-read as them and decided
             // afresh, never the old request decided for the signed-in list.
             await redo()

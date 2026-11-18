@@ -134,7 +134,8 @@ export interface VerdictControlsViewProps {
    * request, no note box. The share page asks a guest who they are here. A
    * list instead of `true` goes on, deciding clear-or-give against that list:
    * the share page re-reads when who is pressing is not who the list on
-   * screen was read as.
+   * screen was read as. A throw also stops the press, and its message is shown:
+   * nothing is decided against a list that could not be read.
    */
   beforePress?: () => Promise<boolean | Verdict[]>
   /**
@@ -227,6 +228,10 @@ export function VerdictControlsView({
     let answer: boolean | Verdict[] = false
     try {
       answer = await beforePress()
+    } catch (err) {
+      setError(failureMessage(err))
+      setFailure(err)
+      return null
     } finally {
       gating.current = false
     }
