@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Smoother progress-bar scrubbing for new uploads.** Videos are now encoded with a keyframe every second (was every two), as IDR frames, so dragging the progress bar shows twice as many distinct frames. Tune it with `HLS_KEYFRAME_INTERVAL` (0.25–2 seconds); existing videos keep their previous encoding.
+- **Thumbnails fade in** behind a loading shimmer instead of popping in, on the web asset, folder and project cards and in the Premiere panel.
+- **Premiere panel: folders are shown as tiles** with item and subfolder counts.
+
+### Added
+
+- **Premiere panel: multi-select in the asset grid.** Ctrl/Cmd-click, Shift-click or the card checkbox selects several assets to move or delete together.
+- **Premiere panel: stack a version onto any FreeFrame asset**, including assets uploaded on the website — pick it from the version-asset list or browse for it — and with either the entire sequence or In/Out points.
+
 ### Fixed
 
+- **Premiere panel: copying a share or asset link now reaches the clipboard** inside Premiere, where the browser clipboard API is often blocked.
+- **Premiere panel: the export dialog opens on the folder you are browsing** instead of the project root.
+- **Premiere panel: the current sequence asset no longer collapses** to an empty strip when the history list is long, shows a linked asset even when it was exported elsewhere, and the add button no longer sits on the scrollbar.
+- **Premiere panel: the review video no longer overlaps the top bar** when the comment column is dragged narrow.
+- **Premiere panel: lower idle CPU use in Premiere.** The live-update connection is no longer reopened every 1.5 seconds, markers are no longer re-sent on every comment poll, the host poll no longer walks every marker or re-renders the panel when nothing changed, and an orphaned hover-preview stream is cleaned up.
+- **Project cards keep their action menu inside the card**, and the **New Project** tile matches the height of the project cards.
 - Allow guests to edit and delete their own comments when the frontend and API use different origins.
 - Keep comment edits and deletions synchronized with the current review session, and show an error when either action fails.
 
