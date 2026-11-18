@@ -346,6 +346,39 @@ def test_a_folder_link_refuses_an_asset_outside_its_folder(client, db, mocks):
     assert {row.asset_id for row in _rows(db)} == {w.AF.id, w.AS.id}
 
 
+def test_a_folder_link_refuses_a_live_asset_in_a_trashed_subfolder(client, db, mocks):
+    """Trashing a folder leaves the assets under it live, so the link has to notice the
+    trashed folder above the asset. Give, clear and read all answer as if it was not there."""
+    w = _world(db)
+    folder = w.links["folder"]
+    version = _v(w, w.AS)
+    assert _put(client, folder, version, asset=w.AS, **GUEST).status_code == 200
+    assert _status(_list(client, folder, version, asset=w.AS,
+                         guest_email=GUEST["guest_email"]))[0] == 200
+    before = _rows(db)
+    assert len(before) == 1
+    mocks.publish.reset_mock()
+    activity_before = len(_activity(db, folder))
+
+    w.S.deleted_at = datetime.now(timezone.utc)  # the subfolder only, not what is in it
+    db.flush()
+    db.expire_all()
+
+    assert _status(_put(client, folder, version, "rejected", asset=w.AS, **GUEST)) == ASSET_NOT_FOUND
+    assert _status(_put(client, folder, version, asset=w.AS,
+                        headers=_auth(w.reviewer))) == ASSET_NOT_FOUND
+    assert _status(_clear(client, folder, version, asset=w.AS,
+                          guest_email=GUEST["guest_email"])) == ASSET_NOT_FOUND
+    assert _status(_list(client, folder, version, asset=w.AS,
+                         guest_email=GUEST["guest_email"])) == ASSET_NOT_FOUND
+
+    # Nothing was written: the earlier verdict is untouched and nobody else appeared.
+    [row] = _rows(db)
+    assert (row.id, row.status.value) == (before[0].id, "approved")
+    assert len(_activity(db, folder)) == activity_before
+    mocks.publish.assert_not_called()
+
+
 def test_a_folder_link_needs_the_asset_named(client, db):
     w = _world(db)
     r = _put(client, w.links["folder"], _v(w, w.AF), **GUEST)
