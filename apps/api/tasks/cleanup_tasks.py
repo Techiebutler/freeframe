@@ -219,6 +219,12 @@ def _purge_share_link(db, share_link_id, counts: PurgeCounts) -> None:
     db.query(ShareLinkItem).filter(ShareLinkItem.share_link_id == share_link_id).delete(synchronize_session=False)
     db.query(ShareLinkActivity).filter(ShareLinkActivity.share_link_id == share_link_id).delete(synchronize_session=False)
     db.query(WatermarkSettings).filter(WatermarkSettings.share_link_id == share_link_id).delete(synchronize_session=False)
+    # A verdict given through the link outlives it: unlink it and keep the row. The FK is
+    # ON DELETE SET NULL as well, but doing it here keeps the ORM's view honest and does
+    # not lean on the constraint. `via_link_title` already holds the name.
+    db.query(Approval).filter(Approval.share_link_id == share_link_id).update(
+        {Approval.share_link_id: None}, synchronize_session=False,
+    )
     db.query(ShareLink).filter(ShareLink.id == share_link_id).delete(synchronize_session=False)
     counts.share_links += 1
     db.flush()
