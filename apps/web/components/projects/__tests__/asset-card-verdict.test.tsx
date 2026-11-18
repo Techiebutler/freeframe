@@ -104,15 +104,18 @@ describe('verdict badge on project thumbnails', () => {
   })
 
   it('shows nothing for an asset with no summary', () => {
-    render(<AssetGrid assets={[makeAsset(1), makeAsset(2, null)]} projectId="p1" />)
-    expect(screen.queryByRole('img', { name: /verdicts?$/ })).toBeNull()
+    const { container } = render(
+      <AssetGrid assets={[makeAsset(1), makeAsset(2, null)]} projectId="p1" />,
+    )
+    expect(screen.queryByRole('img', { name: /verdict/ })).toBeNull()
+    expect(container.querySelector('[data-testid="card-verdict"]')).toBeNull()
   })
 
   it('shows nothing, not an empty pill, when every count is zero', () => {
     const { container } = render(
       <AssetGrid assets={[makeAsset(1, counts())]} projectId="p1" />,
     )
-    expect(screen.queryByRole('img', { name: /verdicts?$/ })).toBeNull()
+    expect(screen.queryByRole('img', { name: /verdict/ })).toBeNull()
     expect(container.querySelector('[data-testid="card-verdict"]')).toBeNull()
   })
 
