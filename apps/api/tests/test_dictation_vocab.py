@@ -73,3 +73,52 @@ def test_apply_fixes_patches_the_words_too_and_keeps_their_times():
     words2 = [{"start": 0, "end": 1, "word": "Chatsuki"}, {"start": 1, "end": 2, "word": "gut"}]
     dictation.apply_fixes("Chatsuki gut", "ChatGPT gut", [], words2)
     assert [w["word"] for w in words2] == ["ChatGPT", "gut"]
+
+
+def _whisper(segments, text=None, status=200):
+    w = MagicMock(status_code=status)
+    w.json.return_value = {"text": text if text is not None else " ".join(s["text"] for s in segments), "segments": segments}
+    return w
+
+
+def _seg(text, start=0.0, end=1.0, **extra):
+    return {"start": start, "end": end, "text": text, **extra}
+
+
+def test_hallucinated_segments_are_dropped_and_valid_ones_survive(monkeypatch):
+    monkeypatch.setattr(dictation.settings, "groq_api_key", "gsk_test")
+    monkeypatch.setattr(dictation, "fix_terms", lambda t: t)
+    segs = [_seg("Der Hook ist zu langsam."), _seg(" Sous-titrage ST' 501", 1, 2), _seg("www.zeoranger.de", 2, 3), _seg("Ss.", 3, 4),
+            _seg("Untertitel im Auftrag des ZDF, 2017", 4, 5), _seg("Schneller.", 5, 6)]
+    with patch("apps.api.services.dictation.httpx.post", return_value=_whisper(segs)):
+        out = dictation.transcribe(b"1", "a.webm", "audio/webm")
+    assert [s["text"] for s in out["segments"]] == ["Der Hook ist zu langsam.", "Schneller."]
+    assert out["text"] == "Der Hook ist zu langsam. Schneller."
+
+
+def test_only_hallucinations_give_empty_text(monkeypatch):
+    monkeypatch.setattr(dictation.settings, "groq_api_key", "gsk_test")
+    with patch("apps.api.services.dictation.httpx.post", return_value=_whisper([_seg("Sous-titrage ST' 501")])), \
+         patch("apps.api.services.dictation.httpx.request") as req:
+        out = dictation.transcribe(b"1", "a.webm", "audio/webm")
+    assert out["text"] == "" and out["segments"] == []
+    req.assert_not_called()
+
+
+def test_silence_probabilities_drop_a_segment_only_when_both_are_bad(monkeypatch):
+    monkeypatch.setattr(dictation.settings, "groq_api_key", "gsk_test")
+    monkeypatch.setattr(dictation, "fix_terms", lambda t: t)
+    segs = [_seg("Ghost words here", no_speech_prob=0.9, avg_logprob=-1.4), _seg("Quiet but real", 1, 2, no_speech_prob=0.9, avg_logprob=-0.3),
+            _seg("Clear but odd", 2, 3, no_speech_prob=0.1, avg_logprob=-1.5)]
+    with patch("apps.api.services.dictation.httpx.post", return_value=_whisper(segs)):
+        out = dictation.transcribe(b"1", "a.webm", "audio/webm")
+    assert [s["text"] for s in out["segments"]] == ["Quiet but real", "Clear but odd"]
+
+
+def test_fixup_still_maps_onto_segments_after_the_filter(monkeypatch):
+    monkeypatch.setattr(dictation.settings, "groq_api_key", "gsk_test")
+    segs = [_seg("Amara.org"), _seg("Chatsuki ist gut", 1, 2)]
+    with patch("apps.api.services.dictation.httpx.post", return_value=_whisper(segs, text="Amara.org Chatsuki ist gut")), \
+         patch("apps.api.services.dictation.httpx.request", return_value=_chat("ChatGPT ist gut")):
+        out = dictation.transcribe(b"1", "a.webm", "audio/webm")
+    assert out["text"] == "ChatGPT ist gut" and out["segments"][0]["text"] == "ChatGPT ist gut"

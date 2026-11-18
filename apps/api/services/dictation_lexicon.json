@@ -125,5 +125,35 @@
   "Clips",
   "Rough Cut",
   "Feedback"
- ]
+ ],
+ "hallucinations": [
+  "Sous-titrage ST' 501",
+  "Sous-titres réalisés par la communauté d'Amara.org",
+  "Sous-titres réalisés par",
+  "Untertitel im Auftrag des ZDF",
+  "Untertitel im Auftrag des ZDF für funk 2017",
+  "Untertitelung des ZDF 2020",
+  "Untertitelung des ZDF 2021",
+  "Untertitelung im Auftrag des ZDF 2018",
+  "Untertitel von Stephanie Geiges",
+  "Untertitelung der Amara.org Community",
+  "Amara.org",
+  "Thanks for watching",
+  "Thank you for watching",
+  "Vielen Dank fürs Zuschauen",
+  "Vielen Dank für Ihre Aufmerksamkeit",
+  "Danke fürs Zuschauen",
+  "Copyright WDR 2020",
+  "Copyright WDR",
+  "Bis zum nächsten Mal",
+  "Subtitles by the Amara.org community",
+  "Ss"
+ ],
+ "hallucination_patterns": [
+  "^untertitel.*",
+  "^untertitelung.*",
+  "^sous titr.*",
+  "^copyright .*"
+ ],
+ "hallucination_note": "Whisper's invented phrases on silence/noise. Whole-segment match, case and punctuation ignored. 'hallucination_patterns' are regexes on the normalized (lowercase, letters/digits/spaces) text. A bare web address is always dropped."
 }

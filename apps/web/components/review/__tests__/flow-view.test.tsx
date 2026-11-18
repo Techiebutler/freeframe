@@ -145,6 +145,34 @@ describe('FlowView embed: pause = talk, play = silence', () => {
     expect(props.onPause).toHaveBeenCalled()
     expect(await screen.findByRole('status', { name: 'Recording' })).toBeInTheDocument()
   })
+  describe('desktop / share (not embed): pause = talk, play = silence', () => {
+    it('Comment while the video plays pauses it, then records', async () => {
+      const { props } = withVideo({ embed: false })
+      fire('play')
+      fireEvent.click(screen.getByRole('button', { name: /comment/i }))
+      expect(props.onPause).toHaveBeenCalled()
+      expect(await screen.findByRole('status', { name: 'Recording' })).toBeInTheDocument()
+    })
+    it('Play during a recording saves the segment and stops recording', async () => {
+      let t = 1000
+      now.mockImplementation(() => t)
+      const { props, send } = withVideo({ embed: false })
+      fire('pause')
+      fireEvent.click(screen.getByRole('button', { name: /comment/i }))
+      await screen.findByRole('status', { name: 'Recording' })
+      t += 3000
+      fire('play')
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+      expect(props.dictate).toHaveBeenCalledWith(audio)
+      expect(screen.queryByRole('status', { name: 'Recording' })).toBeNull()
+    })
+    it('pausing alone does not start a recording', () => {
+      const startRecording = recorder()
+      withVideo({ embed: false, startRecording })
+      fire('play'); fire('pause')
+      expect(startRecording).not.toHaveBeenCalled()
+    })
+  })
   it('no microphone: one hint, the comment box is focused, nothing is left half-recording', async () => {
     withVideo({ startRecording: vi.fn().mockRejectedValue(new Error('denied')) })
     fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
