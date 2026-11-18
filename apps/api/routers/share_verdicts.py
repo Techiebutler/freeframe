@@ -16,7 +16,8 @@ runs the same gates in the same order before it touches anything:
    signed-in non-member acts as themselves, and anyone else is a guest.
 
 The writes themselves go through `services.verdicts`, which notifies, logs,
-publishes and commits.
+publishes and commits. Giving and clearing also sit behind a per-address rate limit
+(a change emails the creator, and anyone holding the link may press the button).
 """
 import uuid
 from typing import Optional
@@ -27,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..middleware.auth import get_optional_user, optional_bearer_scheme
+from ..middleware.rate_limit import rate_limit
 from ..models.asset import Asset, AssetVersion
 from ..models.project import ProjectRole
 from ..models.share import ShareActivityAction, ShareLink, ShareLinkActivity, SharePermission
@@ -135,7 +137,8 @@ def _share_actor(
     return Actor(guest=find_guest(db, guest_email), share_link=link)
 
 
-@router.put("/share/{token}/verdict", response_model=VerdictResponse)
+@router.put("/share/{token}/verdict", response_model=VerdictResponse,
+            dependencies=[Depends(rate_limit("share_verdict", 20, 60))])
 def put_share_verdict(
     token: str,
     body: ShareVerdictSet,
@@ -175,7 +178,8 @@ def put_share_verdict(
     return given
 
 
-@router.delete("/share/{token}/verdict", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/share/{token}/verdict", status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[Depends(rate_limit("share_verdict", 20, 60))])
 def clear_share_verdict(
     token: str,
     version_id: uuid.UUID = Query(...),

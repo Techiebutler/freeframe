@@ -16,7 +16,7 @@ stands in for `verify_share_session`.
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import jwt
 import pytest
@@ -151,6 +151,35 @@ def test_view_and_comment_links_refuse_verdicts(client, db, permission):
     assert _status(_list(client, link, _v(w))) == NO_APPROVALS
     assert _rows(db) == []
     assert _guests(db, GUEST["guest_email"]) == []
+
+
+# ── nobody gets to press it forever ───────────────────────────────────────────
+
+def test_giving_and_clearing_are_rate_limited_per_address(client, db, mocks):
+    """Anyone holding an approve link can change their verdict, and each change emails the
+    creator, so the two write routes sit behind the same per-address limiter as the rest
+    of the share routes. (It fails open when Redis is down, which is why the rest of this
+    file never trips it.)"""
+    w = _world(db)
+    link, version = w.links["asset"], _v(w)
+
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(False, 7)) as check:
+        put = client.put(f"/share/{link.token}/verdict",
+                         json={"version_id": str(version.id), "status": "approved", **GUEST})
+        clear = _clear(client, link, version, guest_email=GUEST["guest_email"])
+
+    for r in (put, clear):
+        assert r.status_code == 429, r.text
+        assert r.headers["Retry-After"] == "7"
+    assert [c.args[1:] for c in check.call_args_list] == [("share_verdict", 20, 60)] * 2
+    # Refused before anything ran: no guest was created and nobody was told.
+    assert _rows(db) == [] and _guests(db, GUEST["guest_email"]) == []
+    mocks.send.assert_not_called()
+    mocks.publish.assert_not_called()
+
+    # Reading is not limited here: it writes and sends nothing.
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(False, 7)):
+        assert _list(client, link, version).status_code == 200
 
 
 # ── a guest on an approve link ────────────────────────────────────────────────
