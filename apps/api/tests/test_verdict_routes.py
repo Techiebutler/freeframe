@@ -552,3 +552,24 @@ def test_legacy_list_still_answers_when_a_guest_has_given_a_verdict(client, db):
     assert {row["user_id"] for row in rows} == {None, str(w.editor.id)}
     assert all(set(row) == LEGACY_KEYS for row in rows)
     assert guest.email not in r.text
+
+
+@pytest.mark.parametrize("path", ["approve", "reject"])
+def test_the_legacy_routes_cap_the_note_like_a_verdict_note(client, db, mocks, path):
+    """The note lands in the same column, notification and email as a verdict's, so it
+    carries the same 5000 limit instead of being the one unbounded way in."""
+    w = _world(db)
+    url = f"/assets/{w.A.id}/{path}"
+
+    too_long = client.post(url, json={"version_id": str(_v(w).id), "note": "x" * 5001},
+                           headers=_auth(w.editor))
+    assert too_long.status_code == 422, too_long.text
+    assert _rows(db, w.A) == []
+    assert _notifications(db, w.A) == []
+    mocks.send.assert_not_called()
+    mocks.publish.assert_not_called()
+
+    at_limit = client.post(url, json={"version_id": str(_v(w).id), "note": "x" * 5000},
+                           headers=_auth(w.editor))
+    assert at_limit.status_code == 200, at_limit.text
+    assert len(at_limit.json()["note"]) == 5000
