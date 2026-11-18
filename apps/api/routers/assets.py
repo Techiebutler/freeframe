@@ -29,7 +29,7 @@ from ..schemas.upload import (
 from ..services.storage import choose_part_size, upload_guard_error
 from ..services.versions import UNVIEWABLE_STATUSES, next_version_number
 from ..services.s3_service import create_multipart_upload
-from .upload import storage_initiate_error
+from .upload import commit_initiated_upload, storage_initiate_error
 
 router = APIRouter(tags=["assets"])
 
@@ -509,7 +509,7 @@ def initiate_new_version(
         s3_key_raw=s3_key,
     )
     db.add(media_file)
-    db.commit()
+    commit_initiated_upload(db, s3_key, upload_id)
 
     return InitiateUploadResponse(
         upload_id=upload_id,
