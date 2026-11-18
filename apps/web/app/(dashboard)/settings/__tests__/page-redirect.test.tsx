@@ -28,7 +28,7 @@ describe('SettingsPage index redirect', () => {
     expect(h.replace).not.toHaveBeenCalled()
   })
 
-  it('sends a superadmin to the admin dashboard', () => {
+  it('sends a superadmin to the Instance section', () => {
     h.auth = { user: { id: 'u1' }, isSuperAdmin: true }
     render(<SettingsPage />)
     expect(h.replace).toHaveBeenCalledWith('/settings/instance/users')

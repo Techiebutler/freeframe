@@ -114,6 +114,8 @@ describe('who sees the settings', () => {
     project = { ...PROJECT, role: null }
     renderPage()
     expect(await screen.findByRole('tab', { name: 'General' })).toBeInTheDocument()
+    // A member without the Admin role is not managing it as an admin.
+    expect(screen.queryByText(NOTICE)).toBeNull()
   })
 
   it('shows a loading state, never the refusal, before the role is known', () => {
@@ -354,5 +356,29 @@ describe('moving to another project', () => {
     nav.id = 'p2'
     view.rerender(page())
     expect(screen.getByLabelText('Name')).toHaveValue('Second film')
+  })
+
+  it('closes the Delete project row, so it never stays open on the next project', async () => {
+    const cache = new Map()
+    const page = () => (
+      <SWRConfig value={{ provider: () => cache, dedupingInterval: 0, shouldRetryOnError: false }}>
+        <ProjectSettingsPage />
+      </SWRConfig>
+    )
+
+    // The open row holds the real delete button under the same name; the toggle
+    // is the one that says whether it is expanded.
+    const toggle = () =>
+      screen.getAllByRole('button', { name: 'Delete project' }).find((b) => b.hasAttribute('aria-expanded'))
+
+    const view = render(page())
+    await screen.findByLabelText('Name')
+    fireEvent.click(toggle()!)
+    expect(toggle()).toHaveAttribute('aria-expanded', 'true')
+
+    nav.id = 'p2'
+    view.rerender(page())
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Second film'))
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false')
   })
 })

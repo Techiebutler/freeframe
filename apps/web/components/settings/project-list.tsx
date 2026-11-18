@@ -9,6 +9,7 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { effectiveProjectRole } from '@/lib/project-role'
 import { useAuthStore } from '@/stores/auth-store'
+import { useBranding } from '@/components/shared/branding-provider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { EmptyState } from '@/components/shared/empty-state'
@@ -91,10 +92,15 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
 
   // The list is sorted by name and can hold hundreds of rows, so the open
   // project is often below the fold; bring its row and its tab links into view.
+  // On a phone the list is the whole page, and its last row ends in the corner
+  // where the shell floats "Powered by FreeFrame"; leave room to scroll it clear.
+  const { poweredByFreeframe } = useBranding()
+  const clearBadge = poweredByFreeframe ? 'pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-2' : undefined
+
   const selectedRow = React.useRef<HTMLLIElement>(null)
   const listReady = rows.length > 0
   React.useEffect(() => {
-    selectedRow.current?.scrollIntoView?.({ block: 'nearest' })
+    selectedRow.current?.scrollIntoView?.({ block: 'center' })
   }, [selectedId, listReady])
 
   if (error && !data) {
@@ -142,7 +148,7 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 p-2">
+    <div className={cn('flex flex-col gap-2 p-2', clearBadge)}>
       <Input
         type="search"
         aria-label="Search projects"

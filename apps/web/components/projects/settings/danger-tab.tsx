@@ -15,7 +15,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
  * Typing the project's name is the confirmation, so the target is explicit.
  * The copy says what really happens: the project goes from the app at once,
  * its data is purged after the instance's retention period, and until then
- * only an instance admin can bring it back, from the Admin dashboard.
+ * only an instance admin can bring it back, from Settings, Instance, Storage.
  */
 export function ProjectDangerTab({ projectId, projectName }: { projectId: string; projectName: string }) {
   const router = useRouter()
