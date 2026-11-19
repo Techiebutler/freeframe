@@ -150,6 +150,7 @@ class InitiateUploadResponse(BaseModel):
 
 class PresignPartRequest(BaseModel):
     s3_key: str
+    # No max_length below the column's width: R2's upload ids are 343 characters (#637).
     upload_id: str
     part_number: int  # 1-indexed
 
@@ -163,6 +164,7 @@ class UploadPart(BaseModel):
 
 class CompleteUploadRequest(BaseModel):
     s3_key: str
+    # No max_length below the column's width: R2's upload ids are 343 characters (#637).
     upload_id: str
     asset_id: uuid.UUID
     version_id: uuid.UUID
@@ -178,6 +180,7 @@ class CompleteUploadResponse(BaseModel):
 
 class AbortUploadRequest(BaseModel):
     s3_key: str
+    # No max_length below the column's width: R2's upload ids are 343 characters (#637).
     upload_id: str
     version_id: uuid.UUID
     # A person pressing Discard, as opposed to an upload that gave up. The two

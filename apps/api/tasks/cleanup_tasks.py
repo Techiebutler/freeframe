@@ -479,10 +479,12 @@ def _reap_stale_uploads(db) -> int:
     #
     # Both initiate handlers call CreateMultipartUpload before committing the rows
     # that describe it, so a commit that fails leaves an upload nothing references
-    # and nothing above can find. Those are the only uploads this listing is still
-    # needed for, and restricting it to keys with no MediaFile is what keeps it
-    # from aborting something the database says is alive -- which is exactly what
-    # it used to do.
+    # and nothing above can find. They abort it when that happens
+    # (`commit_initiated_upload`), but only best-effort, and a process that dies
+    # between the two calls never gets that far. Those are the only uploads this
+    # listing is still needed for, and restricting it to keys with no MediaFile is
+    # what keeps it from aborting something the database says is alive -- which is
+    # exactly what it used to do.
     #
     # Best-effort by design: on MinIO this listing is a node-local in-memory cache
     # and returns nothing after a restart. That is survivable here because MinIO

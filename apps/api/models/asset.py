@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 from typing import Optional
-from sqlalchemy import String, Enum, DateTime, ForeignKey, Integer, BigInteger, Float, func, UniqueConstraint, Index
+from sqlalchemy import String, Text, Enum, DateTime, ForeignKey, Integer, BigInteger, Float, func, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 try:
@@ -62,7 +62,11 @@ class AssetVersion(Base):
     # NULL for rows created before this was recorded -- treat NULL as "unknown",
     # never as "no upload exists". It is never cleared, so a non-NULL value says
     # nothing about whether the upload completed.
-    upload_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #
+    # Text, not a bounded varchar: S3 documents no maximum length for an UploadId
+    # and backends differ widely. Cloudflare R2's are 343 characters, which did
+    # not fit the String(255) this started as (#637). Do not narrow it.
+    upload_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Last time a part was signed for this upload. The reaper ages uploads by
     # this rather than by created_at, so a transfer slower than the window is not
     # aborted while it is still making progress.
