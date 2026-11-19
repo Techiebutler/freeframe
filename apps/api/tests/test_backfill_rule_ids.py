@@ -32,7 +32,8 @@ def test_inline_rule_prefix_matches_and_validates():
     fixes, lost = plan(rows, rules)
     assert [(f[0], f[2]) for f in fixes] == [("c1", "aditor-05-alan-only-as-genmoji"), ("c2", "aditor-02-no-ai-slop-html")]
     assert [l[0] for l in lost] == ["c3"]
-    assert ReviewSource.model_validate(fixes[0][1]).sources[0].layer == "basics"
+    assert ReviewSource.model_validate(fixes[0][1]).sources[0].layer == "brand"   # brand rules, as the worker writes them
+    assert parse_inline_rules(["x=Y"], "global")[0]["scope"] == "global"
 
 
 def test_inline_rule_bad_spec_exits():

@@ -64,14 +64,17 @@ def load_rules(path: str) -> list[dict]:
     return [r for r in rules if r.get("id") and r.get("active", True) is not False and not r.get("archived")]
 
 
-def parse_inline_rules(specs: list[str]) -> list[dict]:
-    """--rule "<rule_id>=<exact name prefix>" -> global rules matched by the start of the body."""
+def parse_inline_rules(specs: list[str], scope: str = "brand") -> list[dict]:
+    """--rule "<rule_id>=<exact name prefix>" -> rules matched by the start of the body. Scope from --scope (brand|global,
+    default brand: the worker writes layer "brand" for brand rules like aditor-05-…, "basics" only for global ones)."""
+    if scope not in ("brand", "global"):
+        sys.exit(f"--scope must be brand or global, got {scope!r}")
     out = []
     for sp in specs:
         rid, sep, prefix = sp.partition("=")
         if not sep or not rid.strip() or not prefix.strip():
             sys.exit(f"--rule needs <rule_id>=<name prefix>, got {sp!r}")
-        out.append({"id": rid.strip(), "name": "", "prefix": prefix.strip(), "scope": "global"})
+        out.append({"id": rid.strip(), "name": "", "prefix": prefix.strip(), "scope": scope})
     return out
 
 
@@ -124,7 +127,7 @@ if __name__ == "__main__":
     inline = [sys.argv[i + 1] for i, a in enumerate(sys.argv[:-1]) if a == "--rule"]
     if not inline and "--rules" not in sys.argv:
         sys.exit("--rules <file.json> or --rule <rule_id>=<name prefix> is required (see the docstring)")
-    rules = (load_rules(_arg("--rules")) if "--rules" in sys.argv else []) + parse_inline_rules(inline)
+    rules = (load_rules(_arg("--rules")) if "--rules" in sys.argv else []) + parse_inline_rules(inline, _arg("--scope") if "--scope" in sys.argv else "brand")
     db = SessionLocal()
     try:
         rows = candidates(db, asset_id=_arg("--asset"))
