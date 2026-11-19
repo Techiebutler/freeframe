@@ -1,5 +1,6 @@
 import * as React from 'react'
 import type { InstanceBranding } from '@/stores/branding-store'
+import { INTERNAL_API_URL, SERVER_FETCH_TIMEOUT_MS } from '@/lib/server-api'
 
 /**
  * Instance branding, read on the server so the first byte already carries it.
@@ -10,20 +11,9 @@ import type { InstanceBranding } from '@/stores/branding-store'
  * name and `<title>FreeFrame</title>` first and their own brand a moment later.
  * On a deployment far from the viewer that moment is long enough to read.
  *
- * The URL here is NOT `NEXT_PUBLIC_API_URL`. That one is written for the
- * browser -- a public domain, or a LAN address -- and inside the web container
- * `localhost:8000` is the web container itself, not the API. `API_INTERNAL_URL`
- * is the server-to-server address (`http://api:8000` under compose). It falls
- * back to the public one so a deployment that has not set it, and any setup
- * where both happen to be the same host, keeps working.
+ * The server's address for the API lives in `@/lib/server-api`, shared with the
+ * short-share-link lookup so the two cannot drift apart.
  */
-const INTERNAL_API_URL =
-  process.env.API_INTERNAL_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  'http://localhost:8000'
-
-/** Long enough for a slow container start, short enough not to hold a page. */
-const TIMEOUT_MS = 3000
 
 /**
  * The uncached fetch. Exported for tests: `cache` memoises for the life of the
@@ -38,7 +28,7 @@ export async function fetchServerBranding(): Promise<InstanceBranding | null> {
         // immediately, since the settings screen syncs the store from its own
         // PUT response; everyone else picks the change up within the window.
         next: { revalidate: 60 },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(SERVER_FETCH_TIMEOUT_MS),
       })
       if (!res.ok) return null
       return (await res.json()) as InstanceBranding
