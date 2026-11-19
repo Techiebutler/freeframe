@@ -161,3 +161,30 @@ def test_embed_url_is_made_once_per_request_with_approve_and_stays_in_the_projec
         links = db.query(ShareLink).filter(ShareLink.folder_id == req.folder_id, ShareLink.token == token).all()
         assert len(links) == 1 and links[0].permission == SharePermission.approve and links[0].created_by == env.owner.id
         assert db.query(ShareLink).filter(ShareLink.folder_id == empty.folder_id).count() == 0
+
+
+def _round(env, req, closed_after=None, acked=False):
+    """A feedback round for `req`, closed `closed_after` seconds from now (None = still open)."""
+    from datetime import datetime, timedelta, timezone
+    from apps.api.models.agent import FeedbackRound
+    now = datetime.now(timezone.utc)
+    with env.Session() as db:
+        db.add(FeedbackRound(request_id=req.id, closed_at=None if closed_after is None else now + timedelta(seconds=closed_after),
+                             acked_at=now if acked else None))
+        db.commit()
+
+
+def test_queue_feedback_sent_follows_the_round_and_versions(env):
+    agent = env.pair_agent(env.project_a)
+    reqs = [env.request(env.project_a, env.owner, t) for t in ("Sent", "Acked", "Newer", "None", "Open")]
+    sent, acked, newer, none, openr = reqs
+    assets = [env.asset(q) for q in reqs]
+    _round(env, sent, closed_after=5)                 # (a) closed after the version, not acked
+    _round(env, acked, closed_after=5, acked=True)    # (b) acked
+    _round(env, newer, closed_after=-60)              # (c) a newer version came after the round closed
+    _round(env, openr)                                # a still-open round is not "sent"
+    p1, p2 = patched({str(a.id): clear(a.versions[0]) for a in assets}, {q.review_share_token: {"status": "clear", "openMustFixes": 0} for q in reqs})
+    with p1, p2:
+        by = {r["title"]: r for r in env.client.get("/agent/queue", headers=agent.headers).json()}
+    assert {t: r["feedback_sent"] for t, r in by.items()} == {"Sent": True, "Acked": False, "Newer": False, "None": False, "Open": False}  # (d) no round
+    assert all(r["stage"] == "ready" for r in by.values())   # stage untouched

@@ -4,11 +4,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models.approval import Approval, ApprovalStatus
-from ..models.asset import Asset
+from ..models.agent import FeedbackRound
+from ..models.asset import Asset, AssetVersion
 from ..models.project import Project
 from ..models.share import ShareLink, SharePermission
 from ..models.upload_request import UploadRequest
@@ -70,6 +72,9 @@ def queue(db: Session, project_id: uuid.UUID, state: Optional[str] = None) -> li
     from . import board_lifecycle as board
     now = datetime.now(timezone.utc)
     info = board.activity(db, reqs, assets)
+    closed = dict(db.query(FeedbackRound.request_id, func.max(FeedbackRound.closed_at)).filter(  # one query: newest sent-and-unacked round per request
+        FeedbackRound.request_id.in_([q.id for q in reqs]), FeedbackRound.closed_at.isnot(None), FeedbackRound.acked_at.is_(None)
+    ).group_by(FeedbackRound.request_id).all())
     out = []
     for q in reqs:
         reviews = r._review_assets(db, q, assets[q.id], reviewer, stats, include_media=False)
@@ -81,12 +86,15 @@ def queue(db: Session, project_id: uuid.UUID, state: Optional[str] = None) -> li
         stage = stage_of("live", len(assets[q.id]), gate["status"])
         if state and stage != state:
             continue
+        vids = [uuid.UUID(a["version_id"]) for a in reviews if a.get("version_id")]
+        newest = db.query(func.max(AssetVersion.created_at)).filter(AssetVersion.id.in_(vids)).scalar() if vids and q.id in closed else None
         life = board.lifecycle(now, last_activity=info[q.id]["last_activity"], last_agent_activity=info[q.id]["last_agent_activity"],
                                approved=False, delivered=False, stage=stage, is_agent=info[q.id]["is_agent"])
         out.append({"request_id": str(q.id), "title": q.title, "folder_id": str(q.folder_id), "stage": stage,
                     "stale_agent": life["stale_agent"], "agent_silent_since": life["agent_silent_since"],
                     "upload_token": q.token, "review_url": review_url(q),
                     "embed_url": embed_url(db, q, owner_id) if assets[q.id] else None, "review_phase": phase_of_reviews(db, reviews),
+                    "feedback_sent": bool(newest and closed[q.id] >= newest),  # the human sent feedback on the current versions, the agent has not acked yet
                     "assets": [{"asset_id": a["asset_id"], "name": a["name"], "version_id": a["version_id"],
                                 "version_number": a["version"], "review_state": a["review_state"],
                                 "processing_status": a["processing"],
