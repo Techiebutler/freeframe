@@ -298,7 +298,7 @@ def test_migration_widens_and_its_downgrade_clears_ids_that_no_longer_fit(real_d
     from apps.api.tests.conftest import MediaSeed
 
     mod = _load_migration()
-    assert mod.down_revision == "f4b9c2a7d105"
+    assert mod.down_revision == "7c3a9d4b1e2f"
 
     rows = MediaSeed(real_db)
     person = rows.user()
