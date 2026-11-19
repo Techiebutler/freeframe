@@ -25,6 +25,13 @@ const notificationIcons: Record<NotificationType, React.ElementType> = {
   approval: CheckCircle,
 }
 
+/** What an approval notification says for each verdict value in `detail`. */
+const VERDICT_PHRASES = new Map<string, string>([
+  ['approved', 'approved'],
+  ['changes_requested', 'asked for changes on'],
+  ['rejected', 'rejected'],
+])
+
 function getNotificationText(n: Notification): { title: string; subtitle: string | null } {
   const actor = n.actor_name ? (n.actor_is_guest ? `${n.actor_name} (guest)` : n.actor_name) : 'Someone'
   const asset = n.asset_name || 'an asset'
@@ -35,8 +42,13 @@ function getNotificationText(n: Notification): { title: string; subtitle: string
       return { title: `${actor} commented on ${asset}`, subtitle: n.comment_preview || null }
     case 'assignment':
       return { title: `${actor} assigned you to ${asset}`, subtitle: null }
-    case 'approval':
+    case 'approval': {
+      // A verdict stores its own actor, and the stored name already carries
+      // "(guest)" for a guest, so the name is used as it is.
+      const verdict = n.detail ? VERDICT_PHRASES.get(n.detail) : undefined
+      if (verdict) return { title: `${n.actor_name || 'Someone'} ${verdict} ${asset}`, subtitle: null }
       return { title: `${actor} updated approval on ${asset}`, subtitle: null }
+    }
     case 'due_soon':
       return { title: `${asset} is due soon`, subtitle: null }
     default:

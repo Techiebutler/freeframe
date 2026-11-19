@@ -3,9 +3,11 @@
 import * as React from 'react'
 import { Film, Music, Image as ImageIcon, Images, MoreHorizontal, Check } from 'lucide-react'
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
-import type { Asset, AssetType, DownloadOption, User } from '@/types'
+import type { Asset, AssetType, DownloadOption, User, VerdictSummary } from '@/types'
 import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
 import { CommentCountBadge } from '@/components/shared/comment-count-badge'
+import { VerdictBadge } from '@/components/review/verdict-badge'
+import { verdictTone } from '@/lib/verdicts'
 import { AssetMenuItems } from './menus/asset-menu'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
 
@@ -30,6 +32,8 @@ interface AssetCardProps {
   authorName?: string
   thumbnailUrl?: string | null
   commentCount?: number
+  /** Verdicts on the latest version; nothing shows while there are none. */
+  verdictSummary?: VerdictSummary | null
   duration?: number | null
   selected?: boolean
   onSelect?: (e: React.MouseEvent) => void
@@ -74,6 +78,7 @@ export function AssetCard({
   authorName,
   thumbnailUrl,
   commentCount,
+  verdictSummary,
   duration,
   selected = false,
   onSelect,
@@ -171,6 +176,19 @@ export function AssetCard({
 
         {/* Comment count badge — bottom-left, as in a share link's grid */}
         <CommentCountBadge count={commentCount} />
+
+        {/* Verdict badge — top-right, the one free corner. Its own pill, because
+            coloured text needs a backing on a thumbnail, and only when there is
+            a verdict: the API sends zeros, not null, so an unguarded pill would
+            be an empty blur on most cards. */}
+        {verdictSummary && verdictTone(verdictSummary) && (
+          <div
+            data-testid="card-verdict"
+            className="absolute top-2 right-2 flex items-center bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5"
+          >
+            <VerdictBadge summary={verdictSummary} />
+          </div>
+        )}
       </div>
 
       {/* Info section */}

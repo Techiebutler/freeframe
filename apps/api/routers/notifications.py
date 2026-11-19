@@ -67,6 +67,12 @@ def list_notifications(
                         actor_name = guest.name
                         actor_is_guest = True
 
+        # A notification that stored its own actor (a verdict) names it directly: the
+        # actor may be a guest with no comment to resolve a name from, and the stored
+        # name already carries any "(guest)" tag.
+        if n.actor_name:
+            actor_name = n.actor_name
+
         results.append(NotificationResponse(
             id=n.id,
             type=n.type,
@@ -79,6 +85,7 @@ def list_notifications(
             actor_is_guest=actor_is_guest,
             comment_preview=comment_preview,
             project_id=project_id,
+            detail=n.detail,
         ))
 
     return results

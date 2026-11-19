@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   ChevronDown,
   MessageSquare,
+  CheckCircle2,
   Download,
   Key,
   Clock,
@@ -31,12 +32,13 @@ import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { SHARE_PASSWORD_TOO_LONG, sharePasswordTooLong } from '@/lib/share-password'
+import { permissionForApprovals, permissionForComments, togglesFrom } from '@/lib/share-permission'
 import {
   ShareAppearanceFields,
   DEFAULT_SHARE_APPEARANCE,
   appearanceFromView,
 } from '@/components/projects/share-appearance-fields'
-import type { AssetResponse, Folder, ShareLink, ShareLinkAppearance } from '@/types'
+import type { AssetResponse, Folder, ShareLink, ShareLinkAppearance, SharePermission } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -293,11 +295,38 @@ function ShareInviteInput({ token, shareLink }: { token: string; shareLink: { as
   )
 }
 
+// ─── Allow approvals row ─────────────────────────────────────────────────────
+
+/** The approvals switch under Comments. It carries a name and a description, since a client choosing it should know what it lets people do. */
+function AllowApprovalsRow({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+  const id = React.useId()
+  return (
+    <div className="flex items-center justify-between gap-3 py-2.5">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <CheckCircle2 className="h-4 w-4 shrink-0 text-text-tertiary" />
+        <div className="min-w-0">
+          <p id={`${id}-label`} className="text-sm text-text-primary">Allow approvals</p>
+          <p id={`${id}-desc`} className="text-2xs text-text-tertiary">Let viewers approve, ask for changes or reject</p>
+        </div>
+      </div>
+      <Switch.Root
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-desc`}
+        className="w-9 h-5 shrink-0 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors"
+      >
+        <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
+      </Switch.Root>
+    </div>
+  )
+}
+
 // ─── Share Config (pre-creation settings) ────────────────────────────────────
 
 interface ShareConfig {
   title: string
-  allowComments: boolean
+  permission: SharePermission
   allowDownloads: boolean
   passphrase: string | null
   expiresAt: string | null
@@ -325,8 +354,9 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
   const [title, setTitle] = React.useState(defaultTitle)
   // Comments on, downloads off, matching ShareLinkCreate on the API. Both have to
   // move together or a link created through the API keeps the old behaviour while
-  // one made in the dialog does not. (#266)
-  const [allowComments, setAllowComments] = React.useState(true)
+  // one made in the dialog does not. (#266) Comments and approvals are one value,
+  // so approvals can never show on over comments off.
+  const [permission, setPermission] = React.useState<SharePermission>('comment')
   const [allowDownloads, setAllowDownloads] = React.useState(false)
   const [passphrase, setPassphrase] = React.useState(false)
   const [passphraseValue, setPassphraseValue] = React.useState('')
@@ -345,7 +375,7 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
   function handleCreate() {
     onCreate({
       title: title.trim() || defaultTitle,
-      allowComments,
+      permission,
       allowDownloads,
       passphrase: passphrase && passphraseValue ? passphraseValue : null,
       expiresAt: expiresAt || null,
@@ -417,13 +447,20 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating, createdUrl, 
               <span className="text-sm text-text-primary">Allow comments</span>
             </div>
             <Switch.Root
-              checked={allowComments}
-              onCheckedChange={setAllowComments}
+              checked={togglesFrom(permission).comments}
+              onCheckedChange={(v) => setPermission(permissionForComments(v))}
+              aria-label="Allow comments"
               className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors"
             >
               <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
             </Switch.Root>
           </div>
+
+          {/* Allow approvals */}
+          <AllowApprovalsRow
+            checked={togglesFrom(permission).approvals}
+            onCheckedChange={(v) => setPermission(permissionForApprovals(v))}
+          />
 
           {/* Allow downloads */}
           <div className="flex items-center justify-between py-2.5">
@@ -715,7 +752,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   const [showSettings, setShowSettings] = React.useState(false)
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
   // Same defaults as the single-item path above. (#266)
-  const [allowComments, setAllowComments] = React.useState(true)
+  const [permission, setPermission] = React.useState<SharePermission>('comment')
   const [allowDownloads, setAllowDownloads] = React.useState(false)
   const [passphrase, setPassphrase] = React.useState(false)
   const [passphraseValue, setPassphraseValue] = React.useState('')
@@ -752,7 +789,7 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
     let cancelled = false
     api.get<ShareLink>(`/share/${result.token}/details`).then((data) => {
       if (cancelled) return
-      setAllowComments(data.permission === 'comment' || data.permission === 'approve')
+      setPermission(data.permission)
       setAllowDownloads(data.allow_download)
       setPassphrase(data.has_password ?? false)
       setPassphraseStored(data.has_password ?? false)
@@ -808,7 +845,8 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
   const settingsSummary = [
     'view',
     allowDownloads ? 'download' : null,
-    allowComments ? 'comment' : null,
+    togglesFrom(permission).comments ? 'comment' : null,
+    togglesFrom(permission).approvals ? 'approve' : null,
   ].filter(Boolean)
 
   return (
@@ -995,13 +1033,20 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
                   <span className="text-sm text-text-primary">Allow comments</span>
                 </div>
                 <Switch.Root
-                  checked={allowComments}
-                  onCheckedChange={(v) => { setAllowComments(v); patchLink({ permission: v ? 'comment' : 'view' }) }}
+                  checked={togglesFrom(permission).comments}
+                  onCheckedChange={(v) => { const next = permissionForComments(v); setPermission(next); patchLink({ permission: next }) }}
+                  aria-label="Allow comments"
                   className="w-9 h-5 rounded-full relative bg-bg-tertiary border border-border data-[state=checked]:bg-accent transition-colors"
                 >
                   <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
                 </Switch.Root>
               </div>
+
+              {/* Allow approvals */}
+              <AllowApprovalsRow
+                checked={togglesFrom(permission).approvals}
+                onCheckedChange={(v) => { const next = permissionForApprovals(v); setPermission(next); patchLink({ permission: next }) }}
+              />
 
               {/* Allow downloads */}
               <div className="flex items-center justify-between py-2.5">
@@ -1274,7 +1319,7 @@ export function ShareCreateDialog({
       // was live, leaving it public without its passphrase or expiry.
       const settings: Record<string, unknown> = {
         title: config.title,
-        permission: config.allowComments ? 'comment' : 'view',
+        permission: config.permission,
         visibility: config.visibility,
         allow_download: config.allowDownloads,
         show_watermark: config.watermark,

@@ -93,6 +93,7 @@ class ShareActivityAction(str, PyEnum):
     commented = "commented"
     approved = "approved"
     rejected = "rejected"
+    changes_requested = "changes_requested"
     downloaded = "downloaded"
 
 class ShareLinkActivity(Base):
