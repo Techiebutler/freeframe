@@ -573,3 +573,25 @@ def test_the_legacy_routes_cap_the_note_like_a_verdict_note(client, db, mocks, p
                            headers=_auth(w.editor))
     assert at_limit.status_code == 200, at_limit.text
     assert len(at_limit.json()["note"]) == 5000
+
+
+def test_an_instance_admin_who_is_not_a_member_gives_a_team_verdict(client, db, mocks):
+    """Since #602 an instance admin reaches every project with owner rights, and the
+    asset page offers them the team's verdict controls. Their verdict is the team's
+    too: listed as `team`, and the creator is told their name without the "(guest)"
+    tag that marks people outside the project."""
+    w = _world(db)
+    admin = User(email=f"admin-{uuid.uuid4().hex[:8]}@t.local", name="Ada Admin", is_superadmin=True)
+    db.add(admin)
+    db.flush()
+    db.refresh(admin)
+
+    given = _put(client, w, admin, "approved")
+    assert given.status_code == 200
+    assert given.json()["who"]["kind"] == "team"
+    assert [v["who"]["kind"] for v in _list(client, w, w.owner).json()] == ["team"]
+
+    [notification] = _notifications(db, w.A)
+    assert notification.actor_name == "Ada Admin"
+    [email] = mocks.send.call_args_list
+    assert email.kwargs["reviewer_name"] == "Ada Admin"

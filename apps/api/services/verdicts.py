@@ -34,6 +34,7 @@ from ..models.user import GuestUser, User
 from ..schemas.verdict import VerdictResponse, VerdictSummary, VerdictWho
 from ..services import event_service
 from ..services.avatar_keys import sign_avatar
+from ..services.permissions import is_instance_admin
 from ..tasks.celery_app import send_task_safe
 from ..tasks.email_tasks import send_approval_email
 
@@ -134,11 +135,15 @@ def _creator_facing_name(db: Session, project_id: uuid.UUID, actor: Actor) -> st
     The one place that decides it, so the two cannot drift. Anyone who is not a live
     member of the project is outside the team, and is tagged: a guest, and a signed-in
     person with no membership alike, since the name is whatever they typed or signed up
-    with and must not read like a colleague. A team member is named as they are.
+    with and must not read like a colleague. A team member is named as they are, and
+    so is an instance admin, who reaches every project with owner rights (#602)
+    without a membership row.
     The name is clipped so the tag still fits the notification's column.
     """
     name = actor.display_name
-    if actor.user is not None and actor.user.id in _live_member_user_ids(db, project_id):
+    if actor.user is not None and (
+        is_instance_admin(actor.user) or actor.user.id in _live_member_user_ids(db, project_id)
+    ):
         return name[:_NOTIFICATION_NAME_LIMIT]
     return name[:_NOTIFICATION_NAME_LIMIT - len(_GUEST_SUFFIX)] + _GUEST_SUFFIX
 
@@ -365,8 +370,10 @@ def list_verdicts(
     """Every verdict on one version of `asset`, oldest change first.
 
     `who.kind` is worked out now, not stored: a user who is a live member of the
-    project is `team`, everyone else is `external`. So a client who gave a verdict
-    as an outsider reads as team once they are added to the project.
+    project is `team`, and so is an instance admin (#602 gives them owner rights on
+    every project without a membership row); everyone else is `external`. So a
+    client who gave a verdict as an outsider reads as team once they are added to
+    the project.
 
     With `guest_scope_link_id` the listing is what a guest on that link may see:
     their own verdict, plus external verdicts given through this same link. Never
@@ -389,7 +396,9 @@ def list_verdicts(
 
     result = []
     for row, user, guest in rows:
-        is_team = row.user_id is not None and row.user_id in member_ids
+        is_team = row.user_id is not None and (
+            row.user_id in member_ids or is_instance_admin(user)
+        )
         mine = _is_mine(row, me)
         if guest_scope_link_id is not None and not mine:
             if is_team or row.share_link_id != guest_scope_link_id:
