@@ -511,6 +511,7 @@ export function AssetGrid({
                 projectId={projectId}
                 versionCount={versionCounts[asset.id]}
                 commentCount={asset.comment_count}
+                verdictSummary={asset.verdict_summary}
                 assignee={asset.assignee_id ? assignees[asset.assignee_id] : null}
                 authorName={authorNames[asset.created_by]}
                 thumbnailUrl={thumbnails[asset.id]}

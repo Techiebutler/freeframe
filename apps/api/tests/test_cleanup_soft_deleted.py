@@ -450,6 +450,8 @@ def test_gc_covers_all_inbound_fks_to_purged_tables():
         # -> share_links.id
         ("share_link_items", "share_link_id"), ("share_link_activity", "share_link_id"),
         ("watermark_settings", "share_link_id"),
+        # a verdict outlives its link: `_purge_share_link` nulls it rather than deleting it
+        ("approvals", "share_link_id"),
         # -> collections.id
         ("collection_shares", "collection_id"),
         # -> metadata_fields.id

@@ -18,6 +18,9 @@ class ActivityAction(str, PyEnum):
     assigned = "assigned"
     approved = "approved"
     rejected = "rejected"
+    changes_requested = "changes_requested"
+    verdict_removed = "verdict_removed"
+    verdict_cleared = "verdict_cleared"
 
 class NotificationType(str, PyEnum):
     mention = "mention"
@@ -51,5 +54,9 @@ class Notification(Base):
     type: Mapped[NotificationType] = mapped_column(Enum(NotificationType), nullable=False)
     asset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True)
     comment_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("comments.id"), nullable=True)
+    # Who did it and what they did, for notifications that have an actor (a verdict
+    # today). Null on every other type, which render as before.
+    actor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    detail: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -219,6 +219,13 @@ def _purge_share_link(db, share_link_id, counts: PurgeCounts) -> None:
     db.query(ShareLinkItem).filter(ShareLinkItem.share_link_id == share_link_id).delete(synchronize_session=False)
     db.query(ShareLinkActivity).filter(ShareLinkActivity.share_link_id == share_link_id).delete(synchronize_session=False)
     db.query(WatermarkSettings).filter(WatermarkSettings.share_link_id == share_link_id).delete(synchronize_session=False)
+    # A verdict given through the link outlives it: unlink it and keep the row. The FK is
+    # ON DELETE SET NULL as well, so this is belt and braces: the unlink does not depend
+    # on the constraint being there. (It does not touch the session's identity map, since
+    # `synchronize_session=False`.) `via_link_title` already holds the name.
+    db.query(Approval).filter(Approval.share_link_id == share_link_id).update(
+        {Approval.share_link_id: None}, synchronize_session=False,
+    )
     db.query(ShareLink).filter(ShareLink.id == share_link_id).delete(synchronize_session=False)
     counts.share_links += 1
     db.flush()
@@ -479,10 +486,12 @@ def _reap_stale_uploads(db) -> int:
     #
     # Both initiate handlers call CreateMultipartUpload before committing the rows
     # that describe it, so a commit that fails leaves an upload nothing references
-    # and nothing above can find. Those are the only uploads this listing is still
-    # needed for, and restricting it to keys with no MediaFile is what keeps it
-    # from aborting something the database says is alive -- which is exactly what
-    # it used to do.
+    # and nothing above can find. They abort it when that happens
+    # (`commit_initiated_upload`), but only best-effort, and a process that dies
+    # between the two calls never gets that far. Those are the only uploads this
+    # listing is still needed for, and restricting it to keys with no MediaFile is
+    # what keeps it from aborting something the database says is alive -- which is
+    # exactly what it used to do.
     #
     # Best-effort by design: on MinIO this listing is a node-local in-memory cache
     # and returns nothing after a restart. That is survivable here because MinIO

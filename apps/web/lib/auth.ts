@@ -82,6 +82,27 @@ export function onSessionEnded(cb: () => void): () => void {
  */
 export function clearTokens(): void {
   if (typeof window === 'undefined') return
+  endSession()
+  window.location.href = withBasePath('/login')
+}
+
+/**
+ * Ends the session as `clearTokens` does, then opens /login with `from` set,
+ * so a sign-in made there can come back to `from` (an app path, without the
+ * basePath; the login page checks it with `safeInternalPath`).
+ *
+ * For a page that is not behind a login, like a share link, whose visitor
+ * chose to sign in again: their dead tokens must go first, or /login would see
+ * a token in storage and send them straight back.
+ */
+export function signInAgain(from: string): void {
+  if (typeof window === 'undefined') return
+  endSession()
+  window.location.href = withBasePath(`/login?from=${encodeURIComponent(from)}`)
+}
+
+/** Everything `clearTokens` does short of leaving the page. */
+function endSession(): void {
   leaveGuardSuppressed = true
   localStorage.removeItem(ACCESS_TOKEN_KEY)
   localStorage.removeItem(REFRESH_TOKEN_KEY)
@@ -95,7 +116,6 @@ export function clearTokens(): void {
       console.warn('A listener failed as the session ended', err)
     }
   })
-  window.location.href = withBasePath('/login')
 }
 
 // Deduplicate concurrent refresh calls — when access token expires, multiple
@@ -105,11 +125,40 @@ let _refreshPromise: Promise<string | null> | null = null
 export async function refreshAccessToken(): Promise<string | null> {
   if (_refreshPromise) return _refreshPromise
 
-  _refreshPromise = _doRefresh()
+  _refreshPromise = _doRefresh(true).then((outcome) => ('token' in outcome ? outcome.token : null))
   try {
     return await _refreshPromise
   } finally {
     _refreshPromise = null
+  }
+}
+
+/**
+ * How a refresh ended. `refused`: the server will not refresh this session (401
+ * or 403, no refresh token, or another tab ended it meanwhile). `transient`: no
+ * answer worth acting on (no network, a 5xx, a proxy error); try again later.
+ */
+export type RefreshOutcome = { token: string } | { failed: 'refused' | 'transient' }
+
+let _quietRefreshPromise: Promise<RefreshOutcome> | null = null
+
+/**
+ * `refreshAccessToken` for a page that must not be left: it never clears the
+ * tokens and never navigates, whatever the answer. It says how it ended, so the
+ * caller can tell "sign in again" (refused) from "try again" (transient). A
+ * share page uses it, where /login would lose the review on screen.
+ *
+ * Its own dedup, so a page-leaving refresh never joins a quiet one (or the
+ * other way round) and inherits the wrong handling of a refusal.
+ */
+export async function refreshAccessTokenQuietly(): Promise<RefreshOutcome> {
+  if (_quietRefreshPromise) return _quietRefreshPromise
+
+  _quietRefreshPromise = _doRefresh(false)
+  try {
+    return await _quietRefreshPromise
+  } finally {
+    _quietRefreshPromise = null
   }
 }
 
@@ -122,17 +171,20 @@ export async function refreshAccessToken(): Promise<string | null> {
  * same account, another tab refreshed it or signed it in again, and its access
  * token is the answer; otherwise null, "could not refresh".
  */
-function sessionMovedOn(sentRefreshToken: string): string | null {
+function sessionMovedOn(sentRefreshToken: string): RefreshOutcome {
   const access = getAccessToken()
   const sub = subjectOf(access)
-  return sub !== null && sub === subjectOf(sentRefreshToken) ? access : null
+  return sub !== null && sub === subjectOf(sentRefreshToken) && access
+    ? { token: access }
+    : { failed: 'refused' }
 }
 
-async function _doRefresh(): Promise<string | null> {
+/** `endsSession`: whether a refusal (or nothing to send) ends the session. */
+async function _doRefresh(endsSession: boolean): Promise<RefreshOutcome> {
   const refreshToken = getRefreshToken()
   if (!refreshToken) {
-    clearTokens()
-    return null
+    if (endsSession) clearTokens()
+    return { failed: 'refused' }
   }
 
   try {
@@ -150,9 +202,10 @@ async function _doRefresh(): Promise<string | null> {
       // is the server being briefly unavailable, and signing the user out for
       // it loses whatever they had open.
       if (response.status === 401 || response.status === 403) {
-        clearTokens()
+        if (endsSession) clearTokens()
+        return { failed: 'refused' }
       }
-      return null
+      return { failed: 'transient' }
     }
 
     const data = await response.json()
@@ -161,7 +214,7 @@ async function _doRefresh(): Promise<string | null> {
     const newRefreshToken: string = data.refresh_token ?? refreshToken
 
     setTokens(newAccessToken, newRefreshToken)
-    return newAccessToken
+    return { token: newAccessToken }
   } catch {
     // `fetch` rejects only on a transport failure; an HTTP error status
     // resolves and is handled above. So reaching here means the request never
@@ -172,6 +225,6 @@ async function _doRefresh(): Promise<string | null> {
     // Callers treat null as "could not refresh" and let the original failure
     // surface, so keeping the tokens costs nothing and the session survives
     // until the network comes back.
-    return null
+    return { failed: 'transient' }
   }
 }

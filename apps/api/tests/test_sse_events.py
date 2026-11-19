@@ -249,17 +249,20 @@ def test_resolve_comment_publishes_the_resulting_state():
 
 
 def test_approve_asset_publishes_approval_updated():
+    """The route hands the write to the verdict service, which publishes the event."""
     from apps.api.routers import approvals as approvals_router
 
     project_id, asset_id = uuid.uuid4(), uuid.uuid4()
     user = SimpleNamespace(id=uuid.uuid4(), name="Alice", email="a@example.com")
     asset = SimpleNamespace(id=asset_id, project_id=project_id, name="clip", created_by=user.id)
-    body = SimpleNamespace(version_id=uuid.uuid4(), note=None)
+    version = SimpleNamespace(id=uuid.uuid4(), asset_id=asset_id)
+    body = SimpleNamespace(version_id=version.id, note=None)
 
     with patch.object(approvals_router, "_get_asset", return_value=asset), \
          patch.object(approvals_router, "require_project_role"), \
-         patch.object(approvals_router, "_upsert_approval", return_value=SimpleNamespace()), \
-         patch.object(approvals_router.event_service, "publish_sync") as pub:
+         patch.object(approvals_router, "_live_version", return_value=version), \
+         patch("apps.api.services.verdicts.send_task_safe"), \
+         patch("apps.api.services.verdicts.event_service.publish_sync") as pub:
         approvals_router.approve_asset(asset_id, body, db=MagicMock(), current_user=user)
 
     pid, event, payload = pub.call_args[0]
@@ -267,7 +270,7 @@ def test_approve_asset_publishes_approval_updated():
     assert event == "approval_updated"
     assert payload == {
         "asset_id": str(asset_id),
-        "user_id": str(user.id),
+        "version_id": str(version.id),
         "status": "approved",
     }
 

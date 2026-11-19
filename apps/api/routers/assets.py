@@ -15,8 +15,10 @@ from ..models.activity import Mention, Notification, NotificationType
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
+from ..schemas.verdict import VerdictSummary
 from ..services.permissions import require_project_role, require_project_visible, require_asset_access, can_access_asset_audited
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
+from ..services.verdicts import verdict_summaries
 from ..services.downloads import (
     describe_choices, download_choices, download_filename, may_download_original,
     original_allowed_for_download, pick_or_refuse,
@@ -29,7 +31,7 @@ from ..schemas.upload import (
 from ..services.storage import choose_part_size, upload_guard_error
 from ..services.versions import UNVIEWABLE_STATUSES, next_version_number
 from ..services.s3_service import create_multipart_upload
-from .upload import storage_initiate_error
+from .upload import commit_initiated_upload, storage_initiate_error
 
 router = APIRouter(tags=["assets"])
 
@@ -134,6 +136,9 @@ def _build_asset_response(asset: Asset, db: Session) -> AssetResponse:
     resp.thumbnail_url = thumbnail_url
     if latest_version:
         resp.comment_count = _comment_counts(db, [latest_version.id]).get(latest_version.id, 0)
+        resp.verdict_summary = verdict_summaries(db, [latest_version.id])[latest_version.id]
+    else:
+        resp.verdict_summary = VerdictSummary()
     return resp
 
 
@@ -174,6 +179,8 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
     version_ids = [v.id for v in latest_versions]
     all_files = db.query(MediaFile).filter(MediaFile.version_id.in_(version_ids)).all() if version_ids else []
     comment_counts = _comment_counts(db, version_ids)
+    # One grouped query for the page: every version asked for is present, zeroed.
+    verdicts = verdict_summaries(db, version_ids)
     files_by_version: dict = {}
     for f in all_files:
         files_by_version.setdefault(f.version_id, []).append(f)
@@ -198,6 +205,7 @@ def _build_asset_responses_bulk(assets: list[Asset], db: Session) -> list[AssetR
         asset_resp.latest_version = version_response
         asset_resp.thumbnail_url = thumbnail_url
         asset_resp.comment_count = comment_counts.get(version.id, 0) if version else 0
+        asset_resp.verdict_summary = verdicts[version.id] if version else VerdictSummary()
         result.append(asset_resp)
     return result
 
@@ -509,7 +517,7 @@ def initiate_new_version(
         s3_key_raw=s3_key,
     )
     db.add(media_file)
-    db.commit()
+    commit_initiated_upload(db, s3_key, upload_id)
 
     return InitiateUploadResponse(
         upload_id=upload_id,

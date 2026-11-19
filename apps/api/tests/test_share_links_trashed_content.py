@@ -176,6 +176,14 @@ def _share_calls(token, asset_id, listing):
         ("GET", f"/share/{token}/comments?asset_id={asset_id}", None),
         ("POST", f"/share/{token}/comment",
          {"asset_id": str(asset_id), "body": "hello", "guest_email": "g@example.com", "guest_name": "G"}),
+        # The verdict routes need a version id to get past request validation; the
+        # link is refused before it is looked at.
+        ("PUT", f"/share/{token}/verdict",
+         {"asset_id": str(asset_id), "version_id": str(uuid.uuid4()), "status": "approved",
+          "guest_email": "g@example.com", "guest_name": "G"}),
+        ("DELETE", f"/share/{token}/verdict?asset_id={asset_id}&version_id={uuid.uuid4()}"
+                   f"&guest_email=g@example.com", None),
+        ("GET", f"/share/{token}/verdicts?asset_id={asset_id}&version_id={uuid.uuid4()}", None),
     ]
     if listing:
         calls.append(("GET", f"/share/{token}/assets", None))

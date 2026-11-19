@@ -49,6 +49,7 @@ class StorageReached(Exception):
 
 def _seed_more(db, w):
     """What the routes below act on, beyond the share-link world."""
+    from apps.api.models.approval import Approval, ApprovalStatus
     from apps.api.models.asset import (
         Asset, AssetType, AssetVersion, MediaFile, FileType, ProcessingStatus,
     )
@@ -85,6 +86,10 @@ def _seed_more(db, w):
     w.upload = AssetVersion(asset_id=w.A.id, version_number=2, created_by=w.owner.id,
                             processing_status=ProcessingStatus.uploading, upload_id="up-1")
     db.add(w.upload); db.flush()
+    # A verdict the viewer has given on A, for the route that removes one by id.
+    w.verdict = Approval(asset_id=w.A.id, version_id=w.v.id, user_id=w.viewer.id,
+                         status=ApprovalStatus.approved)
+    db.add(w.verdict); db.flush()
     w.upload_key = f"raw/{w.project.id}/{w.A.id}/{w.upload.id}/original.mov"
     db.add(MediaFile(version_id=w.upload.id, file_type=FileType.video,
                      original_filename="v2.mov", mime_type="video/quicktime",
@@ -182,6 +187,16 @@ ROUTES = [
     ("asset-reject", "editor", "POST", lambda w: f"/assets/{w.A.id}/reject",
      lambda w: {"version_id": str(w.v.id)}, GONE),
     ("asset-approvals", "viewer", "GET", lambda w: f"/assets/{w.A.id}/approvals", None, NO_ACCESS),
+    # The verdict routes answer 404 for a deleted project, GET included: it checks the
+    # project is live before `can_access_asset`, which alone would answer 403.
+    ("asset-verdict-put", "editor", "PUT", lambda w: f"/assets/{w.A.id}/verdict",
+     lambda w: {"version_id": str(w.v.id), "status": "approved"}, GONE),
+    ("asset-verdict-clear", "editor", "DELETE",
+     lambda w: f"/assets/{w.A.id}/verdict?version_id={w.v.id}", None, GONE),
+    ("asset-verdict-remove", "editor", "DELETE",
+     lambda w: f"/assets/{w.A.id}/verdicts/{w.verdict.id}", None, GONE),
+    ("asset-verdicts", "viewer", "GET",
+     lambda w: f"/assets/{w.A.id}/verdicts?version_id={w.v.id}", None, GONE),
     ("asset-share", "editor", "POST", lambda w: f"/assets/{w.A.id}/share", lambda w: {}, GONE),
     ("asset-shares", "editor", "GET", lambda w: f"/assets/{w.A.id}/shares", None, GONE),
     ("asset-share-user", "editor", "POST", lambda w: f"/assets/{w.A.id}/share/user",

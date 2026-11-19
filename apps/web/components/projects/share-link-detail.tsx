@@ -29,6 +29,11 @@ import {
 } from "@/components/projects/share-appearance-fields";
 import { ToggleRow } from "@/components/ui/setting-controls";
 import { SHARE_ASSETS_PAGE_SIZE } from "@/lib/share-page";
+import {
+  permissionForApprovals,
+  permissionForComments,
+  togglesFrom,
+} from "@/lib/share-permission";
 import { useBranding } from "@/components/shared/branding-provider";
 import { resolveShareLogoUrl } from "@/lib/project-branding";
 import { SharePagePreviewFrame } from "@/components/projects/share-page-preview";
@@ -1032,12 +1037,17 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
               <ToggleRow
                 label="Comments"
                 description="Allow viewers to leave comments"
-                checked={
-                  shareLink.permission === "comment" ||
-                  shareLink.permission === "approve"
-                }
+                checked={togglesFrom(shareLink.permission).comments}
                 onCheckedChange={(checked) =>
-                  immediateUpdate({ permission: checked ? "comment" : "view" })
+                  immediateUpdate({ permission: permissionForComments(checked) })
+                }
+              />
+              <ToggleRow
+                label="Allow approvals"
+                description="Let viewers approve, ask for changes or reject"
+                checked={togglesFrom(shareLink.permission).approvals}
+                onCheckedChange={(checked) =>
+                  immediateUpdate({ permission: permissionForApprovals(checked) })
                 }
               />
               <ToggleRow

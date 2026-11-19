@@ -148,7 +148,7 @@ def initiate_upload(
         s3_key_raw=s3_key,
     )
     db.add(media_file)
-    db.commit()
+    commit_initiated_upload(db, s3_key, upload_id)
 
     return InitiateUploadResponse(
         upload_id=upload_id,
@@ -321,6 +321,42 @@ def storage_initiate_error(exc: Exception) -> HTTPException | None:
             "message": "Storage refused the upload. Ask your admin to check the storage settings.",
         },
     )
+
+
+def commit_initiated_upload(db: Session, s3_key: str, upload_id: str) -> None:
+    """Commit the version an initiate route just started a multipart upload for.
+
+    CreateMultipartUpload has already succeeded by the time this runs, so a
+    commit that fails would otherwise leave that upload in the bucket with no row
+    naming it, and the client's retries add one more each time (#637: seven for
+    one file on R2). Abort it before failing the request. Best-effort: an abort
+    that fails is logged and the original error is what the caller gets, and the
+    stale-upload reaper's bucket sweep is the backstop for what is left.
+
+    The rollback comes first. Until it runs, PostgreSQL holds the failed
+    transaction open, along with the key-share locks its inserts took on the
+    rows they reference, and the abort is a storage call that can take as long
+    as its retries do. A rollback that fails too (the connection is gone) is
+    logged and does not replace the commit's error either.
+    """
+    try:
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception as rollback_exc:  # noqa: BLE001 - must not mask the commit's error
+            logger.warning(
+                "could not roll back after the version for %s failed to save: %r",
+                s3_key, rollback_exc,
+            )
+        try:
+            abort_multipart_upload(s3_key, upload_id)
+        except Exception as abort_exc:  # noqa: BLE001 - must not mask the commit's error
+            logger.warning(
+                "could not abort multipart upload for %s after its version failed to "
+                "save: %r", s3_key, abort_exc,
+            )
+        raise
 
 
 def _storage_unreachable(what: str = "check") -> HTTPException:
