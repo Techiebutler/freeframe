@@ -178,9 +178,9 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       start_period: 30s
-      retries: 3
+      retries: 5
     restart: unless-stopped
 
   worker:

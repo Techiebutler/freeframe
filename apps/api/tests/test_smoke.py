@@ -52,3 +52,9 @@ def test_redoc_ui(client):
     """ReDoc UI should be available."""
     resp = client.get("/redoc")
     assert resp.status_code == 200
+
+
+def test_health_is_async_no_threadpool():
+    import inspect
+    from apps.api.main import health
+    assert inspect.iscoroutinefunction(health)

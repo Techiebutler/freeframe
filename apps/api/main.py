@@ -110,6 +110,6 @@ from .routers import handin_sign as handin_sign_api
 app.include_router(handin_sign_api.router)
 
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
