@@ -38,7 +38,7 @@ meaning: not approved): a signed-in user's own verdict in `approvals`, and every
 `changes_requested` entry in `share_link_activity`. Both then read back there.
 
 Revision ID: a7e3c5d90b42
-Revises: f4b9c2a7d105
+Revises: 7c3a9d4b1e2f
 Create Date: 2026-11-18
 
 """
@@ -50,7 +50,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'a7e3c5d90b42'
-down_revision: Union[str, Sequence[str], None] = 'f4b9c2a7d105'
+down_revision: Union[str, Sequence[str], None] = '7c3a9d4b1e2f'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
