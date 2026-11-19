@@ -154,19 +154,22 @@ export default function ProjectSettingsPage() {
           >
             <Shield className="mt-0.5 h-4 w-4 shrink-0 text-text-tertiary" />
             <p className="text-sm text-text-secondary">
-              You are not a member of this project. You are managing it as an instance admin, and
-              this access is written to the activity log.
+              {project.is_public
+                ? 'You are not a member of this project. You are managing it as an instance admin, and changes made here are written to the activity log.'
+                : 'You are not a member of this project. You are managing it as an instance admin, and this access is written to the activity log.'}
             </p>
           </div>
         )}
         {/* Keyed so a draft in General never carries over to another project:
             ProjectGeneralTab takes its saved values once. */}
         <Tabs.Root key={projectId} value={tab} onValueChange={selectTab}>
-          {/* From `md` the rail's General and People links do this job. Scrolls
+          {/* Shown at every width: the page owns the tab state, so a search or a
+              failed list request that empties the rail cannot take it away. The
+              rail's General and People links read the same `?tab=`. Scrolls
               sideways on a phone rather than wrapping. */}
           <Tabs.List
             aria-label="Project settings"
-            className="-mx-4 flex overflow-x-auto border-b border-border px-4 sm:mx-0 sm:px-0 [scrollbar-width:none] md:hidden"
+            className="-mx-4 flex overflow-x-auto border-b border-border px-4 sm:mx-0 sm:px-0 [scrollbar-width:none]"
           >
             {TABS.map(({ value, label, icon: Icon }) => (
               <Tabs.Trigger
@@ -186,7 +189,7 @@ export default function ProjectSettingsPage() {
           </Tabs.List>
           {/* General stays mounted behind the other tabs so its unsaved draft
               survives a look at them. */}
-          <Tabs.Content value="general" forceMount className="pt-6 md:pt-0 data-[state=inactive]:hidden">
+          <Tabs.Content value="general" forceMount className="pt-6 data-[state=inactive]:hidden">
             <ProjectGeneralTab project={project} />
             <div ref={deleteRowRef} className={cn('mt-6 border-t border-border pt-4', clearBadge)}>
               <button
@@ -211,7 +214,7 @@ export default function ProjectSettingsPage() {
               )}
             </div>
           </Tabs.Content>
-          <Tabs.Content value="people" className={cn('pt-6 md:pt-0', clearBadge)}>
+          <Tabs.Content value="people" className={cn('pt-6', clearBadge)}>
             <ProjectPeopleTab projectId={projectId} />
           </Tabs.Content>
         </Tabs.Root>
@@ -224,7 +227,7 @@ export default function ProjectSettingsPage() {
       {/* Phone only: the rail is not drawn there, so the project list is one tap away. */}
       <Link
         href="/settings/projects"
-        aria-label="Choose project"
+        aria-label={project ? `Choose project, current: ${project.name}` : 'Choose project'}
         className="flex h-10 w-full items-center gap-2.5 rounded-md border border-border bg-bg-secondary px-3 text-sm text-text-primary md:hidden"
       >
         {project && (

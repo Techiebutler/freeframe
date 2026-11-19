@@ -68,7 +68,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
           <ChevronLeft className="h-3.5 w-3.5" />
           Back to projects
         </Link>
-        <p className="text-xl font-semibold text-text-primary">Settings</p>
+        <h1 className="text-xl font-semibold text-text-primary">Settings</h1>
       </div>
 
       <nav

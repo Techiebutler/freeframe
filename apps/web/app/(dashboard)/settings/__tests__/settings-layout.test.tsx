@@ -75,6 +75,13 @@ describe('the section tabs', () => {
   })
 })
 
+describe('the screen title', () => {
+  it('titles the screen with a level 1 heading', () => {
+    renderAt('/settings/profile')
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument()
+  })
+})
+
 describe('the rail', () => {
   it('lists the four Instance pages for an Admin, the open one current', () => {
     useAuthStore.setState({ isSuperAdmin: true })

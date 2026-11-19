@@ -62,17 +62,15 @@ function ProjectTabLinks({ projectId }: { projectId: string }) {
 }
 
 /**
- * The projects the caller can manage, with a search box: every live project for
- * an Admin, the ones they own for everyone else. Picking one opens its settings.
+ * The projects the caller can manage, sorted by name: every live project for an
+ * Admin, the ones they own for everyone else. `data` is undefined until the
+ * list has loaded, so `rows` being empty alone does not mean "none".
  *
- * No project is selected for the caller. Opening a private project as a
- * non-member Admin writes an access row, so the Admin has to choose it.
+ * Every caller shares one SWR key, so using it twice costs no second request.
  */
-export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
+export function useManageableProjects() {
   const user = useAuthStore((s) => s.user)
   const isSuperAdmin = useAuthStore((s) => s.isSuperAdmin)
-  const headingId = React.useId()
-  const [query, setQuery] = React.useState('')
 
   // Wait for the user: until then `isSuperAdmin` is false and an Admin would
   // fire the narrower request first.
@@ -86,6 +84,21 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
     [data, isSuperAdmin],
   )
+
+  return { user, isSuperAdmin, data, error, mutate, rows }
+}
+
+/**
+ * The projects the caller can manage, with a search box. Picking one opens its
+ * settings.
+ *
+ * No project is selected for the caller. Opening a private project as a
+ * non-member Admin writes an access row, so the Admin has to choose it.
+ */
+export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
+  const { user, isSuperAdmin, data, error, mutate, rows } = useManageableProjects()
+  const headingId = React.useId()
+  const [query, setQuery] = React.useState('')
 
   const needle = query.trim().toLowerCase()
   const shown = needle ? rows.filter((p) => p.name.toLowerCase().includes(needle)) : rows

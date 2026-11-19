@@ -6,6 +6,7 @@ import { Eye, ImagePlus, Loader2, Moon, Palette, Settings2, Sun, Upload, X } fro
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getGradientForProject } from '@/lib/gradient-utils'
+import { isProjectListKey } from '@/lib/project-keys'
 import { AVATAR_INPUT_TYPES, AVATAR_MAX_INPUT_BYTES } from '@/lib/avatar-image'
 import { CUSTOM_FOOTER_MAX, resolveShareLogoUrl, uploadProjectLogo } from '@/lib/project-branding'
 import { Button } from '@/components/ui/button'
@@ -291,7 +292,7 @@ export function ProjectGeneralTab({ project }: { project: Project }) {
 
     // Everything else showing this project picks up the new name and cover.
     void globalMutate(`/projects/${projectId}`)
-    void globalMutate('/projects')
+    void globalMutate(isProjectListKey)
     setStatus(failures.length ? { kind: 'failed', failures } : { kind: 'saved' })
     setSaving(false)
   }

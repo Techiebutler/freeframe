@@ -32,6 +32,8 @@ globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {
 
 const NOTICE =
   'You are not a member of this project. You are managing it as an instance admin, and this access is written to the activity log.'
+const NOTICE_PUBLIC =
+  'You are not a member of this project. You are managing it as an instance admin, and changes made here are written to the activity log.'
 
 const PROJECT: Project = {
   id: 'p1',
@@ -244,6 +246,17 @@ describe('the instance admin notice', () => {
     else expect(screen.queryByText(NOTICE)).toBeNull()
   })
 
+  it('names only changes on a public project', async () => {
+    // Opening a public project writes no access row, so the notice must not say it does.
+    useAuthStore.setState({ isSuperAdmin: true })
+    project = { ...PROJECT, role: null, is_public: true }
+    renderPage()
+    await screen.findByLabelText('Name')
+    const note = screen.getByRole('note')
+    expect(note).toHaveTextContent(NOTICE_PUBLIC)
+    expect(note).not.toHaveTextContent(NOTICE)
+  })
+
   it('shows on People as well', async () => {
     useAuthStore.setState({ isSuperAdmin: true })
     project = { ...PROJECT, role: null }
@@ -320,14 +333,15 @@ describe('the Delete project row', () => {
 })
 
 describe('the phone layout', () => {
-  it('has a project picker that links to the list, and hides the tab list from md', async () => {
+  it('has a project picker and keeps the tab list at every width', async () => {
     renderPage()
     await screen.findByLabelText('Name')
-    const picker = screen.getByRole('link', { name: 'Choose project' })
+    const picker = screen.getByRole('link', { name: 'Choose project, current: Launch film' })
     expect(picker).toHaveAttribute('href', '/settings/projects')
     expect(picker.className.split(/\s+/)).toContain('md:hidden')
     expect(picker).toHaveTextContent('Launch film')
-    expect(screen.getByRole('tablist').className.split(/\s+/)).toContain('md:hidden')
+    // A search or a failed list request can empty the rail, so the page's own row stays.
+    expect(screen.getByRole('tablist').className.split(/\s+/)).not.toContain('md:hidden')
   })
 })
 

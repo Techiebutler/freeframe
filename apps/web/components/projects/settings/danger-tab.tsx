@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { mutate as globalMutate } from 'swr'
 import { AlertTriangle } from 'lucide-react'
 import { api } from '@/lib/api'
+import { isProjectListKey } from '@/lib/project-keys'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
@@ -35,7 +36,7 @@ export function ProjectDangerTab({ projectId, projectName }: { projectId: string
       // Keeps the dialog open with the reason.
       throw err
     }
-    void globalMutate('/projects')
+    void globalMutate(isProjectListKey)
     router.push('/projects')
   }
 
