@@ -365,6 +365,8 @@ export interface FolderShareAssetsResponse {
   total: number
   page: number
   per_page: number
+  /** Notes of the request's open feedback round (no Send has closed them yet), embed only. */
+  open_round_notes?: number
 }
 
 // ─── Metadata & Collections ───────────────────────────────────────────────────

@@ -40,7 +40,7 @@ from ..services.permissions import (
     require_project_role, validate_share_link, validate_share_link_with_session,
     validate_asset_in_share, _is_descendant_of,
 )
-from ..services import client_view
+from ..services import client_view, feedback_rounds
 from ..services.redis_service import create_share_session
 from ..services.s3_service import generate_presigned_get_url, build_download_filename, object_exists
 from ..services.crypto_service import encrypt_password, decrypt_password
@@ -1428,6 +1428,9 @@ def get_folder_share_assets(
         total=total,
         page=page,
         per_page=per_page,
+        open_round_notes=feedback_rounds.notes_count(db, module_req or (db.query(UploadRequest).filter(
+            UploadRequest.folder_id == target_folder_id, UploadRequest.revoked_at.is_(None),
+        ).order_by(UploadRequest.created_at.desc()).first() if target_folder_id else None)) if embed else 0,
     )
 
 

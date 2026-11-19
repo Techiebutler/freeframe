@@ -1119,7 +1119,7 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
         setParts({ approved: all.filter((a) => a.approved).length, total: all.length })
         setItems(sorted)
         setIndex(Math.max(0, sorted.findIndex((a) => !a.approved)))
-        setUnsent(sorted.reduce((n, a) => n + (a.comment_count || 0), 0))
+        setUnsent(data?.open_round_notes ?? 0) // notes of the open round only: comments a Send already closed are sent
       })
       .catch(() => setItems([]))
   }, [token, shareSession])

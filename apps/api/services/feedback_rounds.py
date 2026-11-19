@@ -448,11 +448,12 @@ def close_left(db: Session, req: UploadRequest, now: datetime) -> bool:
 
 
 def all_reviewed(db: Session, rnd: FeedbackRound, req: UploadRequest) -> bool:
-    """Every part (deliveries.request_parts) has a comment in this round or is approved, and the round has a comment."""
+    """Every part (deliveries.request_parts) has a comment in this round or is approved, and the round has a comment.
+    Never for a single part: its first note would close the round while the reviewer is still typing (Send or leaving closes it)."""
     from . import deliveries
     commented = {c.asset_id for c in round_comments(db, rnd, req)}
     parts = deliveries.request_parts(db, req)
-    return bool(commented) and bool(parts) and all(approved or a_id in commented for a_id, _v, approved in parts)
+    return bool(commented) and len(parts) >= 2 and all(approved or a_id in commented for a_id, _v, approved in parts)
 
 
 def close_if_all_reviewed(db: Session, req: UploadRequest, now: datetime) -> bool:

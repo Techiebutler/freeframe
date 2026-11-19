@@ -163,6 +163,7 @@ class FolderShareAssetsResponse(BaseModel):
     total: int
     page: int
     per_page: int
+    open_round_notes: int = 0  # notes of the request's open feedback round (no Send has closed them yet); 0 without request/round
 
 
 class ShareAssetVersionItem(BaseModel):

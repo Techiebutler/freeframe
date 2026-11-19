@@ -79,3 +79,27 @@ def test_all_approved_without_any_comment_opens_and_closes_no_round(scene):
     assert e.client.post(f"/share/{tok}/assets/{e.scene.asset.id}/approve", json={}).status_code == 200
     assert e.client.post(f"/share/{tok}/assets/{e.scene.asset.id}/round-sync").json() == {"notes": 0, "closed_by": None}
     assert rounds(e) == []
+
+
+def test_round_sync_never_closes_a_round_of_a_single_part_request(scene):
+    e = scene                                                                # one part: the reviewer sends or leaves, a note is not the end
+    tok = link(e, e.scene.req.folder_id, "comment")
+    comment(e, e.scene.asset)
+    comment(e, e.scene.asset, "And the logo", 5.0)
+    r = e.client.post(f"/share/{tok}/assets/{e.scene.asset.id}/round-sync")
+    assert r.json() == {"notes": 2, "closed_by": None}
+    [rnd] = rounds(e)
+    assert rnd.closed_at is None
+
+
+def test_folder_assets_report_the_open_round_notes_not_the_comment_total(scene):
+    e = scene
+    tok = link(e, e.scene.req.folder_id, "comment")
+    get = lambda: e.client.get(f"/share/{tok}/assets?page=1&per_page=50&embed=true").json()
+    assert get()["open_round_notes"] == 0                                    # no round yet
+    comment(e, e.scene.asset)
+    comment(e, e.scene.asset, "And the logo", 5.0)
+    assert get()["open_round_notes"] == 2
+    done(e)                                                                  # Send closes the round: the comments stay, the open count is 0
+    out = get()
+    assert out["open_round_notes"] == 0 and out["assets"][0]["comment_count"] == 2
