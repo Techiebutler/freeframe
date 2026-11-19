@@ -40,7 +40,7 @@ from ..services.permissions import (
     require_project_role, validate_share_link, validate_share_link_with_session,
     validate_asset_in_share, _is_descendant_of,
 )
-from ..services import client_view, feedback_rounds
+from ..services import client_view, download_gate, feedback_rounds
 from ..services.redis_service import create_share_session
 from ..services.s3_service import generate_presigned_get_url, build_download_filename, object_exists
 from ..services.crypto_service import encrypt_password, decrypt_password
@@ -1464,6 +1464,8 @@ def get_share_stream_url(
     media_file = _exact_media_file(db,asset.id,version_id,link) if isinstance(version_id,uuid.UUID) else _get_latest_media_file(db,asset.id)
     if not media_file:
         raise HTTPException(status_code=404, detail="No ready media file found")
+    if download and not download_gate.may_download(db, asset.project_id, media_file.version_id, current_user):
+        raise HTTPException(status_code=403, detail=download_gate.NOT_RELEASED)
 
     proxy_url = None
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:

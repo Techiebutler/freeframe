@@ -18,7 +18,7 @@ from ..services.permissions import require_project_role, require_asset_access, c
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from .hls_proxy import create_hls_token
 from ..schemas.upload import InitiateUploadRequest, InitiateUploadResponse, ALLOWED_MIME_TYPES, mime_to_asset_type
-from ..services import approval_lock
+from ..services import approval_lock, download_gate
 from ..services.storage import upload_guard_error
 from ..services.s3_service import create_multipart_upload
 
@@ -261,6 +261,9 @@ def get_stream_url(
         raise HTTPException(status_code=404, detail="No version found")
     if version.processing_status != ProcessingStatus.ready:
         raise HTTPException(status_code=409, detail="Asset version is not ready yet")
+
+    if download and not download_gate.may_download(db, asset.project_id, version.id, current_user):
+        raise HTTPException(status_code=403, detail=download_gate.NOT_RELEASED)
 
     media_file = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
     if not media_file:

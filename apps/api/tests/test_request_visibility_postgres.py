@@ -56,6 +56,9 @@ def workspace(monkeypatch):
                 submitted_at=datetime.now(timezone.utc), uploader_name='Editor', uploader_email='editor@example.test'))
             db.add(MediaFile(version_id=version.id, file_type=FileType.video, original_filename='cut.mp4',
                 mime_type='video/mp4', file_size_bytes=100, s3_key_raw='synthetic/cut.mp4'))
+            from apps.api.models.delivery import Delivery  # approved: the download gate lets it through
+            db.add(Delivery(token='delivered-1', request_id=kept.id, asset_id=asset.id, version_id=version.id,
+                            approved_by='Customer owner'))
             db.add(Comment(asset_id=asset.id, version_id=version.id, author_id=owner.id,
                            body='Customer feedback', visibility='public'))
             db.add_all([
