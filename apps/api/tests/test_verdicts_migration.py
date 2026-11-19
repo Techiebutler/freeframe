@@ -40,7 +40,7 @@ def _load_migration():
 
 def _downgrade(db):
     mod = _load_migration()
-    assert mod.revision == "a7e3c5d90b42" and mod.down_revision == "7c3a9d4b1e2f"
+    assert mod.revision == "a7e3c5d90b42" and mod.down_revision == "a6c3e9d1f472"
     with Operations.context(MigrationContext.configure(db.connection())):
         mod.downgrade()
 
