@@ -259,7 +259,7 @@ export function BrandingTab() {
       {/* ── Identity: the two single-value settings, side by side rather than
              as two more full-width cards in the stack ── */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-text-primary">Identity</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Identity</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2 rounded-lg border border-border bg-bg-secondary p-4">
             <div>
@@ -340,7 +340,7 @@ export function BrandingTab() {
 
       {/* ── Section: Logos & Icons ── */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-text-primary">Logos &amp; icons</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Logos &amp; icons</h3>
         <p className="-mt-1 text-sm text-text-secondary">
           Upload one image to fill every slot, or set them individually below.
         </p>
@@ -437,7 +437,7 @@ export function BrandingTab() {
       {/* ── Attribution: one switch, so it reads as a row rather than another
              full section competing with the ones that hold real work ── */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-text-primary">Attribution</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Attribution</h3>
         <div className="flex items-center justify-between gap-6 rounded-lg border border-border bg-bg-secondary p-4">
           <div className="min-w-0">
             <p className="text-sm font-medium text-text-primary">

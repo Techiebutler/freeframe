@@ -45,7 +45,7 @@ export function ProjectDangerTab({ projectId, projectName }: { projectId: string
       <div className="flex items-start gap-3 p-5">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-status-error" />
         <div className="min-w-0 space-y-1">
-          <h2 className="text-sm font-semibold text-text-primary">Delete this project</h2>
+          <h3 className="text-sm font-semibold text-text-primary">Delete this project</h3>
           <p className="text-sm text-text-secondary">
             <span className="font-medium text-text-primary">{projectName}</span> and everything in
             it (folders, assets, versions, comments and share links) disappear for everyone right

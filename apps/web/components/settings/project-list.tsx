@@ -2,7 +2,6 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import { FolderOpen, Search } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -37,27 +36,6 @@ export function ProjectChip({ role }: { role: string | null | undefined }) {
     >
       {isOwner ? 'Owner' : 'Admin'}
     </span>
-  )
-}
-
-/** General and People of the selected project, the active one read off `?tab=`. */
-function ProjectTabLinks({ projectId }: { projectId: string }) {
-  const searchParams = useSearchParams()
-  const active = searchParams.get('tab') === 'people' ? 'people' : 'general'
-  return (
-    <div className="ml-5 hidden space-y-0.5 border-l border-border pl-2 md:block">
-      {(['general', 'people'] as const).map((tab) => (
-        <Link
-          key={tab}
-          href={`/settings/projects/${projectId}?tab=${tab}`}
-          scroll={false}
-          aria-current={active === tab ? 'page' : undefined}
-          className={cn(ROW_CLASS, 'py-1.5', active === tab ? ROW_ACTIVE : ROW_IDLE)}
-        >
-          {tab === 'general' ? 'General' : 'People'}
-        </Link>
-      ))}
-    </div>
   )
 }
 
@@ -205,11 +183,6 @@ export function SettingsProjectList({ selectedId }: { selectedId?: string }) {
                   <span className="min-w-0 flex-1 truncate">{p.name}</span>
                   <ProjectChip role={p.role} />
                 </Link>
-                {selected && (
-                  <React.Suspense fallback={null}>
-                    <ProjectTabLinks projectId={p.id} />
-                  </React.Suspense>
-                )}
               </li>
             )
           })}

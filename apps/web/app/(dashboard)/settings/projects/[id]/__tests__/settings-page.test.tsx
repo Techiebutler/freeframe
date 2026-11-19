@@ -32,8 +32,6 @@ globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {
 
 const NOTICE =
   'You are not a member of this project. You are managing it as an instance admin, and this access is written to the activity log.'
-const NOTICE_PUBLIC =
-  'You are not a member of this project. You are managing it as an instance admin, and changes made here are written to the activity log.'
 
 const PROJECT: Project = {
   id: 'p1',
@@ -246,15 +244,14 @@ describe('the instance admin notice', () => {
     else expect(screen.queryByText(NOTICE)).toBeNull()
   })
 
-  it('names only changes on a public project', async () => {
-    // Opening a public project writes no access row, so the notice must not say it does.
+  it('says the access is logged on a public project too', async () => {
+    // General reads the project's branding and People its members; both are
+    // logged for an admin stand-in whether the project is public or not.
     useAuthStore.setState({ isSuperAdmin: true })
     project = { ...PROJECT, role: null, is_public: true }
     renderPage()
     await screen.findByLabelText('Name')
-    const note = screen.getByRole('note')
-    expect(note).toHaveTextContent(NOTICE_PUBLIC)
-    expect(note).not.toHaveTextContent(NOTICE)
+    expect(screen.getByRole('note')).toHaveTextContent(NOTICE)
   })
 
   it('shows on People as well', async () => {
@@ -272,6 +269,16 @@ describe('the instance admin notice', () => {
     await screen.findByLabelText('Name')
     expect(screen.getByRole('note')).toBeInTheDocument()
     expect(api.get).not.toHaveBeenCalledWith('/projects/p1/members')
+  })
+})
+
+describe('the heading outline', () => {
+  it('titles the pane with the project name, one level below Settings, and its sections below that', async () => {
+    renderPage()
+    await screen.findByLabelText('Name')
+    expect(screen.getByRole('heading', { level: 2, name: 'Launch film' })).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1)
+    expect(screen.getAllByRole('heading', { level: 3 }).length).toBeGreaterThan(0)
   })
 })
 

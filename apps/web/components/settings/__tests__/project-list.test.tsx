@@ -193,40 +193,21 @@ describe('when the request fails', () => {
 })
 
 describe('the selected project', () => {
-  it('is current, and carries General and People with their tab in the link', async () => {
+  it('is current, and no other row is', async () => {
     signIn(true)
     renderList('p2')
     await screen.findByRole('list')
 
-    const row = screen.getByRole('link', { name: /^Brand Film 2026/ })
-    expect(row).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: /^Brand Film 2026/ })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: /^Spring Campaign/ })).not.toHaveAttribute('aria-current')
-
-    const general = await screen.findByRole('link', { name: 'General' })
-    const people = screen.getByRole('link', { name: 'People' })
-    expect(general).toHaveAttribute('href', '/settings/projects/p2?tab=general')
-    expect(people).toHaveAttribute('href', '/settings/projects/p2?tab=people')
-    expect(general).toHaveAttribute('aria-current', 'page')
-    expect(people).not.toHaveAttribute('aria-current')
   })
 
-  it('marks People when the query asks for it, and General for danger or an unknown tab', async () => {
+  it('carries no General or People links, since the page tabs switch those', async () => {
     signIn(true)
     nav.search = 'tab=people'
-    const view = renderList('p2')
-    expect(await screen.findByRole('link', { name: 'People' })).toHaveAttribute('aria-current', 'page')
-    view.unmount()
-
-    nav.search = 'tab=danger'
     renderList('p2')
-    expect(await screen.findByRole('link', { name: 'General' })).toHaveAttribute('aria-current', 'page')
-  })
-
-  it('shows General and People under no other row, and under none when nothing is selected', async () => {
-    signIn(true)
-    renderList()
     await screen.findByRole('list')
-    await waitFor(() => expect(screen.queryByRole('link', { name: 'General' })).toBeNull())
+    expect(screen.queryByRole('link', { name: 'General' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'People' })).toBeNull()
   })
 })

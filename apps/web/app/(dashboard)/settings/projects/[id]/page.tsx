@@ -154,19 +154,18 @@ export default function ProjectSettingsPage() {
           >
             <Shield className="mt-0.5 h-4 w-4 shrink-0 text-text-tertiary" />
             <p className="text-sm text-text-secondary">
-              {project.is_public
-                ? 'You are not a member of this project. You are managing it as an instance admin, and changes made here are written to the activity log.'
-                : 'You are not a member of this project. You are managing it as an instance admin, and this access is written to the activity log.'}
+              You are not a member of this project. You are managing it as an instance admin, and
+              this access is written to the activity log.
             </p>
           </div>
         )}
         {/* Keyed so a draft in General never carries over to another project:
             ProjectGeneralTab takes its saved values once. */}
         <Tabs.Root key={projectId} value={tab} onValueChange={selectTab}>
-          {/* Shown at every width: the page owns the tab state, so a search or a
-              failed list request that empties the rail cannot take it away. The
-              rail's General and People links read the same `?tab=`. Scrolls
-              sideways on a phone rather than wrapping. */}
+          {/* The only General/People switch, at every width: the page owns the
+              tab state, so a search or a failed list request that empties the
+              rail cannot take it away. Scrolls sideways on a phone rather than
+              wrapping. */}
           <Tabs.List
             aria-label="Project settings"
             className="-mx-4 flex overflow-x-auto border-b border-border px-4 sm:mx-0 sm:px-0 [scrollbar-width:none]"
@@ -239,6 +238,9 @@ export default function ProjectSettingsPage() {
         {showForms && <ProjectChip role={project?.role} />}
         <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" />
       </Link>
+      {/* The pane's title, like Profile's or Users'. Screen readers only: the
+          rail's open row, or on a phone the picker above, already shows the name. */}
+      {project && <h2 className="sr-only">{project.name}</h2>}
       {body}
     </div>
   )

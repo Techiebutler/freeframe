@@ -368,9 +368,9 @@ export default function InstancePage() {
       {tab === "users" && (
       <section className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-text-primary">
+          <h3 className="text-sm font-semibold text-text-primary">
             Platform Users
-          </h2>
+          </h3>
           <BulkInviteDialog />
         </div>
 

@@ -435,7 +435,7 @@ export function InstanceSettingsTab() {
   return (
     <div className="space-y-8 max-w-md">
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Instance storage</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Instance storage</h3>
         {data && (
           <StorageUsage used={data.storage_used_bytes} limit={data.storage_limit_bytes} variant="panel" />
         )}
@@ -469,7 +469,7 @@ export function InstanceSettingsTab() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Uploads</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Uploads</h3>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
             <label htmlFor="upload-part-size-mode" className="text-sm font-medium text-text-secondary">
@@ -534,7 +534,7 @@ export function InstanceSettingsTab() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Review streams</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Review streams</h3>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
             {/* Value in the label, which is where this app puts a slider's
@@ -607,7 +607,7 @@ export function InstanceSettingsTab() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Downloads</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Downloads</h3>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
             <label htmlFor="original-downloads" className="text-sm font-medium text-text-secondary">
@@ -645,7 +645,7 @@ export function InstanceSettingsTab() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Sign-in</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Sign-in</h3>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
             <label htmlFor="default-login-mode" className="text-sm font-medium text-text-secondary">

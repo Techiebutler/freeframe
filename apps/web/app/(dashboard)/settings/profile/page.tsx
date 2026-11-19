@@ -109,9 +109,9 @@ export default function ProfilePage() {
 
       {/* Profile section */}
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary border-b border-border pb-2">
+        <h3 className="text-sm font-semibold text-text-primary border-b border-border pb-2">
           Profile
-        </h2>
+        </h3>
 
         <ProfileAvatarEditor />
 
@@ -158,9 +158,9 @@ export default function ProfilePage() {
 
       {/* Password section */}
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary border-b border-border pb-2">
+        <h3 className="text-sm font-semibold text-text-primary border-b border-border pb-2">
           Change Password
-        </h2>
+        </h3>
 
         <form onSubmit={handlePasswordSave} className="space-y-4">
           <div className="space-y-1.5">

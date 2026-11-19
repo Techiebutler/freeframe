@@ -40,7 +40,7 @@ export default function AppearancePage() {
 
       {/* Theme selector */}
       <div className="space-y-3">
-        <h2 className="text-sm font-medium text-text-primary">Theme</h2>
+        <h3 className="text-sm font-medium text-text-primary">Theme</h3>
         <div className="grid grid-cols-3 gap-3">
           {themes.map((t) => {
             const Icon = t.icon

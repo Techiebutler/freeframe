@@ -420,7 +420,7 @@ function CardHeading({
         <Icon className="h-4 w-4 text-accent" />
       </div>
       <div className="min-w-0">
-        <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
+        <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
         {subtitle && <p className="text-xs text-text-tertiary">{subtitle}</p>}
       </div>
     </div>

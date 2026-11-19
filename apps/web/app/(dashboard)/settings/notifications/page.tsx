@@ -119,9 +119,9 @@ export default function NotificationsPage() {
         <div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-bg-secondary">
           <Bell className="h-5 w-5 text-text-secondary mt-0.5" />
           <div className="flex-1">
-            <h3 className="text-sm font-medium text-text-primary">
+            <h4 className="text-sm font-medium text-text-primary">
               Email Notifications Frequency
-            </h3>
+            </h4>
             <p className="text-xs text-text-tertiary mt-1">
               Email updates will be sent to your email address
             </p>
@@ -142,7 +142,7 @@ export default function NotificationsPage() {
 
       {/* Comments Section */}
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Comments</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Comments</h3>
         <div className="space-y-3">
           {commentNotifications.map((item) => (
             <div
@@ -150,9 +150,9 @@ export default function NotificationsPage() {
               className="flex items-center justify-between p-3 rounded-lg border border-border bg-bg-secondary"
             >
               <div>
-                <h3 className="text-sm font-medium text-text-primary">
+                <h4 className="text-sm font-medium text-text-primary">
                   {item.title}
-                </h3>
+                </h4>
                 <p className="text-xs text-text-tertiary mt-0.5">
                   {item.description}
                 </p>
@@ -173,7 +173,7 @@ export default function NotificationsPage() {
 
       {/* Assets Section */}
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-text-primary">Assets</h2>
+        <h3 className="text-sm font-semibold text-text-primary">Assets</h3>
         <div className="space-y-3">
           {assetNotifications.map((item) => (
             <div
@@ -181,9 +181,9 @@ export default function NotificationsPage() {
               className="flex items-center justify-between p-3 rounded-lg border border-border bg-bg-secondary"
             >
               <div>
-                <h3 className="text-sm font-medium text-text-primary">
+                <h4 className="text-sm font-medium text-text-primary">
                   {item.title}
-                </h3>
+                </h4>
                 <p className="text-xs text-text-tertiary mt-0.5">
                   {item.description}
                 </p>
