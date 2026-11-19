@@ -22,3 +22,33 @@ def test_ambiguous_and_trainee_are_not_guessed():
     assert match_rule("Kein generisches AI-Slop-HTML-Design verwenden.", [SLOP, twin])[0] is None
     assert review_source_for({**SLOP, "scope": "trainee"}) is None
     assert match_rule("x", [{"id": "s", "name": "", "fixMessage": "short"}])[0] is None
+
+
+def test_inline_rule_prefix_matches_and_validates():
+    from apps.api.scripts.backfill_rule_ids import parse_inline_rules
+    rules = parse_inline_rules(["aditor-05-alan-only-as-genmoji=Alan nur als Genmoji", "aditor-02-no-ai-slop-html=Kein AI-Slop-HTML"])
+    rows = [("c1", "a", "v", "Must fix — Alan nur als Genmoji. Gesicht zu sehen."),
+            ("c2", "a", "v", "Kein AI-Slop-HTML: generisch."), ("c3", "a", "v", "Ton rauscht.")]
+    fixes, lost = plan(rows, rules)
+    assert [(f[0], f[2]) for f in fixes] == [("c1", "aditor-05-alan-only-as-genmoji"), ("c2", "aditor-02-no-ai-slop-html")]
+    assert [l[0] for l in lost] == ["c3"]
+    assert ReviewSource.model_validate(fixes[0][1]).sources[0].layer == "basics"
+
+
+def test_inline_rule_bad_spec_exits():
+    import pytest
+    from apps.api.scripts.backfill_rule_ids import parse_inline_rules
+    with pytest.raises(SystemExit):
+        parse_inline_rules(["no-equals-sign"])
+
+
+def test_asset_filter_drops_request_and_age_limits(monkeypatch):
+    import uuid
+    from sqlalchemy.orm import Query, Session
+    from apps.api.scripts.backfill_rule_ids import candidates
+    monkeypatch.setattr(Query, "all", lambda self: str(self))
+    one = candidates(Session(), asset_id=uuid.uuid4())
+    allq = candidates(Session())
+    assert "comments.asset_id =" in one and "upload_requests" not in one and "created_at >=" not in one
+    assert "guest_users.email =" in one and "review_source IS NULL" in one
+    assert "upload_requests" in allq and "comments.asset_id =" not in allq
