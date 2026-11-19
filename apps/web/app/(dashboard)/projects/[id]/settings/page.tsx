@@ -8,6 +8,7 @@ import * as Tabs from '@radix-ui/react-tabs'
 import { AlertTriangle, ChevronLeft, Lock, Settings2, Users } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { effectiveProjectRole } from '@/lib/project-role'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/shared/skeleton'
 import { usePageTitle } from '@/hooks/use-page-title'
@@ -35,7 +36,9 @@ function toTab(value: string | null): TabValue {
  * and Danger, each reachable as `?tab=`. An unknown tab opens General.
  *
  * Owner only, as the API is for everything on it: anyone else gets a short
- * card rather than forms whose every save would be refused.
+ * card rather than forms whose every save would be refused. An instance admin
+ * counts as an owner here, on every live project, because the API accepts its
+ * saves; `effectiveProjectRole` is the one place that says so.
  */
 export default function ProjectSettingsPage() {
   const params = useParams()
@@ -44,6 +47,7 @@ export default function ProjectSettingsPage() {
   const searchParams = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const userId = useAuthStore((s) => s.user?.id)
+  const isSuperAdmin = useAuthStore((s) => s.isSuperAdmin)
   const { poweredByFreeframe } = useBranding()
 
   const projectKey = `/projects/${projectId}`
@@ -53,8 +57,9 @@ export default function ProjectSettingsPage() {
     mutate: mutateProject,
   } = useSWR<Project>(projectKey, () => api.get<Project>(projectKey))
   // GET /projects/{id} names the caller's role. The member list is the
-  // fallback for a response that does not.
-  const needsMembers = !!project && project.role == null
+  // fallback for a response that does not, and an instance admin needs
+  // neither: it is an owner here whatever its membership says.
+  const needsMembers = !!project && project.role == null && !isSuperAdmin
   const { data: members, error: membersError } = useSWR<ProjectMember[]>(
     needsMembers ? `/projects/${projectId}/members` : null,
     (key: string) => api.get<ProjectMember[]>(key),
@@ -77,8 +82,11 @@ export default function ProjectSettingsPage() {
     router.replace(`/projects/${projectId}/settings?tab=${next}`, { scroll: false })
   }
 
-  const role = project?.role ?? members?.find((m) => m.user_id === userId)?.role ?? null
-  const roleKnown = !!project && (project.role != null || members !== undefined || !!membersError)
+  const role = effectiveProjectRole(
+    project?.role ?? members?.find((m) => m.user_id === userId)?.role,
+    isSuperAdmin,
+  )
+  const roleKnown = !!project && (isSuperAdmin || project.role != null || members !== undefined || !!membersError)
 
   let body: React.ReactNode
   if (projectError) {

@@ -17,7 +17,11 @@ from ..database import SessionLocal
 from ..middleware.auth import optional_bearer_scheme
 from ..services.auth_service import decode_token
 from ..services.event_service import event_stream
-from ..services.permissions import EVENTS_ACCESS_REVOKED, project_events_denial
+from ..services.permissions import (
+    EVENTS_ACCESS_REVOKED,
+    persist_admin_access_audit,
+    project_events_denial,
+)
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -37,17 +41,30 @@ def _access_claims(*tokens: Optional[str]) -> Optional[tuple[uuid.UUID, int, flo
     return None
 
 
-def _denial(project_id: uuid.UUID, user_id: uuid.UUID, token_version: int) -> Optional[str]:
+def _denial(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    token_version: int,
+    audit: bool = False,
+) -> Optional[str]:
     """One authorization check on its own short-lived session.
 
     A request-scoped session would stay checked out for the life of the
     stream, so each check opens and closes its own. Token expiry is not
     checked here: decode_token() refuses an expired token at connect, and
     event_stream compares `exp` before every write.
+
+    `audit` is passed on the check at connect only. An instance admin opening a
+    project they are not in is logged once per stream, not once per recheck, and
+    the row is committed here because this session has nothing else in it.
     """
     db = SessionLocal()
     try:
-        return project_events_denial(db, project_id, user_id, token_version)
+        # Positional: the SSE tests stand in for this function with a *args lambda.
+        denial = project_events_denial(db, project_id, user_id, token_version, audit)
+        if audit and denial is None:
+            persist_admin_access_audit(db)
+        return denial
     finally:
         db.close()
 
@@ -65,15 +82,15 @@ async def stream_events(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authenticated")
     user_id, token_version, expires_at = claims
 
-    async def authorize() -> Optional[str]:
+    async def authorize(*, audit: bool = False) -> Optional[str]:
         # The query is synchronous; keep it off the event loop.
-        return await asyncio.to_thread(_denial, project_id, user_id, token_version)
+        return await asyncio.to_thread(_denial, project_id, user_id, token_version, audit)
 
     # Refuse here rather than open the stream and revoke it: a client resets its
     # reconnect backoff when a stream opens, so open-then-revoke would invite a
     # fast reconnect loop.
     checked_at = asyncio.get_running_loop().time()
-    denial = await authorize()
+    denial = await authorize(audit=True)
     if denial is not None:
         detail = "Not allowed" if denial == EVENTS_ACCESS_REVOKED else "Not authenticated"
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)

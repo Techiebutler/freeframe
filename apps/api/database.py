@@ -1,6 +1,9 @@
 import os
+import logging
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+
+log = logging.getLogger("freeframe.database")
 
 # Import settings - handle both package and direct execution
 try:
@@ -35,4 +38,22 @@ def get_db():
     try:
         yield db
     finally:
+        _persist_admin_access_audit(db)
         db.close()
+
+
+def _persist_admin_access_audit(db) -> None:
+    """Give a read-only request's instance-admin audit row a chance to land.
+
+    A GET never commits, so the row the permission gate added would be dropped
+    at ``db.close()`` and the audit would only ever show writes. The helper
+    commits nothing unless those rows are the whole of the pending work; see
+    ``services.permissions.persist_admin_access_audit``. Imported here rather
+    than at module import, because the permission service reaches back into the
+    models, which reach back into this module.
+    """
+    try:
+        from .services.permissions import persist_admin_access_audit
+        persist_admin_access_audit(db)
+    except Exception:
+        log.warning("could not persist the admin access audit", exc_info=True)

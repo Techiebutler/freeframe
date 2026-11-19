@@ -421,12 +421,12 @@ def _outsider_asset(mock_db, media_file):
 
 
 @patch("apps.api.routers.assets.generate_presigned_get_url", return_value="https://s3/x")
-@patch("apps.api.services.permissions.can_access_asset", return_value=False)
+@patch("apps.api.services.permissions.asset_access_reason", return_value=None)
 def test_someone_without_access_cannot_list_downloads(
     mock_can_access, mock_presign, client, mock_db, auth_headers, member,
 ):
     # require_asset_access in _ready_media_file is the gate under test, so it runs
-    # for real; only the lookup it makes is answered.
+    # for real; only the lookup it makes is answered. None means no path in.
     asset = _video_asset(mock_db, _media_file())
 
     response = client.get(f"/assets/{asset.id}/downloads", headers=auth_headers)
@@ -435,7 +435,7 @@ def test_someone_without_access_cannot_list_downloads(
 
 
 @patch("apps.api.routers.assets.generate_presigned_get_url", return_value="https://s3/x")
-@patch("apps.api.services.permissions.can_access_asset", return_value=False)
+@patch("apps.api.services.permissions.asset_access_reason", return_value=None)
 def test_someone_without_access_cannot_download_the_original(
     mock_can_access, mock_presign, client, mock_db, auth_headers, member,
 ):

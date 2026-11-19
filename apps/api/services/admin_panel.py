@@ -1,4 +1,4 @@
-"""Data and actions behind the admin Storage tab.
+"""Data and actions behind the admin panel's Storage tab.
 
 One question: what takes up space, and what to clear out. Every figure is one
 number (originals plus measured derived output) and comes from
@@ -1101,11 +1101,11 @@ def purge_from_trash(db: Session, targets: dict, actor: User) -> dict:
             cascade(db, root["id"], counts)
     db.flush()
 
-    # project_id is left null on purpose. `_purge_project` deletes the activity
-    # log of the project it removes, so an entry pinned to one of these projects
-    # would be destroyed by the very action it records. The names are in the
-    # payload because the rows that carry them are gone afterwards, and an id on
-    # its own tells whoever reads this history nothing about what was destroyed.
+    # project_id is null because one purge can span several projects, and a
+    # purged project's row is gone and cannot be referenced by a foreign key.
+    # admin_trash_purge is a retained audit action. Keep ids and names in the
+    # payload because the source rows are gone, and an id alone does not
+    # describe what was destroyed.
     audit = log_activity(
         db,
         "admin_trash_purge",

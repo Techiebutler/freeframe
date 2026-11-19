@@ -15,7 +15,7 @@ from ..models.activity import Mention, Notification, NotificationType
 from ..models.comment import Comment, COMMENT_TREE_MAX_DEPTH
 from ..schemas.asset import AssetResponse, AssetVersionResponse, AssetUpdate, StreamUrlResponse, MediaFileResponse, DownloadOption
 from ..schemas.notification import AssignmentUpdate
-from ..services.permissions import require_project_role, require_project_visible, require_asset_access, can_access_asset
+from ..services.permissions import require_project_role, require_project_visible, require_asset_access, can_access_asset_audited
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
 from ..services.downloads import (
     describe_choices, download_choices, download_filename, may_download_original,
@@ -262,9 +262,13 @@ def get_assets_batch(
     What the uploads panel polls with, so the poll costs one read per tick rather
     than one per row. An asset `GET /assets/{id}` would refuse with a 403 or 404
     is left out of the answer instead of failing the request.
+
+    Audited like the single-asset read it replaces: an instance admin reaching
+    an asset in a project it is not a member of writes one `admin_project_access`
+    row per request and project.
     """
     assets = db.query(Asset).filter(Asset.id.in_(ids), Asset.deleted_at.is_(None)).all()
-    visible = [a for a in assets if can_access_asset(db, a, current_user)]
+    visible = [a for a in assets if can_access_asset_audited(db, a, current_user)]
     return _build_asset_responses_bulk(visible, db)
 
 

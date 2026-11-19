@@ -19,7 +19,7 @@ from ..middleware.auth import get_current_user, get_optional_user
 from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
-from ..models.project import ProjectMember, ProjectRole
+from ..models.project import ProjectRole
 from ..models.comment import (
     Annotation,
     Comment,
@@ -48,8 +48,9 @@ from ..schemas.comment import (
 from ..services import s3_service
 from ..services import comment_export
 from ..services.permissions import (
-    require_asset_access, can_access_asset, validate_share_link_with_session, validate_asset_in_share,
-    require_asset_project_live,
+    require_asset_access, can_access_asset, can_access_asset_audited,
+    validate_share_link_with_session, validate_asset_in_share,
+    require_asset_project_live, require_project_role,
 )
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
@@ -618,6 +619,28 @@ def reply_to_comment(
     return _build_comment_response(reply, db, current_user_id=current_user.id)
 
 
+def _require_comment_moderator(db: Session, asset, current_user: User, refusal: str) -> None:
+    """Someone else's comment is the project owner's to edit or delete.
+
+    Through the central gate rather than a membership query of its own. That
+    gate is where the instance-admin rule and its audit row live, and a second
+    copy of the rule in this router is how one route ends up answering
+    differently from the next: before this, an administrator could put a whole
+    project in the trash but not touch one comment inside it.
+
+    Nothing changes for anyone below superadmin, the refusal message included:
+    `require_project_role` at the owner tier matches exactly the membership this
+    route used to query for, and its own wording would leak which project a
+    comment belongs to.
+    """
+    try:
+        require_project_role(db, asset.project_id, current_user, ProjectRole.owner)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_403_FORBIDDEN:
+            raise
+        raise HTTPException(status_code=403, detail=refusal) from exc
+
+
 @router.patch("/comments/{comment_id}", response_model=CommentResponse)
 def update_comment(
     comment_id: uuid.UUID,
@@ -633,14 +656,7 @@ def update_comment(
     # Allow comment owner or project owner to edit
     if comment.author_id != current_user.id:
         asset = _get_asset(db, comment.asset_id)
-        member = db.query(ProjectMember).filter(
-            ProjectMember.project_id == asset.project_id,
-            ProjectMember.user_id == current_user.id,
-            ProjectMember.role == ProjectRole.owner,
-            ProjectMember.deleted_at.is_(None),
-        ).first()
-        if not member:
-            raise HTTPException(status_code=403, detail="Can only edit your own comments")
+        _require_comment_moderator(db, asset, current_user, "Can only edit your own comments")
     comment.body = body.body
     comment.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -662,14 +678,7 @@ def delete_comment(
     # Allow comment owner or project owner to delete
     if comment.author_id != current_user.id:
         asset = _get_asset(db, comment.asset_id)
-        member = db.query(ProjectMember).filter(
-            ProjectMember.project_id == asset.project_id,
-            ProjectMember.user_id == current_user.id,
-            ProjectMember.role == ProjectRole.owner,
-            ProjectMember.deleted_at.is_(None),
-        ).first()
-        if not member:
-            raise HTTPException(status_code=403, detail="Can only delete your own comments")
+        _require_comment_moderator(db, asset, current_user, "Can only delete your own comments")
     comment.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -777,13 +786,20 @@ def delete_attachment(
         raise HTTPException(status_code=404, detail="Attachment not found")
 
     # Must be comment author OR project owner/editor
-    from ..models.project import ProjectRole
-    from ..services.permissions import get_project_member
     is_comment_author = comment.author_id == current_user.id
     if not is_comment_author:
-        pm = get_project_member(db, asset.project_id, current_user.id)
-        if not pm or pm.role not in (ProjectRole.owner, ProjectRole.editor):
-            raise HTTPException(status_code=403, detail="Not authorized to delete this attachment")
+        # The central gate, for the same reason as _require_comment_moderator:
+        # editor was what this route always asked for, and an instance admin now
+        # passes it here too instead of being the one thing in the project they
+        # cannot clean up.
+        try:
+            require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_403_FORBIDDEN:
+                raise
+            raise HTTPException(
+                status_code=403, detail="Not authorized to delete this attachment",
+            ) from exc
 
     # Delete from S3
     try:
@@ -1192,8 +1208,14 @@ def guest_comment(
     # so only a caller with real access to the asset may file it here. The field
     # used to be dropped, which stored a signed-in member's internal note as
     # public and showed it to every link holder. Refuse rather than downgrade.
+    #
+    # Audited, because this is a gate that answers an administrator who is not a
+    # member: a signed-in non-member admin holding a comment link may file an
+    # internal comment on a private project, which an ordinary signed-in
+    # non-member is refused. The same comment through
+    # `POST /assets/{id}/comments` leaves a row, so this one has to as well.
     if body.visibility == CommentVisibility.internal and not (
-        current_user is not None and can_access_asset(db, asset, current_user)
+        current_user is not None and can_access_asset_audited(db, asset, current_user)
     ):
         raise HTTPException(status_code=403, detail="Internal comments require access to the asset")
 

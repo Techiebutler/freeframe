@@ -6,11 +6,15 @@ import { ExternalLink, Link as LinkIcon, Settings, Trash2 } from 'lucide-react'
 import { copyToClipboard } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { MenuAction, MenuLabel, MenuSeparator } from '@/components/shared/item-menu'
+import { effectiveProjectRole } from '@/lib/project-role'
+import { useAuthStore } from '@/stores/auth-store'
 import type { Project } from '@/types'
 
 /**
  * A project's menu, for the card's ⋯ button and right-click on a card or a
  * list row. Owners only: everyone else gets null, and keeps the browser's menu.
+ * An instance admin counts as one on every project, including the ones
+ * `GET /projects?scope=all` lists with no role because they are not a member.
  * The card is a link, and this menu replaces the browser's, so it carries the
  * two link entries people use there.
  *
@@ -19,7 +23,8 @@ import type { Project } from '@/types'
  */
 export function useProjectMenu(project: Project, { isOwner }: { isOwner?: boolean }) {
   const router = useRouter()
-  const canManage = isOwner || project.role === 'owner'
+  const isSuperAdmin = useAuthStore((s) => s.isSuperAdmin)
+  const canManage = isOwner || effectiveProjectRole(project.role, isSuperAdmin) === 'owner'
   const settingsPath = `/projects/${project.id}/settings`
 
   const projectUrl = () => `${window.location.origin}${withBasePath(`/projects/${project.id}`)}`

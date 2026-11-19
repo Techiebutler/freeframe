@@ -24,6 +24,7 @@ import { useComments } from '@/hooks/use-comments'
 import { useSSE } from '@/hooks/use-sse'
 import { api } from '@/lib/api'
 import { projectFolderHref } from '@/lib/project-links'
+import { effectiveProjectRole } from '@/lib/project-role'
 import { useUploadStore, visibleFiles } from '@/stores/upload-store'
 import { useToast } from '@/components/shared/toast'
 import { useBreadcrumbStore } from '@/stores/breadcrumb-store'
@@ -59,7 +60,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const searchParams = useSearchParams()
   const { asset, versions, isLoading, refetchComments, refetchVersions, togglePlayback } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
-  const { user } = useAuthStore()
+  const { user, isSuperAdmin } = useAuthStore()
   const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
   const toast = useToast()
   const versionFileInputRef = useRef<HTMLInputElement>(null)
@@ -175,7 +176,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     () => api.get<ProjectMember[]>(`/projects/${projectId}/members`),
   )
   const currentMember = members?.find((m) => m.user_id === user?.id)
-  const currentRole = currentMember?.role ?? 'viewer'
+  const currentRole = effectiveProjectRole(currentMember?.role, isSuperAdmin) ?? 'viewer'
   const canComment = currentRole !== 'viewer'
   // delete_comment lets a project owner remove anyone's comment.
   const canModerate = currentRole === 'owner'

@@ -1,4 +1,4 @@
-"""Admin endpoints: user management, and the storage overview."""
+"""Admin endpoints: user management, and the admin panel's Storage tab."""
 
 from datetime import datetime, timedelta, timezone
 import logging
@@ -10,10 +10,11 @@ import uuid
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
-from ..models.project import Project
+from ..models.project import Project, ProjectRole
 from ..models.user import User, UserStatus
 from ..schemas.auth import UserResponse, AdminUserResponse, UpdateUserRoleRequest
 from .users import require_admin
+from ..services.permissions import require_project_role
 from ..tasks.celery_app import send_task_safe
 from ..tasks.cleanup_tasks import cleanup_soft_deleted
 from ..tasks.storage_tasks import backfill_media_derived_size
@@ -216,12 +217,29 @@ def storage_project_files(
     current_user: User = Depends(require_admin),
 ):
     """One project's files, largest first. Superadmin only; fetched when a row
-    is expanded, so opening the panel does not load every file on the instance."""
+    is expanded, so opening the panel does not load every file on the instance.
+
+    The one endpoint on this router that reveals the contents of a single
+    project, so it goes through the same gate as every other way into one
+    project: an administrator who is not a member is answered, and the reach is
+    written to the activity log as `admin_project_access`, exactly as it is when
+    they open the project in the app. `require_admin` above already settles who
+    may call this at all; the gate is here for the audit row and for the one
+    rule about it, that a member reading their own project's files is not an
+    administrative reach and is not logged.
+
+    The instance-wide lists beside it are deliberately not audited: the storage
+    overview lists projects and storage totals; the trash also lists trashed
+    asset and version names from inside projects, including private ones. The
+    audit's unit is one project reached, so these lists would write a row
+    per listed project every time an administrator opened the tab.
+    """
     project = db.query(Project).filter(
         Project.id == project_id, Project.deleted_at.is_(None),
     ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    require_project_role(db, project_id, current_user, ProjectRole.viewer, project=project)
     return StorageProjectFilesResponse(
         project_id=project_id,
         name=project.name,
