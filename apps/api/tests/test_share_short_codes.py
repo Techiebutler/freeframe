@@ -236,6 +236,14 @@ def test_every_create_endpoint_assigns_an_eight_char_code(real_db):
     assert len(set(codes)) == 4
 
 
+def _link_row(db, token):
+    """The ORM row behind a created link. `create_share_link` answers with a
+    `ShareLinkResponse` (since #627), not the row itself."""
+    from apps.api.models.share import ShareLink
+
+    return db.query(ShareLink).filter(ShareLink.token == token).one()
+
+
 def test_list_and_response_carry_short_code(real_db):
     from apps.api.routers.share import (
         _share_link_response,
@@ -245,7 +253,9 @@ def test_list_and_response_carry_short_code(real_db):
     from apps.api.schemas.share import ShareLinkCreate
 
     owner, _recipient, project, asset, _folder = _seed_project(real_db)
-    link = create_share_link(asset.id, ShareLinkCreate(), db=real_db, current_user=owner)
+    created = create_share_link(asset.id, ShareLinkCreate(), db=real_db, current_user=owner)
+    link = _link_row(real_db, created.token)
+    assert created.short_code == link.short_code
 
     response = _share_link_response(link)
     assert response.short_code == link.short_code
@@ -263,7 +273,8 @@ def test_resolve_live_and_deleted_links_real_db(real_db, monkeypatch):
 
     monkeypatch.setattr(settings, "frontend_url", "https://host.example")
     owner, _recipient, _project, asset, _folder = _seed_project(real_db)
-    link = create_share_link(asset.id, ShareLinkCreate(), db=real_db, current_user=owner)
+    created = create_share_link(asset.id, ShareLinkCreate(), db=real_db, current_user=owner)
+    link = _link_row(real_db, created.token)
 
     resolved = resolve_short_code(link.short_code, db=real_db)
     assert isinstance(resolved, RedirectResponse)
