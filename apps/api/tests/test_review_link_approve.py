@@ -1,6 +1,6 @@
 """The request's review link (the one sent to reviewers, clients included) can approve."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .agent_pg import env, needs_pg  # noqa: F401
 
@@ -97,17 +97,19 @@ def test_backfill_dry_run_writes_nothing_and_go_upgrades_only_open_review_links(
     revoked = env.request(env.project_a, env.owner, "Revoked")
     done = env.request(env.project_a, env.owner, "Done")
     viewonly = env.request(env.project_a, env.owner, "View")
-    for r, perm in ((open_req, "comment"), (revoked, "comment"), (done, "comment"), (viewonly, "view")):
+    stale = env.request(env.project_a, env.owner, "Stale")   # open, but nothing happened for 30 days
+    for r, perm in ((open_req, "comment"), (revoked, "comment"), (done, "comment"), (viewonly, "view"), (stale, "comment")):
         _make_link(env, r, perm)
     with env.Session() as db:
         db.get(UploadRequest, revoked.id).revoked_at = datetime.now(timezone.utc)
         db.get(UploadRequest, done.id).completed_at = datetime.now(timezone.utc)
+        db.get(UploadRequest, stale.id).created_at = datetime.now(timezone.utc) - timedelta(days=30)
         db.commit()
 
     def perms():
         with env.Session() as db:
             return {t: db.query(ShareLink).filter(ShareLink.token == t).one().permission.value
-                    for t in (open_req.review_share_token, revoked.review_share_token, done.review_share_token, viewonly.review_share_token)}
+                    for t in (open_req.review_share_token, revoked.review_share_token, done.review_share_token, viewonly.review_share_token, stale.review_share_token)}
 
     before = perms()
     assert _run(env) == 1
@@ -117,4 +119,5 @@ def test_backfill_dry_run_writes_nothing_and_go_upgrades_only_open_review_links(
     assert after[open_req.review_share_token] == "approve"
     assert after[revoked.review_share_token] == "comment" and after[done.review_share_token] == "comment"
     assert after[viewonly.review_share_token] == "view"
+    assert after[stale.review_share_token] == "comment"
     assert _run(env, "--go") == 0
