@@ -14,9 +14,6 @@
   "devDependencies": {
     "turbo": "latest"
   },
-  "dependencies": {
-    "hls.js": "^1.6.19"
-  },
   "pnpm": {
     "overrides": {
       "brace-expansion@1": "^1.1.21",

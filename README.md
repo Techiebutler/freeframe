@@ -20,6 +20,7 @@ FreeFrame gives production houses and creative teams a self-hosted platform for 
 
 - **Video review** with HLS adaptive streaming and frame-accurate timecoded comments
 - **Export comments to your NLE** — DaVinci Resolve (marker EDL), Final Cut Pro (FCPXML), Premiere Pro (XML), or CSV
+- **Review inside Premiere Pro** with the companion panel, which lives in its own repository: [freeframe-premiere-panel](https://github.com/Scrollog/freeframe-premiere-panel)
 - **Image and audio review** with annotations and waveform visualization
 - **Drawing annotations** on any frame using canvas tools
 - **Threaded comments** with mentions, reactions, and attachments
