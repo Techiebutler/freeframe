@@ -46,7 +46,7 @@ import Link from 'next/link'
 import { cn, formatTimecode } from '@/lib/utils'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import { usePageTitle } from '@/hooks/use-page-title'
-import type { Project, AssetResponse, ProjectMember, FolderTreeNode } from '@/types'
+import type { Project, AssetResponse, ProjectMember, FolderTreeNode, ProjectRole } from '@/types'
 
 const acceptByType: Record<string, string> = {
   video: 'video/*',
@@ -348,7 +348,9 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     <VerdictControls
       assetId={asset.id}
       versionId={currentVersion.id}
-      role={currentRole}
+      // effectiveProjectRole types its answer as a plain string; it is always
+      // 'owner' or the member's own ProjectRole.
+      role={currentRole as ProjectRole}
       variant={verdictsInTopBar ? 'toolbar' : 'row'}
     />
   ) : null
