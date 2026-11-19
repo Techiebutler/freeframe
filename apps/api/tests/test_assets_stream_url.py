@@ -75,11 +75,13 @@ def test_video_stream_returns_hls_proxy_url_with_token(
     assert "exp" in payload
 
 
+@patch("apps.api.routers.assets.download_gate.may_download", return_value=True)
 @patch("apps.api.routers.assets.generate_presigned_get_url")
 @patch("apps.api.routers.assets.require_asset_access")
 def test_video_download_still_returns_presigned_raw(
     mock_require_access,
     mock_presign,
+    _mock_gate,
     client,
     mock_db,
     auth_headers,
@@ -123,3 +125,15 @@ def test_image_stream_still_returns_presigned(
     body = response.json()
     assert body["url"] == "https://s3.example.com/image.webp?sig=x"
     assert "/stream/hls/" not in body["url"]
+
+
+@patch("apps.api.routers.assets.download_gate.may_download", return_value=False)
+@patch("apps.api.routers.assets.generate_presigned_get_url")
+@patch("apps.api.routers.assets.require_asset_access")
+def test_video_download_before_approval_is_refused(mock_require_access, mock_presign, _mock_gate, client, mock_db, auth_headers):
+    from apps.api.models.asset import AssetType
+
+    asset, _, _ = _setup_video_asset(mock_db, AssetType.video)
+    response = client.get(f"/assets/{asset.id}/stream?download=true", headers=auth_headers)
+    assert response.status_code == 403 and response.json()["detail"] == "not_released"
+    mock_presign.assert_not_called()

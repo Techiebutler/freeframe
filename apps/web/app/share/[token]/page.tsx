@@ -309,11 +309,14 @@ function ShareTopBar({
   onTogglePhoneView,
 }: ShareTopBarProps) {
   const [downloading, setDownloading] = React.useState(false)
+  // 403 = not approved yet (download gate): say so on the button instead of failing silently.
+  const [locked, setLocked] = React.useState(false)
 
   async function handleDownload() {
     setDownloading(true)
     try {
       const res = await fetch(`${API_URL}/share/${token}/stream/${assetId}?download=true`)
+      if (res.status === 403) { setLocked(true); return }
       if (!res.ok) return
       const data = await res.json()
       if (data?.url) {
@@ -383,11 +386,11 @@ function ShareTopBar({
         {allowDownload && (
           <button
             onClick={handleDownload}
-            disabled={downloading}
+            disabled={downloading || locked}
             className="inline-flex h-11 md:h-auto shrink-0 items-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-700 px-3 md:py-1.5 text-xs font-medium text-white transition-colors disabled:opacity-60"
           >
             {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-            Download
+            {locked ? 'Available after approval' : 'Download'}
           </button>
         )}
 

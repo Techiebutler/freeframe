@@ -17,7 +17,7 @@ from ..models.checklist_binding import ChecklistBinding
 from ..models.project import Project, ProjectRole
 from ..models.upload_request import UploadRequest, RequestUpload
 from ..models.user import User
-from ..services import review_bridge, iteration_mixer, s3_service
+from ..services import review_bridge, iteration_mixer, s3_service, deliveries, download_gate
 from ..services.permissions import require_project_role
 from ..services.iteration_manifest import sign_plan, validate_manifest
 from ..services.iteration_requests import locked_request, snapshot
@@ -100,7 +100,10 @@ def submission_mode(token: str, body: Mode, db: Session=Depends(get_db)):
     return snapshot(req,db)
 
 
-def download(req,key):
+def download(req,key,db):
+    # Rendered ads open only once a human approved every part (E5): the runner's own `delivered` is the auto review.
+    if not deliveries.progress(db,req)['complete'] or not deliveries.request_parts(db,req):
+        raise HTTPException(403,download_gate.NOT_RELEASED)
     state=req.iteration_state or {}
     active={k for _,k in current_recipes(str(req.id),req.iteration_manifest or {'recipes':[]},state,req.iteration_ratio)}
     data=state.get('outputs',{}).get(key,{})
@@ -111,12 +114,12 @@ def download(req,key):
 
 @router.get('/r/{token}/iterations/outputs/{key}/download')
 def guest_download(token:str,key:str,db:Session=Depends(get_db)):
-    return download(_live_request(db,token),key)
+    return download(_live_request(db,token),key,db)
 
 
 @router.get('/requests/{request_id}/iterations/outputs/{key}/download')
 def owner_download(request_id:uuid.UUID,key:str,db:Session=Depends(get_db),current_user:User=Depends(get_current_user)):
-    return download(owner_request(db,request_id,current_user),key)
+    return download(owner_request(db,request_id,current_user),key,db)
 
 
 @router.post('/r/{token}/iterations/retry', dependencies=[Depends(rate_limit('iteration_retry',20,600))])

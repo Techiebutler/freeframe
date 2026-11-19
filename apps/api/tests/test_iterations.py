@@ -193,8 +193,24 @@ def test_guest_download_never_exposes_a_held_output(monkeypatch):
     from apps.api.routers import iterations
     from types import SimpleNamespace
     req=SimpleNamespace(id='r',iteration_manifest=manifest(),iteration_ratio='9:16',iteration_state={'submitted':True,'slots':{},'outputs':{'key':{'status':'held','s3_key':'secret'}}})
-    with pytest.raises(HTTPException) as exc: iterations.download(req,'key')
+    monkeypatch.setattr(iterations.deliveries,'request_parts',lambda db,r:[('a','v',True)])
+    monkeypatch.setattr(iterations.deliveries,'progress',lambda db,r:{'approved':1,'total':1,'complete':True})
+    with pytest.raises(HTTPException) as exc: iterations.download(req,'key',None)
     assert exc.value.status_code==404
+
+
+def test_rendered_output_stays_locked_until_a_human_approved_every_part(monkeypatch):
+    from apps.api.routers import iterations
+    from types import SimpleNamespace
+    req=SimpleNamespace(id='r',iteration_manifest=manifest(),iteration_ratio='9:16',iteration_state={'submitted':True,'slots':{},'outputs':{'key':{'status':'delivered','s3_key':'secret'}}})
+    monkeypatch.setattr(iterations.deliveries,'request_parts',lambda db,r:[('a','v',True),('b','w',False)])
+    monkeypatch.setattr(iterations.deliveries,'progress',lambda db,r:{'approved':1,'total':2,'complete':False})
+    with pytest.raises(HTTPException) as exc: iterations.download(req,'key',None)
+    assert exc.value.status_code==403 and exc.value.detail=='not_released'
+    monkeypatch.setattr(iterations.deliveries,'request_parts',lambda db,r:[])  # no parts at all is not "approved"
+    monkeypatch.setattr(iterations.deliveries,'progress',lambda db,r:{'approved':0,'total':0,'complete':True})
+    with pytest.raises(HTTPException) as exc: iterations.download(req,'key',None)
+    assert exc.value.status_code==403
 
 
 def test_stale_render_completion_cannot_create_or_release_output():
