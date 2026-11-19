@@ -225,7 +225,7 @@ def create_request(body: RequestCreate, db: Session = Depends(get_db), current_u
     # automation webhook): a request exists to be reviewed. Same two switches as automation_share.
     link = ShareLink(folder_id=folder.id, token=secrets.token_urlsafe(32), created_by=current_user.id,
                      title="Auto Review", description="Standing link so Auto Review can see this request.",
-                     permission=SharePermission.comment, allow_download=True, visibility="public")
+                     permission=SharePermission.approve, allow_download=True, visibility="public")
     db.add(link)
     db.flush()
     brand = project_brand(db, project)
@@ -286,7 +286,7 @@ def ensure_folder_assignment(db: Session, folder: Folder, project: Project, acto
             raise HTTPException(409, 'Workspace brand changed; create a new request. Existing assignment is unchanged.')
         require_card_reference(project, folder.description)
     shares = db.query(ShareLink).filter(ShareLink.folder_id == folder.id, ShareLink.deleted_at.is_(None),
-        ShareLink.title == 'Auto Review', ShareLink.permission == SharePermission.comment).all()
+        ShareLink.title == 'Auto Review', ShareLink.permission.in_([SharePermission.comment, SharePermission.approve])).all()
     wanted = req.review_share_token if req else binding.review_share_token if binding else None
     share = next((s for s in shares if s.token == wanted), None) if wanted else shares[0] if len(shares) == 1 else None
     if share is None and not shares and create_share_if_missing:

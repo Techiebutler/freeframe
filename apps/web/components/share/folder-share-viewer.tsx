@@ -21,6 +21,7 @@ import {
   ArrowLeft,
   Mic,
   Bot,
+  Link2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getUsableAccessToken } from '@/lib/auth'
@@ -32,6 +33,7 @@ import { byName } from '@/lib/static-pin'
 import { authHeaders } from '@/lib/auth-headers'
 import { useIsNarrow } from '@/hooks/use-is-narrow'
 import { usePhoneView } from '@/hooks/use-phone-view'
+import { markHandedOn, type DeliveryRef } from '@/lib/delivery'
 import { approveSharedAsset, guestDictate, nextFileId, shareFeedbackDone, undoApproveSharedAsset } from '@/lib/share-flow'
 import type {
   SharePermission,
@@ -606,6 +608,9 @@ interface AssetViewerProps {
   approvedIds?: Set<string>
   onApproved?: (id: string) => void
   onUnapproved?: (id: string) => void
+  /** How many of the request's parts are approved: "n of m approved" + the share link at m of m. */
+  parts?: { approved: number; total: number }
+  onParts?: (p: { approved: number; total: number }) => void
 }
 
 function HlsVideo({ src, className }: { src: string; className?: string }) {
@@ -638,7 +643,7 @@ function HlsVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={videoRef} controls className={className} />
 }
 
-function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved }: AssetViewerProps) {
+function AssetViewer({ token, shareSession, asset, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved, parts, onParts }: AssetViewerProps) {
   // Use the same ReviewProvider as the project review page, but with shareToken
   // This gives us the same video player, image viewer, comment panel, etc.
   return (
@@ -657,6 +662,8 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, sh
         approvedIds={approvedIds}
         onApproved={onApproved}
         onUnapproved={onUnapproved}
+        parts={parts}
+        onParts={onParts}
       />
     </div>
   )
@@ -664,10 +671,10 @@ function AssetViewer({ token, shareSession, asset, permission, allowDownload, sh
 
 /** Lazy-imported review components to avoid circular deps */
 function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved, parts, onParts,
 }: {
   token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; onBack: () => void
-  files?: { id: string; name: string }[]; onSelectFile?: (id: string) => void; approvedIds?: Set<string>; onApproved?: (id: string) => void; onUnapproved?: (id: string) => void
+  files?: { id: string; name: string }[]; onSelectFile?: (id: string) => void; approvedIds?: Set<string>; onApproved?: (id: string) => void; onUnapproved?: (id: string) => void; parts?: { approved: number; total: number }; onParts?: (p: { approved: number; total: number }) => void
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
   const [VideoPlayer, setVideoPlayer] = React.useState<any>(null)
@@ -719,6 +726,8 @@ function ShareReviewScreen({
         approvedIds={approvedIds}
         onApproved={onApproved}
         onUnapproved={onUnapproved}
+        parts={parts}
+        onParts={onParts}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
         AudioPlayer={AudioPlayer}
@@ -731,7 +740,7 @@ function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved,
+  token, shareSession, assetName, permission, allowDownload, showVersions, onBack, files, onSelectFile, approvedIds, onApproved, onUnapproved, parts, onParts,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, comments, refetchComments, addComment } = useReview()
@@ -744,6 +753,8 @@ function ShareReviewInner({
   const [phoneView, setPhoneView] = usePhoneView()
   const [authed, setAuthed] = React.useState(false)
   const [approving, setApproving] = React.useState(false)
+  const [delivery, setDelivery] = React.useState<DeliveryRef | null>(null)
+  const [copied, setCopied] = React.useState(false)
   React.useEffect(() => { void getUsableAccessToken().then((t) => setAuthed(t !== null)).catch(() => {}) }, [])
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
@@ -809,7 +820,7 @@ function ShareReviewInner({
       let identity: { name: string; email: string } | null = null
       try { identity = JSON.parse(localStorage.getItem('ff_guest_identity') || 'null') } catch { /* no identity */ }
       if (!hasAuth && !identity) { setShowGuestPrompt(true); throw new Error('identity') }
-      const made = await approveSharedAsset(token, asset.id, { identity: hasAuth ? null : identity, shareSession, versionId: currentVersion?.id, headers: authHeaders(await getUsableAccessToken()) })
+      const made = await approveSharedAsset(token, asset.id, { identity: hasAuth ? null : identity, shareSession, versionId: currentVersion?.id, headers: authHeaders(await getUsableAccessToken()), onParts })
       onApproved?.(asset.id)
       return made
     }
@@ -819,9 +830,15 @@ function ShareReviewInner({
       onUnapproved?.(asset.id)
     }
   const approved = !!approvedIds?.has(asset.id)
+  const copyDelivery = async () => {
+    if (!delivery) return
+    try { await navigator.clipboard.writeText(delivery.share_url) } catch { window.prompt('Copy this link', delivery.share_url) }
+    setCopied(true)
+    void markHandedOn(delivery.token)
+  }
   const toggleApprove = async () => {
     setApproving(true)
-    try { await (approved ? undoApproveAsset() : approveAsset()) } catch { /* identity prompt or a failed call: the button stays as it was */ } finally { setApproving(false) }
+    try { if (approved) { await undoApproveAsset(); setDelivery(null); setCopied(false) } else { const made = await approveAsset(); if (made) setDelivery(made) } } catch { /* identity prompt or a failed call: the button stays as it was */ } finally { setApproving(false) }
   }
   if (flow) {
     const next = nextFileId(files ?? [], asset.id)
@@ -860,6 +877,7 @@ function ShareReviewInner({
               onNext={() => next && onSelectFile?.(next)}
               sessionKey={token}
               approved={!!approvedIds?.has(asset.id)}
+              parts={permission === 'approve' ? parts : undefined}
               dictate={(audio) => guestDictate(token, audio, shareSession)}
               onExit={isNarrow ? onBack : () => setPhoneView(false)}
               exitLabel={isNarrow ? 'Files' : 'Classic comments'}
@@ -900,6 +918,9 @@ function ShareReviewInner({
             <button className={`flex shrink-0 items-center gap-1.5 h-11 md:h-7 px-3 rounded-md text-xs font-medium transition-colors ${permission === 'approve' ? 'text-text-secondary hover:text-text-primary hover:bg-bg-hover' : 'text-text-inverse bg-accent hover:bg-accent-hover'}`} onClick={() => handleDownload(token, asset.id, shareSession)}>
               <Download className="h-3 w-3" /> Download
             </button>
+          )}
+          {permission === 'approve' && parts && parts.total > 1 && (
+            <span data-testid="parts-progress" role="status" className="hidden shrink-0 text-xs font-medium tabular-nums text-text-secondary md:inline">{parts.approved} of {parts.total} approved</span>
           )}
           {permission === 'approve' && (
             <button type="button" onClick={toggleApprove} disabled={approving} aria-pressed={approved} title={approved ? 'Undo approval' : undefined}
@@ -1014,6 +1035,15 @@ function ShareReviewInner({
           </div>
         )}
       </div>
+
+      {delivery && (
+        <div role="dialog" aria-label="All approved" className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-bg-primary/96 px-8 text-center backdrop-blur-md">
+          <span className="grid h-16 w-16 place-items-center rounded-full bg-status-success/15 text-status-success"><Check size={32} aria-hidden="true" /></span>
+          <p className="text-xl font-semibold leading-tight text-text-primary">{copied ? 'Link copied' : 'All approved'}</p>
+          <button type="button" onClick={copyDelivery} className="press inline-flex h-14 items-center justify-center gap-2 rounded-full bg-accent px-8 text-base font-semibold text-text-inverse hover:bg-accent-hover"><Link2 size={18} aria-hidden="true" />Copy share link</button>
+          <button type="button" onClick={() => setDelivery(null)} className="press inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm font-semibold text-text-secondary hover:bg-bg-hover">Close</button>
+        </div>
+      )}
 
       {/* Guest identity prompt */}
       {showGuestPrompt && (
@@ -1177,6 +1207,8 @@ export function FolderShareViewer({
   const [panelOpen, setPanelOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
   const [viewingAsset, setViewingAsset] = React.useState<FolderShareAssetItem | null>(null)
   const [approvedIds, setApprovedIds] = React.useState<Set<string>>(() => new Set())
+  // The server's count of the request's parts after each approve; until then what the file list says.
+  const [serverParts, setServerParts] = React.useState<{ approved: number; total: number } | null>(null)
 
   // Set page title
   React.useEffect(() => {
@@ -1286,6 +1318,7 @@ export function FolderShareViewer({
       .then((data) => {
         if (cancelled) return
         setAssets(data.assets ?? [])
+        setApprovedIds((prev) => new Set(Array.from(prev).concat((data.assets ?? []).filter((a) => a.approved).map((a) => a.id))))
         setSubfolders(data.subfolders ?? [])
         setTotal(data.total ?? 0)
         setPage(1)
@@ -1405,7 +1438,9 @@ export function FolderShareViewer({
         onSelectFile={(id) => { const next = assets.find((a) => a.id === id); if (next) setViewingAsset(next) }}
         approvedIds={approvedIds}
         onApproved={(id) => setApprovedIds((prev) => new Set(prev).add(id))}
-        onUnapproved={(id) => setApprovedIds((prev) => { const n = new Set(prev); n.delete(id); return n })}
+        onUnapproved={(id) => { setApprovedIds((prev) => { const n = new Set(prev); n.delete(id); return n }); setServerParts((p) => p && { ...p, approved: Math.max(0, p.approved - 1) }) }}
+        parts={serverParts ?? (assets.length > 1 ? { approved: assets.filter((a) => approvedIds.has(a.id)).length, total: assets.length } : undefined)}
+        onParts={setServerParts}
       />
     )
   }

@@ -623,6 +623,12 @@ export function FlowView(p: FlowViewProps) {
         </div>
       )}
 
+      {p.parts && p.parts.total > 1 && !delivery && (
+        <p role="status" data-testid="parts-progress" className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-bg-secondary pl-4 pr-1 text-xs font-medium text-text-secondary">
+          <span className="tabular-nums">{p.parts.approved} of {p.parts.total} approved</span>
+          {sendMode && p.canApprove !== false && !p.approved && !active && <button type="button" onClick={finishApprove} disabled={sending} className="press min-h-11 px-2 text-sm font-semibold text-text-secondary hover:text-text-primary">Approve this part</button>}
+        </p>
+      )}
       {toast && (
         <div role="status" className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-bg-secondary pl-4 pr-1">
           <p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>

@@ -41,6 +41,7 @@ def embed_link(db: Session, folder_id: uuid.UUID) -> Optional[ShareLink]:
     return next((s for s in db.query(ShareLink).filter(
         ShareLink.folder_id == folder_id, ShareLink.permission == SharePermission.approve, ShareLink.is_enabled.is_(True),
         ShareLink.deleted_at.is_(None), ShareLink.visibility == "public", ShareLink.password_hash.is_(None),
+        ShareLink.title != "Auto Review",  # the request's review link approves too, but it is the people link, not the embed
     ).order_by(ShareLink.created_at).all() if not s.expires_at or s.expires_at > now), None)
 
 
