@@ -102,9 +102,9 @@ export default function NotificationsPage() {
           <Bell className="h-5 w-5 text-text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-lg font-semibold text-text-primary">
+          <h2 className="text-lg font-semibold text-text-primary">
             Notifications
-          </h1>
+          </h2>
           <p className="text-sm text-text-secondary">
             Manage your notification preferences
           </p>

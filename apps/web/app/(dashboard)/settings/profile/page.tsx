@@ -100,7 +100,7 @@ export default function ProfilePage() {
           <User className="h-5 w-5 text-text-primary" />
         </div>
         <div>
-          <h1 className="text-lg font-semibold text-text-primary">Profile</h1>
+          <h2 className="text-lg font-semibold text-text-primary">Profile</h2>
           <p className="text-sm text-text-secondary">
             Manage your profile and account settings
           </p>

@@ -39,7 +39,7 @@ describe('the Instance Storage page', () => {
   it('shows Storage on /settings/instance/storage, and not on Users', () => {
     const { unmount } = render(<AdminPage />)
     expect(screen.queryByTestId('storage-tab')).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Users' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'Users' })).toBeInTheDocument()
     unmount()
 
     nav.section = 'storage'

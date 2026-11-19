@@ -32,7 +32,7 @@ export default function AppearancePage() {
   return (
     <div className="p-6 max-w-2xl">
       <div className="mb-6">
-        <h1 className="text-lg font-semibold text-text-primary">Appearance</h1>
+        <h2 className="text-lg font-semibold text-text-primary">Appearance</h2>
         <p className="text-sm text-text-tertiary mt-1">
           Customize how FreeFrame looks on your device.
         </p>

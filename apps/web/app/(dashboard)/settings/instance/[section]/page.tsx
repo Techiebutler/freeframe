@@ -353,9 +353,9 @@ export default function InstancePage() {
           <Shield className="h-5 w-5 text-text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">
+          <h2 className="text-xl font-semibold text-text-primary">
             {INSTANCE_ITEMS.find((item) => item.key === tab)?.label}
-          </h1>
+          </h2>
           <p className="text-sm text-text-secondary">{SUBTITLE[tab]}</p>
         </div>
       </div>
