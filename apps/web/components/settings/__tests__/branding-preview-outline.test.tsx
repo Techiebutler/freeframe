@@ -18,4 +18,14 @@ describe('BrandingPreview: the mock screens stay out of the page outline', () =>
     expect(screen.getAllByText('Studio North').length).toBeGreaterThan(0)
     expect(screen.queryByRole('heading', { name: 'Studio North' })).toBeNull()
   })
+
+  // jsdom does not enforce inert (focus() and Tab still reach the link), so this
+  // pins the attribute itself rather than a focus check that would mean nothing.
+  it('takes the mock links out of the tab order, not only out of the outline', () => {
+    render(<BrandingPreview />)
+    fireEvent.click(screen.getByRole('button', { name: /sign-in/i }))
+    const link = screen.getByRole('link', { name: /powered by freeframe/i, hidden: true })
+    expect(link.closest('[inert]')).not.toBeNull()
+    expect(link.closest('[aria-hidden="true"]')).not.toBeNull()
+  })
 })

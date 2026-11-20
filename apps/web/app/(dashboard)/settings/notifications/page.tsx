@@ -119,9 +119,9 @@ export default function NotificationsPage() {
         <div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-bg-secondary">
           <Bell className="h-5 w-5 text-text-secondary mt-0.5" />
           <div className="flex-1">
-            <h4 className="text-sm font-medium text-text-primary">
+            <h3 className="text-sm font-medium text-text-primary">
               Email Notifications Frequency
-            </h4>
+            </h3>
             <p className="text-xs text-text-tertiary mt-1">
               Email updates will be sent to your email address
             </p>
