@@ -38,7 +38,7 @@ from ..models.comment import Comment
 from ..models.delivery import Delivery
 from ..models.folder import Folder
 from ..models.project import Project, ProjectMember, ProjectRole
-from ..models.share import ShareLink, SharePermission
+from ..models.share import ShareLink, SharePermission, new_share_token
 from ..models.branding import ProjectBranding
 from ..services import approval_lock, s3_service
 from ..models.upload_request import RequestUpload, UploadRequest
@@ -223,7 +223,7 @@ def create_request(body: RequestCreate, db: Session = Depends(get_db), current_u
     db.flush()
     # The standing link Auto Review reads the folder through. Always created here (not gated on the
     # automation webhook): a request exists to be reviewed. Same two switches as automation_share.
-    link = ShareLink(folder_id=folder.id, token=secrets.token_urlsafe(32), created_by=current_user.id,
+    link = ShareLink(folder_id=folder.id, token=new_share_token(), created_by=current_user.id,
                      title="Auto Review", description="Standing link so Auto Review can see this request.",
                      permission=SharePermission.approve, allow_download=True, visibility="public")
     db.add(link)

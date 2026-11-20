@@ -307,7 +307,7 @@ def test_the_standing_link_can_comment_and_download():
     assert link.permission == SharePermission.comment
     assert link.allow_download is True
     assert link.expires_at is None      # a standing link that dies takes the reviews with it
-    assert len(link.token) >= 32
+    assert len(link.token) >= 22      # 128 bits, unguessable
     settings.automation_share_webhook_url = ""
 
 

@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
@@ -5,6 +6,11 @@ from typing import Optional
 from sqlalchemy import String, Enum, DateTime, ForeignKey, Boolean, func, Text, Index, JSON, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+
+
+def new_share_token() -> str:
+    """22 chars, 128 bits. Older links kept their 43-char tokens and still resolve, lookup is by exact token."""
+    return secrets.token_urlsafe(16)
 try:
     from ..database import Base
 except ImportError:

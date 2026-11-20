@@ -12,7 +12,7 @@ from ..models.approval import Approval, ApprovalStatus
 from ..models.agent import FeedbackRound
 from ..models.asset import Asset, AssetVersion
 from ..models.project import Project
-from ..models.share import ShareLink, SharePermission
+from ..models.share import ShareLink, SharePermission, new_share_token
 from ..models.upload_request import UploadRequest
 from ..models.user import GuestUser
 from . import agent_notify, review_bridge
@@ -52,7 +52,7 @@ def embed_url(db: Session, req: UploadRequest, owner_id: uuid.UUID) -> str:
     of the hand-in is reused, else one is created as the project owner (an approve through a link is recorded as its creator)."""
     link = embed_link(db, req.folder_id)
     if link is None:
-        link = ShareLink(folder_id=req.folder_id, token=secrets.token_urlsafe(32), created_by=owner_id, title="Gen review",
+        link = ShareLink(folder_id=req.folder_id, token=new_share_token(), created_by=owner_id, title="Gen review",
                          description="Embedded review inside Gen. Safe to leave in place.", permission=SharePermission.approve,
                          allow_download=False, visibility="public")
         db.add(link)

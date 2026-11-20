@@ -16,7 +16,7 @@ from ..models.user import User
 from ..models.asset import Asset
 from ..models.folder import Folder
 from ..models.approval import Approval, ApprovalStatus
-from ..models.share import AssetShare, ShareLink, ShareLinkItem, SharePermission, ShareLinkActivity, ShareActivityAction
+from ..models.share import AssetShare, ShareLink, ShareLinkItem, SharePermission, ShareLinkActivity, ShareActivityAction, new_share_token
 from ..models.activity import ActivityLog, ActivityAction
 from ..models.branding import ProjectBranding
 from ..models.asset import AssetVersion, AssetType, MediaFile, ProcessingStatus
@@ -204,7 +204,7 @@ def create_share_link(
     asset = _get_asset(db, asset_id)
     require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
 
-    token = secrets.token_urlsafe(32)
+    token = new_share_token()
     if body.password:
         pwd_bytes = body.password[:72].encode('utf-8')
         salt = bcrypt.gensalt()
@@ -488,7 +488,7 @@ def create_folder_share_link(
     folder = _get_folder(db, folder_id)
     require_project_role(db, folder.project_id, current_user, ProjectRole.editor)
 
-    token = secrets.token_urlsafe(32)
+    token = new_share_token()
     if body.password:
         pwd_bytes = body.password[:72].encode('utf-8')
         salt = bcrypt.gensalt()
@@ -532,7 +532,7 @@ def create_project_share_link(
         raise HTTPException(status_code=404, detail="Project not found")
     require_project_role(db, project_id, current_user, ProjectRole.editor)
 
-    token = secrets.token_urlsafe(32)
+    token = new_share_token()
     if body.password:
         pwd_bytes = body.password[:72].encode('utf-8')
         salt = bcrypt.gensalt()
@@ -1141,7 +1141,7 @@ def create_multi_share_link(
         count = len(body.asset_ids) + len(body.folder_ids)
         title = f"{count} items"
 
-    token = secrets.token_urlsafe(32)
+    token = new_share_token()
     password_hash = None
     password_encrypted = None
     if body.password:

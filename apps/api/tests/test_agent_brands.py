@@ -101,3 +101,9 @@ def test_new_brand_is_workspace_and_membership_is_upgraded(env):
     r = env.client.post("/agent/requests", json={"title": "x", "external_ref": "c", "brand_id": str(env.project_b.id)}, headers=agent.headers)
     assert r.status_code == 200
     assert (agent.user_id, "editor") in members(env, env.project_b.id)
+
+
+def test_new_review_link_uses_the_short_token(env):
+    agent = env.pair_agent(env.project_a)
+    r = env.client.post("/agent/requests", json={"title": "Hook 1", "external_ref": "card-short"}, headers=agent.headers)
+    assert len(r.json()["review_url"].rsplit("/share/", 1)[1]) == 22

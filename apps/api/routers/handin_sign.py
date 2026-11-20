@@ -26,7 +26,7 @@ from ..middleware.rate_limit import rate_limit
 from ..models.asset import Asset
 from ..models.handin_sign import HandinSign
 from ..models.project import Project
-from ..models.share import ShareLink, ShareLinkItem, SharePermission
+from ..models.share import ShareLink, ShareLinkItem, SharePermission, new_share_token
 from ..models.upload_request import UploadRequest
 from ..models.user import User
 from ..services import client_view, review_bridge
@@ -178,7 +178,7 @@ def sign(handin_id: uuid.UUID, body: Sign = Body(default_factory=Sign), t: Optio
             raise HTTPException(400, "initials_required")
         req = db.get(UploadRequest, h.request_id)
         h.initials_png, h.terms = png, brand_rules(db, db.get(Project, req.project_id))[0]
-        link = ShareLink(project_id=req.project_id, token=secrets.token_urlsafe(32), created_by=user.id, title=req.title,
+        link = ShareLink(project_id=req.project_id, token=new_share_token(), created_by=user.id, title=req.title,
                          permission=SharePermission.comment, visibility="public", allow_download=True)
         db.add(link)
         db.flush()

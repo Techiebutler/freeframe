@@ -25,7 +25,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models.share import ShareLink, SharePermission
+from ..models.share import ShareLink, SharePermission, new_share_token
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def create_standing_link(db: Session, project_id, created_by) -> Optional[ShareL
         return None
     link = ShareLink(
         project_id=project_id,
-        token=secrets.token_urlsafe(32),
+        token=new_share_token(),
         created_by=created_by,
         title="Auto Review",
         description="Standing link so Auto Review can see this project. Safe to leave in place.",
@@ -77,7 +77,7 @@ def create_standing_folder_link(db: Session, project_id, folder_id, created_by, 
         return None
     link = ShareLink(
         folder_id=folder_id,
-        token=secrets.token_urlsafe(32),
+        token=new_share_token(),
         created_by=created_by,
         title="Auto Review",
         description="Standing link so Auto Review can see this hand-in. Safe to leave in place.",
