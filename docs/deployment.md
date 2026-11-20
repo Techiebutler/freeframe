@@ -746,6 +746,9 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `TRANSCODER_AUDIO_BITRATE` | AAC bitrate for the audio of video review streams, as `<n>k` between `64k` and `512k` (for example `320k` for music and final-mix review). Empty leaves ffmpeg's own choice, AAC-LC at about 128 kb/s for stereo. The value is the total for all channels, and ffmpeg's default for a surround source is already higher (about 341 kb/s for 5.1 and 469 kb/s for 7.1), so a stereo-sized value such as `320k` lowers surround quality. The codec is always AAC-LC, the one every browser plays over HLS. Applies to every rendition, so storage grows by the extra bitrate times the number of rungs. A source-copied upload whose audio is already AAC keeps its own audio untouched; non-AAC audio in a copy is encoded at this bitrate, or `192k` when it is empty. An unusable value is logged and ignored | *(empty)* |
 | `TRANSCODER_SOURCE_COPY` | Package an already browser-safe source into HLS without re-encoding, where the ladder above resolves to one rendition at the source's own size | `false` |
 | `TRANSCODER_CPU_LIMIT` | Cap the CPU one transcode takes: a core count (`6`) or a share of what the process may use (`50%`). Empty = unbounded. Covers the encoders and the filter graph, not decoding, so a heavy master can run over by roughly a quarter, and a low budget can push a long master past ffmpeg's 4-hour ceiling — see `.env.example`. Per ffmpeg process, so the machine-wide ceiling is this times `TRANSCODING_CONCURRENCY` | *(empty)* |
+| `WEBHOOK_URL` | Where to POST a JSON notice when a version finishes transcoding or fails. Empty turns webhooks off. See [Webhooks](#webhooks) | *(empty)* |
+| `WEBHOOK_SECRET` | Key for the `X-FreeFrame-Signature` HMAC-SHA256 header. Empty sends the notice unsigned | *(empty)* |
+| `WEBHOOK_EVENTS` | Comma-separated events to send: `transcode_complete`, `transcode_failed` | both |
 
 Upload part size is set in the app rather than the environment: **Admin Dashboard → Instance settings → Uploads**. Automatic (the default) keeps 10 MB parts up to ~5 GB and grows them for bigger files to about 500 parts, which keeps the storage backend's assembly at the end of an upload short. Fixed cuts every upload into one size from 5 to 512 MB, and refuses a file that would need more than 10,000 parts. A completion that takes 5 seconds or more is logged by the API with where the time went (`completing upload … took …`), which is the place to look when uploads wait at "Finalizing".
 
@@ -844,6 +847,46 @@ phone footage) has to be turned upright in system memory: on NVIDIA it is still
 decoded on the GPU and passed through system memory, which costs a little CPU; on
 Intel it is decoded on the CPU.
 
+### Webhooks
+
+Set `WEBHOOK_URL` and FreeFrame POSTs a JSON notice to it when a version becomes
+watchable (`transcode_complete`) or its processing fails (`transcode_failed`), so
+a chat channel, job board or script does not have to poll the API. The URL is
+instance-level and set only here, never from the app. The `worker` queues the
+notice and the `email_worker` sends it, so recreate both after changing it.
+
+```json
+{
+  "event": "transcode_complete",
+  "delivered_at": "2026-09-18T01:12:44Z",
+  "project": { "id": "…", "name": "Staffel 3" },
+  "folder": { "id": "…", "name": "Rohschnitt", "path": ["Folge 04", "Rohschnitt"] },
+  "asset": { "id": "…", "name": "EP04_v3" },
+  "version": { "id": "…", "number": 3, "status": "ready" }
+}
+```
+
+`folder` is `null` for an asset at the project root; `path` runs from the
+outermost folder down to this one and does not include the project. Ids are the
+stable keys; names are a snapshot at delivery time. `status` is `failed` for
+`transcode_failed`. Nothing is sent for a version, asset or project that has
+been deleted since, and the body holds no presigned URL: a receiver that wants
+the file asks the API with its own credentials.
+
+| Header | Value |
+|--------|-------|
+| `X-FreeFrame-Event` | The event name |
+| `X-FreeFrame-Delivery` | A UUID, the same on every retry of one notice. Drop a repeat you have already handled |
+| `X-FreeFrame-Signature` | `sha256=` and the hex HMAC-SHA256 of the raw request body with `WEBHOOK_SECRET`; only with a secret set. Compare it in constant time, and reject a `delivered_at` that is too old |
+
+Any 2xx answer counts as delivered. A connection error, a timeout (10 s), a 5xx,
+408, 425 or 429 is retried five times with a growing delay (30 s, then 1, 2, 4
+and 8 minutes) and then logged and dropped; any other 4xx is logged and not
+retried. Redirects are not followed. Deliveries run on their own `webhooks`
+queue, which the `email_worker` consumes by default, so a dead endpoint never
+holds a transcode. To scale it apart, add a worker started with `-Q webhooks`
+and take `webhooks` off the `email_worker`'s `-Q` list.
+
 ### Email Workers
 
 Email sending is I/O-bound and lightweight. The default of `2` is sufficient for most deployments.
@@ -919,6 +962,7 @@ subscriber is silently never executed. The shipped topology is:
 | `transcoding` | `worker` | Video/audio/image processing, metadata backfill, watermarking |
 | `email_high` | `email_worker` | Magic codes, invites |
 | `email_low` | `email_worker` | Mentions, comments, approvals, share notices |
+| `webhooks` | `email_worker` | Outgoing webhook deliveries |
 | `maintenance` | `maintenance_worker` | Retention GC, stale-upload reaper, orphan sweep |
 | `default` | nobody, by design | Should always be empty |
 

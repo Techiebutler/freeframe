@@ -187,7 +187,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c $${EMAIL_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
+    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q email_high,email_low,webhooks -c $${EMAIL_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   # Housekeeping: retention GC, stale-upload reaper, orphan sweep. (Watermarking
