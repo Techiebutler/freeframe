@@ -876,7 +876,7 @@ def test_the_only_nonviewable_version_still_requires_selecting_the_file(seed, as
     version = seed.versions_of(asset)[0]
     response = _delete(as_user(admin), version_ids=[str(version.id)], confirm_count=1)
     assert response.status_code == 409
-    assert "In this Storage tab" in response.json()["detail"]
+    assert "On this Storage page" in response.json()["detail"]
     seed.db.refresh(version)
     assert version.deleted_at is None
 

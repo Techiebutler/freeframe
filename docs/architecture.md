@@ -178,7 +178,7 @@ Share Link (unauthenticated access, by token)
 
 `User.is_superadmin` is the one instance-level role: the account the first-run setup creates,
 shown as **Admin** in the dashboard. It covers user administration (invite, deactivate, role
-change), instance settings and branding, the admin panel's Storage tab, where it lists every
+change), instance settings and branding, the Storage page under Settings → Instance, where it lists every
 project's files by name and size, moves them to the trash, restores them and deletes them
 permanently, **and instance-wide project access** — a superadmin may see, open, upload to and
 change every live project without being a member of it.

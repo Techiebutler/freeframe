@@ -33,6 +33,11 @@ export default function DashboardLayout({
   // and the attribution credit, so the shell supplies neither here.
   const isAssetViewer = /\/projects\/[^/]+\/assets\/[^/]+/.test(pathname);
 
+  // Settings is a full page of its own: it draws its own "Back to projects"
+  // link and section tabs, so the rail and the header (whose breadcrumb would
+  // repeat those tabs) stay out. `/projects/<id>/settings` is not this.
+  const isSettings = pathname === "/settings" || pathname.startsWith("/settings/");
+
   React.useEffect(() => {
     fetchUser();
     fetchHistory();
@@ -63,19 +68,21 @@ export default function DashboardLayout({
       onDragOver={refuseFileDrag}
       onDrop={refuseFileDrag}
     >
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed((c) => !c)}
-      />
+      {!isSettings && (
+        <Sidebar
+          collapsed={sidebarCollapsed}
+          onToggle={() => setSidebarCollapsed((c) => !c)}
+        />
+      )}
 
       {/* Main content area */}
       <main
         className={cn(
           "flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-spring",
-          sidebarCollapsed ? "ml-[52px]" : "ml-[220px]",
+          isSettings ? "ml-0" : sidebarCollapsed ? "ml-[52px]" : "ml-[220px]",
         )}
       >
-        {!isAssetViewer && <Header onSearchOpen={() => setCommandOpen(true)} />}
+        {!isAssetViewer && !isSettings && <Header onSearchOpen={() => setCommandOpen(true)} />}
 
         <div className="relative flex-1 overflow-y-auto">{children}</div>
       </main>

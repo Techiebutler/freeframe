@@ -3,8 +3,10 @@ import { cn } from '@/lib/utils'
 
 /**
  * The version chip, top-left of a thumbnail: the same badge in the project grid
- * and in a share link's grid. Nothing until there is more than one version. `className` moves it where a
- * grid has something else in the corner.
+ * and in a share link's grid. Nothing below 2. The project grid passes the latest
+ * version's number (numbers skip after a removed version), a share link's grid the
+ * count of ready versions. `className` moves it where a grid has something else in
+ * the corner.
  */
 export function VersionCountBadge({ count, title, className }: { count?: number | null; title?: string; className?: string }) {
   if (!count || count <= 1) return null

@@ -122,7 +122,13 @@ export function BrandingPreview() {
             className="relative w-full overflow-hidden bg-bg-primary"
             style={{ height: MOCK_HEIGHT * scale }}
           >
+            {/* A picture of the screens, not part of this page: hidden from screen
+                readers so its mock headings and links do not join the page outline,
+                and inert so Tab cannot land on a mock link (the Powered by badge)
+                that screen readers have been told is not there. */}
             <div
+              aria-hidden="true"
+              inert
               className="pointer-events-none origin-top-left select-none"
               style={{ width: MOCK_WIDTH, height: MOCK_HEIGHT, transform: `scale(${scale})` }}
             >

@@ -157,7 +157,7 @@ export function AssetCard({
           </button>
         )}
 
-        {/* Version chip — top-left once there is more than one version, shifted
+        {/* Version chip: the latest version's number, top-left from v2 on, shifted
             right of the selection checkbox, which owns the corner. */}
         <VersionCountBadge
           count={versionCount}
