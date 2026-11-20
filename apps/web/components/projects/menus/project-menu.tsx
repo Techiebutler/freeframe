@@ -19,13 +19,13 @@ import type { Project } from '@/types'
  * two link entries people use there.
  *
  * Settings and Delete both open the project's settings page; deleting happens
- * on its Danger tab, behind a typed confirmation.
+ * in its Delete project row, behind a typed confirmation.
  */
 export function useProjectMenu(project: Project, { isOwner }: { isOwner?: boolean }) {
   const router = useRouter()
   const isSuperAdmin = useAuthStore((s) => s.isSuperAdmin)
   const canManage = isOwner || effectiveProjectRole(project.role, isSuperAdmin) === 'owner'
-  const settingsPath = `/projects/${project.id}/settings`
+  const settingsPath = `/settings/projects/${project.id}`
 
   const projectUrl = () => `${window.location.origin}${withBasePath(`/projects/${project.id}`)}`
 
