@@ -85,6 +85,7 @@ def process_asset(self, asset_id: str, version_id: str):
                 "asset_id": asset_id,
                 "version_id": version_id,
             })
+            _notify_webhook("transcode_complete", asset_id, version_id)
 
         except Exception as exc:
             def _record_failure() -> None:
@@ -99,6 +100,7 @@ def process_asset(self, asset_id: str, version_id: str):
                     "version_id": version_id,
                     "error": redact_presigned_urls(str(exc)),
                 })
+                _notify_webhook("transcode_failed", asset_id, version_id)
 
             # `failed` is written only when nothing more is coming. Writing it
             # before every retry made the version oscillate
@@ -316,6 +318,16 @@ def _publish_event(project_id: str, event_type: str, payload: dict):
     """
     from ..services import event_service
     return event_service.publish_sync(project_id, event_type, payload)
+
+
+def _notify_webhook(event: str, asset_id: str, version_id: str) -> None:
+    """Hand the event to the webhook queue. Best effort, like the SSE publish:
+    nothing here may fail or hold a transcode that has already finished."""
+    try:
+        from .webhook_tasks import enqueue_webhook
+        enqueue_webhook(event, asset_id, version_id)
+    except Exception:
+        log.warning("Could not queue the %s webhook for version %s", event, version_id, exc_info=True)
 
 
 def _eligible_media_rows(db):

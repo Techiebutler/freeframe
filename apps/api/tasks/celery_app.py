@@ -19,6 +19,7 @@ celery_app = Celery(
         "apps.api.tasks.email_tasks",
         "apps.api.tasks.cleanup_tasks",
         "apps.api.tasks.storage_tasks",
+        "apps.api.tasks.webhook_tasks",
     ],
 )
 
@@ -44,6 +45,7 @@ celery_app.conf.update(
         Queue("email_high"),   # Magic codes, invites - immediate
         Queue("email_low"),    # Mentions, comments - can be delayed
         Queue("maintenance"),  # Housekeeping - long, I/O heavy, latency-insensitive
+        Queue("webhooks"),     # Outgoing webhook deliveries - retried, can wait
     ),
     task_default_queue="default",
     # Route tasks to queues.
@@ -65,6 +67,10 @@ celery_app.conf.update(
         # is a full FFmpeg re-encode, so it belongs with the other transcoding
         # work rather than behind an hour-long bucket sweep.
         "apply_watermark": {"queue": "transcoding"},
+        # Its own queue so a slow or dead endpoint never holds a transcode, an
+        # email, or a housekeeping slot. The shipped email worker consumes it;
+        # point a worker of its own at `-Q webhooks` to scale it apart.
+        "apps.api.tasks.webhook_tasks.*": {"queue": "webhooks"},
         "apps.api.tasks.email_tasks.send_magic_code_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_invite_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_mention_email": {"queue": "email_low"},
