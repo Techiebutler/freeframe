@@ -62,7 +62,8 @@ def test_queue_stages_follow_the_kanban(env):
 
 def test_queue_never_shows_another_project(env):
     agent = env.pair_agent(env.project_a)
-    env.request(env.project_b, env.owner, "Other brand")
+    other = env.user("Other")  # another OWNER; a second brand of the same owner is in the workspace
+    env.request(env.project(other, "Foreign"), other, "Other brand")
     p1, p2 = patched()
     with p1, p2:
         assert env.client.get("/agent/queue", headers=agent.headers).json() == []
@@ -89,7 +90,8 @@ def test_review_splits_must_fix_from_guidance(env):
 
 def test_foreign_project_asset_is_404_everywhere(env):
     agent = env.pair_agent(env.project_a)
-    a = env.asset(env.request(env.project_b, env.owner))
+    other = env.user("Other")  # another OWNER; a second brand of the same owner is in the workspace
+    a = env.asset(env.request(env.project(other, "Foreign"), other))
     p1, p2 = patched()
     with p1, p2:
         assert env.client.get(f"/agent/assets/{a.id}/review", headers=agent.headers).status_code == 404
@@ -188,3 +190,54 @@ def test_queue_feedback_sent_follows_the_round_and_versions(env):
         by = {r["title"]: r for r in env.client.get("/agent/queue", headers=agent.headers).json()}
     assert {t: r["feedback_sent"] for t, r in by.items()} == {"Sent": True, "Acked": False, "Newer": False, "None": False, "Open": False}  # (d) no round
     assert all(r["stage"] == "ready" for r in by.values())   # stage untouched
+
+
+# ── workspace reach: every brand of the key's owner, never another owner's ──────
+
+def test_second_brand_of_the_owner_is_reachable_for_queue_review_feedback_ack(env):
+    agent = env.pair_agent(env.project_a)
+    req = env.request(env.project_b, env.owner, "Networther hook")
+    a = env.asset(req, by=agent.who)
+    _round(env, req, closed_after=-1)
+    p1, p2 = patched({str(a.id): clear(a.versions[0])}, bridge(req))
+    with p1, p2:
+        rows = env.client.get("/agent/queue", headers=agent.headers).json()
+        assert [r["request_id"] for r in rows] == [str(req.id)] and rows[0]["upload_token"] == req.token
+        assert env.client.get("/agent/queue?state=ready", headers=agent.headers).json()[0]["request_id"] == str(req.id)
+        review = env.client.get(f"/agent/assets/{a.id}/review", headers=agent.headers)
+        assert review.status_code == 200 and review.json()["asset_id"] == str(a.id)
+    rounds = env.client.get("/agent/feedback", headers=agent.headers).json()["rounds"]
+    assert [r["request_id"] for r in rounds] == [str(req.id)]
+    assert env.client.post(f"/agent/feedback/{rounds[0]['round_id']}/ack", headers=agent.headers).status_code == 204
+    assert env.client.get("/agent/feedback", headers=agent.headers).json()["rounds"] == []
+
+
+def test_approve_in_second_brand_follows_that_brands_flag(env):
+    agent = env.pair_agent(env.project_a)
+    a = env.asset(env.request(env.project_b, env.owner))
+    r = env.client.post(f"/agent/assets/{a.id}/approve", headers=agent.headers)
+    assert (r.status_code, r.json()["detail"]) == (403, "agents_may_not_approve")
+    env.client.patch(f"/projects/{env.project_a.id}", json={"agents_may_approve": True}, headers=env.headers(env.owner))
+    assert env.client.post(f"/agent/assets/{a.id}/approve", headers=agent.headers).status_code == 403  # the home flag does not leak
+    env.client.patch(f"/projects/{env.project_b.id}", json={"agents_may_approve": True}, headers=env.headers(env.owner))
+    assert env.client.post(f"/agent/assets/{a.id}/approve", headers=agent.headers).status_code == 200
+
+
+def test_another_owners_project_is_invisible_to_every_agent_route(env):
+    other = env.user("Other")
+    foreign = env.project(other, "Foreign")
+    agent = env.pair_agent(env.project_a)
+    req = env.request(foreign, other)
+    a = env.asset(req, by=agent.who)
+    _round(env, req, closed_after=-1)
+    env.client.patch(f"/projects/{foreign.id}", json={"agents_may_approve": True}, headers=env.headers(other))
+    p1, p2 = patched({str(a.id): clear(a.versions[0])}, bridge(req))
+    with p1, p2:
+        assert env.client.get("/agent/queue", headers=agent.headers).json() == []
+        assert env.client.get(f"/agent/assets/{a.id}/review", headers=agent.headers).status_code == 404
+        assert env.client.post(f"/agent/assets/{a.id}/approve", headers=agent.headers).status_code == 404
+    assert env.client.get("/agent/feedback", headers=agent.headers).json()["rounds"] == []
+    from apps.api.models.agent import FeedbackRound
+    with env.Session() as db:
+        rid = db.query(FeedbackRound).one().id
+    assert env.client.post(f"/agent/feedback/{rid}/ack", headers=agent.headers).status_code == 404

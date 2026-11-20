@@ -103,12 +103,12 @@ def event_at(d: Delivery) -> datetime:
     return d.approved_at + SETTLE
 
 
-def agent_events(db: Session, agent_user: User, project_id: uuid.UUID, cursor: Optional[datetime], now: datetime) -> list[Delivery]:
+def agent_events(db: Session, agent_user: User, project_id, cursor: Optional[datetime], now: datetime) -> list[Delivery]:
     """Settled approvals of requests this agent handed versions in to, oldest first. Past `cursor` (compared on
     event_at, which is what next_cursor carries); without one, only what has not been handed on yet."""
     handed_in = db.query(RequestUpload.request_id).filter(RequestUpload.uploader_email == agent_user.email)
     q = db.query(Delivery).join(UploadRequest, UploadRequest.id == Delivery.request_id).filter(
-        UploadRequest.project_id == project_id, UploadRequest.id.in_(handed_in), Delivery.approved_at <= now - SETTLE)
+        UploadRequest.project_id.in_([project_id] if isinstance(project_id, uuid.UUID) else list(project_id)), UploadRequest.id.in_(handed_in), Delivery.approved_at <= now - SETTLE)
     q = q.filter(Delivery.approved_at > cursor - SETTLE) if cursor is not None else q.filter(Delivery.handed_on_at.is_(None))
     out, complete = [], {}
     for d in q.order_by(Delivery.approved_at).all():

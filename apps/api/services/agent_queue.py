@@ -60,15 +60,21 @@ def embed_url(db: Session, req: UploadRequest, owner_id: uuid.UUID) -> str:
     return f"{(settings.frontend_url or '').rstrip('/')}/share/{link.token}?embed=1"
 
 
-def queue(db: Session, project_id: uuid.UUID, state: Optional[str] = None) -> list[dict]:
+def as_ids(project_ids) -> list[uuid.UUID]:
+    """One project id or a collection of them (the key's workspace), as a list."""
+    return [project_ids] if isinstance(project_ids, uuid.UUID) else list(project_ids)
+
+
+def queue(db: Session, project_ids, state: Optional[str] = None) -> list[dict]:
     from ..routers import requests as r
-    reqs = db.query(UploadRequest).filter(UploadRequest.project_id == project_id).order_by(UploadRequest.created_at.desc()).limit(100).all()
+    ids = as_ids(project_ids)
+    reqs = db.query(UploadRequest).filter(UploadRequest.project_id.in_(ids)).order_by(UploadRequest.created_at.desc()).limit(100).all()
     reqs = [q for q in reqs if r.request_state(q, datetime.now(timezone.utc)) == "live"]
     statuses = review_bridge.request_status([q.review_share_token for q in reqs])
     assets = {q.id: r._submitted_assets(db, q) for q in reqs}
     stats = review_bridge.asset_stats([str(a.id) for items in assets.values() for a in items])
     reviewer = db.query(GuestUser).filter(GuestUser.email == r.REVIEWER_EMAIL).first()
-    owner_id = db.get(Project, project_id).created_by
+    owner_id = db.get(Project, ids[0]).created_by if ids else None  # one workspace = one owner
     from . import board_lifecycle as board
     now = datetime.now(timezone.utc)
     info = board.activity(db, reqs, assets)
@@ -111,11 +117,11 @@ def split_notes(comments: list[dict]) -> tuple[list[dict], list[dict]]:
     return [note(c) for c in comments if c.get("must_fix")], [note(c) for c in comments if not c.get("must_fix")]
 
 
-def asset_review(db: Session, project_id: uuid.UUID, asset_id: uuid.UUID) -> Optional[dict]:
-    """None when the asset is not in a request of THIS project (the caller answers 404)."""
+def asset_review(db: Session, project_ids, asset_id: uuid.UUID) -> Optional[dict]:
+    """None when the asset is not in a request of one of these projects (the caller answers 404)."""
     from ..routers import requests as r
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.project_id == project_id, Asset.deleted_at.is_(None)).first()
-    req = db.query(UploadRequest).filter(UploadRequest.folder_id == asset.folder_id, UploadRequest.project_id == project_id).first() if asset else None
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.project_id.in_(as_ids(project_ids)), Asset.deleted_at.is_(None)).first()
+    req = db.query(UploadRequest).filter(UploadRequest.folder_id == asset.folder_id, UploadRequest.project_id == asset.project_id).first() if asset else None
     if req is None:
         return None
     entry = next((a for a in r._editor_review(db, req)["assets"] if a["asset_id"] == str(asset.id)), None)
@@ -123,7 +129,7 @@ def asset_review(db: Session, project_id: uuid.UUID, asset_id: uuid.UUID) -> Opt
     if entry is None:
         return None
     must_fix, guidance = split_notes(entry["comments"])
-    embed = embed_url(db, req, db.get(Project, project_id).created_by)
+    embed = embed_url(db, req, db.get(Project, asset.project_id).created_by)
     db.commit()
     return {"embed_url": embed, "asset_id": entry["asset_id"], "version_id": entry["version_id"], "review_state": entry["review_state"],
             "gate": {"status": entry["review_state"], "open_must_fixes": entry["open_must_fixes"]},

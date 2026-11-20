@@ -470,14 +470,14 @@ def close_if_all_reviewed(db: Session, req: UploadRequest, now: datetime) -> boo
 
 # ── What the agent may collect ─────────────────────────────────────────────────
 
-def _mine(db: Session, agent_user: User, project_id: uuid.UUID):
-    """Rounds of requests in this project that this agent handed versions in to."""
+def _mine(db: Session, agent_user: User, project_ids):
+    """Rounds of requests in these projects (one id or the key's workspace) that this agent handed versions in to."""
     handed_in = db.query(RequestUpload.request_id).filter(RequestUpload.uploader_email == agent_user.email)
     return db.query(FeedbackRound).join(UploadRequest, UploadRequest.id == FeedbackRound.request_id).filter(
-        UploadRequest.project_id == project_id, UploadRequest.id.in_(handed_in))
+        UploadRequest.project_id.in_([project_ids] if isinstance(project_ids, uuid.UUID) else list(project_ids)), UploadRequest.id.in_(handed_in))
 
 
-def agent_rounds(db: Session, agent_user: User, project_id: uuid.UUID, cursor: Optional[datetime]) -> list[FeedbackRound]:
+def agent_rounds(db: Session, agent_user: User, project_id, cursor: Optional[datetime]) -> list[FeedbackRound]:
     """Closed, unacknowledged rounds the agent may collect, oldest first."""
     q = _mine(db, agent_user, project_id).filter(FeedbackRound.closed_at.isnot(None), FeedbackRound.acked_at.is_(None))
     if cursor is not None:
@@ -485,7 +485,7 @@ def agent_rounds(db: Session, agent_user: User, project_id: uuid.UUID, cursor: O
     return q.order_by(FeedbackRound.closed_at).all()
 
 
-def agent_round(db: Session, agent_user: User, project_id: uuid.UUID, round_id: uuid.UUID) -> Optional[FeedbackRound]:
+def agent_round(db: Session, agent_user: User, project_id, round_id: uuid.UUID) -> Optional[FeedbackRound]:
     return _mine(db, agent_user, project_id).filter(FeedbackRound.id == round_id).first()
 
 

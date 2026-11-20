@@ -42,7 +42,7 @@ def me(agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
 @router.get("/queue")
 def queue(state: Optional[Literal["editor", "review", "corrections", "ready"]] = None,
           agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
-    items = agent_queue.queue(db, _project(db, agent).id, state)
+    items = agent_queue.queue(db, _workspace_ids(db, agent), state)
     if agent.key.scope == "read":  # the upload token is the hand-in right; a read key never sees it
         for item in items:
             item.pop("upload_token", None)
@@ -51,7 +51,7 @@ def queue(state: Optional[Literal["editor", "review", "corrections", "ready"]] =
 
 @router.get("/assets/{asset_id}/review")
 def asset_review(asset_id: uuid.UUID, agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
-    out = agent_queue.asset_review(db, _project(db, agent).id, asset_id)
+    out = agent_queue.asset_review(db, _workspace_ids(db, agent), asset_id)
     if out is None:
         raise HTTPException(404, "not_found")
     return out
@@ -60,10 +60,10 @@ def asset_review(asset_id: uuid.UUID, agent: AgentContext = Depends(get_agent), 
 @router.post("/assets/{asset_id}/approve")
 def approve(asset_id: uuid.UUID, agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
     from .approvals import _upsert_approval
-    project = _project(db, agent)
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.project_id == project.id, Asset.deleted_at.is_(None)).first()
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.project_id.in_(_workspace_ids(db, agent)), Asset.deleted_at.is_(None)).first()
     if asset is None:
         raise HTTPException(404, "not_found")
+    project = db.get(Project, asset.project_id)  # the asset's own brand decides agents_may_approve
     if not project.agents_may_approve:
         raise HTTPException(403, "agents_may_not_approve")
     version = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None)) \
@@ -101,7 +101,7 @@ def feedback(cursor: str = "", agent: AgentContext = Depends(get_agent), db: Ses
         raise HTTPException(422, "invalid_cursor")
     if after is not None and after.tzinfo is None:
         after = after.replace(tzinfo=timezone.utc)
-    project_id = _project(db, agent).id
+    project_id = _workspace_ids(db, agent)
     rows = feedback_rounds.agent_rounds(db, agent.user, project_id, after)
     approved = deliveries.agent_events(db, agent.user, project_id, after, datetime.now(timezone.utc))
     stamps = [r.closed_at for r in rows] + [deliveries.event_at(d) for d in approved]
@@ -111,7 +111,7 @@ def feedback(cursor: str = "", agent: AgentContext = Depends(get_agent), db: Ses
 
 @router.post("/feedback/{round_id}/ack", status_code=status.HTTP_204_NO_CONTENT)
 def ack(round_id: uuid.UUID, agent: AgentContext = Depends(get_agent), db: Session = Depends(get_db)):
-    rnd = feedback_rounds.agent_round(db, agent.user, _project(db, agent).id, round_id)
+    rnd = feedback_rounds.agent_round(db, agent.user, _workspace_ids(db, agent), round_id)
     if rnd is None:
         raise HTTPException(404, "not_found")
     if rnd.acked_at is None:
@@ -128,6 +128,10 @@ def _owner_brands(db: Session, agent: AgentContext) -> list[Project]:
     """Every live project created by the owner of the key's home project, sorted by name."""
     home = _project(db, agent)
     return db.query(Project).filter(Project.created_by == home.created_by, Project.deleted_at.is_(None)).order_by(Project.name).all()
+
+
+def _workspace_ids(db: Session, agent: AgentContext) -> list[uuid.UUID]:
+    return [p.id for p in _owner_brands(db, agent)]
 
 
 def _ensure_editor(db: Session, project_id: uuid.UUID, agent: AgentContext, owner_id: uuid.UUID) -> None:
