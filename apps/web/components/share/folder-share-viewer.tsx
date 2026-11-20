@@ -14,7 +14,6 @@ import {
   Music,
   Loader2,
   MessageSquare,
-  Layers,
   PanelRightClose,
   PanelRightOpen,
   ArrowLeft,
@@ -26,6 +25,7 @@ import { useReview, type CreateCommentPayload } from '@/components/review/review
 import { useReviewStore } from '@/stores/review-store'
 import { fetchDownloadUrl, fetchShareDownloadOptions, handleDownload, triggerDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
+import { DurationBadge, VersionCountBadge } from '@/components/shared/asset-thumbnail-badges'
 import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import { ShareReviewScreen } from './share-review-screen'
 import { ShareBrandMark } from './share-brand-mark'
@@ -93,14 +93,6 @@ function formatShortDate(dateStr: string): string {
     month: 'short',
     day: 'numeric',
   })
-}
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = Math.floor(seconds % 60)
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
 function getAssetTypeIcon(assetType: string): React.ElementType {
@@ -299,24 +291,13 @@ function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, 
         )}
 
         {/* Version count badge — top left (only when multiple versions exist) */}
-        {(asset.version_count ?? 1) > 1 && (
-          <div className="absolute top-2 left-2 flex items-center gap-1 bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5" title={`${asset.version_count} versions`}>
-            <Layers className="h-3 w-3 text-text-primary" />
-            <span className="text-[10px] font-medium text-text-primary tabular-nums">{asset.version_count}</span>
-          </div>
-        )}
+        <VersionCountBadge count={asset.version_count} />
 
         {/* Comment count badge — bottom left */}
         <CommentCountBadge count={asset.comment_count} />
 
         {/* Duration badge — bottom right (video/audio) */}
-        {asset.duration_seconds != null && asset.duration_seconds > 0 && (
-          <div className="absolute bottom-2 right-2 bg-bg-primary/80 backdrop-blur-sm rounded-md px-1.5 py-0.5">
-            <span className="text-[10px] font-medium text-text-primary tabular-nums">
-              {formatDuration(asset.duration_seconds)}
-            </span>
-          </div>
-        )}
+        <DurationBadge seconds={asset.duration_seconds} />
 
         {/* Download button overlay */}
         {allowDownload && (
