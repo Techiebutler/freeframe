@@ -5,6 +5,7 @@ import { Film, Music, Image as ImageIcon, Images, MoreHorizontal, Check } from '
 import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import type { Asset, AssetType, DownloadOption, User, VerdictSummary } from '@/types'
 import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
+import { DurationBadge, VersionCountBadge } from '@/components/shared/asset-thumbnail-badges'
 import { CommentCountBadge } from '@/components/shared/comment-count-badge'
 import { VerdictBadge } from '@/components/review/verdict-badge'
 import { verdictTone } from '@/lib/verdicts'
@@ -57,17 +58,6 @@ interface AssetCardProps {
   aspectRatio?: AspectRatio
   thumbnailScale?: ThumbnailScale
   className?: string
-}
-
-function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  if (m >= 60) {
-    const h = Math.floor(m / 60)
-    const rm = m % 60
-    return `${h}:${String(rm).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-  }
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
 export function AssetCard({
@@ -167,12 +157,16 @@ export function AssetCard({
           </button>
         )}
 
-        {/* Duration badge — bottom-right (for video/audio) */}
-        {duration != null && duration > 0 && (
-          <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white tabular-nums backdrop-blur-sm">
-            {formatDuration(duration)}
-          </span>
-        )}
+        {/* Version chip — top-left once there is more than one version, shifted
+            right of the selection checkbox, which owns the corner. */}
+        <VersionCountBadge
+          count={versionCount}
+          title={`Version ${versionCount}`}
+          className={onSelect ? 'left-9' : undefined}
+        />
+
+        {/* Duration badge — bottom-right (for video/audio), as in a share link's grid */}
+        <DurationBadge seconds={duration} />
 
         {/* Comment count badge — bottom-left, as in a share link's grid */}
         <CommentCountBadge count={commentCount} />
