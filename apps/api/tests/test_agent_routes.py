@@ -241,3 +241,23 @@ def test_another_owners_project_is_invisible_to_every_agent_route(env):
     with env.Session() as db:
         rid = db.query(FeedbackRound).one().id
     assert env.client.post(f"/agent/feedback/{rid}/ack", headers=agent.headers).status_code == 404
+
+
+def test_queue_request_with_every_part_approved_is_ready_despite_a_held_gate(env):
+    from apps.api.models.approval import Approval, ApprovalStatus
+    agent = env.pair_agent(env.project_a)
+    both = env.request(env.project_a, env.owner, "Both approved")
+    one = env.request(env.project_a, env.owner, "One approved")
+    b1, b2, o1, o2 = env.asset(both), env.asset(both), env.asset(one), env.asset(one)
+    with env.Session() as db:
+        for a in (b1, b2, o1):
+            db.add(Approval(asset_id=a.id, version_id=a.versions[0].id, user_id=env.owner.id, status=ApprovalStatus.approved))
+        db.commit()
+    stats = {str(b1.id): clear(b1.versions[0], 2), str(b2.id): clear(b2.versions[0]),
+             str(o1.id): clear(o1.versions[0], 2), str(o2.id): clear(o2.versions[0])}
+    p1, p2 = patched(stats, {**bridge(both, "held", 2), **bridge(one, "held", 2)})
+    with p1, p2:
+        by = {r["title"]: r["stage"] for r in env.client.get("/agent/queue", headers=agent.headers).json()}
+        assert by == {"Both approved": "ready", "One approved": "corrections"}
+        ready = env.client.get("/agent/queue?state=ready", headers=agent.headers).json()
+        assert [r["title"] for r in ready] == ["Both approved"]

@@ -90,6 +90,8 @@ def queue(db: Session, project_ids, state: Optional[str] = None) -> list[dict]:
         gate = r._request_gate(reviews, statuses.get(q.review_share_token))
         agent_notify.evaluate(db, q, reviews)
         stage = stage_of("live", len(assets[q.id]), gate["status"])
+        if reviews and all(a.get("version_id") in approved for a in reviews):
+            stage = "ready"  # ponytail: a human approval of every current version overrides a held auto gate ("Approve anyway")
         if state and stage != state:
             continue
         vids = [uuid.UUID(a["version_id"]) for a in reviews if a.get("version_id")]
