@@ -94,9 +94,9 @@ export async function undoApproveSharedAsset(
 }
 
 /** Send pressed: close the feedback round now so a waiting agent starts at once. Best effort: the 5-minute idle close is the fallback. */
-export function shareFeedbackDone(token: string, assetId: string, shareSession?: string | null): void {
+export function shareFeedbackDone(token: string, assetId: string, shareSession?: string | null): Promise<void> {
   const qs = shareSession ? `?share_session=${encodeURIComponent(shareSession)}` : ''
-  fetch(`${API_URL()}/share/${token}/assets/${assetId}/feedback-done${qs}`, { method: 'POST' }).catch(() => {})
+  return fetch(`${API_URL()}/share/${token}/assets/${assetId}/feedback-done${qs}`, { method: 'POST' }).then(() => {}, () => {})
 }
 
 /** Signed-in Aditor staff approve on any share link (the server checks it again, V3); everyone else gets the link's own permission. */

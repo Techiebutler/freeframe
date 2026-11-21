@@ -1384,6 +1384,9 @@ def get_folder_share_assets(
         UploadRequest.folder_id == target_folder_id, UploadRequest.revoked_at.is_(None), UploadRequest.iteration_manifest.isnot(None),
     ).order_by(UploadRequest.created_at.desc()).first() if target_folder_id else None
     roles = part_roles(module_req.iteration_manifest, module_req.iteration_state) if module_req else {}
+    request_row = module_req or (db.query(UploadRequest).filter(
+        UploadRequest.folder_id == target_folder_id, UploadRequest.revoked_at.is_(None),
+    ).order_by(UploadRequest.created_at.desc()).first() if target_folder_id and embed else None)
 
     offset = (page - 1) * per_page
     assets = db.query(Asset).filter(
@@ -1391,6 +1394,7 @@ def get_folder_share_assets(
         Asset.deleted_at.is_(None), visible_iteration,
     ).order_by(Asset.created_at.desc()).offset(offset).limit(per_page).all()
 
+    states = feedback_rounds.comment_states(db, module_req or request_row) if embed else {}
     asset_items = []
     for asset in assets:
         thumbnail_url = None
@@ -1420,6 +1424,8 @@ def get_folder_share_assets(
             created_by_name=client_view.creator_name(creator, staff),
             created_at=asset.created_at,
             role=roles.get(str(asset.id), (None, None))[0], order=roles.get(str(asset.id), (None, None))[1],
+            open_notes=sum(1 for a, st in states.values() if a == asset.id and st == "open"),
+            sent_notes=sum(1 for a, st in states.values() if a == asset.id and st == "sent"),
         ))
 
     return FolderShareAssetsResponse(
@@ -1428,9 +1434,7 @@ def get_folder_share_assets(
         total=total,
         page=page,
         per_page=per_page,
-        open_round_notes=feedback_rounds.notes_count(db, module_req or (db.query(UploadRequest).filter(
-            UploadRequest.folder_id == target_folder_id, UploadRequest.revoked_at.is_(None),
-        ).order_by(UploadRequest.created_at.desc()).first() if target_folder_id else None)) if embed else 0,
+        open_round_notes=feedback_rounds.notes_count(db, module_req or request_row) if embed else 0,
     )
 
 

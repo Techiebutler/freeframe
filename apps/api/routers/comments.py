@@ -1126,7 +1126,13 @@ def list_share_comments(
         top_level = [c for c in top_level if client_view.client_visible(c, agents)]
 
     # Batched build (fixed query count) — guests have no user, so no current_user_id.
-    return _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=not staff)
+    built = _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=not staff)
+    if latest_only:  # the embed's list says which round each comment is in
+        from ..services import feedback_rounds
+        states = feedback_rounds.comment_states(db, feedback_rounds.request_for_asset(db, asset_id))
+        for c in built:
+            c.round_state = states[str(c.id)][1] if str(c.id) in states else None
+    return built
 
 
 def automation_comment_id(token, asset_id, version_id, key, authorization):

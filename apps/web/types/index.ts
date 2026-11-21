@@ -344,6 +344,9 @@ export interface FolderShareAssetItem {
   comment_count: number
   auto_comment_count?: number
   approved?: boolean
+  /** Embed: comments of the open round (no Send yet) / of closed rounds the agent has not acked. */
+  open_notes?: number
+  sent_notes?: number
   version_count?: number
   created_by_name: string | null
   created_at: string

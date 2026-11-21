@@ -821,7 +821,7 @@ interface ShareViewerProps {
   /** The upload request behind this share link; the embed names it in its hand-off events. */
   requestId?: string | null
   /** Folder embed: this asset's place in the folder, the stepper, and what the approve acts on. */
-  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** Parts approved so far, and the comments no Send has closed yet (all parts). */ approvedCount?: number; partsTotal?: number; onParts?: (p: { approved: number; total: number }) => void; unsent?: number; onNoteSaved?: () => void; onSentAll?: () => void; /** The segmented file switcher (components/share/module-tabs.tsx). */ nav?: React.ReactNode }
+  folder?: { index: number; count: number; approved: boolean; shareSession: string | null; onStep: (d: -1 | 1) => void; onApproved: (v: boolean) => void; /** Parts approved so far, and the comments no Send has closed yet (all parts). */ approvedCount?: number; partsTotal?: number; onParts?: (p: { approved: number; total: number }) => void; unsent?: number; sent?: number; onNoteSaved?: () => void; onSentAll?: () => void; onRefresh?: () => void; /** The segmented file switcher (components/share/module-tabs.tsx). */ nav?: React.ReactNode }
 }
 
 function ShareViewer({
@@ -908,7 +908,7 @@ function ShareViewer({
   const syncRound = async () => {
     const r = await roundSync(token, asset.id, shareSession)
     if (!r || !requestId) return
-    if (r.closed_by) handoff({ event: 'round_sent', request_id: requestId, asset_id: asset.id })
+    if (r.closed_by) { handoff({ event: 'round_sent', request_id: requestId, asset_id: asset.id }); setCommentKey((k) => k + 1); folder?.onRefresh?.() }
     reportNotes(r.notes)
   }
   React.useEffect(() => {
@@ -975,7 +975,7 @@ function ShareViewer({
           canSave={!!identity}
           onNeedSave={() => setAskIdentity(true)}
           onApprove={flowApprove}
-          onSent={() => { shareFeedbackDone(token, asset.id); send({ type: 'ar:sent' }); handoff({ event: 'round_sent', request_id: requestId ?? '', asset_id: asset.id }); reportNotes(0); folder?.onSentAll?.() }}
+          onSent={() => { void shareFeedbackDone(token, asset.id).then(() => { setCommentKey((k) => k + 1); folder?.onRefresh?.() }); send({ type: 'ar:sent' }); handoff({ event: 'round_sent', request_id: requestId ?? '', asset_id: asset.id }); reportNotes(0); folder?.onSentAll?.() }}
           onBusy={(b) => { busyRef.current = b }}
           onNoteSaved={(t) => { send({ type: 'ar:comment', t }); setCommentKey((k) => k + 1); folder?.onNoteSaved?.(); void syncRound() }}
           onUndoApprove={async () => { await undoApproveSharedAsset(token, asset.id, { shareSession: folder?.shareSession }); setFlowApproved(false); folder?.onApproved(false) }}
@@ -983,6 +983,7 @@ function ShareViewer({
           approved={flowApproved}
           parts={folder ? { approved: folder.approvedCount ?? 0, total: folder.partsTotal ?? folder.count } : undefined}
           unsentFeedback={folder?.unsent}
+          sentFeedback={folder?.sent}
           hasNext={!!folder && folder.index < folder.count - 1}
           onNext={() => folder?.onStep(1)}
           dictate={(audio) => guestDictate(token, audio)}
@@ -1108,11 +1109,21 @@ function ShareViewer({
 function FolderEmbed({ token, shareSession, permission, branding, requestId }: { token: string; shareSession: string | null; permission: SharePermission; branding: ProjectBranding | null; requestId: string | null }) {
   const [items, setItems] = React.useState<FolderShareAssetItem[] | null>(null)
   const [index, setIndex] = React.useState(0)
-  const [unsent, setUnsent] = React.useState(0)
   // The request's own count of parts (every asset in the folder, whatever its type), then the server's answer after each approve.
   const [parts, setParts] = React.useState<{ approved: number; total: number } | null>(null)
+  const ss = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
+  /** Re-reads which comments are open (no Send yet) or sent, per file; the selection and the rest stay. */
+  const refresh = React.useCallback(() => {
+    fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500&embed=true${ss}`)
+      .then((r) => (r.ok ? (r.json() as Promise<FolderShareAssetsResponse>) : null))
+      .then((data) => {
+        if (!data) return
+        const by = new Map(data.assets.map((a) => [a.id, a]))
+        setItems((prev) => prev && prev.map((a) => ({ ...a, open_notes: by.get(a.id)?.open_notes ?? 0, sent_notes: by.get(a.id)?.sent_notes ?? 0 })))
+      })
+      .catch(() => {})
+  }, [token, ss])
   React.useEffect(() => {
-    const ss = shareSession ? `&share_session=${encodeURIComponent(shareSession)}` : ''
     fetch(`${API_URL}/share/${token}/assets?page=1&per_page=500&embed=true${ss}`)
       .then((r) => (r.ok ? (r.json() as Promise<FolderShareAssetsResponse>) : null))
       .then((data) => {
@@ -1122,13 +1133,13 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
         setParts({ approved: all.filter((a) => a.approved).length, total: all.length })
         setItems(sorted)
         setIndex(Math.max(0, sorted.findIndex((a) => !a.approved)))
-        setUnsent(data?.open_round_notes ?? 0) // notes of the open round only: comments a Send already closed are sent
       })
       .catch(() => setItems([]))
   }, [token, shareSession])
   if (!items) return <div className="flex min-h-screen items-center justify-center bg-black"><Loader2 className="h-8 w-8 animate-spin text-zinc-500" /></div>
   const current = items[index]
   if (!current) return <ErrorState />
+  const edit = (f: (a: FolderShareAssetItem) => FolderShareAssetItem) => setItems((prev) => prev && prev.map((a) => (a.id === current.id ? f(a) : a)))
   const go = (n: number) => {
     if (n === index || n < 0 || n > items.length - 1) return
     setIndex(n)
@@ -1147,7 +1158,10 @@ function FolderEmbed({ token, shareSession, permission, branding, requestId }: {
       permission={permission}
       allowDownload={false}
       branding={branding}
-      folder={{ index, count: items.length, approved: !!current.approved, approvedCount: parts?.approved ?? items.filter((a) => a.approved).length, partsTotal: parts?.total ?? items.length, onParts: setParts, unsent, onNoteSaved: () => setUnsent((n) => n + 1), onSentAll: () => setUnsent(0), shareSession, onStep: (d) => go(index + d), nav: nav || undefined,
+      folder={{ index, count: items.length, approved: !!current.approved, approvedCount: parts?.approved ?? items.filter((a) => a.approved).length, partsTotal: parts?.total ?? items.length, onParts: setParts, unsent: current.open_notes ?? 0, sent: current.sent_notes ?? 0, onRefresh: refresh,
+        onNoteSaved: () => edit((a) => ({ ...a, open_notes: (a.open_notes ?? 0) + 1 })),
+        // One Send closes the request's round: every file's open comments are sent now (refresh corrects it if the server says otherwise).
+        onSentAll: () => setItems((prev) => prev && prev.map((a) => ({ ...a, open_notes: 0, sent_notes: (a.sent_notes ?? 0) + (a.open_notes ?? 0) }))), shareSession, onStep: (d) => go(index + d), nav: nav || undefined,
         onApproved: (v) => { setItems((prev) => prev && prev.map((a) => (a.id === current.id ? { ...a, approved: v } : a))); if (!v) setParts((p) => p && { ...p, approved: Math.max(0, p.approved - 1) }) } }}
     />
   )

@@ -206,6 +206,7 @@ class CommentResponse(BaseModel):
     resolved: bool
     visibility: str = "public"
     review_source: Optional[ReviewSource] = None
+    round_state: Optional[Literal["open", "sent", "done"]] = None  # embed list only: feedback round the comment belongs to
     created_at: datetime
     updated_at: datetime
     author: Optional[AuthorInfo] = None

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Embed review: per segment, open comments turn the primary button into "Send feedback (N)" (Approve is hidden, hint "Send or delete comments first"); after a Send the segment reads "Sent · Claude is working on it", and comments of an acked round are muted with a "done" marker. The share assets list gets `open_notes`/`sent_notes` per file and the embed comment list a `round_state`. Double click on Send is one Send.
 - Embed review: the mic follows the video. Paused records dictation, playing is silent and saves the spoken notes with their drawings; Comment pauses and starts. Without a microphone it falls back to typing, and drawings made while paused are still saved. The embed column gets a typed-note field.
 - Hand-in signing: before **Sign and send**, the brand's AutoReview rules show as terms (collapsed, blockers first) with one "I've read the brand rules" box and the line "Signing with a known violation forfeits this card's fee."; the signer draws their initials (finger or mouse). The initials (PNG) and the rules shown are kept with the signature (additive migration `ap11`). The page uses AutoReview's blue (`--ar-blue` tokens, shared with the setup screen).
 

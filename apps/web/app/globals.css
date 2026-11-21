@@ -889,6 +889,7 @@ button:not(:disabled), summary { cursor: pointer; }
 .ep-send:disabled { opacity: 0.4; }
 .ep-send:active { transform: scale(0.94); }
 .ep-progress { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; font-size: 13px; line-height: 1.4; color: var(--text-secondary); padding: 0 4px; }
+.ep-progress.ep-sent { justify-content: flex-start; gap: 6px; color: var(--status-success, var(--text-secondary)); font-weight: 500; }
 .ep-hint { font-size: 13px; line-height: 1.4; color: var(--text-secondary); padding: 0 4px; }
 .ep-rec { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; color: var(--text-secondary); }
 .ep-rec-dot { width: 12px; height: 12px; border-radius: 50%; background: #ff453a; box-shadow: 0 0 0 3px rgb(255 69 58 / 0.28), 0 0 10px rgb(255 69 58 / 0.8); animation: ep-pulse 1.1s ease-in-out infinite; }

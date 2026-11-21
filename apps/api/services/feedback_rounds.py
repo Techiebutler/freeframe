@@ -434,6 +434,19 @@ def notes_count(db: Session, req: Optional[UploadRequest]) -> int:
     return len(round_comments(db, rnd, req)) if rnd else 0
 
 
+def comment_states(db: Session, req: Optional[UploadRequest]) -> dict[str, tuple[uuid.UUID, str]]:
+    """Where every human comment of the request stands: `open` (the open round, no Send yet), `sent` (a closed round the
+    agent has not acked) or `done` (an acked round). Rounds never overlap, so a comment sits in exactly one."""
+    if req is None:
+        return {}
+    out: dict[str, tuple[uuid.UUID, str]] = {}
+    for rnd in db.query(FeedbackRound).filter(FeedbackRound.request_id == req.id).order_by(FeedbackRound.opened_at).all():
+        state = "open" if rnd.closed_at is None else "done" if rnd.acked_at is not None else "sent"
+        for c in round_comments(db, rnd, req):
+            out[str(c.id)] = (c.asset_id, state)
+    return out
+
+
 def close_left(db: Session, req: UploadRequest, now: datetime) -> bool:
     """The embed went away (tile folded, card switched): a round with at least one note closes as `left`, so the
     agent starts. No open round, no note, or a note still waiting for its image: nothing happens (never a silent drop)."""

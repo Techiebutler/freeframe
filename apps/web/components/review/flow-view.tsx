@@ -59,6 +59,8 @@ export interface FlowViewProps {
   parts?: { approved: number; total: number }
   /** Comments of every part that no Send has closed yet: while there are any, Send feedback is the primary action and Approve a quiet per-part one. */
   unsentFeedback?: number
+  /** Embed: this file's comments a Send closed that the agent has not acked yet ("Sent · Claude is working on it"). */
+  sentFeedback?: number
   /** Share links without approve permission: with no notes the right-hand button stays disabled. Default true. */
   canApprove?: boolean
   onExit?: () => void
@@ -430,6 +432,9 @@ export function FlowView(p: FlowViewProps) {
   const hasNotes = notes.length > 0
   const unsent = p.unsentFeedback ?? 0
   const sendMode = hasNotes || unsent > 0
+  const sendCount = Math.max(unsent, notes.length)
+  const sendText = `Send feedback${sendCount ? ` (${sendCount})` : ''}`
+  const justSent = React.useRef(0)
   const partsOpen = !!p.parts && p.parts.total > 1 && p.parts.approved < p.parts.total
   const showDone = () => setMoment({ title: doneLine(sessionSummary(sKey)) })
   const advance = () => { if (p.hasNext && p.onNext) p.onNext(); else if (!partsOpen) showDone() }
@@ -451,12 +456,14 @@ export function FlowView(p: FlowViewProps) {
     setToast({ secs: p.onUndoApprove ? 5 : 1 })
   }
   const finish = async () => {
+    if (Date.now() - justSent.current < 2000) return // a double click on Send is one Send, never a stray Approve
     if (flushInk(typed)) { setTyped(''); return } // a drawing still waiting becomes its note first; the next tap sends
     setSending(true); setError('')
     try {
       if (!sendMode) { await approvePart(); return }
       const count = notes.length || unsent
       await p.onFinishRound?.()
+      justSent.current = Date.now()
       p.onSent?.()
       dispatch({ type: 'clear' })
       setMoment({ title: sentLine(count, !!p.onFinishRound), sub: p.hasNext ? undefined : doneLine(sessionSummary(sKey)) })
@@ -696,7 +703,9 @@ export function FlowView(p: FlowViewProps) {
           {error && <p role="alert" className="rounded-lg bg-bg-secondary px-3 py-2 text-sm text-status-error">{error}</p>}
           {ob.summary.failed > 0 && <button type="button" onClick={() => ob.entries.filter(e => e.status === 'failed').forEach(e => ob.retry(e.id))} className="press inline-flex min-h-11 items-center gap-1 self-start rounded-full bg-bg-secondary px-3 text-xs font-semibold"><RotateCcw size={12} />Retry sending notes</button>}
           {toast && <div role="status" className="flex items-center justify-between gap-2 rounded-lg bg-bg-secondary py-1 pl-3 pr-1"><p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>{copyButton}{p.onUndoApprove && <button type="button" onClick={undo} className="press min-h-11 rounded-full px-3 text-sm font-semibold text-text-primary hover:bg-bg-hover">Undo ({toast.secs} s)</button>}</div>}
-          {p.parts && p.parts.total > 1 && !delivery && <p role="status" data-testid="parts-progress" className="ep-progress"><span className="tabular-nums">{p.parts.approved} of {p.parts.total} approved</span>{sendMode && p.canApprove !== false && !p.approved && !active && <button type="button" onClick={finishApprove} disabled={sending} className="press min-h-11 px-2 font-semibold text-text-secondary hover:text-text-primary">Approve this part</button>}</p>}
+          {p.parts && p.parts.total > 1 && !delivery && <p role="status" data-testid="parts-progress" className="ep-progress"><span className="tabular-nums">{p.parts.approved} of {p.parts.total} approved</span></p>}
+          {sendMode && !active && p.canApprove !== false && !p.approved && <p role="status" data-testid="send-first" className="ep-progress">Send or delete comments first</p>}
+          {!sendMode && (p.sentFeedback ?? 0) > 0 && <p role="status" data-testid="sent-status" className="ep-progress ep-sent"><Check size={14} aria-hidden="true" />Sent · Claude is working on it</p>}
           {micHint && !active && <p role="status" className="ep-hint">{micHint}</p>}
           {typing && !active && notes.some(n => n.status !== 'recording') && (
             <ul className="ep-notes" aria-label="Your notes">
@@ -733,8 +742,8 @@ export function FlowView(p: FlowViewProps) {
               <button type="button" onClick={() => dictate_('type')} aria-label="Type a note" aria-pressed={typing} title="Type a note" className="ep-type-btn press"><Keyboard size={20} aria-hidden="true" /></button>
             )}
             {!active && (
-              <button type="button" onClick={finish} disabled={sending || (sendMode ? blocked : (!!p.approved || !canApprove))} aria-label={sendMode || inkPending ? 'Send feedback' : sendLabel} data-primary={sendMode || inkPending ? '' : undefined} className="ep-approve glass">
-                {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : sendMode || inkPending ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span className="ep-lbl">{sendMode || inkPending ? 'Send feedback' : sendLabel}</span>
+              <button type="button" onClick={finish} disabled={sending || (sendMode ? blocked : (!!p.approved || !canApprove))} aria-label={sendMode || inkPending ? sendText : sendLabel} data-primary={sendMode || inkPending ? '' : undefined} className="ep-approve glass">
+                {sending ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : sendMode || inkPending ? <Send size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span className="ep-lbl">{sendMode || inkPending ? sendText : sendLabel}</span>
               </button>
             )}
           </div>

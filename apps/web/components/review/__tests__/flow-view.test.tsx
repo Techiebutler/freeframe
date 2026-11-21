@@ -760,18 +760,29 @@ describe('FlowView embed: per-part approve, share link only when every part is a
     const onApprove = vi.fn().mockResolvedValue(undefined)
     embed({ parts: { approved: 1, total: 5 }, unsentFeedback: 3, onSent, onApprove })
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Send feedback \(\d+\)$/ }))
     await waitFor(() => expect(onSent).toHaveBeenCalledTimes(1))
     expect(onApprove).not.toHaveBeenCalled()
   })
 
-  it('"Approve this part" approves just this part while comments are open', async () => {
-    const onApprove = vi.fn().mockResolvedValue(undefined)
+  it('with open comments there is no Approve, only the hint, and a double click on Send is one Send', async () => {
     const onSent = vi.fn()
+    const onApprove = vi.fn().mockResolvedValue(undefined)
     embed({ parts: { approved: 0, total: 5 }, unsentFeedback: 2, onApprove, onSent })
-    fireEvent.click(screen.getByRole('button', { name: 'Approve this part' }))
-    await waitFor(() => expect(onApprove).toHaveBeenCalledTimes(1))
-    expect(onSent).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Send feedback (2)' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve/i })).toBeNull()
+    expect(screen.getByTestId('send-first')).toHaveTextContent('Send or delete comments first')
+    const send = screen.getByRole('button', { name: 'Send feedback (2)' })
+    fireEvent.click(send); fireEvent.click(send)
+    await waitFor(() => expect(onSent).toHaveBeenCalledTimes(1))
+    expect(onApprove).not.toHaveBeenCalled()
+  })
+
+  it('after a Send the segment says so and Approve is back', () => {
+    embed({ parts: { approved: 1, total: 5 }, unsentFeedback: 0, sentFeedback: 3 })
+    expect(screen.getByTestId('sent-status')).toHaveTextContent('Sent · Claude is working on it')
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
+    expect(screen.queryByTestId('send-first')).toBeNull()
   })
 
   it('an approved part reads "Approved" with one check, not two', () => {
@@ -781,7 +792,7 @@ describe('FlowView embed: per-part approve, share link only when every part is a
 
   it('with open comments Send feedback is the filled primary and Comment steps back', () => {
     embed({ parts: { approved: 1, total: 5 }, unsentFeedback: 2 })
-    expect(screen.getByRole('button', { name: 'Send feedback' })).toHaveAttribute('data-primary')
+    expect(screen.getByRole('button', { name: /^Send feedback \(\d+\)$/ })).toHaveAttribute('data-primary')
     expect(screen.getByRole('button', { name: 'Comment' })).toHaveAttribute('data-secondary')
   })
 })

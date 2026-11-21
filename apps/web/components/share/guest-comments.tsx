@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Loader2, MessageSquare } from 'lucide-react'
+import { Check, Loader2, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -27,6 +27,8 @@ export interface GuestComment {
   timecode_start?: number | null
   /** The drawing made with the comment (ink.v1 or older), when it has one. */
   annotation?: { drawing_data?: unknown } | null
+  /** Embed: open = not sent yet, sent = the agent is on it, done = the agent handled it. */
+  round_state?: 'open' | 'sent' | 'done' | null
 }
 
 export type CommentsResponse = GuestComment[]
@@ -47,7 +49,7 @@ export function GuestCommentItem({ comment, onSelect, selected }: GuestCommentIt
 
   return (
     <div
-      className={cn('rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5', onSelect && 'press cursor-pointer text-left hover:bg-white/[0.06]', selected && 'border-white/20 bg-white/[0.07]')}
+      className={cn('rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5', onSelect && 'press cursor-pointer text-left hover:bg-white/[0.06]', selected && 'border-white/20 bg-white/[0.07]', comment.round_state === 'done' && 'opacity-60')}
       {...(onSelect ? { role: 'button', tabIndex: 0, 'aria-pressed': !!selected, onClick: () => onSelect(comment), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(comment) } } } : {})}
     >
       <div className="flex items-center gap-2 mb-1.5">
@@ -72,7 +74,8 @@ export function GuestCommentItem({ comment, onSelect, selected }: GuestCommentIt
             {String(Math.floor(comment.timecode_start % 60)).padStart(2, '0')}
           </span>
         )}
-        <span className="ml-auto text-2xs text-zinc-600">
+        {comment.round_state === 'done' && <span className="ml-auto inline-flex items-center gap-1 text-2xs font-medium text-zinc-400"><Check size={12} aria-hidden="true" />done</span>}
+        <span className={cn('text-2xs text-zinc-600', comment.round_state !== 'done' && 'ml-auto')}>
           {new Date(comment.created_at).toLocaleDateString()}
         </span>
       </div>

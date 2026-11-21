@@ -148,6 +148,9 @@ class FolderShareAssetItem(BaseModel):
     # Parts of a module request: role (hook/body/cta/...) and place among that role; None for everything else.
     role: Optional[str] = None
     order: Optional[int] = None
+    # Embed: this file's comments of the open round (no Send yet), and of closed rounds the agent has not acked yet.
+    open_notes: int = 0
+    sent_notes: int = 0
 
 
 class FolderShareSubfolder(BaseModel):

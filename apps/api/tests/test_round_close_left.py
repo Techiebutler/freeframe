@@ -103,3 +103,39 @@ def test_folder_assets_report_the_open_round_notes_not_the_comment_total(scene):
     done(e)                                                                  # Send closes the round: the comments stay, the open count is 0
     out = get()
     assert out["open_round_notes"] == 0 and out["assets"][0]["comment_count"] == 2
+
+
+def test_double_send_is_one_round_and_the_agent_gets_it_once(scene):
+    e = scene
+    comment(e, e.scene.asset)
+    done(e)
+    first = rounds(e)[0].closed_at
+    done(e)  # second click: nothing open, nothing changes
+    assert len(rounds(e)) == 1 and rounds(e)[0].closed_at == first
+    assert len(e.client.get("/agent/feedback", headers=e.scene.agent.headers).json()["rounds"]) == 1
+
+
+def test_a_closed_rounds_comments_never_reach_the_next_round(scene):
+    e = scene
+    comment(e, e.scene.asset, "First round", 1.0)
+    done(e)
+    comment(e, e.scene.asset, "Second round", 2.0)
+    done(e)
+    rs = e.client.get("/agent/feedback", headers=e.scene.agent.headers).json()["rounds"]
+    assert [[n["text"] for f in r["files"] for n in f["comments"]] for r in rs] == [["First round"], ["Second round"]]
+
+
+def test_comments_and_files_carry_open_sent_done_and_acked_ones_do_not_count_as_open(scene):
+    e = scene
+    tok = link(e, e.scene.req.folder_id, "comment")
+    assets = lambda: e.client.get(f"/share/{tok}/assets?page=1&per_page=50&embed=true").json()["assets"][0]
+    states = lambda: [c["round_state"] for c in e.client.get(f"/share/{tok}/comments?asset_id={e.scene.asset.id}&latest_only=true").json()]
+    comment(e, e.scene.asset, "One", 1.0)
+    assert states() == ["open"] and assets()["open_notes"] == 1
+    done(e)
+    assert states() == ["sent"] and (assets()["open_notes"], assets()["sent_notes"]) == (0, 1)
+    [rnd] = e.client.get("/agent/feedback", headers=e.scene.agent.headers).json()["rounds"]
+    assert e.client.post(f"/agent/feedback/{rnd['round_id']}/ack", headers=e.scene.agent.headers).status_code == 204
+    comment(e, e.scene.asset, "Two", 2.0)
+    assert states() == ["done", "open"]
+    assert (assets()["open_notes"], assets()["sent_notes"]) == (1, 0)
