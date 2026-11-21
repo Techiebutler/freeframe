@@ -139,3 +139,18 @@ def test_comments_and_files_carry_open_sent_done_and_acked_ones_do_not_count_as_
     comment(e, e.scene.asset, "Two", 2.0)
     assert states() == ["done", "open"]
     assert (assets()["open_notes"], assets()["sent_notes"]) == (1, 0)
+
+
+def test_a_sent_round_a_newer_version_answers_counts_as_done(scene):
+    """Rounds an agent answered with a new version but never acked (all of them before #219) are not "sent" again."""
+    from apps.api.models.asset import AssetVersion, ProcessingStatus
+    e = scene
+    tok = link(e, e.scene.req.folder_id, "comment")
+    assets = lambda: e.client.get(f"/share/{tok}/assets?page=1&per_page=50&embed=true").json()["assets"][0]
+    comment(e, e.scene.asset, "Old note", 1.0)
+    done(e)
+    assert assets()["sent_notes"] == 1
+    with e.Session() as db:
+        db.add(AssetVersion(asset_id=e.scene.asset.id, version_number=2, processing_status=ProcessingStatus("ready"), created_by=e.scene.req.created_by))
+        db.commit()
+    assert (assets()["open_notes"], assets()["sent_notes"]) == (0, 0)

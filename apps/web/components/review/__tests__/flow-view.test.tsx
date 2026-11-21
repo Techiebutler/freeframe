@@ -780,7 +780,7 @@ describe('FlowView embed: per-part approve, share link only when every part is a
 
   it('after a Send the segment says so and Approve is back', () => {
     embed({ parts: { approved: 1, total: 5 }, unsentFeedback: 0, sentFeedback: 3 })
-    expect(screen.getByTestId('sent-status')).toHaveTextContent('Sent · Claude is working on it')
+    expect(screen.getByTestId('sent-status')).toHaveTextContent('Sent · waiting for Claude')
     expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
     expect(screen.queryByTestId('send-first')).toBeNull()
   })

@@ -436,14 +436,22 @@ def notes_count(db: Session, req: Optional[UploadRequest]) -> int:
 
 def comment_states(db: Session, req: Optional[UploadRequest]) -> dict[str, tuple[uuid.UUID, str]]:
     """Where every human comment of the request stands: `open` (the open round, no Send yet), `sent` (a closed round the
-    agent has not acked) or `done` (an acked round). Rounds never overlap, so a comment sits in exactly one."""
+    agent has not acked) or `done` (an acked round, or a comment on a version a newer version already answers: an agent
+    that uploads without acking must not leave old notes "sent" forever). Rounds never overlap, so a comment sits in one."""
     if req is None:
         return {}
     out: dict[str, tuple[uuid.UUID, str]] = {}
+    latest: dict[uuid.UUID, Optional[uuid.UUID]] = {}
     for rnd in db.query(FeedbackRound).filter(FeedbackRound.request_id == req.id).order_by(FeedbackRound.opened_at).all():
         state = "open" if rnd.closed_at is None else "done" if rnd.acked_at is not None else "sent"
         for c in round_comments(db, rnd, req):
-            out[str(c.id)] = (c.asset_id, state)
+            if state == "sent":
+                if c.asset_id not in latest:
+                    v = db.query(AssetVersion.id).filter(AssetVersion.asset_id == c.asset_id, AssetVersion.deleted_at.is_(None)).order_by(AssetVersion.version_number.desc()).first()
+                    latest[c.asset_id] = v[0] if v else None
+                out[str(c.id)] = (c.asset_id, "sent" if latest[c.asset_id] in (None, c.version_id) else "done")
+            else:
+                out[str(c.id)] = (c.asset_id, state)
     return out
 
 

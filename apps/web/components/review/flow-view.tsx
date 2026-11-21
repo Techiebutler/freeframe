@@ -59,7 +59,7 @@ export interface FlowViewProps {
   parts?: { approved: number; total: number }
   /** Comments of every part that no Send has closed yet: while there are any, Send feedback is the primary action and Approve a quiet per-part one. */
   unsentFeedback?: number
-  /** Embed: this file's comments a Send closed that the agent has not acked yet ("Sent · Claude is working on it"). */
+  /** Embed: this file's comments a Send closed that the agent has not acked yet ("Sent · waiting for Claude": nothing proves an agent picked it up). */
   sentFeedback?: number
   /** Share links without approve permission: with no notes the right-hand button stays disabled. Default true. */
   canApprove?: boolean
@@ -705,7 +705,7 @@ export function FlowView(p: FlowViewProps) {
           {toast && <div role="status" className="flex items-center justify-between gap-2 rounded-lg bg-bg-secondary py-1 pl-3 pr-1"><p className="flex items-center gap-2 text-sm font-medium text-status-success"><Check size={16} aria-hidden="true" />Approved</p>{copyButton}{p.onUndoApprove && <button type="button" onClick={undo} className="press min-h-11 rounded-full px-3 text-sm font-semibold text-text-primary hover:bg-bg-hover">Undo ({toast.secs} s)</button>}</div>}
           {p.parts && p.parts.total > 1 && !delivery && <p role="status" data-testid="parts-progress" className="ep-progress"><span className="tabular-nums">{p.parts.approved} of {p.parts.total} approved</span></p>}
           {sendMode && !active && p.canApprove !== false && !p.approved && <p role="status" data-testid="send-first" className="ep-progress">Send or delete comments first</p>}
-          {!sendMode && (p.sentFeedback ?? 0) > 0 && <p role="status" data-testid="sent-status" className="ep-progress ep-sent"><Check size={14} aria-hidden="true" />Sent · Claude is working on it</p>}
+          {!sendMode && (p.sentFeedback ?? 0) > 0 && <p role="status" data-testid="sent-status" className="ep-progress ep-sent"><Check size={14} aria-hidden="true" />Sent · waiting for Claude</p>}
           {micHint && !active && <p role="status" className="ep-hint">{micHint}</p>}
           {typing && !active && notes.some(n => n.status !== 'recording') && (
             <ul className="ep-notes" aria-label="Your notes">
