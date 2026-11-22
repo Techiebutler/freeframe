@@ -21,6 +21,14 @@ from ..models.asset import Asset, AssetVersion, ProcessingStatus
 #: version be deleted on its own, and it has to mean the one people see.
 UNVIEWABLE_STATUSES = (ProcessingStatus.uploading, ProcessingStatus.failed)
 
+#: Its exact complement: a version in one of these ran. Its upload completed and
+#: it was handed to the transcoder, and its master is in storage, which nothing
+#: reclaims. It is the kind of version that keeps an asset alive. Not
+#: `uploading` (an open multipart upload, which a discard or the reaper throws
+#: away) and not `failed` (the reaper reclaims one whose master never assembled,
+#: so a failed version in the trash may have no file at all).
+KEPT_STATUSES = tuple(s for s in ProcessingStatus if s not in UNVIEWABLE_STATUSES)
+
 
 def next_version_number(db: Session, asset_id: uuid.UUID) -> int:
     """Take the next version number for an asset, and burn it.
