@@ -176,6 +176,36 @@ def _on_a_live_version(asset_id: uuid.UUID):
     )
 
 
+def _thread_starts_on_a_live_version(db: Session, comment: Comment) -> bool:
+    """Whether the thread `comment` sits in begins on a version that is not deleted.
+
+    The comment listings select a thread by its root's version (`_on_a_live_version`
+    on the top-level comments) and hang every reply under it by `parent_id` alone,
+    whatever version the reply itself carries. So a comment is listed exactly when
+    its root is on a live version, and a reply to it is only ever seen then. A
+    reply's own `version_id` does not tell: rows written before replies took their
+    parent's version can sit on v1 under a root on a deleted v2.
+
+    One recursive query up the `parent_id` chain; UNION, not UNION ALL, so a cycle
+    in bad data ends instead of looping.
+    """
+    chain = (
+        select(Comment.id, Comment.parent_id, Comment.version_id)
+        .where(Comment.id == comment.id)
+        .cte("thread_chain", recursive=True)
+    )
+    chain = chain.union(
+        select(Comment.id, Comment.parent_id, Comment.version_id)
+        .where(Comment.id == chain.c.parent_id)
+    )
+    root_version = select(chain.c.version_id).where(chain.c.parent_id.is_(None))
+    return db.query(AssetVersion.id).filter(
+        AssetVersion.id.in_(root_version),
+        AssetVersion.asset_id == comment.asset_id,
+        AssetVersion.deleted_at.is_(None),
+    ).first() is not None
+
+
 def _get_comment(db: Session, comment_id: uuid.UUID) -> Comment:
     comment = db.query(Comment).filter(Comment.id == comment_id, Comment.deleted_at.is_(None)).first()
     if not comment:
@@ -515,19 +545,31 @@ def create_comment(
     # alone with no asset filter, so a comment created here could be rendered
     # inside a thread on an asset the author cannot open. The weaker failure is
     # the same bug pointed at a deleted parent: a 201 for a reply no read path
-    # will ever return.
+    # will ever return. A parent on a version deleted on its own (#419), or in a
+    # thread that begins on one, is such a parent too, and reads as unknown here
+    # as it does in every comment listing.
+    #
+    # A reply takes its parent's version, as `reply_to_comment` and the share
+    # route do, whatever `version_id` says (which still has to be a live version
+    # of this asset). Taking `version_id` filed a reply on v1 under a parent on
+    # v2: deleting v2 hid the thread, and the reply then still passed a check on
+    # its own version, so it could be answered with mentions and notifications
+    # that no listing ever shows.
+    version_id = body.version_id
     if body.parent_id is not None:
         parent = db.query(Comment).filter(
             Comment.id == body.parent_id,
             Comment.asset_id == asset_id,
             Comment.deleted_at.is_(None),
+            _on_a_live_version(asset_id),
         ).first()
-        if not parent:
+        if not parent or not _thread_starts_on_a_live_version(db, parent):
             raise HTTPException(status_code=400, detail="parent_id does not belong to this asset")
+        version_id = parent.version_id
 
     comment = Comment(
         asset_id=asset_id,
-        version_id=body.version_id,
+        version_id=version_id,
         parent_id=body.parent_id,
         author_id=current_user.id,
         timecode_start=body.timecode_start,
@@ -584,10 +626,14 @@ def reply_to_comment(
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
+    # Not a comment on a version deleted on its own (#419), nor one in a thread
+    # that begins on one: no listing would ever return the reply, while its
+    # mentions and notifications still went out.
     parent = db.query(Comment).filter(
         Comment.id == comment_id, Comment.asset_id == asset_id, Comment.deleted_at.is_(None),
+        _on_a_live_version(asset_id),
     ).first()
-    if not parent:
+    if not parent or not _thread_starts_on_a_live_version(db, parent):
         raise HTTPException(status_code=404, detail="Parent comment not found")
 
     # These four were dropped on the floor before. The endpoint takes a full
@@ -1184,7 +1230,8 @@ def guest_comment(
     # unknown id hit the foreign key and answered 500, and a parent on another
     # asset or behind `internal` was accepted. Mirrors `create_comment` and
     # `reply_to_comment`, including the version: a reply belongs to the same
-    # version as what it answers.
+    # version as what it answers, so a parent on a version deleted on its own
+    # (#419), or in a thread that begins on one, is not one a guest can see.
     parent = None
     if body.parent_id:
         parent = db.query(Comment).filter(
@@ -1192,8 +1239,9 @@ def guest_comment(
             Comment.asset_id == asset.id,
             Comment.deleted_at.is_(None),
             Comment.visibility != "internal",
+            _on_a_live_version(asset.id),
         ).first()
-        if not parent:
+        if not parent or not _thread_starts_on_a_live_version(db, parent):
             raise HTTPException(status_code=400, detail="Parent comment not found on this asset")
 
     version_id = body.version_id

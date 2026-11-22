@@ -446,6 +446,155 @@ def test_the_comment_export_of_a_deleted_version_is_not_found(client, w):
     assert "A note on v1" in latest.text and "A note on v2" not in latest.text
 
 
+def _top_comment(db, version):
+    from apps.api.models.comment import Comment
+    return db.query(Comment).filter(
+        Comment.version_id == version.id, Comment.parent_id.is_(None)).one()
+
+
+def _what_a_reply_leaves(db, asset):
+    """Comments on the asset, mentions and notifications: what a reply writes."""
+    from apps.api.models.activity import Mention, Notification
+    from apps.api.models.comment import Comment
+    db.expire_all()
+    return (db.query(Comment).filter(Comment.asset_id == asset.id).count(),
+            db.query(Mention).count(),
+            db.query(Notification).count())
+
+
+def _reply_as_member(client, w, parent):
+    """`POST .../comments/{id}/replies`, an editor answering the owner's comment."""
+    return client.post(
+        f"/assets/{w.A.id}/comments/{parent.id}/replies",
+        json={"body": "see this", "version_id": str(w.v1.id),
+              "mention_user_ids": [str(w.viewer.id)]},
+        headers=_auth(w.editor))
+
+
+def _comment_with_a_parent(client, w, parent):
+    """`POST .../comments` with `parent_id`, on a live `version_id`."""
+    return client.post(
+        f"/assets/{w.A.id}/comments",
+        json={"body": "see this", "version_id": str(w.v1.id), "parent_id": str(parent.id),
+              "mention_user_ids": [str(w.viewer.id)]},
+        headers=_auth(w.editor))
+
+
+def _reply_as_guest(client, w, parent):
+    """`POST /share/{token}/comment` with `parent_id`, from nobody signed in."""
+    return client.post(
+        f"/share/{w.latest_only.token}/comment",
+        json={"body": f"see this @{w.viewer.email}", "parent_id": str(parent.id),
+              "guest_email": "guest@client.test", "guest_name": "Guest"})
+
+
+@pytest.mark.parametrize("reply, refusal", [
+    (_reply_as_member, (404, {"detail": "Parent comment not found"})),
+    (_comment_with_a_parent, (400, {"detail": "parent_id does not belong to this asset"})),
+    (_reply_as_guest, (400, {"detail": "Parent comment not found on this asset"})),
+], ids=["reply_to_comment", "create_comment", "guest_comment"])
+def test_a_comment_on_a_deleted_version_cannot_be_answered(client, db, w, reply, refusal):
+    """Each door that takes a parent refuses one on a deleted version, as it refuses
+    an unknown id, and writes nothing: no reply, no mention, no notification. The
+    reply would take the parent's version, so no listing would ever return it."""
+    on_v1, on_v2 = _top_comment(db, w.v1), _top_comment(db, w.v2)
+    assert _delete(client, w, w.v2).status_code == 200
+
+    # The same reply to a comment on a live version goes through and tells people:
+    # the viewer is mentioned and the owner, who wrote the parent, is notified.
+    before = _what_a_reply_leaves(db, w.A)
+    assert reply(client, w, on_v1).status_code == 201
+    comments, mentions, notifications = _what_a_reply_leaves(db, w.A)
+    assert (comments, mentions, notifications) == (before[0] + 1, before[1] + 1, before[2] + 2)
+
+    before = _what_a_reply_leaves(db, w.A)
+    r = reply(client, w, on_v2)
+
+    assert (r.status_code, r.json()) == refusal
+    assert _what_a_reply_leaves(db, w.A) == before
+
+    assert _restore(client, w, w.v2).status_code == 200
+    assert reply(client, w, on_v2).status_code == 201, "a restore makes it answerable again"
+
+
+@pytest.mark.parametrize("reply, refusal", [
+    (_reply_as_member, (404, {"detail": "Parent comment not found"})),
+    (_comment_with_a_parent, (400, {"detail": "parent_id does not belong to this asset"})),
+    (_reply_as_guest, (400, {"detail": "Parent comment not found on this asset"})),
+], ids=["reply_to_comment", "create_comment", "guest_comment"])
+def test_a_reply_on_a_live_version_in_a_thread_on_a_deleted_one_cannot_be_answered(
+        client, db, w, reply, refusal):
+    """R is on v1 but answers P on v2, a row `create_comment` used to write when a
+    reply carried its own `version_id`, and one an older database may still hold.
+    The listings select a thread by its root, so once v2 goes R is gone with P,
+    even though R's own version is live. Each door refuses it as unknown and
+    writes nothing: no reply, no mention, no notification."""
+    from apps.api.models.comment import Comment
+
+    p = _top_comment(db, w.v2)
+    r_row = Comment(asset_id=w.A.id, version_id=w.v1.id, parent_id=p.id, author_id=w.owner.id,
+                    body="an answer on v1 under v2's thread")
+    db.add(r_row); db.flush()
+
+    # While v2 is live, answering R goes through and tells people.
+    before = _what_a_reply_leaves(db, w.A)
+    assert reply(client, w, r_row).status_code == 201
+    assert _what_a_reply_leaves(db, w.A) == (before[0] + 1, before[1] + 1, before[2] + 2)
+
+    assert _delete(client, w, w.v2).status_code == 200
+    listed = [c["id"] for c in client.get(f"/assets/{w.A.id}/comments", headers=_auth(w.viewer)).json()]
+    assert str(p.id) not in listed and str(r_row.id) not in listed
+
+    before = _what_a_reply_leaves(db, w.A)
+    r = reply(client, w, r_row)
+
+    assert (r.status_code, r.json()) == refusal
+    assert _what_a_reply_leaves(db, w.A) == before
+
+
+@pytest.mark.parametrize("reply, refusal", [
+    (_reply_as_member, (404, {"detail": "Parent comment not found"})),
+    (_comment_with_a_parent, (400, {"detail": "parent_id does not belong to this asset"})),
+    (_reply_as_guest, (400, {"detail": "Parent comment not found on this asset"})),
+], ids=["reply_to_comment", "create_comment", "guest_comment"])
+def test_a_reply_into_a_parent_cycle_is_refused_rather_than_hanging(client, db, w, reply, refusal):
+    """Two comments naming each other as parent, as bad data can. The thread has no
+    root, so nothing lists it and it cannot be answered; and the walk up the chain
+    has to end on the cycle. The statement timeout turns a walk that never ends into
+    a failure here instead of a hung run."""
+    from sqlalchemy import text
+    from apps.api.models.comment import Comment
+
+    c1 = Comment(asset_id=w.A.id, version_id=w.v1.id, author_id=w.owner.id, body="c1")
+    db.add(c1); db.flush()
+    c2 = Comment(asset_id=w.A.id, version_id=w.v1.id, author_id=w.owner.id, body="c2", parent_id=c1.id)
+    db.add(c2); db.flush()
+    c1.parent_id = c2.id
+    db.flush()
+    db.execute(text("SET LOCAL statement_timeout = '5s'"))
+
+    before = _what_a_reply_leaves(db, w.A)
+    r = reply(client, w, c1)
+
+    assert (r.status_code, r.json()) == refusal
+    assert _what_a_reply_leaves(db, w.A) == before
+
+
+def test_a_reply_filed_through_create_comment_takes_its_parents_version(client, db, w):
+    """As `reply_to_comment` and the share route do: `version_id` still has to be a
+    live version of this asset, but the reply belongs to what it answers. So a
+    reply to P on v2 sent with v1 lands on v2, and leaves with it."""
+    from apps.api.models.comment import Comment
+
+    p = _top_comment(db, w.v2)
+    r = _comment_with_a_parent(client, w, p)
+
+    assert r.status_code == 201, r.text
+    assert r.json()["version_id"] == str(w.v2.id)
+    db.expire_all()
+    assert db.get(Comment, uuid.UUID(r.json()["id"])).version_id == w.v2.id
+
+
 def test_approvals_of_a_deleted_version_are_left_out_and_refused(client, w):
     viewer = _auth(w.viewer)
     assert _delete(client, w, w.v2).status_code == 200
