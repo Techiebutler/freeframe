@@ -311,7 +311,7 @@ describe('VersionSwitcher ⋯ menu (#419)', () => {
     expect(screen.getByRole('menuitem', { name: 'Actions for v1' })).not.toHaveAttribute('aria-disabled')
   })
 
-  it('says a failed version cannot be restored before deleting it', async () => {
+  it('says a failed version comes back only while its upload is stored', async () => {
     const v1 = makeVersion({ version_number: 1 })
     const v2 = makeVersion({ version_number: 2, processing_status: 'failed' })
     useReviewStore.getState().setCurrentVersion(v1)
@@ -321,7 +321,8 @@ describe('VersionSwitcher ⋯ menu (#419)', () => {
     await user().click(within(await openActions(2)).getByRole('menuitem', { name: 'Delete version' }))
 
     const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveTextContent('A version that failed cannot be restored, so this cannot be undone.')
+    expect(dialog).toHaveTextContent(
+      'A version that failed can be restored only while its upload is still in storage; if it is not, this cannot be undone.')
     expect(dialog).not.toHaveTextContent('where you can restore it')
   })
 

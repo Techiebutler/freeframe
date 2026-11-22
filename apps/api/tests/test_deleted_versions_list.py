@@ -2,11 +2,12 @@
 
 `GET /assets/{asset_id}/deleted-versions` answers editors and above with the
 versions `POST .../restore` would still take back: deleted on their own, ran
-(processing or ready), not yet purged. Guarded here against a real
-Postgres through the real app:
+(processing or ready) or failed with its master still in storage, not yet
+purged. Guarded here against a real Postgres through the real app:
   * only editors and owners get it; reviewers, viewers, outsiders get 403;
-  * a discarded upload, a failed version, a live version and another asset's
-    version never appear, and the list is newest first;
+  * a discarded upload, a failed version with nothing stored, a live version
+    and another asset's version never appear, and the list is newest first;
+  * a failed version is listed exactly when the restore takes it back;
   * each row says until when it can be restored, from the retention window;
   * no other read path hands a deleted version out, an `include_deleted` flag
     on the live version list or the share list included.
@@ -60,7 +61,8 @@ def test_nobody_below_editor_may_list_deleted_versions(client, w, role):
 
 def test_only_restorable_versions_of_this_asset_are_listed(client, db, w):
     """Processing and ready, deleted, of this asset. A discarded upload and a
-    failed version (the reaper soft-deletes those on its own) stay out."""
+    failed version with no master (the reaper soft-deletes those on its own)
+    stay out."""
     from apps.api.models.asset import AssetVersion, ProcessingStatus
 
     def row(asset, number, st):
@@ -78,6 +80,30 @@ def test_only_restorable_versions_of_this_asset_are_listed(client, db, w):
 
     assert [(x["id"], x["processing_status"]) for x in rows] == [(str(processing.id), "processing")], (
         "live v1/v2, the discard, the failed one and B's row stay out")
+
+
+@pytest.mark.parametrize("stored", [True, False], ids=["master_stored", "nothing_stored"])
+def test_a_failed_version_is_listed_exactly_when_the_restore_takes_it(client, db, w, monkeypatch, stored):
+    """One rule for both: a failed version comes back, and so is offered, only
+    while storage holds its master. One HEAD for the failed row, none for the
+    processing one."""
+    from apps.api.models.asset import AssetVersion, ProcessingStatus
+    from apps.api.tests.test_delete_a_version import _master_in_storage
+
+    w.v2.processing_status = ProcessingStatus.failed
+    db.flush()
+    assert _delete(client, w, w.v2).status_code == 200
+    processing = AssetVersion(asset_id=w.A.id, version_number=3, created_by=w.owner.id,
+                              processing_status=ProcessingStatus.processing,
+                              deleted_at=datetime.now(timezone.utc))
+    db.add(processing); db.flush()
+    asked = _master_in_storage(monkeypatch, stored)
+
+    listed = [x["id"] for x in _listed(client, w).json()]
+
+    assert asked == [f"raw/{w.A.id}/{w.v2.id}/original.mov"]
+    assert listed == ([str(processing.id), str(w.v2.id)] if stored else [str(processing.id)])
+    assert _restore(client, w, w.v2).status_code == (200 if stored else 409)
 
 
 def test_the_list_is_newest_first(client, db, w):

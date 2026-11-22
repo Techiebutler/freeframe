@@ -7,8 +7,9 @@ Postgres through the real app:
   * the delete is an editor's, answers with the asset's latest version
     afterwards, and refuses (409) an upload still in flight and the asset's
     last version that is ready or processing;
-  * the restore brings back a version that landed, and nothing else: not one
-    that was never deleted, not a discarded upload, not a purged one;
+  * the restore brings back a version that ran, and a failed one only while
+    its master is in storage; nothing else: not one that was never deleted,
+    not a discarded upload, not a purged one;
   * a deleted version, its comments and its approvals leave the version,
     comment and approval listings, share links included: the version list,
     the asset's latest, share links (latest, and a version asked for by id),
@@ -331,18 +332,50 @@ def test_a_processing_version_comes_back(client, db, w):
     assert db.get(type(w.v2), w.v2.id).deleted_at is None
 
 
-def test_a_failed_version_is_refused_with_a_409(client, db, w):
-    """It can be deleted, but not brought back: the reaper soft-deletes failed
-    uploads that never assembled a file, and those must not come back as versions."""
+def _master_in_storage(monkeypatch, stored):
+    """Answer `_holds_a_master`'s HEAD on the raw key, and record what it asked."""
+    asked = []
+
+    def head(key):
+        asked.append(key)
+        return 2000 if stored else None
+
+    monkeypatch.setattr(cleanup, "head_object_size", head)
+    return asked
+
+
+def test_a_failed_version_whose_master_is_stored_comes_back(client, db, w, monkeypatch):
+    """A transcode that failed on every attempt leaves the uploaded master, which
+    can be someone's only copy of the original, so it is restorable (#419)."""
     from apps.api.models.asset import ProcessingStatus
 
     w.v2.processing_status = ProcessingStatus.failed
     db.flush()
     assert _delete(client, w, w.v2).status_code == 200
+    asked = _master_in_storage(monkeypatch, stored=True)
 
     r = _restore(client, w, w.v2)
 
-    assert (r.status_code, r.json()) == (409, {"detail": "A version that failed cannot be restored."})
+    assert r.status_code == 200, r.text
+    assert asked == [f"raw/{w.A.id}/{w.v2.id}/original.mov"]
+    db.expire_all()
+    assert db.get(type(w.v2), w.v2.id).deleted_at is None
+
+
+def test_a_failed_version_with_no_master_stored_is_refused_with_a_409(client, db, w, monkeypatch):
+    """The reaper soft-deletes a failed upload whose master never assembled, and
+    that empty row must not come back as a version."""
+    from apps.api.models.asset import ProcessingStatus
+
+    w.v2.processing_status = ProcessingStatus.failed
+    db.flush()
+    assert _delete(client, w, w.v2).status_code == 200
+    _master_in_storage(monkeypatch, stored=False)
+
+    r = _restore(client, w, w.v2)
+
+    assert (r.status_code, r.json()) == (409, {"detail": (
+        "This version failed and its upload is no longer in storage, so it cannot be restored.")})
     db.expire_all()
     assert db.get(type(w.v2), w.v2.id).deleted_at is not None
 

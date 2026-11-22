@@ -440,7 +440,7 @@ function ActionsSubmenu({ version, children }: { version: number; children: Reac
 function deleteDescription(target: AssetVersion | null, sorted: AssetVersion[]): string {
   if (!target) return ''
   const base = target.processing_status === 'failed'
-    ? `This deletes v${target.version_number}, with its comments and approvals. A version that failed cannot be restored, so this cannot be undone. Its number is not used again.`
+    ? `This moves v${target.version_number} to the trash, with its comments and approvals. A version that failed can be restored only while its upload is still in storage; if it is not, this cannot be undone. Its number is not used again.`
     : `This moves v${target.version_number} to the trash, with its comments and approvals. It stays in this list, where you can restore it, until it is removed for good. Its number is not used again.`
   const newest = sorted[sorted.length - 1]
   if (newest?.id !== target.id) return base

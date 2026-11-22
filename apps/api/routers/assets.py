@@ -29,6 +29,7 @@ from ..schemas.upload import (
     ALLOWED_MIME_TYPES, mime_to_asset_type,
 )
 from ..services.storage import choose_part_size, upload_guard_error
+from ..services.restore_rules import RESTORABLE_STATUSES, version_comes_back
 from ..services.versions import KEPT_STATUSES, UNVIEWABLE_STATUSES, next_version_number
 from ..services.s3_service import create_multipart_upload
 from .upload import commit_initiated_upload, storage_initiate_error
@@ -417,12 +418,14 @@ def restore_asset_version(
 ):
     """Bring back a version deleted on its own, until the retention purge takes it.
 
-    Only a version that ran (processing or ready) comes back. An upload that was
-    discarded or reclaimed in flight has no bytes left to return to, and is not
-    found. A failed version is refused with a 409: the reaper soft-deletes a
-    failed upload whose master never assembled, so one in the trash may be an
-    empty row nobody deleted. A version of an asset in the trash comes back
-    with the asset, not here.
+    The rule is the trash's (`restore_rules.version_comes_back`): a version that
+    ran (processing or ready) comes back, and a failed one only while storage
+    still holds its master, since a transcode failure can be someone's only copy
+    of the original. A failed one without it is refused with a 409: the reaper
+    soft-deletes a failed upload whose master never assembled, so it may be an
+    empty row nobody deleted. An upload that was discarded or reclaimed in
+    flight has no bytes left to return to, and is not found. A version of an
+    asset in the trash comes back with the asset, not here.
     """
     _lock_live_asset(db, asset_id, current_user)
     version = db.query(AssetVersion).filter(
@@ -433,8 +436,11 @@ def restore_asset_version(
     ).first()
     if not version:
         raise HTTPException(status_code=404, detail="Deleted version not found")
-    if version.processing_status not in KEPT_STATUSES:
-        raise HTTPException(status_code=409, detail="A version that failed cannot be restored.")
+    if not version_comes_back(db, version):
+        raise HTTPException(
+            status_code=409,
+            detail="This version failed and its upload is no longer in storage, so it cannot be restored.",
+        )
     # Guarded on the row still being in the trash, as restore_asset is: the
     # retention purge may have locked and hard-deleted it since it was read.
     restored = db.query(AssetVersion).filter(
@@ -490,9 +496,11 @@ def list_deleted_versions(
     Its own route rather than a flag on `GET .../versions`: that list feeds the
     player, compare and every viewer, and must never carry a deleted version.
     This one answers only the role that may restore (editor and above), and
-    lists only what `restore_asset_version` would take back: a version that
-    ran (processing or ready), not yet purged. A discarded upload or a failed
-    version, which the reaper also soft-deletes on its own, never appears.
+    lists only what `restore_asset_version` would take back, not yet purged,
+    under the same rule (`restore_rules.version_comes_back`): a version that ran
+    (processing or ready), and a failed one while storage still holds its
+    master, which is one HEAD per failed row. A discarded upload, or a failed
+    upload the reaper soft-deleted with nothing stored, never appears.
     """
     from ..tasks.cleanup_tasks import _retention_days
 
@@ -504,11 +512,13 @@ def list_deleted_versions(
     versions = db.query(AssetVersion).filter(
         AssetVersion.asset_id == asset_id,
         AssetVersion.deleted_at.isnot(None),
-        AssetVersion.processing_status.in_(KEPT_STATUSES),
+        AssetVersion.processing_status.in_(RESTORABLE_STATUSES),
     ).order_by(AssetVersion.version_number.desc()).all()
     days = _retention_days()
     result = []
     for v in versions:
+        if not version_comes_back(db, v):
+            continue
         item = DeletedVersionResponse.model_validate(v)
         if days > 0:
             item.restorable_until = v.deleted_at + timedelta(days=days)
