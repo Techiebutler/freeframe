@@ -338,9 +338,10 @@ soft-deleted rows and reclaims their S3 objects after `SOFT_DELETE_RETENTION_DAY
 (`POST /admin/trash/purge`).
 
 **Deleting one version** (`DELETE /assets/{asset_id}/versions/{version_id}`, editor role) is
-such a soft delete. The version, its comments and its approvals leave every listing, share links
-included, and `POST /assets/{asset_id}/versions/{version_id}/restore` brings them back until the
-retention purge hard-deletes them. Only a version that ran (processing or ready) comes back: the
+such a soft delete. The version, its comments and its approvals leave the version, comment and
+approval listings, share links included; a notification keeps quoting such a comment.
+`POST /assets/{asset_id}/versions/{version_id}/restore` brings them back until the retention purge
+hard-deletes them. Only a version that ran (processing or ready) comes back: the
 reaper soft-deletes failed uploads without a file on its own, so a failed version in the trash may
 be an empty row nobody deleted. `GET /assets/{asset_id}/deleted-versions` lists, for editors and
 above only, the deleted versions that can still be restored and until when (`deleted_at` plus

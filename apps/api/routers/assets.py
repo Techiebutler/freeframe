@@ -362,9 +362,10 @@ def delete_asset_version(
     Refused for the asset's last version that is ready or processing: the
     asset is deleted instead, never as a side effect of deleting a version.
 
-    Until the retention purge it keeps its media, comments and approvals, which
-    every read path leaves out with it; the purge then reclaims them as it does
-    for any soft-deleted version. Its number stays burned either way (see
+    Until the retention purge it keeps its media, comments and approvals. The
+    version, comment and approval listings leave them out with it, share links
+    included, while a notification keeps quoting such a comment. The purge then
+    reclaims them as it does for any soft-deleted version. Its number stays burned either way (see
     `next_version_number`).
 
     Answers with the asset's latest version afterwards, because deleting the

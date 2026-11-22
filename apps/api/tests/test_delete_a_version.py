@@ -9,10 +9,12 @@ Postgres through the real app:
     last version that is ready or processing;
   * the restore brings back a version that landed, and nothing else: not one
     that was never deleted, not a discarded upload, not a purged one;
-  * a deleted version leaves every read path: the version list, the asset's
-    latest, share links (latest, and a version asked for by id), comments,
-    the comment export, approvals and its project's storage figure; a
-    restore brings it all back;
+  * a deleted version, its comments and its approvals leave the version,
+    comment and approval listings, share links included: the version list,
+    the asset's latest, share links (latest, and a version asked for by id),
+    comments, the comment export, approvals, and its project's storage figure
+    with them; a restore brings it all back. A notification keeps quoting
+    such a comment, which nothing here changes;
   * two deletes racing on an asset's last two versions cannot both succeed.
 """
 import threading
@@ -414,7 +416,7 @@ def _bodies(rows):
     return sorted(c["body"] for c in rows)
 
 
-def test_comments_on_a_deleted_version_leave_every_listing_and_come_back(client, w):
+def test_comments_on_a_deleted_version_leave_the_comment_listings_and_come_back(client, w):
     viewer = _auth(w.viewer)
     assert _bodies(client.get(f"/assets/{w.A.id}/comments", headers=viewer).json()) == [
         "A note on v1", "A note on v2"]
