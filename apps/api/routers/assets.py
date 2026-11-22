@@ -30,7 +30,7 @@ from ..schemas.upload import (
 )
 from ..services.storage import choose_part_size, upload_guard_error
 from ..services.restore_rules import RESTORABLE_STATUSES, version_comes_back
-from ..services.versions import KEPT_STATUSES, UNVIEWABLE_STATUSES, next_version_number
+from ..services.versions import UNVIEWABLE_STATUSES, next_version_number
 from ..services.s3_service import create_multipart_upload
 from .upload import commit_initiated_upload, storage_initiate_error
 
@@ -360,8 +360,9 @@ def delete_asset_version(
 ):
     """Soft-delete one version (#419); `POST .../restore` brings it back.
 
-    Refused for the asset's last version that is ready or processing: the
-    asset is deleted instead, never as a side effect of deleting a version.
+    Refused unless another version of the asset is ready: the asset is
+    deleted instead, never as a side effect of deleting a version, and its
+    only playable cut never goes while the next one is still transcoding.
 
     Until the retention purge it keeps its media, comments and approvals. The
     version, comment and approval listings leave them out with it, share links
@@ -386,21 +387,27 @@ def delete_asset_version(
             status_code=409,
             detail="This version is still uploading. Discard the upload instead.",
         )
-    # The version that stays has to be one whose master is known to be stored.
-    # Neither an upload in flight nor a failed version is: the reaper reclaims
-    # both (a failed one when storage holds no master for it), and with them the
-    # asset (`_strip_asset_with_no_versions`), which is the accident this
-    # refusal exists to prevent.
-    other_kept = db.query(AssetVersion.id).filter(
+    # The version that stays has to be a ready one: what this delete must not
+    # take is the asset's only playable cut. Not an upload in flight nor a failed
+    # version, which the reaper reclaims (a failed one when storage holds no
+    # master for it), and with them the asset (`_strip_asset_with_no_versions`).
+    # Not a processing one either: until it finishes, share streams answer 404
+    # and `/stream` 409, and if it then fails, the asset's only live version is
+    # `failed` and leaves the grid while this one's retention clock runs.
+    other_statuses = {status for (status,) in db.query(AssetVersion.processing_status).filter(
         AssetVersion.asset_id == asset_id,
         AssetVersion.id != version.id,
         AssetVersion.deleted_at.is_(None),
-        AssetVersion.processing_status.in_(KEPT_STATUSES),
-    ).first()
-    if other_kept is None:
+    ).all()}
+    if ProcessingStatus.ready not in other_statuses:
         raise HTTPException(
             status_code=409,
-            detail="No other version of this asset is ready or processing. Delete the asset instead.",
+            detail=(
+                "No other version of this asset is ready yet. Wait for its transcode to finish, "
+                "or delete the asset instead."
+                if ProcessingStatus.processing in other_statuses
+                else "No other version of this asset is ready. Delete the asset instead."
+            ),
         )
     version.deleted_at = datetime.now(timezone.utc)
     db.flush()

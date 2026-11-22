@@ -60,18 +60,18 @@ export function restorableFor(version: DeletedAssetVersion, now: number = Date.n
  * Why the shown version cannot be deleted, or null when it can. Mirrors the
  * server's refusals, so the menu says so instead of offering a 409: an upload
  * in flight is discarded from the uploads panel, and the asset has to keep a
- * version that is ready or processing (an upload or a failed version can be
- * reclaimed, and the asset with it).
+ * version that is ready. An upload or a failed version can be reclaimed, and
+ * the asset with it; a processing one does not play yet and can still fail.
  */
 export function deleteVersionBlocker(version: AssetVersion, versions: AssetVersion[]): string | null {
   if (version.processing_status === 'uploading') {
     return 'Still uploading. Discard it in the uploads panel.'
   }
   const others = versions.filter((v) => v.id !== version.id)
-  const othersKept = others.some(
-    (v) => v.processing_status === 'ready' || v.processing_status === 'processing',
-  )
-  if (othersKept) return null
+  if (others.some((v) => v.processing_status === 'ready')) return null
+  if (others.some((v) => v.processing_status === 'processing')) {
+    return 'Wait until another version has finished processing.'
+  }
   // Something else is there, but nothing that plays: a failed version or an
   // upload in flight, either of which the reaper can take with the asset.
   return others.length > 0 ? 'Asset needs at least 1 playable version.' : 'Asset needs at least 1 version.'

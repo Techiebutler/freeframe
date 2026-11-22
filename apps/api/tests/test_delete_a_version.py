@@ -5,8 +5,8 @@
 it as it does any soft-deleted version. Guarded here, each against a real
 Postgres through the real app:
   * the delete is an editor's, answers with the asset's latest version
-    afterwards, and refuses (409) an upload still in flight and the asset's
-    last version that is ready or processing;
+    afterwards, and refuses (409) an upload still in flight and a version
+    when no other version of the asset is ready;
   * the restore brings back a version that ran, and a failed one only while
     its master is in storage; nothing else: not one that was never deleted,
     not a discarded upload, not a purged one;
@@ -184,7 +184,7 @@ def test_the_only_version_is_refused_with_a_pointer_to_deleting_the_asset(client
 
     assert r.status_code == 409, r.text
     assert r.json()["detail"] == (
-        "No other version of this asset is ready or processing. Delete the asset instead.")
+        "No other version of this asset is ready. Delete the asset instead.")
     db.expire_all()
     assert db.get(type(w.b1), w.b1.id).deleted_at is None
     assert db.get(type(w.B), w.B.id).deleted_at is None
@@ -226,7 +226,9 @@ def test_a_failed_version_does_not_count_as_the_version_that_stays(client, db, w
     assert "Delete the asset instead" in r.json()["detail"]
 
 
-def test_a_processing_version_does_count_as_the_version_that_stays(client, db, w):
+def test_a_processing_version_does_not_count_as_the_version_that_stays(client, db, w):
+    """v1 is the only cut that plays while v2 transcodes, and v2 can still fail,
+    so the delete waits for it."""
     from apps.api.models.asset import ProcessingStatus
 
     w.v2.processing_status = ProcessingStatus.processing
@@ -234,8 +236,27 @@ def test_a_processing_version_does_count_as_the_version_that_stays(client, db, w
 
     r = _delete(client, w, w.v1)
 
+    assert (r.status_code, r.json()) == (409, {"detail": (
+        "No other version of this asset is ready yet. Wait for its transcode to finish, "
+        "or delete the asset instead.")})
+    db.expire_all()
+    assert db.get(type(w.v1), w.v1.id).deleted_at is None
+
+    w.v2.processing_status = ProcessingStatus.ready
+    db.flush()
+    assert _delete(client, w, w.v1).status_code == 200, "once v2 is ready, v1 can go"
+
+
+def test_a_processing_version_can_itself_be_deleted_beside_a_ready_one(client, db, w):
+    from apps.api.models.asset import ProcessingStatus
+
+    w.v2.processing_status = ProcessingStatus.processing
+    db.flush()
+
+    r = _delete(client, w, w.v2)
+
     assert r.status_code == 200, r.text
-    assert r.json()["latest_version"]["id"] == str(w.v2.id)
+    assert r.json()["latest_version"]["id"] == str(w.v1.id)
 
 
 def test_a_failed_version_can_itself_be_deleted(client, db, w):

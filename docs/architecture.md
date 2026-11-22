@@ -347,9 +347,10 @@ the reaper): a transcode failure can be someone's only copy of the original, whi
 soft-deletes failed uploads without a file on its own, so such a row may be empty. The rule is the
 admin trash's too (`services/restore_rules.py`). `GET /assets/{asset_id}/deleted-versions` lists,
 for editors and above only, exactly the deleted versions that can still be restored and until when
-(`deleted_at` plus `SOFT_DELETE_RETENTION_DAYS`). A version cannot be deleted this way when no other version of the
-asset is ready or processing (delete the asset instead), and neither can an upload in flight
-(discard it).
+(`deleted_at` plus `SOFT_DELETE_RETENTION_DAYS`). A version cannot be deleted this way when no
+other version of the asset is ready (delete the asset instead, or wait for a transcode to finish: a
+version still processing does not play yet and can still fail), and neither can an upload in
+flight (discard it).
 A deleted version's bytes stay in the bucket until the purge reclaims them, while its project's
 own storage figure stops counting it at once.
 Version numbers come from a per-asset counter (`assets.last_version_number`), not from the

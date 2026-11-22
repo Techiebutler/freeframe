@@ -586,18 +586,24 @@ describe('deleteVersionBlocker', () => {
   const v = (n: number, processing_status: AssetVersion['processing_status'] = 'ready') =>
     makeVersion({ version_number: n, processing_status })
 
-  it('allows a version beside another that is ready or processing', () => {
-    for (const other of ['ready', 'processing'] as const) {
-      expect(deleteVersionBlocker(v(1), [v(1), v(2, other)])).toBeNull()
-    }
+  it('allows a version beside another that is ready', () => {
+    expect(deleteVersionBlocker(v(1), [v(1), v(2)])).toBeNull()
     expect(deleteVersionBlocker(v(2, 'failed'), [v(1), v(2, 'failed')])).toBeNull()
+    expect(deleteVersionBlocker(v(2, 'processing'), [v(1), v(2, 'processing')])).toBeNull()
   })
 
-  it('refuses the last version that is ready or processing, honestly worded', () => {
+  it('refuses the last ready version, honestly worded', () => {
     expect(deleteVersionBlocker(v(1), [v(1)])).toBe('Asset needs at least 1 version.')
     for (const other of ['uploading', 'failed'] as const) {
       expect(deleteVersionBlocker(v(1), [v(1), v(2, other)])).toBe('Asset needs at least 1 playable version.')
     }
+  })
+
+  it('holds the last ready version back while another is still processing', () => {
+    expect(deleteVersionBlocker(v(1), [v(1), v(2, 'processing')])).toBe(
+      'Wait until another version has finished processing.')
+    expect(deleteVersionBlocker(v(1), [v(1), v(2, 'processing'), v(3, 'failed')])).toBe(
+      'Wait until another version has finished processing.')
   })
 
   it('refuses an upload in flight and points at discarding it', () => {
