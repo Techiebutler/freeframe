@@ -326,6 +326,61 @@ describe('VersionSwitcher ⋯ menu (#419)', () => {
     expect(dialog).not.toHaveTextContent('where you can restore it')
   })
 
+  describe('says when share links move, keyed on the newest ready version', () => {
+    async function dialogFor(versions: AssetVersion[], target: number) {
+      useReviewStore.getState().setCurrentVersion(versions[0])
+      render(<VersionSwitcher versions={versions} canDelete />)
+      await openMenu()
+      await user().click(within(await openActions(target)).getByRole('menuitem', { name: 'Delete version' }))
+      return screen.findByRole('dialog')
+    }
+
+    it('names the move when the newest ready version goes past a failed newer one', async () => {
+      const dialog = await dialogFor([
+        makeVersion({ version_number: 1 }),
+        makeVersion({ version_number: 2 }),
+        makeVersion({ version_number: 3, processing_status: 'failed' }),
+      ], 2)
+      expect(dialog).toHaveTextContent('v1 becomes the latest version, also on share links that show the latest.')
+    })
+
+    it('names the move past a newer upload in flight, which the latest never counts', async () => {
+      const dialog = await dialogFor([
+        makeVersion({ version_number: 1 }),
+        makeVersion({ version_number: 2 }),
+        makeVersion({ version_number: 3, processing_status: 'uploading' }),
+      ], 2)
+      expect(dialog).toHaveTextContent('v1 becomes the latest version, also on share links that show the latest.')
+    })
+
+    it('names only the share links when a newer version is still processing', async () => {
+      const dialog = await dialogFor([
+        makeVersion({ version_number: 1 }),
+        makeVersion({ version_number: 2 }),
+        makeVersion({ version_number: 3, processing_status: 'processing' }),
+      ], 2)
+      expect(dialog).toHaveTextContent('Share links that show the latest version move to v1.')
+      expect(dialog).not.toHaveTextContent('becomes the latest version')
+    })
+
+    it('says nothing about share links for a failed newest version beside a ready one', async () => {
+      const dialog = await dialogFor([
+        makeVersion({ version_number: 2 }),
+        makeVersion({ version_number: 3, processing_status: 'failed' }),
+      ], 3)
+      expect(dialog).not.toHaveTextContent(/share links/i)
+      expect(dialog).not.toHaveTextContent('becomes the latest version')
+    })
+
+    it('says nothing about share links for a version that is not the newest ready one', async () => {
+      const dialog = await dialogFor([
+        makeVersion({ version_number: 1 }),
+        makeVersion({ version_number: 2 }),
+      ], 1)
+      expect(dialog).not.toHaveTextContent(/share links/i)
+    })
+  })
+
   it('asks before deleting, and sends nothing when cancelled', async () => {
     const v1 = makeVersion({ version_number: 1 })
     const v2 = makeVersion({ version_number: 2 })

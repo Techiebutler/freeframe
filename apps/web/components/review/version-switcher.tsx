@@ -442,9 +442,18 @@ function deleteDescription(target: AssetVersion | null, sorted: AssetVersion[]):
   const base = target.processing_status === 'failed'
     ? `This moves v${target.version_number} to the trash, with its comments and approvals. A version that failed can be restored only while its upload is still in storage; if it is not, this cannot be undone. Its number is not used again.`
     : `This moves v${target.version_number} to the trash, with its comments and approvals. It stays in this list, where you can restore it, until it is removed for good. Its number is not used again.`
-  const newest = sorted[sorted.length - 1]
-  if (newest?.id !== target.id) return base
-  const previous = [...sorted].reverse().find((v) => v.id !== target.id && v.processing_status === 'ready')
-  if (!previous) return base
-  return `${base} v${previous.version_number} becomes the latest version, also on share links that show the latest.`
+  // Share links that show the latest follow the newest *ready* version, so they
+  // move only when the target is that version and another ready one is left.
+  // The app's latest also counts a processing version (`_display_version`), so
+  // the two only move together when nothing newer than the next ready one plays.
+  const newestFirst = [...sorted].reverse()
+  const isReady = (v: AssetVersion) => v.processing_status === 'ready'
+  const isShowable = (v: AssetVersion) => isReady(v) || v.processing_status === 'processing'
+  if (newestFirst.find(isReady)?.id !== target.id) return base
+  const nextShared = newestFirst.find((v) => v.id !== target.id && isReady(v))
+  if (!nextShared) return base
+  const nextLatest = newestFirst.find((v) => v.id !== target.id && isShowable(v))
+  return nextLatest?.id === nextShared.id
+    ? `${base} v${nextShared.version_number} becomes the latest version, also on share links that show the latest.`
+    : `${base} Share links that show the latest version move to v${nextShared.version_number}.`
 }
