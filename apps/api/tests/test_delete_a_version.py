@@ -470,6 +470,15 @@ def _bodies(rows):
     return sorted(c["body"] for c in rows)
 
 
+@pytest.mark.parametrize("route", ["stream", "downloads"])
+def test_a_member_cannot_stream_or_download_a_deleted_version_by_id(client, w, route):
+    assert _delete(client, w, w.v2).status_code == 200
+
+    r = client.get(f"/assets/{w.A.id}/{route}?version_id={w.v2.id}", headers=_auth(w.viewer))
+
+    assert (r.status_code, r.json()) == (404, {"detail": "No version found"})
+
+
 def test_comments_on_a_deleted_version_leave_the_comment_listings_and_come_back(client, w):
     viewer = _auth(w.viewer)
     assert _bodies(client.get(f"/assets/{w.A.id}/comments", headers=viewer).json()) == [
