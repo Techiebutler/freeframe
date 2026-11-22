@@ -11,8 +11,8 @@ Postgres through the real app:
     that was never deleted, not a discarded upload, not a purged one;
   * a deleted version leaves every read path: the version list, the asset's
     latest, share links (latest, and a version asked for by id), comments,
-    the comment export, approvals and the storage count; a restore brings it
-    all back;
+    the comment export, approvals and its project's storage figure; a
+    restore brings it all back;
   * two deletes racing on an asset's last two versions cannot both succeed.
 """
 import threading
@@ -465,14 +465,19 @@ def test_approving_a_version_of_another_asset_is_refused(client, w):
     assert r.status_code == 404, r.text
 
 
-def test_the_storage_count_leaves_out_a_deleted_version_until_restored(client, db, w):
-    from apps.api.services.storage import instance_storage_used_bytes
+def test_the_project_storage_figure_leaves_out_a_deleted_version_until_restored(client, db, w):
+    """The project's own figure drops at once. The instance figure, which the cap
+    is enforced against, keeps counting the version, whose bytes stay in the
+    bucket until the purge (#599)."""
+    from apps.api.services.storage import instance_storage_used_bytes, project_storage_used_bytes
 
-    before = instance_storage_used_bytes(db)
+    before = project_storage_used_bytes(db, w.project.id)
+    instance_before = instance_storage_used_bytes(db)
     assert _delete(client, w, w.v2).status_code == 200
-    assert instance_storage_used_bytes(db) == before - 2000
+    assert project_storage_used_bytes(db, w.project.id) == before - 2000
+    assert instance_storage_used_bytes(db) == instance_before
     assert _restore(client, w, w.v2).status_code == 200
-    assert instance_storage_used_bytes(db) == before
+    assert project_storage_used_bytes(db, w.project.id) == before
 
 
 # ── two deletes at once ──────────────────────────────────────────────────────

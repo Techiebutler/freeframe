@@ -347,8 +347,8 @@ above only, the deleted versions that can still be restored and until when (`del
 `SOFT_DELETE_RETENTION_DAYS`). A version cannot be deleted this way when no other version of the
 asset is ready or processing (delete the asset instead), and neither can an upload in flight
 (discard it).
-The storage cap stops counting a deleted version at once, but its bytes stay in the bucket until
-the purge, so the bucket can hold more than the cap shows for up to `SOFT_DELETE_RETENTION_DAYS`.
+A deleted version's bytes stay in the bucket until the purge reclaims them, while its project's
+own storage figure stops counting it at once.
 Version numbers come from a per-asset counter (`assets.last_version_number`), not from the
 surviving rows, so a purged version's number is never handed out again: "v2" in a comment export
 or a share URL names one cut for the life of the asset.
