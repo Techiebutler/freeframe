@@ -341,10 +341,11 @@ soft-deleted rows and reclaims their S3 objects after `SOFT_DELETE_RETENTION_DAY
 such a soft delete. The version, its comments and its approvals leave the version, comment and
 approval listings, share links included; a notification keeps quoting such a comment.
 `POST /assets/{asset_id}/versions/{version_id}/restore` brings them back until the retention purge
-hard-deletes them. A version that ran (processing or ready) comes back, and a failed one only while
-storage still holds its master (one `HEAD` on the raw key, the check `_holds_a_master` draws for
-the reaper): a transcode failure can be someone's only copy of the original, while the reaper
-soft-deletes failed uploads without a file on its own, so such a row may be empty. The rule is the
+hard-deletes them, or an admin deletes the version permanently from the trash before then. A
+version that ran (processing or ready) comes back, and a failed one only while storage still holds
+its master (one `HEAD` on the raw key, the check `_holds_a_master` draws for the reaper): a
+transcode failure can be someone's only copy of the original, while the reaper soft-deletes failed
+uploads without a file on its own, so such a row may be empty. The rule is the
 admin trash's too (`services/restore_rules.py`). `GET /assets/{asset_id}/deleted-versions` lists,
 for editors and above only, exactly the deleted versions that can still be restored and until when
 (`deleted_at` plus `SOFT_DELETE_RETENTION_DAYS`). A version cannot be deleted this way when no

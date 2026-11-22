@@ -364,10 +364,11 @@ def delete_asset_version(
     deleted instead, never as a side effect of deleting a version, and its
     only playable cut never goes while the next one is still transcoding.
 
-    Until the retention purge it keeps its media, comments and approvals. The
-    version, comment and approval listings leave them out with it, share links
-    included, while a notification keeps quoting such a comment. The purge then
-    reclaims them as it does for any soft-deleted version. Its number stays burned either way (see
+    Until the retention purge, or an admin's permanent delete from the trash, it
+    keeps its media, comments and approvals. The version, comment and approval
+    listings leave them out with it, share links included, while a notification
+    keeps quoting such a comment. The purge then reclaims them as it does for
+    any soft-deleted version. Its number stays burned either way (see
     `next_version_number`).
 
     Answers with the asset's latest version afterwards, because deleting the

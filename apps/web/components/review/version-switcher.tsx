@@ -441,7 +441,7 @@ function deleteDescription(target: AssetVersion | null, sorted: AssetVersion[]):
   if (!target) return ''
   const base = target.processing_status === 'failed'
     ? `This moves v${target.version_number} to the trash, with its comments and approvals. A version that failed can be restored only while its upload is still in storage; if it is not, this cannot be undone. Its number is not used again.`
-    : `This moves v${target.version_number} to the trash, with its comments and approvals. It stays in this list, where you can restore it, until it is removed for good. Its number is not used again.`
+    : `This moves v${target.version_number} to the trash, with its comments and approvals. It stays in this list, where you can restore it, until it is removed for good, at the end of the retention period or earlier by an admin. Its number is not used again.`
   // Share links that show the latest follow the newest *ready* version, so they
   // move only when the target is that version and another ready one is left.
   // The app's latest also counts a processing version (`_display_version`), so
