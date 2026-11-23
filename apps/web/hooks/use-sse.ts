@@ -163,7 +163,8 @@ export function useSSE(projectId: string | null | undefined, options: UseSSEOpti
       if (destroyed) return
 
       const cookieMode = usesRefreshCookie()
-      let token = cookieMode ? await ensureAccessToken() : getAccessToken()
+      let token = getAccessToken()
+      if (cookieMode && !token) token = await ensureAccessToken()
       if (destroyed || (cookieMode && !token)) return
       if (token && (token === rejectedToken || isExpiringSoon(token))) {
         // A refused refresh signs the user out (lib/auth); a failed one
