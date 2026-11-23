@@ -314,6 +314,11 @@ function refreshCookie(): Promise<RefreshOutcome> {
       if (!response.ok) return transient()
       const data = await response.json()
       if (movedOn()) return movedOutcome()
+      if (typeof data.access_token !== 'string' || !data.access_token) return transient()
+      // Cookie changes can arrive before the tab's storage notification. A
+      // refresh of an existing bearer must not silently switch its account.
+      const sentSubject = subjectOf(sentAccess)
+      if (sentSubject && subjectOf(data.access_token) !== sentSubject) return { failed: 'refused' }
       memoryAccess = data.access_token
       clearLegacyStorage()
       return { token: data.access_token }

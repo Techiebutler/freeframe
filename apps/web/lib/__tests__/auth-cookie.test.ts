@@ -60,6 +60,16 @@ it('does not install a late refresh into a new local session', async () => {
   expect(auth.getAccessToken()).toBe('second-access')
 })
 
+it('does not switch accounts if the shared cookie answers for a different subject', async () => {
+  const auth = await import('../auth')
+  const jwt = (sub: string) => `e30.${btoa(JSON.stringify({ sub }))}.sig`
+  const alice = jwt('alice')
+  auth.setTokens(alice)
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ access_token: jwt('bob') })))
+  expect(await auth.refreshAccessTokenQuietly()).toEqual({ failed: 'refused' })
+  expect(auth.getAccessToken()).toBe(alice)
+})
+
 it('does not retry failed cookie refreshes during the transient cooldown', async () => {
   const auth = await import('../auth')
   vi.useFakeTimers()
