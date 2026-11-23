@@ -1,5 +1,6 @@
 "use client";
 
+import { AuthBootstrap } from "@/components/auth/auth-bootstrap";
 import * as React from "react";
 import { usePathname } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
@@ -20,6 +21,10 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  return <AuthBootstrap><DashboardShell>{children}</DashboardShell></AuthBootstrap>;
+}
+
+function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(true);
   const [commandOpen, setCommandOpen] = React.useState(false);

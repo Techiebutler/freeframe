@@ -10,6 +10,7 @@
  * with a plain textarea, no timecode control and no version concept at all
  * (#117, #123).
  */
+import { getAccessToken } from '@/lib/auth'
 import * as React from 'react'
 import { ArrowLeft, ChevronDown, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
@@ -28,7 +29,7 @@ import { ShareVerdictControls } from './share-verdict-controls'
 /** Signed in, or a guest who has already given a name and email. */
 function hasIdentity(): boolean {
   try {
-    return !!localStorage.getItem('ff_access_token') || !!localStorage.getItem('ff_guest_identity')
+    return !!getAccessToken() || !!localStorage.getItem('ff_guest_identity')
   } catch {
     return false
   }
@@ -206,7 +207,6 @@ function ShareReviewInner({
       if (stored) setGuestIdentity(JSON.parse(stored))
     } catch {}
   }, [])
-  const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
   // A verdict asks who the guest is through the same prompt a comment does.
   // The press waits on this promise: the prompt's Continue resolves it with the

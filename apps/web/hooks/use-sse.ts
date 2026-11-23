@@ -1,7 +1,8 @@
 'use client'
 
 import * as React from 'react'
-import { getAccessToken, refreshAccessToken } from '@/lib/auth'
+import { ensureAccessToken, getAccessToken, refreshAccessToken } from '@/lib/auth'
+import { usesRefreshCookie } from '@/lib/auth-transport'
 
 // ─── Event payload types ──────────────────────────────────────────────────────
 
@@ -161,14 +162,16 @@ export function useSSE(projectId: string | null | undefined, options: UseSSEOpti
     async function connect() {
       if (destroyed) return
 
-      let token = getAccessToken()
+      const cookieMode = usesRefreshCookie()
+      let token = cookieMode ? await ensureAccessToken() : getAccessToken()
+      if (destroyed || (cookieMode && !token)) return
       if (token && (token === rejectedToken || isExpiringSoon(token))) {
         // A refused refresh signs the user out (lib/auth); a failed one
         // returns null and we try again later.
         token = await refreshAccessToken()
         if (destroyed) return
         if (!token) {
-          scheduleReconnect()
+          if (!cookieMode || getAccessToken()) scheduleReconnect()
           return
         }
       }

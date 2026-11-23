@@ -1,5 +1,6 @@
 import { isExpiringSoon } from '@/hooks/use-sse'
-import { refreshAccessTokenQuietly } from '@/lib/auth'
+import { getAccessToken, refreshAccessTokenQuietly } from '@/lib/auth'
+import { webClientHeaders } from '@/lib/auth-transport'
 import { subjectOf } from '@/lib/jwt-subject'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -74,7 +75,7 @@ export function resetShareRequestState(): void {
 
 function storedAccessToken(): string | null {
   try {
-    return localStorage.getItem('ff_access_token')
+    return getAccessToken()
   } catch {
     return null
   }
@@ -208,7 +209,7 @@ export async function shareRequest<T>(
         ...(guest ? { guest_name: guest.name, guest_email: guest.email } : {}),
       })
     }
-    return fetch(url.toString(), { method: init.method, headers, body })
+    return fetch(url.toString(), { method: init.method, headers: { ...headers, ...webClientHeaders() }, body })
   }
 
   const bearer = caller.kind === 'bearer' ? caller.token : null

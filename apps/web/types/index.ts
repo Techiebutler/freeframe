@@ -715,13 +715,13 @@ export interface MagicCodeResponse {
 
 export interface VerifyCodeResponse {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string;
   token_type: string;
   needs_password: boolean;
 }
 
 export interface AuthTokens {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string;
   token_type: string;
 }

@@ -31,12 +31,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   logout: () => {
-    clearTokens()
-    set({
-      user: null,
-      isAuthenticated: false,
-      isSuperAdmin: false,
-    })
+    const clearUser = () => set({ user: null, isAuthenticated: false, isSuperAdmin: false })
+    const pending = clearTokens()
+    if (pending) void pending.then((cleared) => { if (cleared) clearUser() })
+    else clearUser()
   },
 
   fetchUser: async () => {

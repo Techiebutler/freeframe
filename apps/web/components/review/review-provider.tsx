@@ -1,5 +1,6 @@
 "use client";
 
+import { getAccessToken } from "@/lib/auth"
 import React, {
   createContext,
   useCallback,
@@ -109,7 +110,7 @@ export function ReviewProvider({
           process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
         const headers: Record<string, string> = {};
         try {
-          const t = localStorage.getItem("ff_access_token");
+          const t = getAccessToken();
           if (t) headers["Authorization"] = `Bearer ${t}`;
         } catch {}
         const streamRes = await fetch(
@@ -185,7 +186,7 @@ export function ReviewProvider({
           process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
         const headers: Record<string, string> = {};
         try {
-          const t = localStorage.getItem("ff_access_token");
+          const t = getAccessToken();
           if (t) headers["Authorization"] = `Bearer ${t}`;
         } catch {}
         try {
@@ -295,7 +296,7 @@ export function ReviewProvider({
     const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
     const headers: Record<string, string> = {};
     try {
-      const t = localStorage.getItem("ff_access_token");
+      const t = getAccessToken();
       if (t) headers["Authorization"] = `Bearer ${t}`;
     } catch {}
     fetch(
@@ -326,7 +327,7 @@ export function ReviewProvider({
           "Content-Type": "application/json",
         };
         try {
-          const t = localStorage.getItem("ff_access_token");
+          const t = getAccessToken();
           if (t) headers["Authorization"] = `Bearer ${t}`;
         } catch {}
         // Include guest identity if available (for non-authenticated users)

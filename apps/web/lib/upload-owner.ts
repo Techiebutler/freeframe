@@ -1,4 +1,5 @@
-import { getAccessToken, onSessionEnded } from './auth'
+import { usesRefreshCookie } from './auth-transport'
+import { getAccessToken, onSessionEnded, SESSION_NOTICE_KEY } from './auth'
 import { subjectOf } from './jwt-subject'
 
 export { subjectOf }
@@ -39,8 +40,8 @@ export function watchSubject(
   if (typeof window === 'undefined') return () => {}
   let prev = currentSubject()
   const onStorage = (e: StorageEvent) => {
-    if (e.key !== ACCESS_TOKEN_KEY && e.key !== null) return
-    const next = subjectOf(e.key === null ? getAccessToken() : e.newValue)
+    if (usesRefreshCookie() ? e.key !== SESSION_NOTICE_KEY : e.key !== ACCESS_TOKEN_KEY && e.key !== null) return
+    const next = usesRefreshCookie() ? null : subjectOf(e.key === null ? getAccessToken() : e.newValue)
     if (next === prev) return
     const was = prev
     prev = next

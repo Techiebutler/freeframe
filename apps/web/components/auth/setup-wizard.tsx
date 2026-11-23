@@ -1,5 +1,8 @@
 'use client'
 
+import { setTokens } from '@/lib/auth'
+import { usesRefreshCookie } from '@/lib/auth-transport'
+import type { AuthTokens } from '@/types'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, ApiError } from '@/lib/api'
@@ -77,11 +80,12 @@ export function SetupWizard() {
     setLoading(true)
     setErrors({})
     try {
-      await api.post('/setup/create-superadmin', {
+      const tokens = await api.post<AuthTokens>('/setup/create-superadmin', {
         email: form.email,
         name: form.name,
         password: form.password,
       })
+      if (usesRefreshCookie()) setTokens(tokens.access_token)
       setSuccess(true)
       setTimeout(() => {
         router.push('/login')

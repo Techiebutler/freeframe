@@ -1,7 +1,10 @@
-import { getAccessToken, refreshAccessToken } from './auth'
+import { getAccessToken, refreshAccessToken, withCookieMutation } from './auth'
+import { API_URL, usesRefreshCookie, webClientHeaders } from './auth-transport'
 import { subjectOf } from './upload-owner'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// Serialize the requests that can set the refresh cookie with refresh/logout.
+const COOKIE_ISSUERS = new Set(['/auth/login', '/auth/verify-magic-code', '/auth/accept-invite',
+  '/auth/change-password', '/setup/create-superadmin'])
 
 export class ApiError extends Error {
   status: number
@@ -155,6 +158,7 @@ async function request<T>(
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...options?.headers,
+      ...webClientHeaders(),
     }
     if (token) {
       headers['Authorization'] = `Bearer ${token}`
@@ -162,16 +166,22 @@ async function request<T>(
     return headers
   }
 
-  const execute = async (token: string | null): Promise<Response> => {
-    return fetch(`${API_URL}${path}`, {
+  const issuesCookie = usesRefreshCookie() && COOKIE_ISSUERS.has(path)
+  const execute = (token: string | null): Promise<Response> => {
+    const send = () => fetch(`${API_URL}${path}`, {
       method,
       headers: buildHeaders(token),
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...(issuesCookie ? { signal: AbortSignal.timeout(15000) } : {}),
     })
+    return issuesCookie ? withCookieMutation(send) : send()
   }
 
-  // On 401, attempt a token refresh and retry once
-  const response = await sendWithAuth(execute, options?.pinSubject)
+  // An anonymous auth endpoint's 401 is a rejected sign-in, not a lapsed
+  // bearer. In cookie mode, don't risk refreshing a previous account here.
+  const response = issuesCookie && path !== '/auth/change-password'
+    ? await execute(null)
+    : await sendWithAuth(execute, options?.pinSubject)
 
   if (!response.ok) {
     throw await toApiError(response, { joinValidationMessages: true })
@@ -201,7 +211,7 @@ async function uploadRequest<T>(
   options?: Pick<RequestOptions, 'pinSubject'>,
 ): Promise<T> {
   const buildHeaders = (token: string | null): Record<string, string> => {
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = webClientHeaders()
     if (token) headers['Authorization'] = `Bearer ${token}`
     return headers
   }

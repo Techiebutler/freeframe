@@ -1,5 +1,6 @@
 'use client'
 
+import { clearTokens } from '@/lib/auth'
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
@@ -857,14 +858,7 @@ export function FolderShareViewer({
                   </div>
                   <DropdownMenu.Item
                     onSelect={() => {
-                      // Ensure cookie is set from localStorage before navigating
-                      if (typeof window !== 'undefined') {
-                        const token = localStorage.getItem('ff_access_token')
-                        if (token) {
-                          document.cookie = `ff_access_token=${token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
-                        }
-                        window.location.href = withBasePath('/projects')
-                      }
+                      window.location.href = withBasePath('/projects')
                     }}
                     className="flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-tertiary cursor-pointer outline-none transition-colors"
                   >
@@ -872,12 +866,7 @@ export function FolderShareViewer({
                   </DropdownMenu.Item>
                   <DropdownMenu.Item
                     onSelect={() => {
-                      if (typeof window !== 'undefined') {
-                        localStorage.removeItem('ff_access_token')
-                        localStorage.removeItem('ff_refresh_token')
-                        document.cookie = 'ff_access_token=; path=/; max-age=0'
-                        window.location.href = withBasePath('/login')
-                      }
+                      void clearTokens()
                     }}
                     className="flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 cursor-pointer outline-none transition-colors"
                   >
