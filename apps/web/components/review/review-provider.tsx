@@ -9,7 +9,10 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { isExpiringSoon } from "@/hooks/use-sse";
 import { api } from "@/lib/api";
+import { getAccessToken, refreshAccessTokenQuietly } from "@/lib/auth";
+import { SERVER_UNREACHABLE } from "@/lib/share-request";
 import { useReviewStore } from "@/stores/review-store";
 import type { AssetResponse, AssetVersion, Comment } from "@/types";
 
@@ -325,10 +328,22 @@ export function ReviewProvider({
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
+        let bearer: string | null = null;
         try {
-          const t = localStorage.getItem("ff_access_token");
-          if (t) headers["Authorization"] = `Bearer ${t}`;
+          bearer = getAccessToken();
         } catch {}
+        // The share endpoint can accept an expired bearer as a guest instead
+        // of returning 401. Renew before sending, without leaving the share.
+        if (bearer && isExpiringSoon(bearer)) {
+          const outcome = await refreshAccessTokenQuietly();
+          if (!("token" in outcome)) {
+            throw new Error(outcome.failed === "transient"
+              ? SERVER_UNREACHABLE
+              : "Your sign-in has expired. Sign in again to post this comment.");
+          }
+          bearer = outcome.token;
+        }
+        if (bearer) headers["Authorization"] = `Bearer ${bearer}`;
         // Include guest identity if available (for non-authenticated users)
         const guestFields: Record<string, string> = {};
         try {
