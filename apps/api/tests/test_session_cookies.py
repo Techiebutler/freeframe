@@ -1,0 +1,132 @@
+"""HTTP contract for the opt-in browser refresh cookie."""
+from http.cookies import SimpleCookie
+from unittest.mock import patch
+
+import pytest
+
+from apps.api.services.auth_service import create_refresh_token, decode_token
+
+WEB = {"X-FF-Client": "web", "Sec-Fetch-Site": "same-origin"}
+HOST = "__Host-ff_refresh_token"
+LEGACY = "ff_refresh_token"
+
+
+@pytest.fixture
+def valid_refresh(mock_db, test_user):
+    test_user.token_version = 1
+    mock_db.first.return_value = test_user
+    return create_refresh_token(str(test_user.id))
+
+
+def cookies(response):
+    result = SimpleCookie()
+    for value in response.headers.get_list("set-cookie"):
+        result.load(value)
+    return result
+
+
+@pytest.mark.parametrize("route, method, payload, target", [
+    ("/auth/login", "POST", {"email": "test@example.com", "password": "fixture-password"}, "verify_password"),
+    ("/auth/verify-magic-code", "POST", {"email": "test@example.com", "code": "123456"}, "redis_verify_magic_code"),
+    ("/auth/accept-invite", "POST", {"token": "fixture", "name": "Reviewer", "password": "fixture-password"}, "hash_password"),
+    ("/auth/change-password", "PATCH", {"current_password": "fixture-password", "new_password": "new-fixture"}, "verify_password"),
+])
+def test_web_auth_issues_host_cookie(client, test_user, valid_refresh, route, method, payload, target):
+    test_user.invite_token_expires_at = None
+    with patch(f"apps.api.routers.auth.{target}", return_value=(True, None) if target == "redis_verify_magic_code" else "test-hash"):
+        if method == "PATCH":
+            from apps.api.services.auth_service import create_access_token
+            headers = {**WEB, "Authorization": f"Bearer {create_access_token(str(test_user.id))}"}
+        else:
+            headers = WEB
+        response = client.request(method, route, json=payload, headers=headers)
+    assert response.status_code == 200
+    assert "refresh_token" not in response.json()
+    cookie = cookies(response)[HOST]
+    assert decode_token(cookie.value)["type"] == "refresh"
+    assert cookie["httponly"] and cookie["secure"]
+    assert cookie["samesite"] == "lax" and cookie["path"] == "/" and not cookie["domain"]
+
+
+def test_browser_first_setup_issues_cookie(client, mock_db):
+    from uuid import uuid4
+
+    mock_db.refresh.side_effect = lambda user: setattr(user, "id", uuid4())
+    with patch("apps.api.routers.setup.get_email_owner", return_value=None):
+        response = client.post("/setup/create-superadmin", json={
+            "email": "test@example.com", "name": "Reviewer", "password": "fixture-password",
+        }, headers=WEB)
+    assert response.status_code == 201
+    assert "refresh_token" not in response.json()
+    assert decode_token(cookies(response)[HOST].value)["type"] == "refresh"
+
+
+@pytest.mark.parametrize("source", [HOST, LEGACY, "body"])
+def test_web_refresh_accepts_current_cookie_or_migrates_legacy_token(client, valid_refresh, source):
+    kwargs = ({"json": {"refresh_token": valid_refresh}} if source == "body"
+              else {"headers": {**WEB, "Cookie": f"{source}={valid_refresh}"}})
+    response = client.post("/auth/refresh", **({"headers": WEB} | kwargs))
+    assert response.status_code == 200
+    assert "refresh_token" not in response.json()
+    assert HOST in cookies(response)
+    assert cookies(response)[LEGACY]["max-age"] == "0"
+
+
+def test_plain_http_cookie_is_http_only(client, valid_refresh, monkeypatch):
+    from apps.api.config import settings
+    monkeypatch.setitem(settings.__dict__, "cookie_secure", False)
+    response = client.post("/auth/refresh", json={"refresh_token": valid_refresh}, headers=WEB)
+    assert response.status_code == 200
+    cookie = cookies(response)[LEGACY]
+    assert cookie["httponly"] and not cookie["secure"]
+    assert HOST not in cookies(response)
+
+
+def test_body_client_gets_body_token_even_with_an_unrelated_cookie(client, valid_refresh):
+    response = client.post("/auth/refresh", json={"refresh_token": valid_refresh},
+                           headers={"Cookie": f"{HOST}=invalid"})
+    assert response.status_code == 200
+    assert decode_token(response.json()["refresh_token"])["type"] == "refresh"
+    assert "set-cookie" not in response.headers
+
+
+def test_body_client_cannot_use_cookie(client, valid_refresh):
+    response = client.post("/auth/refresh", headers={"Cookie": f"{HOST}={valid_refresh}"})
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("site", ["cross-site", "same-site"])
+@pytest.mark.parametrize("route", ["/auth/refresh", "/auth/logout"])
+def test_cookie_endpoints_refuse_other_origins(client, valid_refresh, site, route):
+    response = client.post(route, headers={**WEB, "Sec-Fetch-Site": site,
+                                           "Cookie": f"{HOST}={valid_refresh}"})
+    assert response.status_code == 403
+    assert "set-cookie" not in response.headers
+
+
+def test_logout_expires_both_cookies(client):
+    response = client.post("/auth/logout", headers=WEB)
+    assert response.status_code == 204
+    expired = cookies(response)
+    assert expired[HOST]["max-age"] == "0"
+    assert expired[HOST]["secure"] and expired[HOST]["httponly"]
+    assert expired[LEGACY]["max-age"] == "0"
+
+
+def test_cookie_mode_has_its_own_refresh_limit(client, valid_refresh):
+    with patch("apps.api.middleware.rate_limit.check_rate_limit", return_value=(True, 0)) as limit:
+        for headers in (WEB, {}):
+            client.post("/auth/refresh", json={"refresh_token": valid_refresh}, headers=headers)
+    limits = {(call.args[1], call.args[2], call.args[3]) for call in limit.call_args_list}
+    assert ("refresh_token_web", 120, 60) in limits
+    assert ("refresh_token", 30, 60) in limits
+
+
+def test_wildcard_cors_warns_without_refusing_startup(client, monkeypatch, caplog):
+    from apps.api.config import settings
+    from apps.api import main
+
+    monkeypatch.setattr(settings, "cors_allow_origins", "*")
+    with patch.object(main, "run_startup_bucket_setup"), client:
+        assert client.get("/health").status_code == 200
+    assert "CORS_ALLOW_ORIGINS=*" in caplog.text

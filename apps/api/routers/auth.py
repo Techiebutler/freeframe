@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 import uuid
 import secrets
@@ -17,6 +17,9 @@ from ..services.auth_service import (
     hash_password, verify_password,
     create_access_token, create_refresh_token, decode_token,
     get_user_by_email, get_user_by_id,
+)
+from ..services.session_cookies import (
+    clear_refresh_cookie, read_refresh_token, refresh_token_for_body, wants_cookie,
 )
 from ..services.redis_service import (
     generate_magic_code, store_magic_code, verify_magic_code as redis_verify_magic_code,
@@ -45,6 +48,15 @@ INVITE_NOT_ACCEPTED_DETAIL = (
 )
 
 MAGIC_CODE_EXPIRY_MINUTES = MAGIC_CODE_EXPIRY_SECONDS // 60
+
+
+def _issue_tokens(request: Request, response: Response, user: User, *, needs_password: bool = False) -> TokenResponse:
+    access = create_access_token(str(user.id), token_version=user.token_version)
+    refresh = create_refresh_token(str(user.id), token_version=user.token_version)
+    return TokenResponse(
+        access_token=access, needs_password=needs_password,
+        **refresh_token_for_body(request, response, refresh),
+    )
 
 
 def _generate_invite_token() -> str:
@@ -94,8 +106,8 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/verify-magic-code", response_model=TokenResponse, dependencies=[Depends(rate_limit("verify_magic_code", 10, 600))])
-def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db)):
+@router.post("/verify-magic-code", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(rate_limit("verify_magic_code", 10, 600))])
+def verify_magic_code(body: VerifyMagicCodeRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Verify magic code and return tokens.
     Returns needs_password=True if user hasn't set a password yet.
@@ -134,11 +146,7 @@ def verify_magic_code(body: VerifyMagicCodeRequest, db: Session = Depends(get_db
     # Check if user needs to set password
     needs_password = user.password_hash is None
     
-    return TokenResponse(
-        access_token=create_access_token(str(user.id), token_version=user.token_version),
-        refresh_token=create_refresh_token(str(user.id), token_version=user.token_version),
-        needs_password=needs_password,
-    )
+    return _issue_tokens(request, response, user, needs_password=needs_password)
 
 
 @router.post("/set-password", response_model=UserResponse)
@@ -176,8 +184,8 @@ def get_invite_info(token: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/accept-invite", response_model=TokenResponse)
-def accept_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
+@router.post("/accept-invite", response_model=TokenResponse, response_model_exclude_none=True)
+def accept_invite(body: AcceptInviteRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Accept invite and set password. Email is already verified via invite."""
     user = db.query(User).filter(
         User.invite_token == body.token,
@@ -204,15 +212,11 @@ def accept_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
     user.invite_token_expires_at = None
     db.commit()
     
-    return TokenResponse(
-        access_token=create_access_token(str(user.id), token_version=user.token_version),
-        refresh_token=create_refresh_token(str(user.id), token_version=user.token_version),
-        needs_password=False,
-    )
+    return _issue_tokens(request, response, user)
 
 
-@router.post("/login", response_model=TokenResponse, dependencies=[Depends(rate_limit("login", 10, 600))])
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+@router.post("/login", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(rate_limit("login", 10, 600))])
+def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Login with email + password."""
     user = get_user_by_email(db, body.email)
     if (
@@ -222,16 +226,26 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         or user.status == UserStatus.deactivated
     ):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    return TokenResponse(
-        access_token=create_access_token(str(user.id), token_version=user.token_version),
-        refresh_token=create_refresh_token(str(user.id), token_version=user.token_version),
-        needs_password=False,
-    )
+    return _issue_tokens(request, response, user)
 
 
-@router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(rate_limit("refresh_token", 30, 60))])
-def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
-    payload = decode_token(body.refresh_token)
+_limit_body_refresh = rate_limit("refresh_token", 30, 60)
+_limit_web_refresh = rate_limit("refresh_token_web", 120, 60)
+
+
+def _limit_refresh(request: Request) -> None:
+    (_limit_web_refresh if wants_cookie(request) else _limit_body_refresh)(request)
+
+
+@router.post("/refresh", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(_limit_refresh)])
+def refresh_token(request: Request, response: Response, body: RefreshRequest | None = None, db: Session = Depends(get_db)):
+    token = body.refresh_token if body is not None else None
+    if wants_cookie(request):
+        token = read_refresh_token(request, token)
+    elif body is None:
+        # The body is optional only for clients that opt into cookie transport.
+        raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": "Field required", "type": "missing", "input": None}])
+    payload = decode_token(token) if token else None
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     user = get_user_by_id(db, uuid.UUID(payload["sub"]))
@@ -239,11 +253,14 @@ def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="User not found")
     if payload.get("ver", 1) != user.token_version:
         raise HTTPException(status_code=401, detail="Session expired, please log in again")
-    return TokenResponse(
-        access_token=create_access_token(str(user.id), token_version=user.token_version),
-        refresh_token=create_refresh_token(str(user.id), token_version=user.token_version),
-        needs_password=user.password_hash is None,
-    )
+    return _issue_tokens(request, response, user, needs_password=user.password_hash is None)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(request: Request, response: Response):
+    """Clear the browser cookie; this does not revoke already-issued tokens."""
+    if wants_cookie(request):
+        clear_refresh_cookie(request, response)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -271,9 +288,11 @@ def update_preferences(
     db.refresh(current_user)
     return current_user
 
-@router.patch("/change-password", response_model=TokenResponse, status_code=status.HTTP_200_OK)
+@router.patch("/change-password", response_model=TokenResponse, response_model_exclude_none=True, status_code=status.HTTP_200_OK)
 def change_password(
     body: ChangePasswordRequest,
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -287,8 +306,4 @@ def change_password(
     current_user.token_version += 1
     db.commit()
     db.refresh(current_user)
-    return TokenResponse(
-        access_token=create_access_token(str(current_user.id), token_version=current_user.token_version),
-        refresh_token=create_refresh_token(str(current_user.id), token_version=current_user.token_version),
-        needs_password=False,
-    )
+    return _issue_tokens(request, response, current_user)

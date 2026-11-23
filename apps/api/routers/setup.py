@@ -2,14 +2,15 @@
 First-time setup / onboarding endpoints.
 These are only available when no superadmin exists in the system.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from ..database import get_db
 from ..models.user import User, UserStatus
 from ..services.auth_service import hash_password, create_access_token, create_refresh_token, get_email_owner
-from ..schemas.auth import NewPassword, NewUserEmail, TokenResponse
+from ..schemas.auth import NewPassword, NewUserEmail
+from ..services.session_cookies import refresh_token_for_body
 from ..middleware.rate_limit import rate_limit
 
 router = APIRouter(prefix="/setup", tags=["setup"])
@@ -30,7 +31,7 @@ class SetupCompleteResponse(BaseModel):
     message: str
     user_id: str
     access_token: str
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 def _has_superadmin(db: Session) -> bool:
@@ -58,8 +59,8 @@ def get_setup_status(db: Session = Depends(get_db)):
     )
 
 
-@router.post("/create-superadmin", response_model=SetupCompleteResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit("create_superadmin", 3, 600))])
-def create_superadmin(body: CreateSuperAdminRequest, db: Session = Depends(get_db)):
+@router.post("/create-superadmin", response_model=SetupCompleteResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit("create_superadmin", 3, 600))])
+def create_superadmin(body: CreateSuperAdminRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Create the first superadmin user.
     This endpoint is only available when no superadmin exists.
@@ -101,5 +102,5 @@ def create_superadmin(body: CreateSuperAdminRequest, db: Session = Depends(get_d
         message="Superadmin created successfully. You can now create organizations.",
         user_id=str(user.id),
         access_token=access_token,
-        refresh_token=refresh_token,
+        **refresh_token_for_body(request, response, refresh_token),
     )

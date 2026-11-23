@@ -726,7 +726,14 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `S3_ENDPOINT` | S3 endpoint the API and workers use (non-AWS); ignored when `S3_STORAGE=s3` | `http://minio:9000` |
 | `S3_PUBLIC_ENDPOINT` | Browser-reachable base URL for presigned URLs, when it differs from `S3_ENDPOINT` | (empty = `S3_ENDPOINT`) |
 | `S3_STORAGE_CLASS` | Storage class for media (uploaded originals, every transcoder output and watermarked renders), set by the server when each object is created. Avatars, logos and posters keep the bucket default. MinIO and Silo accept only `STANDARD` and `REDUCED_REDUNDANCY`; Garage ignores it; `GLACIER` and `DEEP_ARCHIVE` are refused at startup | (empty = bucket default) |
-| `CORS_ALLOW_ORIGINS` | Extra browser origins, comma-separated, allowed by the API and (non-AWS) the bucket | (empty) |
+| `CORS_ALLOW_ORIGINS` | Extra browser origins, comma-separated, allowed by the API and (non-AWS) the bucket. Avoid `*` with credentialed requests. | (empty) |
+| `COOKIE_SECURE` | Use a Secure, host-only refresh cookie for the opt-in web client. Set `false` only for plain HTTP; it uses an unprefixed HttpOnly cookie. | `true` |
+
+The browser refresh-cookie flow requires a same-origin API (normally
+`NEXT_PUBLIC_API_URL=/api` behind a reverse proxy). Forward `Sec-Fetch-Site`
+and `Origin` unchanged. Clients that use a separate API origin must omit
+`X-FF-Client: web` and continue using the JSON refresh-token response and request.
+This setting does not change authentication for clients that do not opt in.
 | `JWT_SECRET` | Auth token signing key | (required, generate with `openssl rand -hex 64`) |
 | `FRONTEND_URL` | Your FreeFrame URL (with https://) | (required) |
 | `DOMAIN` | Your domain; required with `docker-compose.https.yml`, which requests the certificate | (optional) |

@@ -52,6 +52,11 @@ async def lifespan(app: FastAPI):
             "will FAIL until you configure SMTP or SES. See docs/deployment.md.",
             settings.mail_provider,
         )
+    if settings.cors_allows_any_origin:
+        logging.getLogger("apps.api.startup").warning(
+            "CORS_ALLOW_ORIGINS=* allows credentialed requests from any origin. "
+            "Use an explicit allowlist, especially with browser refresh cookies enabled."
+        )
     yield
 
 _disable_docs = os.getenv("DISABLE_DOCS", "").lower() in ("true", "1", "yes")
