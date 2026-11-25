@@ -203,6 +203,41 @@ def test_cookie_endpoints_refuse_other_origins(client, valid_refresh, site, rout
     assert "set-cookie" not in response.headers
 
 
+@pytest.mark.parametrize("route", ["/auth/refresh", "/auth/logout"])
+def test_cookie_endpoints_check_origin_without_fetch_metadata(client, valid_refresh, route):
+    response = client.post(route, headers={**FOREIGN_WEB, "Cookie": f"{HOST}={valid_refresh}"})
+    assert response.status_code == 403
+    assert "set-cookie" not in response.headers
+
+
+def test_web_refresh_disables_caching(client, valid_refresh):
+    response = client.post("/auth/refresh", headers={**WEB, "Cookie": f"{HOST}={valid_refresh}"})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_web_refresh_uses_configured_cookie_lifetime(client, valid_refresh, monkeypatch):
+    from apps.api.config import settings
+
+    monkeypatch.setattr(settings, "refresh_token_expire_days", 2)
+    response = client.post("/auth/refresh", headers={**WEB, "Cookie": f"{HOST}={valid_refresh}"})
+    assert response.status_code == 200
+    assert cookies(response)[HOST]["max-age"] == "172800"
+
+
+@pytest.mark.parametrize("password_hash", [None, "test-hash"])
+@pytest.mark.parametrize("route", ["/auth/refresh", "/auth/verify-magic-code"])
+def test_web_auth_reports_whether_password_is_needed(client, test_user, valid_refresh, route, password_hash):
+    test_user.password_hash = password_hash
+    if route == "/auth/refresh":
+        response = client.post(route, headers={**WEB, "Cookie": f"{HOST}={valid_refresh}"})
+    else:
+        with patch("apps.api.routers.auth.redis_verify_magic_code", return_value=(True, None)):
+            response = client.post(route, json={"email": LOGIN["email"], "code": "123456"}, headers=WEB)
+    assert response.status_code == 200
+    assert response.json()["needs_password"] is (password_hash is None)
+
+
 def test_logout_expires_both_cookies(client):
     response = client.post("/auth/logout", headers=WEB)
     assert response.status_code == 204
