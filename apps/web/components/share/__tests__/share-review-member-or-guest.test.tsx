@@ -197,4 +197,8 @@ it('keeps an inline reply and its error when the guest identity prompt is cancel
   expect(await screen.findByRole('alert')).toHaveTextContent('Your sign-in has expired.')
   expect(input).toHaveValue('A reply')
   expect(writes).toEqual([['refresh', null]])
+
+  fireEvent.keyDown(input, { key: 'Enter' })
+  expect(await screen.findByRole('dialog', { name: 'Your sign-in has expired.' })).toBeInTheDocument()
+  expect(writes).toEqual([['refresh', null]])
 })
