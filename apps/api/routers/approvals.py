@@ -156,7 +156,10 @@ def list_approvals(
 ):
     asset = _get_asset(db, asset_id)
     require_asset_access(db, asset, current_user)
-    return db.query(Approval).filter(
+    # Approvals of a version deleted on its own are kept for a restore, and left
+    # out here until then, as its comments are.
+    return db.query(Approval).join(AssetVersion, Approval.version_id == AssetVersion.id).filter(
         Approval.asset_id == asset_id,
         Approval.deleted_at.is_(None),
+        AssetVersion.deleted_at.is_(None),
     ).all()
