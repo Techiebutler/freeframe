@@ -4,6 +4,7 @@ import re
 import signal
 import threading
 from contextlib import asynccontextmanager, contextmanager
+import redis
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -168,6 +169,19 @@ async def _request_validation_error(request: Request, exc: RequestValidationErro
     )
 
 
+@app.exception_handler(redis.exceptions.ConnectionError)
+@app.exception_handler(redis.exceptions.TimeoutError)
+async def redis_unavailable(request: Request, exc: redis.exceptions.RedisError):
+    """What needs Redis and cannot go on without it, such as a sign-in code. The
+    rate limiters never get here: they let the request through."""
+    logging.getLogger("apps.api.redis").error("Redis is not available: %s: %s", type(exc).__name__, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The server is not answering right now. Try again in a moment."},
+        headers={"Retry-After": "5"},
+    )
+
+
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SetupGuardMiddleware)
 # add_middleware prepends, so the one added last runs first. CORS has to be
@@ -205,7 +219,8 @@ app.include_router(hls_proxy.router)
 app.include_router(instance_settings.router)
 app.include_router(instance_branding.router)
 
+# async, so that it needs none of the threads that busy routes share.
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 

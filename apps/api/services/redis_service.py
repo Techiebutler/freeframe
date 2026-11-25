@@ -1,6 +1,7 @@
 import logging
 import redis
 import secrets
+import time
 from typing import Optional
 from ..config import settings
 
@@ -9,13 +10,47 @@ logger = logging.getLogger(__name__)
 # Redis client
 _redis_client: Optional[redis.Redis] = None
 
+# A Redis that accepts the connection but never answers (a paused container, a
+# network blackhole) would otherwise hold a request for good. Every command here
+# takes well under a millisecond on a live Redis.
+REDIS_TIMEOUT_SECONDS = 2.0
+
 
 def get_redis() -> redis.Redis:
     """Get Redis client singleton."""
     global _redis_client
     if _redis_client is None:
-        _redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+        _redis_client = redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_timeout=REDIS_TIMEOUT_SECONDS,
+            socket_connect_timeout=REDIS_TIMEOUT_SECONDS,
+        )
     return _redis_client
+
+
+# The global rate limiter fails open, and it runs on almost every request. After it
+# has waited out the timeout once, it skips Redis for a moment instead of making
+# each request wait too. A refused connection costs nothing, so it does not pause it.
+# check_rate_limit below does not use this: it guards sign-in and share passwords,
+# and has to count again as soon as Redis answers.
+LIMITER_PAUSE_SECONDS = 10.0
+_limiter_paused_until = 0.0
+
+
+def limiter_paused() -> bool:
+    return time.monotonic() < _limiter_paused_until
+
+
+def pause_limiter_after(exc: Exception) -> None:
+    """Note what the global rate limiter failed on; a timeout pauses it for a moment."""
+    global _limiter_paused_until
+    if isinstance(exc, redis.exceptions.TimeoutError):
+        _limiter_paused_until = time.monotonic() + LIMITER_PAUSE_SECONDS
+        logger.warning(
+            "Redis did not answer in time; the global rate limit is off for %.0f s",
+            LIMITER_PAUSE_SECONDS,
+        )
 
 
 # Magic code keys
