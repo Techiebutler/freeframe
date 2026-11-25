@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { setTokens, signInAgain } from '@/lib/auth'
 import { resetShareRequestState } from '@/lib/share-request'
 import { useReviewStore } from '@/stores/review-store'
@@ -77,7 +78,9 @@ function startReview(status: number, comments: object[] = []) {
 }
 
 async function submitDraft() {
-  const input = await screen.findByPlaceholderText('Leave your comment...')
+  // The review screen loads the composer and other controls with dynamic imports.
+  const input = await screen.findByPlaceholderText('Leave your comment...', {}, { timeout: 4000 })
+  input.focus()
   fireEvent.change(input, { target: { value: 'Looks good' } })
   fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
   return input
@@ -143,6 +146,41 @@ it.each([false, true])('continues as guest on a comment link (stored guest: %s)'
   expect(writes).toEqual([['refresh', null], ['comment', null, {
     asset_id: 'a1', version_id: 'v1', body: 'Looks good', guest_name: guest.name, guest_email: guest.email,
   }]])
+})
+
+it('keeps a second Enter out of the composer while the sign-in prompt is open', async () => {
+  storeGuest()
+  const { writes } = startReview(401)
+  const input = await submitDraft()
+  const dialog = await screen.findByRole('dialog', { name: 'Your sign-in has expired.' })
+  const cancel = within(dialog).getByRole('button', { name: 'Cancel' })
+  const focused = document.activeElement ?? document.body
+
+  // Dispatch the keydown without activating the focused button, then choose the guest action.
+  await act(async () => { fireEvent.keyDown(focused, { key: 'Enter' }) })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Continue as guest' }))
+
+  await waitFor(() => expect(input).toHaveValue(''))
+  expect(screen.queryByText('Your sign-in has expired.', { exact: false })).not.toBeInTheDocument()
+  expect(focused).toBe(cancel)
+  expect(writes).toEqual([['refresh', null], ['comment', null, {
+    asset_id: 'a1', version_id: 'v1', body: 'Looks good', guest_name: guest.name, guest_email: guest.email,
+  }]])
+})
+
+it('keeps a typed inline reply when Escape is pressed in the sign-in prompt', async () => {
+  const user = userEvent.setup()
+  startReview(401, [parentComment])
+  await user.click(await screen.findByRole('button', { name: 'Reply' }))
+  const input = screen.getByPlaceholderText('Leave your reply here...')
+  await user.type(input, 'A reply{Enter}')
+  const dialog = await screen.findByRole('dialog', { name: 'Your sign-in has expired.' })
+  const cancel = within(dialog).getByRole('button', { name: 'Cancel' })
+
+  await user.keyboard('{Escape}')
+
+  expect(screen.getByPlaceholderText('Leave your reply here...')).toHaveValue('A reply')
+  expect(cancel).toHaveFocus()
 })
 
 it('keeps an inline reply and its error when the guest identity prompt is cancelled', async () => {
