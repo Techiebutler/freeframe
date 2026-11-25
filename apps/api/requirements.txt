@@ -29,12 +29,12 @@ PyJWT==2.15.1
 cryptography==50.0.2
 bcrypt==4.3.0
 python-multipart==0.0.34
-boto3==1.44.5
+boto3==1.44.9
 # Pinned transitive: boto3 allows any botocore in >=1.44.5,<1.45.0, and botocore
 # is where S3 request signing lives. Silent botocore moves have broken S3
 # compatibility here before (SigV4 presigning against non-AWS backends), so this
 # is pinned to make those changes arrive as a reviewable PR.
-botocore==1.44.5
+botocore==1.44.9
 celery[redis]==5.7.0
 redis==6.4.0
 httpx==0.28.1
