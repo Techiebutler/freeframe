@@ -191,7 +191,8 @@ def test_web_refresh_uses_first_live_credential(client, test_user, valid_refresh
     other_user = User(id=uuid4(), status=UserStatus.active, token_version=2)
     other_token = create_refresh_token(str(other_user.id), token_version=other_user.token_version)
     stale_other_token = create_refresh_token(str(other_user.id), token_version=1)
-    body_token = stale_other_token if dead_source == "body" else valid_refresh
+    stale_body_token = create_refresh_token(str(test_user.id), token_version=0)
+    body_token = stale_body_token if dead_source == "body" else valid_refresh
     cookie_token = stale_other_token if dead_source == "cookie" else other_token
     users = {test_user.id: test_user, other_user.id: other_user}
     with patch("apps.api.routers.auth.get_user_by_id", side_effect=lambda db, user_id: users.get(user_id)):
@@ -201,6 +202,27 @@ def test_web_refresh_uses_first_live_credential(client, test_user, valid_refresh
     expected = other_user if dead_source == "body" else test_user
     payload = decode_token(response.json()["access_token"])
     assert payload and payload["sub"] == str(expected.id)
+
+
+def test_web_refresh_rejects_access_token(client, test_user, valid_refresh):
+    token = create_access_token(str(test_user.id), token_version=test_user.token_version)
+    response = client.post("/auth/refresh", headers={**WEB, "Cookie": f"{HOST}={token}"})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid refresh token"
+
+
+def test_web_refresh_rejects_deactivated_user(client, test_user, valid_refresh):
+    test_user.status = UserStatus.deactivated
+    response = client.post("/auth/refresh", headers={**WEB, "Cookie": f"{HOST}={valid_refresh}"})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "User not found"
+
+
+def test_web_refresh_rejects_invalid_subject(client):
+    token = create_refresh_token("not-a-uuid")
+    response = client.post("/auth/refresh", headers={**WEB, "Cookie": f"{HOST}={token}"})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid refresh token"
 
 
 def test_body_client_gets_body_token_even_with_an_unrelated_cookie(client, valid_refresh):
@@ -230,6 +252,31 @@ def test_cookie_endpoints_check_origin_without_fetch_metadata(client, valid_refr
     response = client.post(route, headers={**FOREIGN_WEB, "Cookie": f"{HOST}={valid_refresh}"})
     assert response.status_code == 403
     assert "set-cookie" not in response.headers
+
+
+def test_web_refresh_trusts_same_origin_fetch_metadata(client, valid_refresh):
+    response = client.post("/auth/refresh", headers={
+        **WEB, **FOREIGN_ORIGIN, "Cookie": f"{HOST}={valid_refresh}",
+    })
+    assert response.status_code == 200
+
+
+def test_web_refresh_allows_missing_origin_without_fetch_metadata(client, valid_refresh):
+    response = client.post("/auth/refresh", headers={
+        "X-FF-Client": "web", "Cookie": f"{HOST}={valid_refresh}",
+    })
+    assert response.status_code == 200
+
+
+def test_web_refresh_accepts_frontend_origin_without_path(client, valid_refresh, monkeypatch):
+    from apps.api.config import settings
+
+    origin = "https://frontend.example:8443"
+    monkeypatch.setattr(settings, "frontend_url", f"{origin}/freeframe")
+    response = client.post("/auth/refresh", headers={
+        "X-FF-Client": "web", "Origin": origin, "Cookie": f"{HOST}={valid_refresh}",
+    })
+    assert response.status_code == 200
 
 
 def test_web_refresh_disables_caching(client, valid_refresh):
@@ -286,6 +333,12 @@ def test_logout_expires_both_cookies(client):
     assert expired[HOST]["max-age"] == "0"
     assert expired[HOST]["secure"] and expired[HOST]["httponly"]
     assert expired[LEGACY]["max-age"] == "0"
+
+
+def test_logout_without_web_header_does_not_clear_cookies(client):
+    response = client.post("/auth/logout", headers=FOREIGN_ORIGIN)
+    assert response.status_code == 204
+    assert "set-cookie" not in response.headers
 
 
 def test_cookie_mode_has_its_own_refresh_limit(client, valid_refresh):
