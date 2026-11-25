@@ -602,11 +602,12 @@ const ACCESS_GONE_MESSAGE = 'This upload can no longer be sent.'
  * A 403, 404 or 409, or a 401 that came back again after a refresh as the same
  * account (a 401 with no code), is the server refusing the owner for good. An
  * account change is final for the row too, and `uploadPart` stops on it. A 401
- * whose refresh got no answer, a 408, a 429, a 5xx or a network error is the
- * moment, not the upload, and is retried like any part failure.
+ * whose refresh got no answer, a 408, a 429, a 5xx, a 404 that was not the
+ * API's or a network error is the moment, not the upload, and is retried like
+ * any part failure.
  */
 function presignFailure(err: unknown): unknown {
-  if (!(err instanceof ApiError)) return err
+  if (!(err instanceof ApiError) || err.apiMissing) return err
   const refused =
     err.status === 403 || err.status === 404 || err.status === 409 ||
     (err.status === 401 && err.code === undefined)
@@ -1530,11 +1531,11 @@ interface ResumeInfo {
  * 404 and 409 from the resume endpoint are statements about the upload itself --
  * the version is gone, or it is no longer `uploading` -- so the row is finished
  * and offering another resume would send the user round the same loop. Anything
- * else (a 503, a dropped connection) says nothing about the upload, and the row
- * stays resumable.
+ * else (a 503, a dropped connection, a 404 from a proxy while the API restarts)
+ * says nothing about the upload, and the row stays resumable.
  */
 function isFinalRefusal(err: unknown): boolean {
-  return err instanceof ApiError && (err.status === 404 || err.status === 409)
+  return err instanceof ApiError && !err.apiMissing && (err.status === 404 || err.status === 409)
 }
 
 const ASSET_GONE_MESSAGE = 'This file is no longer available.'
@@ -1866,7 +1867,7 @@ async function finishAssembledUpload(versionId: string, ownerId: string | undefi
 }
 
 /** Waits before each resend of a completion that did not get through, unless the server asked for another. */
-const COMPLETE_RETRY_DELAYS_MS = [2_000, 5_000]
+const COMPLETE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000]
 /** The longest a completion waits on a server's Retry-After before trying again. */
 const COMPLETE_RETRY_AFTER_CAP_MS = 30_000
 
@@ -1874,19 +1875,22 @@ const COMPLETE_RETRY_AFTER_CAP_MS = 30_000
  * Whether a completion failed in a way that sending it again may fix: the
  * request never got an answer (fetch rejects with a TypeError), or the server
  * or a proxy in front of it could not get through for now (502/503/504; the
- * API answers 503 with a Retry-After when it cannot reach storage). A 4xx is
- * the server's answer about this version, and asking again gets the same one.
+ * API answers 503 with a Retry-After when it cannot reach storage), or a 404
+ * that was not the API's. Any other 4xx is the server's answer about this
+ * version, and asking again gets the same one.
  * Cross-origin, an unhandled 500 with no CORS headers reaches the client as a
  * fetch TypeError and is retried, which is safe because the completion is
  * idempotent (#263).
  */
 function isTransientCompletionFailure(err: unknown): boolean {
-  if (err instanceof ApiError) return err.status === 502 || err.status === 503 || err.status === 504
+  if (err instanceof ApiError) {
+    return err.apiMissing === true || err.status === 502 || err.status === 503 || err.status === 504
+  }
   return err instanceof TypeError
 }
 
 /**
- * Sends `/upload/complete`, and sends it again, up to three tries in all, while
+ * Sends `/upload/complete`, and sends it again, up to five tries in all, while
  * it fails in a way a retry may fix.
  *
  * Sent once, a completion lost to a blip at the end of a long transfer left the
@@ -1982,7 +1986,8 @@ function reportDiscardFailure(
   fileId: string,
   err: unknown,
 ): string {
-  const message = err instanceof Error ? err.message : 'Discard failed'
+  // Never empty: the confirm dialog takes an empty answer for success.
+  const message = (err instanceof Error && err.message) || 'Discard failed'
   set((s) => ({
     files: s.files.map((f) => (f.id === fileId ? { ...f, error: message, discardFailed: true as const } : f)),
     versionsRevision: s.versionsRevision + 1,
@@ -3382,7 +3387,7 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
             } catch (abortErr) {
               // The upload is already gone too: the same answer from the other
               // side, and what Discard wanted to happen has happened.
-              if (!(abortErr instanceof ApiError && abortErr.status === 404)) {
+              if (!(abortErr instanceof ApiError && abortErr.status === 404 && !abortErr.apiMissing)) {
                 return reportDiscardFailure(set, fileId, abortErr)
               }
             }
@@ -3934,8 +3939,9 @@ const adopting = new Set<string>()
  *    is checked again when someone else signs in;
  *  * 404 or 409: the upload is gone or finished, and the row is dropped;
  *  * no `versionId`: there is nothing on the server to resume. Dropped too;
- *  * anything else -- a network error, a 5xx, a 429, or an answer that came
- *    after another account signed in -- settles nothing; the next load or
+ *  * anything else -- a network error, a 5xx, a 429, a 404 that was not the
+ *    API's, or an answer that came after another account signed in -- settles
+ *    nothing; the next load or
  *    sign-in asks again.
  *
  * With nobody signed in nothing is asked and nothing changes. Run once after
@@ -3959,7 +3965,7 @@ async function checkOwner(f: UploadFile, versionId: string, owner: string): Prom
       files: s.files.map((r) => (r.id === f.id && r.ownerId === undefined ? { ...r, ownerId: owner } : r)),
     }))
   } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 409)) letGo(f)
+    if (isFinalRefusal(err)) letGo(f)
   } finally {
     adopting.delete(f.id)
   }
