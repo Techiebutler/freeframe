@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **J, K and L shuttle the video player like an edit suite.** L plays forward and each further press goes faster (2x, 4x, 8x); J does the same in reverse; K stops. Pressing the opposite key switches direction at 1x. J and L used to jump 10 seconds; the arrow keys still jump 5. (#589 by @jdanna)
 
 ### Fixed
+- Opening a page while signed out, such as the sign-in page or a share link, no longer resets a saved light or system theme to dark. (#661, #667)
 - **Share comments and replies renew an expiring sign-in before posting.** If renewal is refused, reviewers can sign in again or continue as a guest, just as they can when giving a verdict. `POST /share/{token}/comment` now returns 401 when a bearer token is sent but does not resolve to a user, instead of posting the comment as a guest. (#635, #649 by @jeremy-pixelated)
 - Stopping the production Celery containers now reaches Celery. A worker stops taking tasks, and if it finishes the running ones within Docker's 10 seconds it returns the tasks it had reserved to the queue; before, it kept starting new tasks until it was killed. A longer transcode is still interrupted, and the hourly check starts it again after `STUCK_PROCESSING_TIMEOUT_HOURS` (6 by default). (#658)
 - FCPXML comment exports use the instance name for the event label, falling back to `FreeFrame Comments` when no name is configured. (#648 by @jeremy-pixelated)

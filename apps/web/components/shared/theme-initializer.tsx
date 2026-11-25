@@ -10,10 +10,12 @@ export function ThemeInitializer() {
   const syncFromServer = useThemeStore((s) => s.syncFromServer)
   const user = useAuthStore((s) => s.user)
 
-  // Apply saved theme on mount (local only, no server save)
+  // Apply saved theme on mount (local only, no server save). Read from the store,
+  // not from the render: while it hydrates, a component is given the store's
+  // initial state, and applying that would save dark over the stored choice.
   useEffect(() => {
-    applyTheme(theme)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    applyTheme(useThemeStore.getState().theme)
+  }, [applyTheme])
 
   // Sync from server when user loads (server wins if it has a value)
   useEffect(() => {
