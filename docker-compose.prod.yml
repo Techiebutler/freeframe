@@ -166,7 +166,7 @@ services:
       - traefik.http.services.api.loadbalancer.server.port=8000
     restart: unless-stopped
 
-  # `exec` in the four Celery commands replaces the shell, which does not pass
+  # `exec` in the five Celery commands replaces the shell, which does not pass
   # SIGTERM on: without it a stop never reached Celery, so the worker kept taking
   # tasks until it was killed. `init: true` reaps ffmpeg processes whose parent
   # worker process died, which the shell used to do.
@@ -218,7 +218,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q webhooks -c $${WEBHOOK_CONCURRENCY:-1} --loglevel=$${CELERY_LOGLEVEL:-info}"
+    init: true
+    command: sh -c "exec celery -A apps.api.tasks.celery_app worker -Q webhooks -c $${WEBHOOK_CONCURRENCY:-1} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   # Housekeeping: retention GC, stale-upload reaper, orphan sweep. (Watermarking
