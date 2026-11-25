@@ -135,7 +135,17 @@ class Settings(BaseSettings):
     # services/branding_service.resolve_org_name). Set it to pin a fixed
     # display name regardless of branding.
     mail_from_name: str = ""
-    
+
+    # Outgoing webhook (tasks/webhook_tasks.py). Unset WEBHOOK_URL = off. Set by
+    # whoever controls the instance's environment, never by a user, so it is not
+    # a request-forgery primitive for an ordinary account.
+    webhook_url: str = ""
+    # HMAC-SHA256 key for the X-FreeFrame-Signature header. Blank sends no
+    # signature header.
+    webhook_secret: str = ""
+    # Comma-separated event names to send; see tasks.webhook_tasks.WEBHOOK_EVENT_NAMES.
+    webhook_events: str = "transcode_complete,transcode_failed"
+
     # AWS SES settings
     aws_mail_access_key_id: str | None = None
     aws_mail_secret_access_key: str | None = None

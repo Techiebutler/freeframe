@@ -166,7 +166,7 @@ services:
       - traefik.http.services.api.loadbalancer.server.port=8000
     restart: unless-stopped
 
-  # `exec` in the four Celery commands replaces the shell, which does not pass
+  # `exec` in the five Celery commands replaces the shell, which does not pass
   # SIGTERM on: without it a stop never reached Celery, so the worker kept taking
   # tasks until it was killed. `init: true` reaps ffmpeg processes whose parent
   # worker process died, which the shell used to do.
@@ -200,6 +200,26 @@ services:
         condition: service_healthy
     init: true
     command: sh -c "exec celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c $${EMAIL_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
+    restart: unless-stopped
+
+  # Outgoing webhook deliveries. A worker of its own so an endpoint that is slow
+  # or gone can never hold an email_high slot (a magic code someone is waiting
+  # on) and so it can be scaled apart. It reads the database to build the body.
+  webhook_worker:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.prod
+    env_file:
+      - .env.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    init: true
+    command: sh -c "exec celery -A apps.api.tasks.celery_app worker -Q webhooks -c $${WEBHOOK_CONCURRENCY:-1} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   # Housekeeping: retention GC, stale-upload reaper, orphan sweep. (Watermarking

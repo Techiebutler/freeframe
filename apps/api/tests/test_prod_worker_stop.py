@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 PROD_COMPOSE = Path(__file__).resolve().parents[3] / "docker-compose.prod.yml"
-CELERY_SERVICES = {"worker", "email_worker", "maintenance_worker", "beat"}
+CELERY_SERVICES = {"worker", "email_worker", "maintenance_worker", "webhook_worker", "beat"}
 
 
 def _celery_services():

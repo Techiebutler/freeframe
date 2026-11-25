@@ -25,7 +25,7 @@ STORAGE_COMPOSE = REPO_ROOT / "docker-compose.storage.yml"
 GPU_COMPOSE = REPO_ROOT / "docker-compose.gpu.yml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 
-APP_SERVICES = ("api", "worker", "email_worker", "maintenance_worker", "beat", "web")
+APP_SERVICES = ("api", "worker", "email_worker", "webhook_worker", "maintenance_worker", "beat", "web")
 API_IMAGE_SERVICES = ("api", "worker", "email_worker", "maintenance_worker", "beat")
 SILO_TAG = "RELEASE.2026-09-16T00-00-00Z"
 
@@ -150,6 +150,7 @@ def test_base_prod_file_unchanged():
         "api",
         "worker",
         "email_worker",
+        "webhook_worker",
         "maintenance_worker",
         "beat",
         "web",
@@ -183,7 +184,7 @@ def test_base_prod_file_unchanged():
         "traefik.http.services.web.loadbalancer.server.port=3000",
     ]
 
-    for name in ("api", "worker", "email_worker", "maintenance_worker", "beat"):
+    for name in ("api", "worker", "email_worker", "webhook_worker", "maintenance_worker", "beat"):
         assert services[name]["build"] == {
             "context": ".",
             "dockerfile": "apps/api/Dockerfile.prod",
