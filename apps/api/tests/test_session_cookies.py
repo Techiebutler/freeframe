@@ -66,20 +66,13 @@ def test_web_refresh_accepts_current_cookie_or_migrates_legacy_token(client, val
     kwargs = ({"json": {"refresh_token": valid_refresh}} if source == "body"
               else {"headers": {**WEB, "Cookie": f"{source}={valid_refresh}"}})
     response = client.post("/auth/refresh", **({"headers": WEB} | kwargs))
+    if source == LEGACY:
+        assert response.status_code == 401
+        return
     assert response.status_code == 200
     assert "refresh_token" not in response.json()
     assert HOST in cookies(response)
     assert cookies(response)[LEGACY]["max-age"] == "0"
-
-
-def test_plain_http_cookie_is_http_only(client, valid_refresh, monkeypatch):
-    from apps.api.config import settings
-    monkeypatch.setitem(settings.__dict__, "cookie_secure", False)
-    response = client.post("/auth/refresh", json={"refresh_token": valid_refresh}, headers=WEB)
-    assert response.status_code == 200
-    cookie = cookies(response)[LEGACY]
-    assert cookie["httponly"] and not cookie["secure"]
-    assert HOST not in cookies(response)
 
 
 def test_body_client_gets_body_token_even_with_an_unrelated_cookie(client, valid_refresh):

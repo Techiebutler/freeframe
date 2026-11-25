@@ -23,18 +23,12 @@ def require_same_origin(request: Request) -> None:
 
 
 def _cookie_options() -> dict:
-    return {"path": "/", "secure": settings.cookie_secure, "httponly": True, "samesite": "lax"}
-
-
-def _cookie_name() -> str:
-    return HOST_COOKIE if settings.cookie_secure else LEGACY_COOKIE
+    return {"path": "/", "secure": True, "httponly": True, "samesite": "lax"}
 
 
 def read_refresh_token(request: Request, body_token: str | None) -> str | None:
     require_same_origin(request)
-    # The secure cookie takes precedence over transition credentials. A legacy
-    # body can migrate even if a JS-set cookie is stale or absent.
-    return request.cookies.get(HOST_COOKIE) or body_token or request.cookies.get(LEGACY_COOKIE)
+    return request.cookies.get(HOST_COOKIE) or body_token
 
 
 def refresh_token_for_body(request: Request, response: Response, token: str) -> dict[str, str]:
@@ -43,17 +37,15 @@ def refresh_token_for_body(request: Request, response: Response, token: str) -> 
     require_same_origin(request)
     response.headers["Cache-Control"] = "no-store"
     response.set_cookie(
-        key=_cookie_name(), value=token,
+        key=HOST_COOKIE, value=token,
         max_age=settings.refresh_token_expire_days * 86400,
         **_cookie_options(),
     )
-    if settings.cookie_secure:
-        response.delete_cookie(key=LEGACY_COOKIE, path="/")
+    response.delete_cookie(key=LEGACY_COOKIE, path="/")
     return {}
 
 
 def clear_refresh_cookie(request: Request, response: Response) -> None:
     require_same_origin(request)
-    response.delete_cookie(key=_cookie_name(), **_cookie_options())
-    if settings.cookie_secure:
-        response.delete_cookie(key=LEGACY_COOKIE, path="/")
+    response.delete_cookie(key=HOST_COOKIE, **_cookie_options())
+    response.delete_cookie(key=LEGACY_COOKIE, path="/")
