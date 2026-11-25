@@ -377,6 +377,14 @@ def needs_typed_confirmation(project_count: int, bytes_total: int) -> bool:
     return project_count > CONFIRM_ABOVE_PROJECTS or bytes_total > CONFIRM_ABOVE_BYTES
 
 
+def _no_longer_exist(count: int) -> "DeleteGate":
+    return DeleteGate(
+        409,
+        f"{count} of the selected items no longer exist. "
+        "Reload the list and select again.",
+    )
+
+
 def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str | None) -> None:
     """Raise unless the request proved it meant this exact selection.
 
@@ -388,16 +396,13 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
        trusted with: without it a hand-made request deletes a different number
        of things than the dialog named.
     3. No asset's newest live version is taken alone, which would silently
-       demote the asset to an older cut while reporting a tidy reclaim.
+       demote the asset to an older cut while reporting a tidy reclaim. Decided
+       under the assets' row locks, which the caller's commit releases.
     4. Past a threshold the phrase was typed, enforced here and not only in the
        dialog, because a gate living in the browser is a suggestion.
     """
     if targets["missing"]:
-        raise DeleteGate(
-            409,
-            f"{len(targets['missing'])} of the selected items no longer exist. "
-            "Reload the list and select again.",
-        )
+        raise _no_longer_exist(len(targets["missing"]))
 
     versions = targets.get("versions", [])
     resolved = len(targets["projects"]) + len(targets["assets"]) + len(versions)
@@ -417,6 +422,22 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
             v for v in versions
             if v["asset_id"] not in chosen_assets and v["project_id"] not in chosen_projects
         ]
+        # The lock an editor's delete or restore of a version takes
+        # (`_lock_live_asset`), so the two take turns on an asset and neither can
+        # take the version the other leaves. Taken before the version's own row,
+        # as there; the log entry naming the asset used to come after it, which
+        # could deadlock. Whole assets in the selection are in it too, all in one
+        # order, so two admin deletes cannot wait on each other. `key_share`
+        # leaves comments alone.
+        db.query(Asset.id).filter(
+            Asset.id.in_(chosen_assets | {v["asset_id"] for v in versions})
+        ).order_by(Asset.id).with_for_update(key_share=True).all()
+        # An editor may have deleted one of them while this waited.
+        still_live = db.query(AssetVersion.id).filter(
+            AssetVersion.id.in_([v["id"] for v in versions]), AssetVersion.deleted_at.is_(None),
+        ).count()
+        if still_live != len(versions):
+            raise _no_longer_exist(len(versions) - still_live)
         newest = latest_version_ids(db, [v["asset_id"] for v in at_risk])
         blocked = [v for v in at_risk if newest.get(v["asset_id"]) == v["id"]]
         if blocked:
