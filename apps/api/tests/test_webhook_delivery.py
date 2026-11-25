@@ -158,6 +158,17 @@ class TestEnqueue:
             webhook_tasks.SOFT_TIME_LIMIT, webhook_tasks.HARD_TIME_LIMIT,
         )
         assert webhook_tasks.SOFT_TIME_LIMIT < webhook_tasks.HARD_TIME_LIMIT
+        # psycopg2 blocks in C, so the soft limit can arrive late.
+        assert webhook_tasks.HARD_TIME_LIMIT == 120
+
+    def test_webhooks_stay_off_the_email_worker(self):
+        import re
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[3]
+        for name in ("docker-compose.prod.yml", "docker-compose.dev.yml"):
+            text = (root / name).read_text()
+            block = re.search(r"^  email_worker:\n(.*?)(?=^  \S)", text, re.S | re.M).group(1)
+            assert "webhooks" not in block, name
 
     def test_queued_with_a_delivery_id_and_on_its_own_queue(self, configured):
         with patch.object(deliver_webhook, "delay") as delay:
@@ -242,6 +253,27 @@ class TestDelivery:
         post.assert_not_called()
         db.close.assert_called_once()
 
+    def test_a_time_limit_during_the_database_read_is_retried(self, configured):
+        w = World()
+        db = w.db()
+        db.get.side_effect = SoftTimeLimitExceeded()
+        post = MagicMock()
+        with patch.object(webhook_tasks, "SessionLocal", return_value=db), \
+             patch.object(webhook_tasks.httpx, "post", post), \
+             patch.object(deliver_webhook, "retry", side_effect=Retry()) as retry, \
+             patch.object(deliver_webhook.request, "retries", 0, create=True):
+            with pytest.raises(Retry):
+                deliver_webhook.run("transcode_complete", str(w.asset.id), str(w.version.id), "d-1")
+        retry.assert_called_once_with(countdown=30)
+        post.assert_not_called()
+
+    @pytest.mark.parametrize("error", [httpx.InvalidURL("bad"), UnicodeError("label empty")])
+    def test_an_unbuildable_url_is_dropped_not_retried(self, configured, error, caplog):
+        with caplog.at_level("ERROR", logger="celery.webhook"):
+            _, retry = _run(World(), error=error)
+        retry.assert_not_called()
+        assert len(caplog.records) == 1
+
     def test_backoff_doubles(self, configured):
         _, retry = _run(World(), _resp(503), retries=3)
         retry.assert_called_once_with(countdown=240)
@@ -300,6 +332,33 @@ class TestTranscodeIsNeverHeldUp:
             raise RuntimeError("ffmpeg died")
         w, notify = self._run_process_asset(boom, retries=3)
         notify.assert_called_once_with("transcode_failed", str(w.asset.id), str(w.version.id))
+
+    def test_the_notice_follows_the_commit_in_process_asset(self):
+        from apps.api.tasks import transcode_tasks
+        order = MagicMock()
+        from apps.api.models.asset import AssetType, MediaFile
+        w = World()
+        w.asset.asset_type = AssetType.video
+        rows = {AssetVersion: w.version, Asset: w.asset, MediaFile: SimpleNamespace(id=_id())}
+
+        def query(model):
+            q = MagicMock()
+            q.filter.return_value = q
+            q.first.return_value = rows[model]
+            return q
+
+        db = MagicMock()
+        db.query.side_effect = query
+        db.commit.side_effect = lambda: order.commit()
+        with patch.object(transcode_tasks, "SessionLocal", return_value=db), \
+             patch.object(transcode_tasks, "get_s3_client"), \
+             patch.object(transcode_tasks, "_process_video"), \
+             patch.object(transcode_tasks, "_record_derived_size"), \
+             patch.object(transcode_tasks, "_publish_event"), \
+             patch.object(transcode_tasks, "_notify_webhook", side_effect=lambda *a: order.notify()):
+            transcode_tasks.process_asset.run(str(w.asset.id), str(w.version.id))
+        names = [c[0] for c in order.mock_calls]
+        assert names.index("notify") > max(i for i, n in enumerate(names) if n == "commit")
 
     def test_a_version_with_no_media_file_announces_failed(self):
         from apps.api.models.asset import MediaFile

@@ -190,29 +190,7 @@ def test_a_version_whose_output_already_exists_is_marked_ready_not_re_transcoded
     assert stuck.processing_status == ProcessingStatus.ready
 
 
-def test_a_version_marked_ready_by_the_sweep_announces_complete():
-    """The transcode that would have sent the webhook never got to."""
-    from apps.api.tasks import cleanup_tasks, transcode_tasks
-
-    stuck = SimpleNamespace(id=uuid.uuid4(), asset_id=uuid.uuid4(),
-                            processing_status=ProcessingStatus.processing)
-    db = MagicMock()
-    db.query.return_value = db
-    db.filter.return_value = db
-    db.all.return_value = [stuck]
-    db.first.return_value = SimpleNamespace(s3_key_processed="processed/p/a/v")
-
-    with patch.object(cleanup_tasks.settings, "stuck_processing_timeout_hours", 6), \
-         patch.object(cleanup_tasks, "SessionLocal", return_value=db), \
-         patch.object(transcode_tasks, "_notify_webhook") as notify:
-        cleanup_tasks.requeue_stuck_processing()
-
-    notify.assert_called_once_with("transcode_complete", str(stuck.asset_id), str(stuck.id))
-    # after the commit that made the version ready, never before
-    assert db.commit.called
-
-
-def test_a_version_the_sweep_re_dispatches_announces_nothing():
+def test_the_sweep_announces_nothing():
     from apps.api.tasks import cleanup_tasks, transcode_tasks
 
     stuck = SimpleNamespace(id=uuid.uuid4(), asset_id=uuid.uuid4(),

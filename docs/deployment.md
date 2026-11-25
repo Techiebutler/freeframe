@@ -854,9 +854,8 @@ Set `WEBHOOK_URL` and FreeFrame POSTs a JSON notice to it when a version becomes
 watchable (`transcode_complete`) or its processing fails (`transcode_failed`), so
 a chat channel, job board or script does not have to poll the API. The URL is
 instance-level and set only here, never from the app. The `worker` queues the
-notice, the `maintenance_worker` queues the one for a version it finds already
-done, and the `webhook_worker` sends it. Only a container that sees `WEBHOOK_URL`
-queues anything, so recreate all three after changing it.
+notice and the `webhook_worker` sends it. Only a container that sees `WEBHOOK_URL`
+queues anything, so recreate both after changing it.
 
 ```json
 {
@@ -872,7 +871,7 @@ queues anything, so recreate all three after changing it.
 `folder` is `null` for an asset at the project root; `path` runs from the
 outermost folder down to this one and does not include the project. Ids are the
 stable keys; names are a snapshot at delivery time. `status` is `failed` for
-`transcode_failed`. Nothing is sent for a version, asset or project that has
+`transcode_failed`. Nothing is sent for a version, asset, folder or project that has
 been deleted since, and the body holds no presigned URL: a receiver that wants
 the file asks the API with its own credentials.
 

@@ -38,6 +38,8 @@ from ..services.folder_paths import MAX_DEPTH_WALK
 from ..services.permissions import folder_chain_is_live
 
 log = logging.getLogger("celery.webhook")
+# httpx logs every request URL at INFO, and the URL may carry a token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 #: Events WEBHOOK_EVENTS can name, and the version status each reports.
 WEBHOOK_EVENT_NAMES = {
@@ -50,9 +52,12 @@ WEBHOOK_EVENT_NAMES = {
 #: attempt: SOFT_TIME_LIMIT does.
 REQUEST_TIMEOUT = 10.0
 #: Seconds one attempt may run in all before it counts as a timeout (and is
-#: retried), and the hard limit that kills the process if that is ignored.
+#: retried), and the hard limit that kills the process if that is ignored. The
+#: hard limit is generous because psycopg2 blocks in C: the soft limit is not
+#: seen until a stuck query returns, and a tight hard limit would lose the
+#: delivery with no retry.
 SOFT_TIME_LIMIT = 15
-HARD_TIME_LIMIT = 20
+HARD_TIME_LIMIT = 120
 #: Attempts after the first. Backoff doubles from 30s: 30, 60, 120, 240, 480.
 MAX_RETRIES = 5
 RETRY_BASE_SECONDS = 30
@@ -175,8 +180,8 @@ def deliver_webhook(self, event: str, asset_id: str, version_id: str, delivery_i
     db = SessionLocal()
     try:
         payload = build_payload(db, event, asset_id, version_id)
-    except SQLAlchemyError as exc:
-        # A database that is restarting comes back; the delivery should too.
+    except (SQLAlchemyError, SoftTimeLimitExceeded) as exc:
+        # A database that is restarting or locked comes back; the delivery should too.
         return _retry_or_give_up(self, event, delivery_id, version_id, exc)
     finally:
         db.close()
@@ -201,6 +206,10 @@ def deliver_webhook(self, event: str, asset_id: str, version_id: str, delivery_i
         )
     except httpx.HTTPError as exc:
         return _retry_or_give_up(self, event, delivery_id, version_id, exc)
+    except (httpx.InvalidURL, UnicodeError) as exc:
+        # A URL that passed the enqueue check but cannot be built; asking again will not help.
+        log.error("Webhook %s (delivery %s) dropped: WEBHOOK_URL is unusable: %s", event, delivery_id, exc)
+        return
     except SoftTimeLimitExceeded:
         return _retry_or_give_up(
             self, event, delivery_id, version_id, f"no answer within {SOFT_TIME_LIMIT}s",
