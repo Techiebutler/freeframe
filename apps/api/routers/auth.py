@@ -19,7 +19,8 @@ from ..services.auth_service import (
     get_user_by_email, get_user_by_id,
 )
 from ..services.session_cookies import (
-    clear_refresh_cookie, read_refresh_token, refresh_token_for_body, wants_cookie,
+    clear_refresh_cookie, read_refresh_token, refresh_token_for_body,
+    require_same_origin_for_web, wants_cookie,
 )
 from ..services.redis_service import (
     generate_magic_code, store_magic_code, verify_magic_code as redis_verify_magic_code,
@@ -106,7 +107,7 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/verify-magic-code", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(rate_limit("verify_magic_code", 10, 600))])
+@router.post("/verify-magic-code", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(require_same_origin_for_web), Depends(rate_limit("verify_magic_code", 10, 600))])
 def verify_magic_code(body: VerifyMagicCodeRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Verify magic code and return tokens.
@@ -184,7 +185,7 @@ def get_invite_info(token: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/accept-invite", response_model=TokenResponse, response_model_exclude_none=True)
+@router.post("/accept-invite", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(require_same_origin_for_web)])
 def accept_invite(body: AcceptInviteRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Accept invite and set password. Email is already verified via invite."""
     user = db.query(User).filter(
@@ -215,7 +216,7 @@ def accept_invite(body: AcceptInviteRequest, request: Request, response: Respons
     return _issue_tokens(request, response, user)
 
 
-@router.post("/login", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(rate_limit("login", 10, 600))])
+@router.post("/login", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(require_same_origin_for_web), Depends(rate_limit("login", 10, 600))])
 def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Login with email + password."""
     user = get_user_by_email(db, body.email)
@@ -288,7 +289,7 @@ def update_preferences(
     db.refresh(current_user)
     return current_user
 
-@router.patch("/change-password", response_model=TokenResponse, response_model_exclude_none=True, status_code=status.HTTP_200_OK)
+@router.patch("/change-password", response_model=TokenResponse, response_model_exclude_none=True, status_code=status.HTTP_200_OK, dependencies=[Depends(require_same_origin_for_web)])
 def change_password(
     body: ChangePasswordRequest,
     request: Request,

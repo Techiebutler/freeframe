@@ -4,9 +4,13 @@ from unittest.mock import patch
 
 import pytest
 
-from apps.api.services.auth_service import create_refresh_token, decode_token
+from apps.api.models.user import UserStatus
+from apps.api.services.auth_service import create_access_token, create_refresh_token, decode_token
 
 WEB = {"X-FF-Client": "web", "Sec-Fetch-Site": "same-origin"}
+FOREIGN_ORIGIN = {"Origin": "https://other.example"}
+FOREIGN_WEB = {"X-FF-Client": "web", **FOREIGN_ORIGIN}
+LOGIN = {"email": "test@example.com", "password": "fixture-password"}
 HOST = "__Host-ff_refresh_token"
 LEGACY = "ff_refresh_token"
 
@@ -59,6 +63,87 @@ def test_browser_first_setup_issues_cookie(client, mock_db):
     assert response.status_code == 201
     assert "refresh_token" not in response.json()
     assert decode_token(cookies(response)[HOST].value)["type"] == "refresh"
+
+
+def test_foreign_web_login_issues_no_session(client, valid_refresh):
+    with patch("apps.api.routers.auth.verify_password", return_value=True), \
+         patch("apps.api.routers.auth.create_access_token", wraps=create_access_token) as access, \
+         patch("apps.api.routers.auth.create_refresh_token", wraps=create_refresh_token) as refresh:
+        response = client.post("/auth/login", json=LOGIN, headers=FOREIGN_WEB)
+    assert response.status_code == 403
+    assert "set-cookie" not in response.headers
+    access.assert_not_called()
+    refresh.assert_not_called()
+
+
+def test_foreign_login_without_web_header_uses_body_tokens(client, valid_refresh):
+    with patch("apps.api.routers.auth.verify_password", return_value=True):
+        response = client.post("/auth/login", json=LOGIN, headers=FOREIGN_ORIGIN)
+    assert response.status_code == 200
+    payload = decode_token(response.json()["refresh_token"])
+    assert payload and payload["type"] == "refresh"
+    assert "set-cookie" not in response.headers
+
+
+def test_foreign_web_accept_invite_leaves_invite_unspent(client, mock_db, test_user, valid_refresh):
+    test_user.invite_token = "fixture"
+    test_user.invite_token_expires_at = None
+    test_user.status = UserStatus.pending_invite
+    with patch("apps.api.routers.auth.hash_password", return_value="test-hash"):
+        response = client.post("/auth/accept-invite", json={
+            "token": "fixture", "name": "Reviewer", "password": "fixture-password",
+        }, headers=FOREIGN_WEB)
+    assert response.status_code == 403
+    assert test_user.invite_token == "fixture"
+    assert test_user.status == UserStatus.pending_invite
+    mock_db.commit.assert_not_called()
+
+
+def test_foreign_web_verify_magic_code_leaves_code_unspent(client, mock_db, test_user, valid_refresh):
+    from apps.api.services.redis_service import MAGIC_CODE_PREFIX
+
+    code_key = f"{MAGIC_CODE_PREFIX}{test_user.id}"
+    stored = {code_key: "123456"}
+    with patch("apps.api.services.redis_service.get_redis") as get_redis:
+        redis = get_redis.return_value
+        redis.get.side_effect = stored.get
+        redis.delete.side_effect = lambda key: stored.pop(key, None)
+        response = client.post("/auth/verify-magic-code", json={
+            "email": LOGIN["email"], "code": "123456",
+        }, headers=FOREIGN_WEB)
+    assert response.status_code == 403
+    assert stored == {code_key: "123456"}
+    assert test_user.email_verified is False
+    mock_db.commit.assert_not_called()
+
+
+def test_foreign_web_change_password_leaves_password_unchanged(client, mock_db, test_user, valid_refresh):
+    old_hash = test_user.password_hash
+    headers = {**FOREIGN_WEB, "Authorization": f"Bearer {create_access_token(str(test_user.id))}"}
+    with patch("apps.api.routers.auth.verify_password", return_value=True), \
+         patch("apps.api.routers.auth.hash_password", return_value="new-hash"):
+        response = client.patch("/auth/change-password", json={
+            "current_password": "fixture-password", "new_password": "new-fixture",
+        }, headers=headers)
+    assert response.status_code == 403
+    assert test_user.password_hash == old_hash
+    assert test_user.token_version == 1
+    mock_db.commit.assert_not_called()
+
+
+def test_foreign_web_setup_does_not_create_superadmin(client, mock_db):
+    from uuid import uuid4
+
+    mock_db.refresh.side_effect = lambda user: setattr(user, "id", uuid4())
+    with patch("apps.api.routers.setup.get_email_owner", return_value=None), \
+         patch("apps.api.routers.setup.hash_password", return_value="test-hash"):
+        response = client.post("/setup/create-superadmin", json={
+            **LOGIN, "name": "Reviewer",
+        }, headers=FOREIGN_WEB)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Cross-origin request rejected"
+    mock_db.add.assert_not_called()
+    mock_db.commit.assert_not_called()
 
 
 @pytest.mark.parametrize("source", [HOST, LEGACY, "body"])

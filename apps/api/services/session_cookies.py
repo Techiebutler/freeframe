@@ -22,6 +22,11 @@ def require_same_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Cross-origin request rejected")
 
 
+def require_same_origin_for_web(request: Request) -> None:
+    if wants_cookie(request):
+        require_same_origin(request)
+
+
 def _cookie_options() -> dict:
     return {"path": "/", "secure": True, "httponly": True, "samesite": "lax"}
 
@@ -34,7 +39,6 @@ def read_refresh_token(request: Request, body_token: str | None) -> str | None:
 def refresh_token_for_body(request: Request, response: Response, token: str) -> dict[str, str]:
     if not wants_cookie(request):
         return {"refresh_token": token}
-    require_same_origin(request)
     response.headers["Cache-Control"] = "no-store"
     response.set_cookie(
         key=HOST_COOKIE, value=token,
