@@ -150,17 +150,19 @@ updates:
   # READ THIS BEFORE ASSUMING THIS ENTRY KEEPS BASE IMAGES CURRENT — it does
   # not, and cannot, for the tags we pin:
   #   apps/api/Dockerfile*  FROM python:3.11-slim
-  #   apps/web/Dockerfile*  FROM node:20-alpine
+  #   apps/web/Dockerfile       FROM node:20-alpine
+  #   apps/web/Dockerfile.prod  FROM node:24-alpine
   # Dockerfile tag matching is precision-filtered: a two-segment tag only
   # matches other two-segment tags, a one-segment tag only one-segment. So
   # python:3.11-slim can only ever move to 3.x-slim (always MINOR) and
-  # node:20-alpine only to 2x-alpine (always MAJOR). Neither is ever a PATCH.
+  # node:2x-alpine only to another major. Neither is ever a PATCH.
   # Net effect: this entry opens zero PRs until a tag here gains a patch
   # segment (e.g. python:3.11.14-slim).
   #
   # Keeping base images current is therefore a MANUAL, CALENDARED job, not an
-  # automated one. Node 20 is already EOL (2026-04-30) and needs a
-  # hand-written PR.
+  # automated one. Node 20 is already EOL (2026-04-30); the dev image
+  # (apps/web/Dockerfile, docker-compose.dev.yml) is still on it and needs a
+  # hand-written PR, as Dockerfile.prod had.
   #
   # The `ignore` block is load-bearing, not decoration: a dependency matching
   # no group gets an INDIVIDUAL PR rather than being held back, so without it
