@@ -136,7 +136,7 @@ services:
         condition: service_healthy
     command: >
       sh -c "cd /workspace/apps/api && alembic upgrade head && cd /workspace &&
-      gunicorn apps.api.main:app
+      exec gunicorn apps.api.main:app
       -w $${API_WORKERS:-4}
       -k uvicorn.workers.UvicornWorker
       --bind 0.0.0.0:8000
