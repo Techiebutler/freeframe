@@ -10,7 +10,7 @@ from ..database import get_db
 from ..models.user import User, UserStatus
 from ..services.auth_service import hash_password, create_access_token, create_refresh_token, get_email_owner
 from ..schemas.auth import NewPassword, NewUserEmail
-from ..services.session_cookies import refresh_token_for_body
+from ..services.session_cookies import refresh_token_for_body, require_same_origin_for_web
 from ..middleware.rate_limit import rate_limit
 
 router = APIRouter(prefix="/setup", tags=["setup"])
@@ -59,7 +59,7 @@ def get_setup_status(db: Session = Depends(get_db)):
     )
 
 
-@router.post("/create-superadmin", response_model=SetupCompleteResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit("create_superadmin", 3, 600))])
+@router.post("/create-superadmin", response_model=SetupCompleteResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_same_origin_for_web), Depends(rate_limit("create_superadmin", 3, 600))])
 def create_superadmin(body: CreateSuperAdminRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Create the first superadmin user.

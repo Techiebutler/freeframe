@@ -19,7 +19,8 @@ from ..services.auth_service import (
     get_user_by_email, get_user_by_id,
 )
 from ..services.session_cookies import (
-    clear_refresh_cookie, read_refresh_token, refresh_token_for_body, wants_cookie,
+    clear_refresh_cookie, expire_host_refresh_cookie, read_refresh_token,
+    refresh_token_for_body, require_same_origin_for_web, wants_cookie,
 )
 from ..services.redis_service import (
     generate_magic_code, store_magic_code, verify_magic_code as redis_verify_magic_code,
@@ -106,7 +107,7 @@ def send_magic_code(body: SendMagicCodeRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/verify-magic-code", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(rate_limit("verify_magic_code", 10, 600))])
+@router.post("/verify-magic-code", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(require_same_origin_for_web), Depends(rate_limit("verify_magic_code", 10, 600))])
 def verify_magic_code(body: VerifyMagicCodeRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Verify magic code and return tokens.
@@ -184,7 +185,7 @@ def get_invite_info(token: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/accept-invite", response_model=TokenResponse, response_model_exclude_none=True)
+@router.post("/accept-invite", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(require_same_origin_for_web)])
 def accept_invite(body: AcceptInviteRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Accept invite and set password. Email is already verified via invite."""
     user = db.query(User).filter(
@@ -215,7 +216,7 @@ def accept_invite(body: AcceptInviteRequest, request: Request, response: Respons
     return _issue_tokens(request, response, user)
 
 
-@router.post("/login", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(rate_limit("login", 10, 600))])
+@router.post("/login", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(require_same_origin_for_web), Depends(rate_limit("login", 10, 600))])
 def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Login with email + password."""
     user = get_user_by_email(db, body.email)
@@ -237,23 +238,47 @@ def _limit_refresh(request: Request) -> None:
     (_limit_web_refresh if wants_cookie(request) else _limit_body_refresh)(request)
 
 
-@router.post("/refresh", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(_limit_refresh)])
-def refresh_token(request: Request, response: Response, body: RefreshRequest | None = None, db: Session = Depends(get_db)):
-    token = body.refresh_token if body is not None else None
-    if wants_cookie(request):
-        token = read_refresh_token(request, token)
-    elif body is None:
-        # The body is optional only for clients that opt into cookie transport.
-        raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": "Field required", "type": "missing", "input": None}])
-    payload = decode_token(token) if token else None
+def _refresh_user(db: Session, token: str) -> User:
+    payload = decode_token(token)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    user = get_user_by_id(db, uuid.UUID(payload["sub"]))
+    try:
+        user_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid refresh token") from None
+    user = get_user_by_id(db, user_id)
     if not user or user.status == UserStatus.deactivated:
         raise HTTPException(status_code=401, detail="User not found")
     if payload.get("ver", 1) != user.token_version:
         raise HTTPException(status_code=401, detail="Session expired, please log in again")
-    return _issue_tokens(request, response, user, needs_password=user.password_hash is None)
+    return user
+
+
+@router.post("/refresh", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(_limit_refresh)])
+def refresh_token(request: Request, response: Response, body: RefreshRequest | None = None, db: Session = Depends(get_db)):
+    web = wants_cookie(request)
+    if not web and body is None:
+        # The body is optional only for clients that opt into cookie transport.
+        raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": "Field required", "type": "missing", "input": None}])
+    body_token = body.refresh_token if body is not None else None
+    cookie_token = read_refresh_token(request) if web else None
+    failure = None
+    for token in (body_token, cookie_token):
+        if not token:
+            continue
+        try:
+            user = _refresh_user(db, token)
+        except HTTPException as exc:
+            failure = failure or exc
+        else:
+            return _issue_tokens(request, response, user, needs_password=user.password_hash is None)
+    failure = failure or HTTPException(status_code=401, detail="Invalid refresh token")
+    if cookie_token is not None:
+        # The exception handler does not use headers on the injected response.
+        expired = Response()
+        expire_host_refresh_cookie(expired)
+        failure.headers = {**(failure.headers or {}), "Set-Cookie": expired.headers["set-cookie"]}
+    raise failure
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -288,7 +313,7 @@ def update_preferences(
     db.refresh(current_user)
     return current_user
 
-@router.patch("/change-password", response_model=TokenResponse, response_model_exclude_none=True, status_code=status.HTTP_200_OK)
+@router.patch("/change-password", response_model=TokenResponse, response_model_exclude_none=True, status_code=status.HTTP_200_OK, dependencies=[Depends(require_same_origin_for_web)])
 def change_password(
     body: ChangePasswordRequest,
     request: Request,

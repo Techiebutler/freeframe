@@ -69,6 +69,43 @@ describe('hasStoredToken', () => {
   })
 })
 
+// Every production image is built with NEXT_PUBLIC_API_URL=/api, a path with no
+// origin, which `new URL` refuses without a base. The tests above and below use
+// the absolute default, so they cannot see it.
+describe('shareRequest with a relative API URL', () => {
+  async function relativeShareRequest() {
+    vi.stubEnv('NEXT_PUBLIC_API_URL', '/api')
+    vi.resetModules()
+    return (await import('../share-request')).shareRequest
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  it('reads from the page origin under the API path, with the query it adds', async () => {
+    const request = await relativeShareRequest()
+    respond(200, [])
+    await expect(request('tok', '/verdicts?asset_id=a1', { method: 'GET', shareSession: 's1', guest })).resolves.toEqual([])
+    const { url } = lastCall()
+    expect(url.origin).toBe(window.location.origin)
+    expect(url.pathname).toBe('/api/share/tok/verdicts')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      asset_id: 'a1', share_session: 's1', guest_email: guest.email,
+    })
+  })
+
+  it('writes to the page origin under the API path', async () => {
+    const request = await relativeShareRequest()
+    respond(200, { id: 'v1' })
+    await expect(request('tok', '/verdict', { method: 'PUT', body: { status: 'approved' }, guest })).resolves.toEqual({ id: 'v1' })
+    const { url, body } = lastCall()
+    expect(`${url.origin}${url.pathname}`).toBe(`${window.location.origin}/api/share/tok/verdict`)
+    expect(body).toEqual({ status: 'approved', guest_name: guest.name, guest_email: guest.email })
+  })
+})
+
 describe('shareRequest', () => {
   // A signed-in client whose login has lapsed
   // must not have their verdict filed under whatever guest identity is left in
