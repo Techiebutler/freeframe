@@ -1,8 +1,9 @@
 import logging
 import os
 import re
+import signal
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -10,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .config import settings
 from .routers import auth, users, projects, upload, events, assets, me, comments, approvals, share, share_verdicts, metadata, branding, instance_branding, notifications, admin, setup, folders, hls_proxy, instance_settings
+from .services.event_service import allow_streams, end_streams
 from .services.s3_service import run_startup_bucket_setup
 from .services.email_service import mail_is_configured
 from .middleware.global_rate_limit import GlobalRateLimitMiddleware
@@ -41,6 +43,40 @@ class _DropQueryStringFilter(logging.Filter):
 # logger's handlers with its own (--access-logfile) but leaves its filters alone.
 logging.getLogger("uvicorn.access").addFilter(_DropQueryStringFilter())
 
+@contextmanager
+def _end_streams_on_stop():
+    """End the open event streams when the server is told to stop.
+
+    uvicorn closes its sockets on SIGTERM and then waits for open responses, and
+    runs the lifespan's own shutdown only after that, which an event stream holds
+    up for good. So this listens for the signal itself and passes it on. It does
+    nothing where there is no handler to pass it on to, or off the main thread
+    (the test client), where signals cannot be set."""
+    allow_streams()
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        previous = {
+            sig: handler
+            for sig in (signal.SIGTERM, signal.SIGINT)
+            if callable(handler := signal.getsignal(sig))
+        }
+
+    def stop(sig, frame):
+        try:
+            end_streams()
+        finally:  # whatever happens above, the server still has to hear the signal
+            previous[sig](sig, frame)
+
+    for sig in previous:
+        signal.signal(sig, stop)
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            if signal.getsignal(sig) is stop:
+                signal.signal(sig, handler)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Run bucket setup off the request path (daemon thread) so a slow or unreachable
@@ -52,7 +88,8 @@ async def lifespan(app: FastAPI):
             "will FAIL until you configure SMTP or SES. See docs/deployment.md.",
             settings.mail_provider,
         )
-    yield
+    with _end_streams_on_stop():
+        yield
 
 _disable_docs = os.getenv("DISABLE_DOCS", "").lower() in ("true", "1", "yes")
 
