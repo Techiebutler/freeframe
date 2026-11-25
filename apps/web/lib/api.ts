@@ -10,14 +10,25 @@ export class ApiError extends Error {
   code?: string
   /** Seconds the server asked the client to wait before trying again. */
   retryAfter?: number
+  /**
+   * A 404 that the API did not send. While it restarts, a proxy with no route to
+   * it, or the web app, answers in its place. It says nothing about what was
+   * asked for, so it must not be read as "gone".
+   */
+  apiMissing?: boolean
 
-  constructor(status: number, detail: string, opts?: { code?: string; retryAfter?: number }) {
+  constructor(
+    status: number,
+    detail: string,
+    opts?: { code?: string; retryAfter?: number; apiMissing?: boolean },
+  ) {
     super(detail)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
     this.code = opts?.code
     this.retryAfter = opts?.retryAfter
+    this.apiMissing = opts?.apiMissing
   }
 }
 
@@ -37,6 +48,9 @@ function retryAfterFromHeader(response: Response): number | undefined {
  * as it always was. `retryAfter` comes from the body's `retry_after`, else the
  * `Retry-After` header.
  *
+ * Every error the API sends is JSON with a `detail`, so a 404 without one came
+ * from something in front of it (`apiMissing`).
+ *
  * `joinValidationMessages` selects what an array (FastAPI 422) detail becomes:
  * its messages joined, or, for the form-upload path, its JSON as before.
  */
@@ -47,9 +61,11 @@ async function toApiError(
   let detail = response.statusText
   let code: string | undefined
   let retryAfter: number | undefined
+  let hasDetail = false
   try {
     const errorBody = await response.json()
     const raw = errorBody?.detail
+    hasDetail = raw !== undefined
     if (raw) {
       if (typeof raw === 'string') {
         detail = raw
@@ -73,6 +89,7 @@ async function toApiError(
   return new ApiError(response.status, detail, {
     code,
     retryAfter: retryAfter ?? retryAfterFromHeader(response),
+    apiMissing: response.status === 404 && !hasDetail ? true : undefined,
   })
 }
 
