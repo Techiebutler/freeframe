@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -188,6 +189,91 @@ def _get_presign_client():
         kwargs["config"] = _SIGV4_CONFIG
     return boto3.client("s3", **kwargs)
 
+#: The statement every release from v1.0.0 to v1.9.x wrote on a non-AWS bucket.
+_OLD_PUBLIC_SID = "PublicReadProcessed"
+
+
+def _is_old_public_statement(statement) -> bool:
+    """Whether this is exactly the statement FreeFrame used to write.
+
+    Stores hand a policy back in their own shape (MinIO and Silo turn the
+    principal into `{"AWS": ["*"]}` and the action and resource into lists), so
+    both shapes match. Anything else about it being different, a condition
+    included, means someone edited it or wrote their own, and it is left alone.
+    """
+    def is_only(value, expected) -> bool:
+        return value == expected or value == [expected]
+
+    if not isinstance(statement, dict):
+        return False
+    principal = statement.get("Principal")
+    if isinstance(principal, dict) and set(principal) == {"AWS"}:
+        principal = principal["AWS"]
+    return (
+        set(statement) == {"Sid", "Effect", "Principal", "Action", "Resource"}
+        and statement["Sid"] == _OLD_PUBLIC_SID
+        and statement["Effect"] == "Allow"
+        and is_only(principal, "*")
+        and is_only(statement["Action"], "s3:GetObject")
+        and is_only(statement["Resource"], f"arn:aws:s3:::{settings.s3_bucket}/processed/*")
+    )
+
+
+def _remove_old_public_policy(s3) -> None:
+    """Take back the public-read policy on processed/* that older releases set.
+
+    It let HLS sub-playlists and segments be fetched without presigned URLs. The
+    HLS proxy (routers/hls_proxy.py) has long made it unnecessary, and it made
+    every processed object readable by anyone who had seen its key, after the
+    share link that gave it out was revoked too. v1.10.0 stopped writing it, but
+    a bucket that already had it kept it, so it is removed here.
+
+    Only that statement goes; a policy an operator set stays. Never fatal: a
+    store without policies, or a key that may not touch them, starts as before.
+    """
+    try:
+        policy = json.loads(s3.get_bucket_policy(Bucket=settings.s3_bucket)["Policy"])
+    except ClientError as e:
+        # No policy, no such API on this store, or not this key's business. None
+        # of them is worth a warning on every start: a key that may not read the
+        # policy could not have written it.
+        logger.info("Not checking the bucket policy on %r: %s", settings.s3_bucket, e)
+        return
+    except (ValueError, TypeError):
+        return
+    if not isinstance(policy, dict):
+        return
+
+    statements = policy.get("Statement")
+    if isinstance(statements, dict):
+        statements = [statements]
+    if not isinstance(statements, list):
+        return
+    kept = [st for st in statements if not _is_old_public_statement(st)]
+    if len(kept) == len(statements):
+        return
+
+    try:
+        if kept:
+            s3.put_bucket_policy(
+                Bucket=settings.s3_bucket, Policy=json.dumps({**policy, "Statement": kept}))
+        else:
+            s3.delete_bucket_policy(Bucket=settings.s3_bucket)
+    except ClientError as e:
+        logger.warning(
+            "The bucket policy on %r still has the statement %r that an older FreeFrame release "
+            "wrote, and it could not be removed (%s). Anyone with the URL of an object under "
+            "processed/ can read it without signing in. Remove the statement by hand.",
+            settings.s3_bucket, _OLD_PUBLIC_SID, e,
+        )
+        return
+    logger.warning(
+        "Removed the statement %r, which an older FreeFrame release wrote, from the bucket policy "
+        "on %r. It let anyone with the URL of an object under processed/ read it without signing in.",
+        _OLD_PUBLIC_SID, settings.s3_bucket,
+    )
+
+
 def ensure_bucket_exists():
     """Create the S3 bucket if it does not exist (+ configure CORS/policy on non-AWS).
 
@@ -293,14 +379,7 @@ def ensure_bucket_exists():
                 settings.s3_bucket, e,
             )
 
-        # NOTE: a public-read bucket policy on processed/* used to be set
-        # here so HLS sub-playlists and .ts segments could be fetched
-        # without presigned URLs. The HLS proxy in routers/hls_proxy.py
-        # already rewrites .ts URLs to presigned S3 URLs, so the public
-        # policy was dead weight and leaked any processed object to anyone
-        # who guessed a key (UUIDs aren't secret — share-link presigned
-        # GETs expose them). Removed for defense-in-depth; the bucket can
-        # stay fully private.
+        _remove_old_public_policy(s3)
 
 
 def run_startup_bucket_setup(attempts: int = 5, base_delay: float = 3.0, _sleep=time.sleep) -> None:

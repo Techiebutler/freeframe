@@ -85,6 +85,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An upload in progress or waiting in the queue is no longer lost while the API restarts.** A proxy, or the web app, answers 404 in the API's place then, and the uploader took that for its answer: the file failed with no Resume, and Discard could drop an upload the server still held. A 404 that did not come from the API is now treated like a lost connection. (#665, #666)
 - **A Redis that stops answering no longer stops the API.** One that accepted connections but never replied held every request for good, `/health` included, because the rate limiter waited for it without a limit. Each call to Redis now gives up after 2 seconds, and the general rate limit is then off for 10 seconds at a time. The limits on sign-in and share passwords let a request through only while Redis does not answer, as they already did when it is down. What cannot work without Redis, such as a sign-in code, answers 503. (#660, #668)
 
+## [1.22.2] - 2026-11-26
+
+Security release: fixes [GHSA-vh3c-rxj8-gx2q](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-vh3c-rxj8-gx2q). Installs that ran v1.0.0 to v1.9.x on a store other than AWS S3 still have a bucket policy that lets anyone read processed media whose URL they have. Upgrading is strongly recommended for them. It contains only this fix on top of v1.22.1, and no migrations.
+
+### Security
+- **Startup removes the public-read bucket policy that v1.0.0 to v1.9.x wrote.** Those releases let anyone read objects under `processed/` (streams, renditions and thumbnails, not originals) on a non-AWS store without signing in, given the object's URL. v1.10.0 stopped writing the policy but left it on a bucket that already had it, so upgraded installs still have it, and revoking a share link did not take access away from someone who had kept a URL. The API now removes that statement when it starts and logs a warning saying so; any other statement in the policy stays. If the key may not change the policy, the warning says to remove it by hand. `S3_STORAGE=s3` (AWS) was never affected, and stores without bucket policies are left alone. If something outside FreeFrame reads `processed/` without signing in, give it a statement of its own.
+
+### Contributors
+Thanks to @jeremy-pixelated for reporting this.
+
 ## [1.22.1] - 2026-11-17
 
 Security release: fixes [GHSA-9rqc-xmrj-9qc6](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-9rqc-xmrj-9qc6), which let read-only project members read share-link passwords and let guests keep access after a link's password was changed. Upgrading is strongly recommended. It contains only this fix on top of v1.22.0, and no migrations.
