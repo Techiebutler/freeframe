@@ -166,6 +166,10 @@ services:
       - traefik.http.services.api.loadbalancer.server.port=8000
     restart: unless-stopped
 
+  # `exec` in the four Celery commands replaces the shell, which does not pass
+  # SIGTERM on: without it a stop never reached Celery, so the worker kept taking
+  # tasks until it was killed. `init: true` reaps ffmpeg processes whose parent
+  # worker process died, which the shell used to do.
   worker:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -179,7 +183,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q transcoding -c $${TRANSCODING_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
+    init: true
+    command: sh -c "exec celery -A apps.api.tasks.celery_app worker -Q transcoding -c $${TRANSCODING_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   email_worker:
@@ -193,7 +198,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c $${EMAIL_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
+    init: true
+    command: sh -c "exec celery -A apps.api.tasks.celery_app worker -Q email_high,email_low -c $${EMAIL_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   # Outgoing webhook deliveries. A worker of its own so an endpoint that is slow
@@ -233,7 +239,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app worker -Q maintenance -c $${MAINTENANCE_CONCURRENCY:-1} --loglevel=$${CELERY_LOGLEVEL:-info}"
+    init: true
+    command: sh -c "exec celery -A apps.api.tasks.celery_app worker -Q maintenance -c $${MAINTENANCE_CONCURRENCY:-1} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
   beat:
@@ -247,7 +254,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: sh -c "celery -A apps.api.tasks.celery_app beat --loglevel=$${CELERY_LOGLEVEL:-info} -s /tmp/celerybeat-schedule"
+    init: true
+    command: sh -c "exec celery -A apps.api.tasks.celery_app beat --loglevel=$${CELERY_LOGLEVEL:-info} -s /tmp/celerybeat-schedule"
     restart: unless-stopped
 
   web:
