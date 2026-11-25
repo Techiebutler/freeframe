@@ -47,8 +47,10 @@ async function thrown(response: Response): Promise<ApiError> {
   throw new Error('expected the call to reject')
 }
 
+const NOT_ANSWERING = 'The server is not answering right now. Try again in a moment.'
+
 /** The error a proxy's 404 becomes, for the tests that mock `api` itself. */
-const proxied = () => new ApiError(404, 'Not Found', { apiMissing: true })
+const proxied = () => new ApiError(404, NOT_ANSWERING, { apiMissing: true })
 
 const interrupted = (over: Partial<UploadFile> = {}): UploadFile =>
   row({
@@ -86,6 +88,19 @@ describe('telling a proxy 404 from the API 404', () => {
   it('only a 404 is marked: another status from a proxy keeps its own meaning', async () => {
     expect((await thrown(new Response('Forbidden', { status: 403 }))).apiMissing).toBeFalsy()
     expect((await thrown(new Response('Bad Gateway', { status: 502 }))).apiMissing).toBeFalsy()
+  })
+})
+
+describe('what the error says', () => {
+  // HTTP/2 has no reason phrase, so `statusText` is empty there.
+  it.each([['HTTP/1.1', 'Not Found'], ['HTTP/2', '']])('is a sentence over %s', async (_, statusText) => {
+    const err = await thrown(new Response('404 page not found', { status: 404, statusText }))
+    expect(err.detail).toBe(NOT_ANSWERING)
+    expect(err.message).toBe(NOT_ANSWERING)
+  })
+
+  it('the API keeps its own words', async () => {
+    expect((await thrown(fromApi())).detail).toBe('Project not found')
   })
 })
 
@@ -144,10 +159,10 @@ describe('sending an upload', () => {
     await vi.advanceTimersByTimeAsync(600_000)
     await flush()
 
-    expect(rowOf(id)).toMatchObject({ status: 'interrupted', versionId: 'v1', uploadId: 'u1' })
+    expect(rowOf(id)).toMatchObject({ status: 'interrupted', versionId: 'v1', uploadId: 'u1', error: NOT_ANSWERING })
   })
 
-  it('a completion answered by the proxy is sent again, past a restart of 20 seconds', async () => {
+  it('a completion answered by the proxy is sent again, past a restart of 45 seconds', async () => {
     vi.useFakeTimers()
     fakeServer()
     const serve = vi.mocked(api.post).getMockImplementation() as (...a: unknown[]) => Promise<unknown>
@@ -156,17 +171,17 @@ describe('sending an upload', () => {
     vi.mocked(api.post).mockImplementation(((path: string, ...rest: unknown[]) => {
       if (path === '/upload/complete') {
         sent += 1
-        if (Date.now() - began < 20_000) return Promise.reject(proxied())
+        if (Date.now() - began < 45_000) return Promise.reject(proxied())
       }
       return serve(path, ...rest)
     }) as never)
 
     const [id] = drop([small('a.jpg')])
     await flush()
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(90_000)
     await flush()
 
-    expect(sent).toBe(4)
+    expect(sent).toBe(5)
     expect(rowOf(id).status).toBe('processing')
   })
 })
@@ -188,17 +203,26 @@ describe('an interrupted upload', () => {
   it('Discard keeps the row and says so, instead of dropping it', async () => {
     vi.mocked(api.get).mockRejectedValue(proxied())
 
-    expect(await useUploadStore.getState().discardUpload('r')).not.toBeNull()
+    expect(await useUploadStore.getState().discardUpload('r')).toBe(NOT_ANSWERING)
 
-    expect(rowOf('r').status).toBe('interrupted')
+    expect(rowOf('r')).toMatchObject({ status: 'interrupted', error: NOT_ANSWERING })
     expect(api.post).not.toHaveBeenCalled()
+  })
+
+  it('a Discard that failed with no words still says so: the dialog closes on an empty answer', async () => {
+    // A 502 over HTTP/2 has neither a body to read nor a reason phrase.
+    vi.mocked(api.get).mockRejectedValue(new ApiError(502, ''))
+
+    expect(await useUploadStore.getState().discardUpload('r')).toBeTruthy()
+
+    expect(rowOf('r').error).toBeTruthy()
   })
 
   it('an abort answered by the proxy is a failed Discard, not a finished one', async () => {
     vi.mocked(api.get).mockRejectedValue(new ApiError(404, 'Version not found'))
     vi.mocked(api.post).mockRejectedValue(proxied())
 
-    expect(await useUploadStore.getState().discardUpload('r')).not.toBeNull()
+    expect(await useUploadStore.getState().discardUpload('r')).toBe(NOT_ANSWERING)
 
     expect(rowOf('r').status).toBe('interrupted')
   })

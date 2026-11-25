@@ -431,13 +431,13 @@ describe('a completion that did not get through', () => {
     expect(rowOf(id).status).toBe('interrupted')
   })
 
-  it('gives up after four tries, and the row is interrupted, still resumable', async () => {
-    const { completions, aborts } = mockCompletions(storageDown(), storageDown(), storageDown(), storageDown())
+  it('gives up after five tries, and the row is interrupted, still resumable', async () => {
+    const { completions, aborts } = mockCompletions(...Array.from({ length: 5 }, storageDown))
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await vi.advanceTimersByTimeAsync(60_000)
 
-    expect(completions()).toBe(4)
+    expect(completions()).toBe(5)
     expect(rowOf(id).status).toBe('interrupted')
     expect(rowOf(id).versionId).toBe(VERSION_ID)
     expect(aborts).toEqual([])

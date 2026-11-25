@@ -1867,7 +1867,7 @@ async function finishAssembledUpload(versionId: string, ownerId: string | undefi
 }
 
 /** Waits before each resend of a completion that did not get through, unless the server asked for another. */
-const COMPLETE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000]
+const COMPLETE_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000]
 /** The longest a completion waits on a server's Retry-After before trying again. */
 const COMPLETE_RETRY_AFTER_CAP_MS = 30_000
 
@@ -1890,7 +1890,7 @@ function isTransientCompletionFailure(err: unknown): boolean {
 }
 
 /**
- * Sends `/upload/complete`, and sends it again, up to four tries in all, while
+ * Sends `/upload/complete`, and sends it again, up to five tries in all, while
  * it fails in a way a retry may fix.
  *
  * Sent once, a completion lost to a blip at the end of a long transfer left the
@@ -1986,7 +1986,8 @@ function reportDiscardFailure(
   fileId: string,
   err: unknown,
 ): string {
-  const message = err instanceof Error ? err.message : 'Discard failed'
+  // Never empty: the confirm dialog takes an empty answer for success.
+  const message = (err instanceof Error && err.message) || 'Discard failed'
   set((s) => ({
     files: s.files.map((f) => (f.id === fileId ? { ...f, error: message, discardFailed: true as const } : f)),
     versionsRevision: s.versionsRevision + 1,
@@ -3938,8 +3939,9 @@ const adopting = new Set<string>()
  *    is checked again when someone else signs in;
  *  * 404 or 409: the upload is gone or finished, and the row is dropped;
  *  * no `versionId`: there is nothing on the server to resume. Dropped too;
- *  * anything else -- a network error, a 5xx, a 429, or an answer that came
- *    after another account signed in -- settles nothing; the next load or
+ *  * anything else -- a network error, a 5xx, a 429, a 404 that was not the
+ *    API's, or an answer that came after another account signed in -- settles
+ *    nothing; the next load or
  *    sign-in asks again.
  *
  * With nobody signed in nothing is asked and nothing changes. Run once after

@@ -32,6 +32,9 @@ export class ApiError extends Error {
   }
 }
 
+/** `statusText` will not do here: it is empty over HTTP/2. */
+const API_MISSING_MESSAGE = 'The server is not answering right now. Try again in a moment.'
+
 /** Whole seconds from a `Retry-After` header; an HTTP-date or junk reads as absent. */
 function retryAfterFromHeader(response: Response): number | undefined {
   const raw = response.headers.get('Retry-After')
@@ -48,8 +51,8 @@ function retryAfterFromHeader(response: Response): number | undefined {
  * as it always was. `retryAfter` comes from the body's `retry_after`, else the
  * `Retry-After` header.
  *
- * Every error the API sends is JSON with a `detail`, so a 404 without one came
- * from something in front of it (`apiMissing`).
+ * Every 404 the API sends is JSON with a `detail`, so one without it came from
+ * something in front of it (`apiMissing`).
  *
  * `joinValidationMessages` selects what an array (FastAPI 422) detail becomes:
  * its messages joined, or, for the form-upload path, its JSON as before.
@@ -86,10 +89,11 @@ async function toApiError(
   } catch {
     // ignore parse errors; use statusText as fallback
   }
-  return new ApiError(response.status, detail, {
+  const apiMissing = response.status === 404 && !hasDetail
+  return new ApiError(response.status, apiMissing ? API_MISSING_MESSAGE : detail, {
     code,
     retryAfter: retryAfter ?? retryAfterFromHeader(response),
-    apiMissing: response.status === 404 && !hasDetail ? true : undefined,
+    apiMissing: apiMissing || undefined,
   })
 }
 
