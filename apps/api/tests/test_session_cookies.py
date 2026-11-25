@@ -3,9 +3,11 @@ from http.cookies import SimpleCookie
 from unittest.mock import patch
 
 import pytest
+from starlette.requests import Request
 
 from apps.api.models.user import UserStatus
 from apps.api.services.auth_service import create_access_token, create_refresh_token, decode_token
+from apps.api.services.session_cookies import read_refresh_token
 
 WEB = {"X-FF-Client": "web", "Sec-Fetch-Site": "same-origin"}
 FOREIGN_ORIGIN = {"Origin": "https://other.example"}
@@ -27,6 +29,22 @@ def cookies(response):
     for value in response.headers.get_list("set-cookie"):
         result.load(value)
     return result
+
+
+@pytest.mark.parametrize("cookie_headers, expected", [
+    ((b"\xa0__Host-ff_refresh_token=padded",), None),
+    ((b"\x85__Host-ff_refresh_token=padded",), None),
+    ((b"__Host-ff_refresh_token=real; \xa0__Host-ff_refresh_token=padded",), "real"),
+    ((b"__Host-ff_refresh_token=real; \x85__Host-ff_refresh_token=padded",), "real"),
+    ((b"__Host-ff_refresh_token=real",), "real"),
+    ((b"unrelated=value", b"__Host-ff_refresh_token=real"), "real"),
+], ids=["nbsp", "nel", "real-before-nbsp", "real-before-nel", "plain", "split-headers"])
+def test_read_refresh_token_requires_exact_cookie_name(cookie_headers, expected):
+    request = Request({"type": "http", "headers": [
+        (b"sec-fetch-site", b"same-origin"),
+        *((b"cookie", value) for value in cookie_headers),
+    ]})
+    assert read_refresh_token(request) == expected
 
 
 @pytest.mark.parametrize("route, method, payload, target", [
