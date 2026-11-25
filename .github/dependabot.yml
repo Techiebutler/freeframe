@@ -53,13 +53,6 @@ updates:
       # Majors reviewed by hand. Does NOT suppress security updates.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-      # celery and kombu 5.7 need redis>=6.4 and redis is pinned at 5.3.1. The
-      # rule above keeps redis at 5.x, so a grouped PR carrying them cannot
-      # install. Remove both entries when redis moves to 6.4.
-      - dependency-name: "celery"
-        update-types: ["version-update:semver-minor"]
-      - dependency-name: "kombu"
-        update-types: ["version-update:semver-minor"]
 
   # ---------------------------------------------------------------------
   # Web frontend — apps/web/package.json + pnpm-lock.yaml
