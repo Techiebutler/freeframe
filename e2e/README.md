@@ -38,6 +38,7 @@ services:
     env_file: !override [$DIR/.env]       # absolute path
   worker:             { env_file: !override [$DIR/.env] }
   email_worker:       { env_file: !override [$DIR/.env] }
+  webhook_worker:     { env_file: !override [$DIR/.env] }
   maintenance_worker: { env_file: !override [$DIR/.env] }
   beat:               { env_file: !override [$DIR/.env] }
   web:

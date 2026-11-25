@@ -188,3 +188,23 @@ def test_a_version_whose_output_already_exists_is_marked_ready_not_re_transcoded
     assert requeued == 0
     assert sent == []
     assert stuck.processing_status == ProcessingStatus.ready
+
+
+def test_the_sweep_announces_nothing():
+    from apps.api.tasks import cleanup_tasks, transcode_tasks
+
+    stuck = SimpleNamespace(id=uuid.uuid4(), asset_id=uuid.uuid4(),
+                            processing_status=ProcessingStatus.processing)
+    db = MagicMock()
+    db.query.return_value = db
+    db.filter.return_value = db
+    db.all.return_value = [stuck]
+    db.first.return_value = None
+
+    with patch.object(cleanup_tasks.settings, "stuck_processing_timeout_hours", 6), \
+         patch.object(cleanup_tasks, "SessionLocal", return_value=db), \
+         patch("apps.api.tasks.celery_app.send_task_safe"), \
+         patch.object(transcode_tasks, "_notify_webhook") as notify:
+        cleanup_tasks.requeue_stuck_processing()
+
+    notify.assert_not_called()
