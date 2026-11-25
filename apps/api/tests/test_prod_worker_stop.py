@@ -38,3 +38,13 @@ def test_celery_replaces_the_shell(name):
 @pytest.mark.parametrize("name", sorted(CELERY_SERVICES))
 def test_an_init_process_reaps_orphans(name):
     assert _celery_services()[name].get("init") is True
+
+
+def test_only_the_transcoding_worker_gets_a_long_stop():
+    """A transcode may finish; nothing else should hold up a deploy."""
+    grace = {
+        name: service["stop_grace_period"]
+        for name, service in _celery_services().items()
+        if "stop_grace_period" in service
+    }
+    assert grace == {"worker": "10m"}

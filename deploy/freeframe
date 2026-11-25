@@ -3364,6 +3364,12 @@ _install_dns_step() {
   _ff_p "The DNS records point at this server."
 }
 
+# How long a stop waits before it kills: for the commands that discard the
+# running work (rollback and restore put another database in place, uninstall
+# removes everything). The worker's own stop_grace_period in
+# docker-compose.prod.yml lets a transcode finish, and would keep FreeFrame
+# down for that long here.
+FF_STOP_SECS=10
 FF_SETUP_FILES=(docker-compose.prod.yml docker-compose.images.yml docker-compose.https.yml docker-compose.storage.yml
   docker-compose.gpu.yml deploy/systemd/freeframe-backup.service deploy/systemd/freeframe-backup.timer)
 
@@ -4841,7 +4847,7 @@ restore_database() {
   done
   say "Stopping FreeFrame (its web address shows an error until the restore is done)..."
   FF_STATE="FreeFrame may be partly stopped; the database has not been changed. $(_restore_start_hint)"
-  if ((${#svcs[@]})) && ! _ff_logged dc stop "${svcs[@]}"; then
+  if ((${#svcs[@]})) && ! _ff_logged dc stop -t "$FF_STOP_SECS" "${svcs[@]}"; then
     _restore_fail "$(_restore_restart)" "FreeFrame could not be stopped, so nothing was changed." \
       "run: $FF_RERUN. The reason is at the end of the log."
   fi
@@ -5626,7 +5632,7 @@ _ff_stop_project_app() {
     esac
   done <<<"$out"
   ((${#ids[@]})) || return 0
-  _ff_logged docker stop "${ids[@]}"
+  _ff_logged docker stop -t "$FF_STOP_SECS" "${ids[@]}"
 }
 
 # _rollback_unstarted OLD: the rollback of an update whose new version was
@@ -5830,7 +5836,7 @@ cmd_rollback() {
     for s in "${all[@]}"; do
       if [[ -n $s && $s != postgres && $s != traefik ]]; then svcs+=("$s"); fi
     done
-    if ((${#svcs[@]})) && ! _ff_logged dc stop "${svcs[@]}"; then
+    if ((${#svcs[@]})) && ! _ff_logged dc stop -t "$FF_STOP_SECS" "${svcs[@]}"; then
       install_fail "FreeFrame could not be stopped." "the reason is at the end of $FF_LOG. Then run: sudo freeframe rollback"
     fi
   # The compose files in place may be the very thing that is broken: then
@@ -7591,7 +7597,7 @@ _uninstall_containers() {
   FF_STEP="removing FreeFrame's containers"
   say "Removing FreeFrame's containers and network..."
   if _ff_logged dc config -q; then
-    if _ff_logged dc_bounded "${FF_DOWN_WAIT:-300}" down --remove-orphans; then return 0; fi
+    if _ff_logged dc_bounded "${FF_DOWN_WAIT:-300}" down -t "$FF_STOP_SECS" --remove-orphans; then return 0; fi
   elif _uninstall_read ids container &&
     { ((${#ids[@]} == 0)) || _ff_logged docker rm -f "${ids[@]}"; } &&
     _uninstall_read ids network &&

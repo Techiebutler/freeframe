@@ -49,6 +49,8 @@ assert_not_started() {
   grep -qx "phase=started" "$FF_ROOT/.update-undo"
   ff rollback --yes
   [ "$status" -eq 0 ] || { echo "$output"; cat "$CALLS"; false; }
+  # A running transcode is not waited for: the database is about to be replaced.
+  grep -q "^dc stop -t 10 " "$CALLS"
   # Stopped while the new release's files were still in place.
   grep -q '1.22.0' "$STUB_DIR/images-at-stop"
   assert_order "dc stop " "dc exec -T postgres dropdb" "dc exec -T postgres createdb" \
@@ -272,7 +274,7 @@ assert_not_started() {
   ff rollback --yes
   [ "$status" -eq 0 ] || { echo "$output"; cat "$CALLS"; false; }
   grep -q "^docker ps --filter label=com.docker.compose.project=freeframe" "$CALLS"
-  grep -qx "docker stop c1 c4" "$CALLS"
+  grep -qx "docker stop -t 10 c1 c4" "$CALLS"
   assert_files_from_before
 }
 

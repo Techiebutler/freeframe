@@ -507,7 +507,7 @@ dumps() { (cd "$BK" && LC_ALL=C ls freeframe-*.dump 2>/dev/null) || true; }
   # Every service except postgres and traefik is stopped.
   local stop
   stop=$(grep '^dc stop ' "$CALLS")
-  assert_eq "$stop" "dc stop redis api worker email_worker maintenance_worker beat web minio minio-init"
+  assert_eq "$stop" "dc stop -t 10 redis api worker email_worker maintenance_worker beat web minio minio-init"
   # The dump's bytes reached pg_restore.
   assert_eq "$(cat "$STUB_DIR/restored")" "PGDMP old 20261020-030000"
   assert_out "The database is back as it was"

@@ -294,7 +294,7 @@ assert_removed() {
 @test "uninstall: the backup comes before any removal, and the command goes last" {
   ff uninstall --yes
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  assert_order "dc exec -T postgres pg_dump" "dc config -q" "dc down --remove-orphans" \
+  assert_order "dc exec -T postgres pg_dump" "dc config -q" "dc down -t 10 --remove-orphans" \
     "systemctl disable --now freeframe-backup.timer" "systemctl daemon-reload" \
     "rm -rf -- $FF_ROOT" "rm -f -- $FF_BIN_DIR/freeframe"
   # Nothing is removed before the backup is saved.
@@ -901,8 +901,8 @@ assert_nothing_more_removed() {
 @test "uninstall: dc down is bounded in time and never told to remove volumes" {
   ff uninstall --yes
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  grep -qE '^dc_bounded [0-9]+ down --remove-orphans$' "$CALLS" || { cat "$CALLS"; false; }
-  [ "$(grep '^dc down' "$CALLS")" = "dc down --remove-orphans" ]
+  grep -qE '^dc_bounded [0-9]+ down -t 10 --remove-orphans$' "$CALLS" || { cat "$CALLS"; false; }
+  [ "$(grep '^dc down' "$CALLS")" = "dc down -t 10 --remove-orphans" ]
 }
 
 @test "uninstall: the lock file goes only once the lock is let go" {
