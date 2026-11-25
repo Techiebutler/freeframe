@@ -16,7 +16,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROD_COMPOSE = REPO_ROOT / "docker-compose.prod.yml"
 API_DOCKERFILE = REPO_ROOT / "apps/api/Dockerfile.prod"
-CELERY_SERVICES = ("worker", "email_worker", "maintenance_worker", "beat")
+CELERY_SERVICES = ("worker", "email_worker", "webhook_worker", "maintenance_worker", "beat")
 
 
 def _prod_services():

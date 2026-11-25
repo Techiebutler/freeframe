@@ -67,9 +67,9 @@ celery_app.conf.update(
         # is a full FFmpeg re-encode, so it belongs with the other transcoding
         # work rather than behind an hour-long bucket sweep.
         "apply_watermark": {"queue": "transcoding"},
-        # Its own queue so a slow or dead endpoint never holds a transcode, an
-        # email, or a housekeeping slot. The shipped email worker consumes it;
-        # point a worker of its own at `-Q webhooks` to scale it apart.
+        # Its own queue, consumed by the `webhook_worker` service alone, so a slow
+        # or dead endpoint never holds a transcode, an email, or a housekeeping
+        # slot and the queue can be scaled apart.
         "apps.api.tasks.webhook_tasks.*": {"queue": "webhooks"},
         "apps.api.tasks.email_tasks.send_magic_code_email": {"queue": "email_high"},
         "apps.api.tasks.email_tasks.send_invite_email": {"queue": "email_high"},

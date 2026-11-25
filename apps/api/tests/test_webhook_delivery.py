@@ -14,7 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from celery.exceptions import Retry
+from celery.exceptions import Retry, SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError
 
 from apps.api.models.asset import Asset, AssetVersion
 from apps.api.models.folder import Folder
@@ -54,6 +55,16 @@ class World:
         }
         db = MagicMock()
         db.get.side_effect = lambda model, key: rows.get((model, key))
+        # folder_chain_is_live counts the folders from the asset's up and how many
+        # of them are in the trash.
+        chain, seen, fid = [], set(), self.asset.folder_id
+        while fid is not None and fid not in seen and (Folder, fid) in rows:
+            seen.add(fid)
+            chain.append(rows[(Folder, fid)])
+            fid = chain[-1].parent_id
+        db.execute.return_value.one.return_value = (
+            len(chain), sum(f.deleted_at is not None for f in chain),
+        )
         return db
 
 
@@ -87,13 +98,17 @@ class TestPayload:
     def test_failed_event_reports_failed(self):
         assert _payload(World(), "transcode_failed")["version"]["status"] == "failed"
 
-    def test_path_stops_below_a_deleted_ancestor(self):
-        p = _payload(World(folder_deleted=True))
-        assert p["folder"]["path"] == ["Rohschnitt"]
+    def test_nothing_for_an_asset_under_a_deleted_ancestor(self):
+        assert _payload(World(folder_deleted=True)) is None
 
-    def test_deleted_own_folder_is_left_out(self):
+    def test_nothing_for_an_asset_in_a_deleted_folder(self):
         w = World()
         w.leaf.deleted_at = datetime.now(timezone.utc)
+        assert _payload(w) is None
+
+    def test_the_project_root_is_not_silenced_by_the_folder_check(self):
+        w = World(asset_in="root")
+        w.top.deleted_at = datetime.now(timezone.utc)
         assert _payload(w)["folder"] is None
 
     def test_a_parent_cycle_ends_the_walk(self):
@@ -126,6 +141,23 @@ class TestEnqueue:
             assert enqueue_webhook("transcode_complete", "a", "v") is False
             assert enqueue_webhook("transcode_failed", "a", "v") is True
         assert delay.call_count == 1
+
+    @pytest.mark.parametrize("url", ["http://[::1", "hooks.example.com/ff", "ftp://hooks.example.com", "https://"])
+    def test_a_malformed_url_sends_nothing_and_warns_once(self, url, monkeypatch, caplog):
+        monkeypatch.setattr(webhook_tasks.settings, "webhook_url", url)
+        monkeypatch.setattr(webhook_tasks.settings, "webhook_events", "transcode_complete")
+        with patch.object(deliver_webhook, "delay") as delay, caplog.at_level("WARNING", logger="celery.webhook"):
+            assert enqueue_webhook("transcode_complete", "a", "v") is False
+        delay.assert_not_called()
+        assert len(caplog.records) == 1
+
+    def test_the_result_is_ignored(self):
+        # Otherwise .delay() subscribes to the result backend and can wait on Redis.
+        assert deliver_webhook.ignore_result is True
+        assert (deliver_webhook.soft_time_limit, deliver_webhook.time_limit) == (
+            webhook_tasks.SOFT_TIME_LIMIT, webhook_tasks.HARD_TIME_LIMIT,
+        )
+        assert webhook_tasks.SOFT_TIME_LIMIT < webhook_tasks.HARD_TIME_LIMIT
 
     def test_queued_with_a_delivery_id_and_on_its_own_queue(self, configured):
         with patch.object(deliver_webhook, "delay") as delay:
@@ -182,7 +214,7 @@ class TestDelivery:
         post, _ = _run(w, _resp(200))
         post.assert_not_called()
 
-    @pytest.mark.parametrize("status", [500, 502, 408, 429])
+    @pytest.mark.parametrize("status", [500, 502, 408, 425, 429])
     def test_retried_on_server_errors_and_throttling(self, configured, status):
         _, retry = _run(World(), _resp(status))
         retry.assert_called_once_with(countdown=30)
@@ -190,6 +222,25 @@ class TestDelivery:
     def test_retried_on_a_connection_error(self, configured):
         _, retry = _run(World(), error=httpx.ConnectError("down"))
         retry.assert_called_once_with(countdown=30)
+
+    def test_an_attempt_that_outlasts_the_time_limit_is_retried(self, configured):
+        _, retry = _run(World(), error=SoftTimeLimitExceeded())
+        retry.assert_called_once_with(countdown=30)
+
+    def test_a_database_error_is_retried(self, configured):
+        w = World()
+        db = w.db()
+        db.get.side_effect = OperationalError("SELECT 1", {}, Exception("restarting"))
+        post = MagicMock()
+        with patch.object(webhook_tasks, "SessionLocal", return_value=db), \
+             patch.object(webhook_tasks.httpx, "post", post), \
+             patch.object(deliver_webhook, "retry", side_effect=Retry()) as retry, \
+             patch.object(deliver_webhook.request, "retries", 0, create=True):
+            with pytest.raises(Retry):
+                deliver_webhook.run("transcode_complete", str(w.asset.id), str(w.version.id), "d-1")
+        retry.assert_called_once_with(countdown=30)
+        post.assert_not_called()
+        db.close.assert_called_once()
 
     def test_backoff_doubles(self, configured):
         _, retry = _run(World(), _resp(503), retries=3)
@@ -248,6 +299,25 @@ class TestTranscodeIsNeverHeldUp:
         def boom(*a, **k):
             raise RuntimeError("ffmpeg died")
         w, notify = self._run_process_asset(boom, retries=3)
+        notify.assert_called_once_with("transcode_failed", str(w.asset.id), str(w.version.id))
+
+    def test_a_version_with_no_media_file_announces_failed(self):
+        from apps.api.models.asset import MediaFile
+        from apps.api.tasks import transcode_tasks
+        w = World()
+        rows = {AssetVersion: w.version, Asset: w.asset, MediaFile: None}
+
+        def query(model):
+            q = MagicMock()
+            q.filter.return_value = q
+            q.first.return_value = rows[model]
+            return q
+
+        db = MagicMock()
+        db.query.side_effect = query
+        with patch.object(transcode_tasks, "SessionLocal", return_value=db), \
+             patch.object(transcode_tasks, "_notify_webhook") as notify:
+            transcode_tasks.process_asset.run(str(w.asset.id), str(w.version.id))
         notify.assert_called_once_with("transcode_failed", str(w.asset.id), str(w.version.id))
 
     def test_a_transcode_that_will_retry_announces_nothing(self):

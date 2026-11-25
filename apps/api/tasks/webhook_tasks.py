@@ -22,9 +22,12 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..config import settings
 from ..database import SessionLocal
@@ -32,6 +35,7 @@ from ..models.asset import Asset, AssetVersion
 from ..models.folder import Folder
 from ..models.project import Project
 from ..services.folder_paths import MAX_DEPTH_WALK
+from ..services.permissions import folder_chain_is_live
 
 log = logging.getLogger("celery.webhook")
 
@@ -41,8 +45,14 @@ WEBHOOK_EVENT_NAMES = {
     "transcode_failed": "failed",
 }
 
-#: Seconds the receiver gets to connect and to answer.
+#: Seconds the receiver gets to connect, to take the request and to send each
+#: chunk of the answer. Each step has its own timer, so it does not bound a whole
+#: attempt: SOFT_TIME_LIMIT does.
 REQUEST_TIMEOUT = 10.0
+#: Seconds one attempt may run in all before it counts as a timeout (and is
+#: retried), and the hard limit that kills the process if that is ignored.
+SOFT_TIME_LIMIT = 15
+HARD_TIME_LIMIT = 20
 #: Attempts after the first. Backoff doubles from 30s: 30, 60, 120, 240, 480.
 MAX_RETRIES = 5
 RETRY_BASE_SECONDS = 30
@@ -58,9 +68,23 @@ def enabled_events() -> set[str]:
     return names & WEBHOOK_EVENT_NAMES.keys()
 
 
+def _valid_url(url: str) -> bool:
+    """True for an http(s) URL with a host. Anything else is a typo, and would
+    otherwise crash every delivery or retry it for 15 minutes."""
+    try:
+        parts = urlsplit(url)
+        return parts.scheme in ("http", "https") and bool(parts.hostname)
+    except ValueError:
+        return False
+
+
 def enqueue_webhook(event: str, asset_id: str, version_id: str) -> bool:
     """Queue a delivery if a webhook is configured for `event`. True if queued."""
-    if not settings.webhook_url.strip() or event not in enabled_events():
+    url = settings.webhook_url.strip()
+    if not url or event not in enabled_events():
+        return False
+    if not _valid_url(url):
+        log.warning("WEBHOOK_URL is not an http(s) URL with a host; no webhook is sent")
         return False
     # One id for every attempt of this delivery.
     deliver_webhook.delay(event, asset_id, version_id, str(uuid.uuid4()))
@@ -104,10 +128,15 @@ def build_payload(db, event: str, asset_id: str, version_id: str) -> Optional[di
     if project is None or project.deleted_at is not None:
         return None
 
-    # null at the project root, and when the asset's own folder is deleted.
+    # An asset under a trashed folder counts as trashed, as it does for a share
+    # link. The folder_id guard keeps the project root from being silenced.
+    if asset.folder_id and not folder_chain_is_live(db, asset.folder_id):
+        return None
+
+    # null at the project root.
     chain = _folder_chain(db, asset.folder_id)
     folder = None
-    if chain and chain[-1].id == asset.folder_id:
+    if chain:
         folder = {
             "id": str(chain[-1].id),
             "name": chain[-1].name,
@@ -128,7 +157,16 @@ def build_payload(db, event: str, asset_id: str, version_id: str) -> Optional[di
     }
 
 
-@shared_task(bind=True, name="apps.api.tasks.webhook_tasks.deliver_webhook", max_retries=MAX_RETRIES)
+# ignore_result: nothing reads the outcome, and without it `.delay()` first
+# subscribes to the Redis result backend, which can hold the transcode worker.
+@shared_task(
+    bind=True,
+    name="apps.api.tasks.webhook_tasks.deliver_webhook",
+    max_retries=MAX_RETRIES,
+    ignore_result=True,
+    soft_time_limit=SOFT_TIME_LIMIT,
+    time_limit=HARD_TIME_LIMIT,
+)
 def deliver_webhook(self, event: str, asset_id: str, version_id: str, delivery_id: str):
     url = settings.webhook_url.strip()
     if not url or event not in WEBHOOK_EVENT_NAMES:
@@ -137,6 +175,9 @@ def deliver_webhook(self, event: str, asset_id: str, version_id: str, delivery_i
     db = SessionLocal()
     try:
         payload = build_payload(db, event, asset_id, version_id)
+    except SQLAlchemyError as exc:
+        # A database that is restarting comes back; the delivery should too.
+        return _retry_or_give_up(self, event, delivery_id, version_id, exc)
     finally:
         db.close()
     if payload is None:
@@ -160,6 +201,10 @@ def deliver_webhook(self, event: str, asset_id: str, version_id: str, delivery_i
         )
     except httpx.HTTPError as exc:
         return _retry_or_give_up(self, event, delivery_id, version_id, exc)
+    except SoftTimeLimitExceeded:
+        return _retry_or_give_up(
+            self, event, delivery_id, version_id, f"no answer within {SOFT_TIME_LIMIT}s",
+        )
 
     if response.is_success:
         return

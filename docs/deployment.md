@@ -546,7 +546,7 @@ FreeFrame's Docker Compose includes PostgreSQL and Redis by default, but you can
 Works with: **AWS RDS, Google Cloud SQL, Supabase, Neon, DigitalOcean Managed DB, or any PostgreSQL 15+ instance.**
 
 1. Remove the `postgres` service and `pgdata` volume from `docker-compose.prod.yml`
-2. Remove `postgres` from the `depends_on` of the `api`, `worker`, and `maintenance_worker` services
+2. Remove `postgres` from the `depends_on` of the `api`, `worker`, `webhook_worker`, and `maintenance_worker` services
 3. In `.env.prod`, set `DATABASE_URL` to your external database:
    ```
    DATABASE_URL=postgresql://user:password@your-db-host:5432/freeframe
@@ -561,7 +561,7 @@ Works with: **AWS RDS, Google Cloud SQL, Supabase, Neon, DigitalOcean Managed DB
 Works with: **AWS ElastiCache, Upstash, Redis Cloud, DigitalOcean Managed Redis, or any Redis 7+ / Valkey instance.** Valkey is a drop-in Redis replacement and works out of the box.
 
 1. Remove the `redis` service and `redisdata` volume from `docker-compose.prod.yml`
-2. Remove `redis` from the `depends_on` of the `api`, `worker`, `email_worker`, `maintenance_worker`, and `beat` services
+2. Remove `redis` from the `depends_on` of the `api`, `worker`, `email_worker`, `webhook_worker`, `maintenance_worker`, and `beat` services
 3. In `.env.prod`, set `REDIS_URL` to your external instance:
    ```
    REDIS_URL=redis://:password@your-redis-host:6379/0
@@ -735,6 +735,7 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `API_WORKERS` | Gunicorn worker processes | `4` |
 | `TRANSCODING_CONCURRENCY` | Parallel transcoding jobs | `2` |
 | `EMAIL_CONCURRENCY` | Parallel email jobs | `2` |
+| `WEBHOOK_CONCURRENCY` | Parallel webhook deliveries | `1` |
 | `MAINTENANCE_CONCURRENCY` | Parallel housekeeping jobs | `1` |
 | `CELERY_LOGLEVEL` | Log level of the Celery workers and beat. At `warning` they still log what the retention GC, stale-upload reaper and orphan sweep deleted, and any sweep that is switched off | `info` |
 | `UPLOAD_CONCURRENCY` | Upload parts in flight across the whole browser tab, shared by every file being uploaded (the earliest file first), not per file. Values above 6 only help when the storage endpoint speaks HTTP/2: over HTTP/1.1 a browser opens at most 6 connections per host, shared by all its tabs, so parts past the sixth wait for a free connection before they send anything, which with large parts on a slow uplink can be minutes. The upload leaves such a waiting part alone while other parts in the tab are sending, and gives up on it (and retries it) only after 5 minutes without a first byte. Read when the web container starts, so changing it needs `docker compose ... up -d web` with the same `--env-file` and every `-f` file you start FreeFrame with (`docker compose restart` does not re-read `.env.prod`), not a rebuild. The older name `NEXT_PUBLIC_UPLOAD_CONCURRENCY` is still read when this one is unset | `5` |
@@ -853,7 +854,9 @@ Set `WEBHOOK_URL` and FreeFrame POSTs a JSON notice to it when a version becomes
 watchable (`transcode_complete`) or its processing fails (`transcode_failed`), so
 a chat channel, job board or script does not have to poll the API. The URL is
 instance-level and set only here, never from the app. The `worker` queues the
-notice and the `email_worker` sends it, so recreate both after changing it.
+notice, the `maintenance_worker` queues the one for a version it finds already
+done, and the `webhook_worker` sends it. Only a container that sees `WEBHOOK_URL`
+queues anything, so recreate all three after changing it.
 
 ```json
 {
@@ -879,13 +882,15 @@ the file asks the API with its own credentials.
 | `X-FreeFrame-Delivery` | A UUID, the same on every retry of one notice. Drop a repeat you have already handled |
 | `X-FreeFrame-Signature` | `sha256=` and the hex HMAC-SHA256 of the raw request body with `WEBHOOK_SECRET`; only with a secret set. Compare it in constant time, and reject a `delivered_at` that is too old |
 
-Any 2xx answer counts as delivered. A connection error, a timeout (10 s), a 5xx,
-408, 425 or 429 is retried five times with a growing delay (30 s, then 1, 2, 4
+Any 2xx answer counts as delivered. A connection error, a timeout (10 s
+to connect and for each read, 15 s for the whole attempt), a 5xx, 408, 425 or 429
+is retried five times with a growing delay (30 s, then 1, 2, 4
 and 8 minutes) and then logged and dropped; any other 4xx is logged and not
 retried. Redirects are not followed. Deliveries run on their own `webhooks`
-queue, which the `email_worker` consumes by default, so a dead endpoint never
-holds a transcode. To scale it apart, add a worker started with `-Q webhooks`
-and take `webhooks` off the `email_worker`'s `-Q` list.
+queue, served by the `webhook_worker` alone, so a dead endpoint never holds a
+transcode or a sign-in email. Raise `WEBHOOK_CONCURRENCY` to send more at once.
+A `WEBHOOK_URL` that is not an http(s) URL with a host is logged as a warning and
+nothing is sent.
 
 ### Email Workers
 
@@ -962,7 +967,7 @@ subscriber is silently never executed. The shipped topology is:
 | `transcoding` | `worker` | Video/audio/image processing, metadata backfill, watermarking |
 | `email_high` | `email_worker` | Magic codes, invites |
 | `email_low` | `email_worker` | Mentions, comments, approvals, share notices |
-| `webhooks` | `email_worker` | Outgoing webhook deliveries |
+| `webhooks` | `webhook_worker` | Outgoing webhook deliveries |
 | `maintenance` | `maintenance_worker` | Retention GC, stale-upload reaper, orphan sweep |
 | `default` | nobody, by design | Should always be empty |
 

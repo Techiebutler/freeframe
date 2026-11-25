@@ -48,6 +48,7 @@ def process_asset(self, asset_id: str, version_id: str):
         if not media_file:
             version.processing_status = ProcessingStatus.failed
             db.commit()
+            _notify_webhook("transcode_failed", asset_id, version_id)
             return
 
         # Reset to processing status before each attempt

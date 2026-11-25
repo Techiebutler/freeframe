@@ -76,7 +76,7 @@ json_expect() {
     -f "$BATS_TEST_TMPDIR/docker-compose.gpu.yml" config --format json
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 
-  for service in api worker email_worker maintenance_worker beat web; do
+  for service in api worker email_worker webhook_worker maintenance_worker beat web; do
     jq -e --arg svc "$service" '.services[$svc] |
       (.cap_drop == ["ALL"]) and (.security_opt | index("no-new-privileges:true") != null)' \
       <<< "$output" || { echo "Missing hardening on $service"; return 1; }

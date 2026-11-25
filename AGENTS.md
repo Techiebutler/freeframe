@@ -23,14 +23,14 @@ docker compose -f docker-compose.dev.yml up --build
 # open http://localhost:3000
 ```
 
-Ten services start in Docker: postgres, redis, minio, minio-init, api, worker, email_worker,
-maintenance_worker, beat, web.
+Eleven services start in Docker: postgres, redis, minio, minio-init, api, worker, email_worker,
+webhook_worker, maintenance_worker, beat, web.
 
-> **Hot reload covers `api` and `web` only.** The four Celery containers have no autoreload, so
+> **Hot reload covers `api` and `web` only.** The five Celery containers have no autoreload, so
 > a change under `apps/api/tasks/` (or to anything a task imports) does nothing until you restart
 > them:
 > ```bash
-> docker compose -f docker-compose.dev.yml restart worker email_worker maintenance_worker beat
+> docker compose -f docker-compose.dev.yml restart worker email_worker webhook_worker maintenance_worker beat
 > ```
 
 > **The dev stack really deletes local data on a schedule.** `maintenance_worker` and `beat` run

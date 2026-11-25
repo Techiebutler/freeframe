@@ -649,7 +649,7 @@ def requeue_stuck_processing():
     # slow encode gets a second worker started on top of the one still running.
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     from .celery_app import send_task_safe
-    from .transcode_tasks import process_asset
+    from .transcode_tasks import _notify_webhook, process_asset
 
     db = SessionLocal()
     try:
@@ -660,6 +660,7 @@ def requeue_stuck_processing():
         ).all()
 
         requeued = 0
+        marked_ready: list[AssetVersion] = []
         for v in stuck:
             # A version whose output is already written finished its transcode and
             # simply never had its status updated. Re-running it would redo hours
@@ -671,6 +672,7 @@ def requeue_stuck_processing():
             if done is not None:
                 v.processing_status = ProcessingStatus.ready
                 log.info("requeue: version %s already had output; marking ready", v.id)
+                marked_ready.append(v)
                 continue
 
             send_task_safe(process_asset, str(v.asset_id), str(v.id))
@@ -678,6 +680,9 @@ def requeue_stuck_processing():
             requeued += 1
 
         db.commit()
+        # The transcode that would have announced these never got to.
+        for v in marked_ready:
+            _notify_webhook("transcode_complete", str(v.asset_id), str(v.id))
         if stuck:
             log.info("requeue: %s stuck, %s re-dispatched", len(stuck), requeued)
         return requeued
