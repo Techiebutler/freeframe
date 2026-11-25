@@ -5,9 +5,14 @@ bucket DNS behind a reverse proxy) and SigV4 query auth (Garage rejects SigV2).
 Garage also joins a CORS rule's AllowedOrigins into one comma-separated
 Access-Control-Allow-Origin header — which browsers reject — so the startup CORS
 config must emit one rule per origin.
+
+Also the startup removal of the public-read policy that v1.0.0 to v1.9.x wrote.
 """
+import json
+
 import pytest
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from apps.api.config import settings
 from apps.api.services import s3_service
@@ -154,8 +159,8 @@ class _FakeS3:
     def put_bucket_cors(self, Bucket, CORSConfiguration):
         self.cors_config = CORSConfiguration
 
-    def put_bucket_policy(self, **kwargs):
-        return {}
+    def get_bucket_policy(self, **kwargs):
+        raise ClientError({"Error": {"Code": "NoSuchBucketPolicy"}}, "GetBucketPolicy")
 
 
 def test_startup_cors_emits_one_rule_per_origin(monkeypatch):
@@ -256,3 +261,157 @@ def test_startup_cors_wildcard_allows_any_origin(monkeypatch):
     rules = fake.cors_config["CORSRules"]
     assert [r["AllowedOrigins"] for r in rules] == [["*"]]
     assert "ETag" in rules[0]["ExposeHeaders"]
+
+# ── the public-read policy that v1.0.0 to v1.9.x wrote ───────────────────────
+
+_OLD_STATEMENT = {
+    "Sid": "PublicReadProcessed",
+    "Effect": "Allow",
+    "Principal": "*",
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::ffbucket/processed/*",
+}
+# MinIO and Silo hand back what was written in this shape (measured).
+_OLD_STATEMENT_AS_STORED = {
+    "Sid": "PublicReadProcessed",
+    "Effect": "Allow",
+    "Principal": {"AWS": ["*"]},
+    "Action": ["s3:GetObject"],
+    "Resource": ["arn:aws:s3:::ffbucket/processed/*"],
+}
+_OPERATORS = {
+    "Sid": "Operators",
+    "Effect": "Allow",
+    "Principal": "*",
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::ffbucket/public/*",
+}
+
+
+class _PolicyS3(_FakeS3):
+    """Holds a bucket policy. `fail` maps an operation to the error it raises."""
+
+    def __init__(self, statements=None, fail=None, raw=None):
+        super().__init__()
+        self.policy = raw if raw is not None else (
+            None if statements is None else json.dumps({"Version": "2012-10-17", "Statement": statements}))
+        self.fail = fail or {}
+        self.calls = []
+
+    def _maybe_fail(self, name):
+        self.calls.append(name)
+        error = self.fail.get(name)
+        if isinstance(error, Exception):
+            raise error
+        if error:
+            raise ClientError({"Error": {"Code": error}}, name)
+
+    def get_bucket_policy(self, Bucket):
+        self._maybe_fail("GetBucketPolicy")
+        if self.policy is None:
+            raise ClientError({"Error": {"Code": "NoSuchBucketPolicy"}}, "GetBucketPolicy")
+        return {"Policy": self.policy}
+
+    def put_bucket_policy(self, Bucket, Policy):
+        self._maybe_fail("PutBucketPolicy")
+        self.policy = Policy
+
+    def delete_bucket_policy(self, Bucket):
+        self._maybe_fail("DeleteBucketPolicy")
+        self.policy = None
+
+
+def _start_against(monkeypatch, fake, storage="minio"):
+    monkeypatch.setattr(settings, "s3_storage", storage)
+    monkeypatch.setattr(settings, "s3_bucket", "ffbucket")
+    monkeypatch.setattr(settings, "frontend_url", "https://freeframe.example.com")
+    monkeypatch.setattr(settings, "cors_allow_origins", "")
+    monkeypatch.setattr(s3_service, "_build_s3_client", lambda config=None: fake)
+    ensure_bucket_exists()
+
+
+@pytest.mark.parametrize("statement", [_OLD_STATEMENT, _OLD_STATEMENT_AS_STORED])
+def test_startup_removes_the_old_public_policy(monkeypatch, caplog, statement):
+    fake = _PolicyS3([statement])
+    with caplog.at_level("WARNING"):
+        _start_against(monkeypatch, fake)
+
+    assert fake.policy is None
+    assert "DeleteBucketPolicy" in fake.calls
+    assert "PublicReadProcessed" in caplog.text
+
+
+@pytest.mark.parametrize("statement", [_OLD_STATEMENT, _OLD_STATEMENT_AS_STORED])
+def test_startup_keeps_the_statements_an_operator_added(monkeypatch, statement):
+    fake = _PolicyS3([_OPERATORS, statement])
+    _start_against(monkeypatch, fake)
+
+    assert json.loads(fake.policy) == {"Version": "2012-10-17", "Statement": [_OPERATORS]}
+    assert "DeleteBucketPolicy" not in fake.calls
+
+
+@pytest.mark.parametrize("change", [
+    {"Sid": "Mine"},
+    {"Effect": "Deny"},
+    {"Principal": {"AWS": ["arn:aws:iam::123456789012:root"]}},
+    {"Action": ["s3:GetObject", "s3:ListBucket"]},
+    {"Resource": "arn:aws:s3:::ffbucket/*"},
+    {"Resource": "arn:aws:s3:::other/processed/*"},
+    {"Condition": {"IpAddress": {"aws:SourceIp": "10.0.0.0/8"}}},
+])
+def test_startup_leaves_a_policy_it_did_not_write(monkeypatch, change):
+    fake = _PolicyS3([{**_OLD_STATEMENT, **change}])
+    before = fake.policy
+    _start_against(monkeypatch, fake)
+
+    assert fake.policy == before
+    assert "PutBucketPolicy" not in fake.calls
+    assert "DeleteBucketPolicy" not in fake.calls
+
+
+def test_startup_removes_a_lone_statement_that_is_not_in_a_list(monkeypatch):
+    fake = _PolicyS3(raw=json.dumps({"Version": "2012-10-17", "Statement": _OLD_STATEMENT}))
+    _start_against(monkeypatch, fake)
+    assert fake.policy is None
+
+
+@pytest.mark.parametrize("fake", [
+    _PolicyS3(),
+    _PolicyS3(fail={"GetBucketPolicy": "NotImplemented"}),
+    _PolicyS3(raw="not json"),
+    _PolicyS3(raw="[]"),
+    _PolicyS3(raw=json.dumps({"Statement": ["nonsense"]})),
+])
+def test_startup_survives_no_policy_and_stores_without_them(monkeypatch, caplog, fake):
+    with caplog.at_level("WARNING"):
+        _start_against(monkeypatch, fake)
+    assert fake.calls == ["GetBucketPolicy"]
+    assert "PublicReadProcessed" not in caplog.text
+
+
+@pytest.mark.parametrize("operation, statements", [
+    ("DeleteBucketPolicy", [_OLD_STATEMENT]),
+    ("PutBucketPolicy", [_OPERATORS, _OLD_STATEMENT]),
+])
+def test_startup_warns_when_the_key_may_not_change_the_policy(monkeypatch, caplog, operation, statements):
+    fake = _PolicyS3(statements, fail={operation: "AccessDenied"})
+    with caplog.at_level("WARNING"):
+        _start_against(monkeypatch, fake)
+    assert "PublicReadProcessed" in caplog.text
+    assert "without signing in" in caplog.text
+
+
+def test_startup_does_not_warn_when_the_key_may_not_read_the_policy(monkeypatch, caplog):
+    # A key kept to the object calls is a normal setup, and such a key could not
+    # have written the policy.
+    fake = _PolicyS3([_OLD_STATEMENT], fail={"GetBucketPolicy": "AccessDenied"})
+    with caplog.at_level("INFO"):
+        _start_against(monkeypatch, fake)
+    assert [r.levelname for r in caplog.records if "bucket policy" in r.getMessage()] == ["INFO"]
+
+
+def test_startup_does_not_read_the_policy_on_aws(monkeypatch):
+    # v1.0.0 to v1.9.x wrote it on non-AWS stores only.
+    fake = _PolicyS3([_OLD_STATEMENT])
+    _start_against(monkeypatch, fake, storage="s3")
+    assert fake.calls == []
