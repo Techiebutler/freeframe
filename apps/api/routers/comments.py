@@ -19,6 +19,7 @@ from ..middleware.auth import get_current_user, get_optional_user
 from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
+from ..models.instance_branding import InstanceBranding
 from ..models.project import ProjectRole
 from ..models.comment import (
     Annotation,
@@ -47,6 +48,7 @@ from ..schemas.comment import (
 )
 from ..services import s3_service
 from ..services import comment_export
+from ..services.branding_service import DEFAULT_ORG_NAME
 from ..services.guests import resolve_guest
 from ..services.permissions import (
     require_asset_access, can_access_asset, can_access_asset_audited,
@@ -1063,7 +1065,9 @@ def export_comments(
             content = comment_export.to_edl(
                 markers, edl_spec, comment_export.tc_to_frames(start_tc, edl_spec), asset.name)
         elif format == "fcpxml":
-            content = comment_export.to_fcpxml(markers, spec, asset.name, duration_frames)
+            branding = db.query(InstanceBranding).first()
+            org_name = (branding.org_name if branding else None) or DEFAULT_ORG_NAME
+            content = comment_export.to_fcpxml(markers, spec, asset.name, duration_frames, org_name=org_name)
         else:
             content = comment_export.to_premiere_xml(markers, spec, asset.name, duration_frames)
 
