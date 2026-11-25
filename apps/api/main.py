@@ -62,8 +62,10 @@ def _end_streams_on_stop():
         }
 
     def stop(sig, frame):
-        end_streams()
-        previous[sig](sig, frame)
+        try:
+            end_streams()
+        finally:  # whatever happens above, the server still has to hear the signal
+            previous[sig](sig, frame)
 
     for sig in previous:
         signal.signal(sig, stop)

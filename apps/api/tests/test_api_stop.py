@@ -177,6 +177,28 @@ def test_the_stop_signal_ends_streams_and_still_reaches_the_server(pubsub, monke
         signal.signal(sig, before)
 
 
+def test_the_signal_is_passed_on_even_if_ending_the_streams_fails(pubsub, monkeypatch):
+    monkeypatch.setattr("apps.api.main.run_startup_bucket_setup", lambda: None)
+    received = []
+
+    def broken():
+        raise RuntimeError("loop is closed")
+
+    monkeypatch.setattr("apps.api.main.end_streams", broken)
+
+    async def go():
+        async with lifespan(app):
+            with pytest.raises(RuntimeError):
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+
+    before = signal.signal(signal.SIGTERM, lambda signum, frame: received.append(signum))
+    try:
+        asyncio.run(go())
+    finally:
+        signal.signal(signal.SIGTERM, before)
+    assert received == [signal.SIGTERM]
+
+
 def test_a_signal_nobody_handles_is_left_alone(pubsub, monkeypatch):
     """Taking over a default handler would make the process ignore the stop."""
     monkeypatch.setattr("apps.api.main.run_startup_bucket_setup", lambda: None)
