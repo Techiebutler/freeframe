@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse
 import jwt
 
 from ..config import settings
-from ..services.redis_service import get_redis
+from ..services.redis_service import get_redis, limiter_paused, pause_limiter_after
 
 # Limits per window — tuned for media-review workflows where a single folder
 # page can trigger 10+ paginated asset fetches plus SWR calls for project,
@@ -48,7 +48,13 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         action = "global_w" if is_write else "global_r"
         limit = WRITE_LIMIT if is_write else READ_LIMIT
 
-        # Check rate limit
+        # Check rate limit. This runs on the event loop, so a Redis that does not
+        # answer stops the whole worker while it waits: once, for the client's
+        # timeout. Then the limiter pauses, and everything behind it passes.
+        # On threads instead, requests reach the database pool unpaced: at 100 at
+        # once the routes' threads and its connections wait for each other.
+        if limiter_paused():
+            return await call_next(request)
         allowed, retry_after = self._check(identity, action, limit)
         if not allowed:
             return JSONResponse(
@@ -97,6 +103,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             pipe.expire(key, WINDOW_SECONDS, nx=True)
             pipe.execute()
             return True, 0
-        except Exception:
+        except Exception as exc:
+            pause_limiter_after(exc)
             # Fail open — allow the request if Redis is unavailable
             return True, 0
