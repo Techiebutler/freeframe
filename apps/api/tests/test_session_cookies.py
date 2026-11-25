@@ -55,17 +55,21 @@ def test_read_refresh_token_requires_exact_cookie_name(cookie_headers, expected)
 ])
 def test_web_auth_issues_host_cookie(client, test_user, valid_refresh, route, method, payload, target):
     test_user.invite_token_expires_at = None
+    test_user.token_version = 7
     with patch(f"apps.api.routers.auth.{target}", return_value=(True, None) if target == "redis_verify_magic_code" else "test-hash"):
         if method == "PATCH":
-            from apps.api.services.auth_service import create_access_token
-            headers = {**WEB, "Authorization": f"Bearer {create_access_token(str(test_user.id))}"}
+            access = create_access_token(str(test_user.id), token_version=test_user.token_version)
+            headers = {**WEB, "Authorization": f"Bearer {access}"}
         else:
             headers = WEB
         response = client.request(method, route, json=payload, headers=headers)
     assert response.status_code == 200
     assert "refresh_token" not in response.json()
     cookie = cookies(response)[HOST]
-    assert decode_token(cookie.value)["type"] == "refresh"
+    refresh_payload = decode_token(cookie.value)
+    assert refresh_payload["type"] == "refresh"
+    assert refresh_payload["ver"] == test_user.token_version
+    assert decode_token(response.json()["access_token"])["ver"] == test_user.token_version
     assert cookie["httponly"] and cookie["secure"]
     assert cookie["samesite"] == "lax" and cookie["path"] == "/" and not cookie["domain"]
 
