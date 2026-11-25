@@ -435,7 +435,10 @@ def restore_asset_version(
     flight has no bytes left to return to, and is not found. A version of an
     asset in the trash comes back with the asset, not here.
     """
-    _lock_live_asset(db, asset_id, current_user)
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    require_project_role(db, asset.project_id, current_user, ProjectRole.editor)
     version = db.query(AssetVersion).filter(
         AssetVersion.id == version_id,
         AssetVersion.asset_id == asset_id,
@@ -449,6 +452,9 @@ def restore_asset_version(
             status_code=409,
             detail="This version failed and its upload is no longer in storage, so it cannot be restored.",
         )
+    # Only now, after the check above: it can be a HEAD, and a comment on the
+    # asset would wait for storage behind this lock.
+    _lock_live_asset(db, asset_id, current_user)
     # Guarded on the row still being in the trash, as restore_asset is: the
     # retention purge may have locked and hard-deleted it since it was read.
     restored = db.query(AssetVersion).filter(
