@@ -114,25 +114,38 @@ def restore_asset_row(db: Session, asset_id: uuid.UUID) -> bool:
     )
 
 
-def restore_version_row(db: Session, version_id: uuid.UUID) -> bool:
-    """Clear one trashed version's `deleted_at`, under the same rule.
+def version_comes_back(db: Session, version: AssetVersion) -> bool:
+    """Whether a trashed version is one the rule lets come back.
 
-    A version has no folder to be stranded in, so only the second half applies:
-    an `uploading` version in the trash was discarded or reclaimed. A failed
-    row comes back only when storage still holds its master; upload abort and
+    An `uploading` version in the trash was discarded or reclaimed. A failed
+    one comes back only when storage still holds its master; upload abort and
     the reaper also leave failed rows whose objects never assembled or are gone.
-    Returns whether a row really came back.
+    That costs one HEAD per failed version (`_holds_a_master`), and only for
+    a failed one.
+
+    Shared by `restore_version_row` and the editor's own door for a version
+    deleted on its own (`POST /assets/{id}/versions/{vid}/restore`, and
+    `GET /assets/{id}/deleted-versions`, which lists what that door takes).
     """
     from ..tasks.cleanup_tasks import _holds_a_master
 
+    if version.processing_status not in RESTORABLE_STATUSES:
+        return False
+    return version.processing_status != ProcessingStatus.failed or _holds_a_master(db, version)
+
+
+def restore_version_row(db: Session, version_id: uuid.UUID) -> bool:
+    """Clear one trashed version's `deleted_at`, under the same rule.
+
+    A version has no folder to be stranded in, so only the second half applies
+    (`version_comes_back`). Returns whether a row really came back.
+    """
     version = db.query(AssetVersion).filter(
         AssetVersion.id == version_id,
         AssetVersion.deleted_at.isnot(None),
         AssetVersion.processing_status.in_(RESTORABLE_STATUSES),
     ).first()
-    if version is None:
-        return False
-    if version.processing_status == ProcessingStatus.failed and not _holds_a_master(db, version):
+    if version is None or not version_comes_back(db, version):
         return False
     return bool(
         db.query(AssetVersion)

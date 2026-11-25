@@ -213,6 +213,8 @@ export function AudioPlayer({ asset, version, comments = [], className }: AudioP
     const handleKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      // Space picks an item in an open menu or dialog; it is not a play key there.
+      if (e.target instanceof Element && e.target.closest('[role="dialog"], [role="menu"]')) return
       if (e.code === 'Space') {
         e.preventDefault()
         wavesurferRef.current?.playPause()
