@@ -11,7 +11,6 @@
  * (#117, #123).
  */
 import * as React from 'react'
-import * as Dialog from '@radix-ui/react-dialog'
 import { ArrowLeft, ChevronDown, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
@@ -499,7 +498,6 @@ function ShareReviewInner({
         <SharePrompt
           title="Your sign-in has expired."
           description="Sign in again or continue as a guest."
-          onCancel={() => settleSignIn(false)}
         >
           <ShareSignInActions
             onContinueAsGuest={() => settleSignIn(true)}
@@ -534,19 +532,19 @@ const PROMPT_COPY = {
   verdict: { title: 'Give your verdict', body: 'Enter your name and email so the team knows who this verdict is from.' },
 } as const
 
-function SharePrompt({ title, description, onCancel, children }: {
-  title: string; description: string; onCancel: () => void; children: React.ReactNode
+/** The modal frame the guest prompt has always used, shared with the sign-in prompt. */
+function SharePrompt({ title, description, children }: {
+  title: string; description: string; children: React.ReactNode
 }) {
+  const titleId = React.useId()
   return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open) onCancel() }}>
-      <Dialog.Overlay className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-        <Dialog.Content className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-5 shadow-xl">
-          <Dialog.Title asChild><h3 className="text-sm font-semibold text-text-primary mb-1">{title}</h3></Dialog.Title>
-          <Dialog.Description className="text-xs text-text-tertiary mb-4">{description}</Dialog.Description>
-          {children}
-        </Dialog.Content>
-      </Dialog.Overlay>
-    </Dialog.Root>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-5 shadow-xl">
+        <h3 id={titleId} className="text-sm font-semibold text-text-primary mb-1">{title}</h3>
+        <p className="text-xs text-text-tertiary mb-4">{description}</p>
+        {children}
+      </div>
+    </div>
   )
 }
 
@@ -555,7 +553,7 @@ function GuestIdentityPrompt({ purpose = 'comment', onSave, onCancel }: { purpos
   const [email, setEmail] = React.useState('')
 
   return (
-    <SharePrompt title={PROMPT_COPY[purpose].title} description={PROMPT_COPY[purpose].body} onCancel={onCancel}>
+    <SharePrompt title={PROMPT_COPY[purpose].title} description={PROMPT_COPY[purpose].body}>
       <div className="space-y-3">
         <input
           type="text"

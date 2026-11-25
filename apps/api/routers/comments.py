@@ -19,6 +19,7 @@ from ..config import settings
 from ..database import get_db
 from ..middleware.auth import get_current_user, get_optional_user, optional_bearer_scheme
 from ..middleware.share_auth import get_share_link
+from .share_verdicts import _refuse_stale_sign_in
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.instance_branding import InstanceBranding
@@ -1210,11 +1211,9 @@ def _refuse_stale_comment_sign_in(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer_scheme),
     current_user: Optional[User] = Depends(get_optional_user),
 ) -> None:
-    if credentials is not None and current_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Your sign-in has expired. Sign in again or continue as a guest.",
-        )
+    # Same rule as share verdicts: a bearer that no longer resolves is refused,
+    # never quietly downgraded to the guest fields.
+    _refuse_stale_sign_in(credentials, current_user)
 
 
 @router.post(
