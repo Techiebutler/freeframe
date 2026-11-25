@@ -104,6 +104,19 @@ describe('shareRequest with a relative API URL', () => {
     expect(`${url.origin}${url.pathname}`).toBe(`${window.location.origin}/api/share/tok/verdict`)
     expect(body).toEqual({ status: 'approved', guest_name: guest.name, guest_email: guest.email })
   })
+
+  it('posts a comment and guest identity in the JSON body under the API path', async () => {
+    const request = await relativeShareRequest()
+    respond(201, { id: 'c1' })
+    const payload = { asset_id: 'a1', body: 'Looks good' }
+    await expect(request('tok', '/comment', { method: 'POST', body: payload, guest, shareSession: 's1' }))
+      .resolves.toEqual({ id: 'c1' })
+    const { url, init, headers, body } = lastCall()
+    expect(url.toString()).toBe(`${window.location.origin}/api/share/tok/comment?share_session=s1`)
+    expect(init.method).toBe('POST')
+    expect(headers).toEqual({ 'Content-Type': 'application/json' })
+    expect(body).toEqual({ ...payload, guest_name: guest.name, guest_email: guest.email })
+  })
 })
 
 describe('shareRequest', () => {

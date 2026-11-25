@@ -5,6 +5,7 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
+from apps.api.middleware.auth import get_optional_user
 from apps.api.routers.setup import CreateSuperAdminRequest
 from apps.api.schemas.asset import AssetUpdate
 from apps.api.schemas.comment import GuestCommentCreate
@@ -94,7 +95,8 @@ FOLDER_ID = str(uuid.uuid4())
         "upload-original-filename",
     ],
 )
-def test_overlong_request_fields_return_422(client, auth_headers, method, path, payload):
+def test_overlong_request_fields_return_422(client, auth_headers, test_user, monkeypatch, method, path, payload):
+    monkeypatch.setitem(client.app.dependency_overrides, get_optional_user, lambda: test_user)
     response = getattr(client, method)(path, json=payload, headers=auth_headers)
 
     assert response.status_code == 422, response.text

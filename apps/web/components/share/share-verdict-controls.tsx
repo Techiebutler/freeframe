@@ -136,40 +136,18 @@ function ShareVerdictControlsFor({
     { redo, dismiss }: { redo: () => Promise<void>; dismiss: () => void },
   ) => {
     if (!isSignInExpired(error)) return null
-    const from = currentAppPath()
     return (
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <a
-          href={withBasePath(`/login?from=${encodeURIComponent(from)}`)}
-          onClick={(event) => {
-            event.preventDefault()
-            signInAgain(from)
-          }}
-          className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-xs font-medium text-white outline-none
-            hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          Sign in
-        </a>
-        <button
-          type="button"
-          onClick={async () => {
-            if (!sendAs()) {
-              // The prompt is a modal under this popover: put it away first.
-              dismiss()
-              if (!(await askWhoTheyAre())) return
-            }
-            continueAsGuest(error)
-            rerender()
-            // The press again, as the guest: re-read as them and decided
-            // afresh, never the old request decided for the signed-in list.
-            await redo()
-          }}
-          className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium text-text-secondary
-            outline-none hover:bg-bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          Continue as guest
-        </button>
-      </div>
+      <ShareSignInActions onContinueAsGuest={async () => {
+        if (!sendAs()) {
+          // The prompt is a modal under this popover: put it away first.
+          dismiss()
+          if (!(await askWhoTheyAre())) return
+        }
+        continueAsGuest(error)
+        rerender()
+        // The press again, as the guest: re-read as them and decide afresh.
+        await redo()
+      }} />
     )
   }
 
@@ -201,8 +179,44 @@ function ShareVerdictControlsFor({
   )
 }
 
+export function ShareSignInActions({ onContinueAsGuest, onCancel }: {
+  onContinueAsGuest: () => void | Promise<void>
+  onCancel?: () => void
+}) {
+  const from = currentAppPath()
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <a
+        href={withBasePath(`/login?from=${encodeURIComponent(from)}`)}
+        onClick={(event) => {
+          event.preventDefault()
+          onCancel?.()
+          signInAgain(currentAppPath())
+        }}
+        className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-xs font-medium text-white outline-none
+          hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        Sign in
+      </a>
+      <button
+        type="button"
+        onClick={onContinueAsGuest}
+        className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium text-text-secondary
+          outline-none hover:bg-bg-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        Continue as guest
+      </button>
+      {onCancel && (
+        <button type="button" autoFocus onClick={onCancel} className="px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary transition-colors">
+          Cancel
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** This page's path and query, without the basePath: what /login's `from` takes. */
-function currentAppPath(): string {
+export function currentAppPath(): string {
   if (typeof window === 'undefined') return '/'
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
   const { pathname, search } = window.location

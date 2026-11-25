@@ -169,7 +169,7 @@ describe('ShareReviewScreen verdicts', () => {
 
   // Through the real screen: a lapsed sign-in that will not refresh
   // is asked about, and "Continue as guest" opens the same prompt.
-  it('a lapsed sign-in that will not refresh asks, and Continue as guest goes through the prompt', async () => {
+  it('a lapsed sign-in can give a verdict and then comment as the same guest', async () => {
     const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
     localStorage.setItem('ff_access_token', `${b64url({ alg: 'HS256' })}.${b64url({ exp: 1 })}.sig`)
     localStorage.setItem('ff_refresh_token', 'dead')
@@ -182,6 +182,7 @@ describe('ShareReviewScreen verdicts', () => {
     expect(puts()).toHaveLength(0)
 
     await userEvent.click(screen.getByRole('button', { name: 'Continue as guest' }))
+    expect(await screen.findByText('Give your verdict')).toBeInTheDocument()
     await userEvent.type(await screen.findByPlaceholderText('Your name'), 'Dana')
     await userEvent.type(screen.getByPlaceholderText('Email address'), 'dana@client.example')
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
@@ -189,5 +190,18 @@ describe('ShareReviewScreen verdicts', () => {
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0].headers.Authorization).toBeUndefined()
     expect(puts()[0].body).toMatchObject({ guest_name: 'Dana', guest_email: 'dana@client.example', asset_id: 'a1' })
+
+    const input = await screen.findByPlaceholderText('Leave your comment...')
+    fireEvent.change(input, { target: { value: 'Looks good' } })
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(input).toHaveValue(''))
+    const posts = calls.filter((c) => c.method === 'POST' && c.url.pathname === '/share/t/comment')
+    expect(posts).toHaveLength(1)
+    expect(posts[0].headers.Authorization).toBeUndefined()
+    expect(posts[0].body).toEqual({
+      asset_id: 'a1', version_id: 'v1', body: 'Looks good', guest_name: 'Dana', guest_email: 'dana@client.example',
+    })
+    expect(calls.filter((c) => c.url.pathname.endsWith('/auth/refresh'))).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Continue as guest' })).toBeNull()
   })
 })

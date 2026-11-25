@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { useReviewStore } from '@/stores/review-store'
 import { ReviewProvider, useReview } from '../review-provider'
 
@@ -33,9 +33,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderShareProvider() {
+function renderShareProvider(shareSession?: string) {
   const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <ReviewProvider assetId="a1" shareToken="tok">{children}</ReviewProvider>
+    <ReviewProvider assetId="a1" shareToken="tok" shareSession={shareSession}>{children}</ReviewProvider>
   )
   return renderHook(() => useReview(), { wrapper })
 }
@@ -50,6 +50,21 @@ async function postAndCatch() {
 }
 
 describe('ReviewProvider addComment on a share link', () => {
+  it('includes the password link session in the comment POST URL', async () => {
+    const shareSession = 'password-link-session'
+    postReply = respond(201, { id: 'c1', body: 'a comment' })
+    const { result } = renderShareProvider(shareSession)
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    await act(async () => { await result.current.addComment({ body: 'a comment' }) })
+
+    const posts = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(posts).toHaveLength(1)
+    const url = new URL(String(posts[0][0]))
+    expect(url.pathname).toBe('/share/tok/comment')
+    expect(url.searchParams.get('share_session')).toBe(shareSession)
+  })
+
   it("throws the server's detail, so a failed reply can say why", async () => {
     postReply = respond(400, { detail: 'Parent comment not found on this asset' })
     const err = await postAndCatch()
