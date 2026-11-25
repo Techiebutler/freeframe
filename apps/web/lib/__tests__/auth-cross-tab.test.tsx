@@ -23,6 +23,25 @@ function otherTab(account: string | null) {
   tab.dispatchEvent(new StorageEvent('storage', { key: noticeKey, oldValue, newValue }))
 }
 
+function installCookieLocks() {
+  const queues = new Map<string, Promise<unknown>>()
+  const released = vi.fn()
+  const request = vi.fn((name: string, run: () => Promise<unknown>) => {
+    const previous = queues.get(name) ?? Promise.resolve()
+    const next = previous.then(async () => {
+      try {
+        return await run()
+      } finally {
+        released(name)
+      }
+    })
+    queues.set(name, next.catch(() => {}))
+    return next
+  })
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } })
+  return { request, released }
+}
+
 function observeNavigation() {
   const { origin, protocol, pathname, search } = tab.location
   const location = { origin, protocol, pathname, search, href: '', replace: vi.fn() }
@@ -140,6 +159,70 @@ it('uses the origin-wide lock for cookie mutations', async () => {
   expect(request).toHaveBeenCalledExactlyOnceWith('ff-auth-cookie', expect.any(Function))
   expect(request.mock.invocationCallOrder[0]).toBeLessThan(fetch.mock.invocationCallOrder[0])
   expect(localStorage.getItem('ff_signed_in_hint')).toBe('1')
+})
+
+it.each([
+  { method: 'POST', path: '/auth/login' },
+  { method: 'POST', path: '/auth/verify-magic-code' },
+  { method: 'POST', path: '/auth/accept-invite' },
+  { method: 'PATCH', path: '/auth/change-password' },
+  { method: 'POST', path: '/setup/create-superadmin' },
+  { method: 'POST', path: '/auth/logout' },
+])('holds the cookie lock through the $method $path response', async ({ method, path }) => {
+  const { request, released } = installCookieLocks()
+  const { api } = await import('../api')
+  const auth = await import('../auth')
+  const location = observeNavigation()
+  const isLogout = path === '/auth/logout'
+  let respond!: (response: Response) => void
+  const fetch = vi.fn(() => new Promise<Response>(resolve => { respond = resolve }))
+  vi.stubGlobal('fetch', fetch)
+
+  const pending = isLogout ? auth.clearTokens() : (method === 'PATCH' ? api.patch : api.post)(path, {})
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledExactlyOnceWith(`/api${path}`, expect.objectContaining({ method })))
+  const responseArrived = vi.fn(respond)
+  responseArrived(isLogout ? new Response(null, { status: 204 }) : restored(alice))
+  expect(await pending).toEqual(isLogout ? true : { access_token: alice })
+
+  expect(request).toHaveBeenCalledExactlyOnceWith('ff-auth-cookie', expect.any(Function))
+  expect(request.mock.invocationCallOrder[0]).toBeLessThan(fetch.mock.invocationCallOrder[0])
+  expect(released).toHaveBeenCalledExactlyOnceWith('ff-auth-cookie')
+  expect(released.mock.invocationCallOrder[0]).toBeGreaterThan(responseArrived.mock.invocationCallOrder[0])
+  if (isLogout) expect(location.href).toBe('/login')
+})
+
+it('queues login in another tab until an in-flight refresh refusal is handled', async () => {
+  const { request } = installCookieLocks()
+  const tabA = await import('../auth')
+  vi.resetModules()
+  const tabB = await import('../auth')
+  const { api } = await import('../api')
+  expect(tabA).not.toBe(tabB)
+
+  // Clearing legacy storage is part of handling a refused refresh.
+  const removeItem = vi.spyOn(Storage.prototype, 'removeItem')
+  let respond!: (response: Response) => void
+  const loginStarted = vi.fn()
+  const fetch = vi.fn((url: string) => {
+    if (url === '/api/auth/refresh') return new Promise<Response>(resolve => { respond = resolve })
+    loginStarted(removeItem.mock.calls.some(([key]) => key === 'ff_refresh_token'))
+    return Promise.resolve(restored(bob))
+  })
+  vi.stubGlobal('fetch', fetch)
+
+  const refresh = tabA.refreshAccessTokenQuietly()
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledExactlyOnceWith('/api/auth/refresh', expect.anything()))
+  const login = api.post('/auth/login', { email: 'bob@example.test', password: 'fixture' })
+  await Promise.resolve()
+  const fetchesBeforeRefusal = fetch.mock.calls.map(([url]) => url)
+
+  respond(refused())
+  await expect(refresh).resolves.toEqual({ failed: 'refused' })
+  await expect(login).resolves.toEqual({ access_token: bob })
+  expect(fetchesBeforeRefusal).toEqual(['/api/auth/refresh'])
+  expect(request).toHaveBeenNthCalledWith(2, 'ff-auth-cookie', expect.any(Function))
+  expect(fetch).toHaveBeenNthCalledWith(2, '/api/auth/login', expect.objectContaining({ method: 'POST' }))
+  expect(loginStarted).toHaveBeenCalledExactlyOnceWith(true)
 })
 
 it('waits for the new account before posting a share comment after another tab signs back in', async () => {
