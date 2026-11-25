@@ -207,7 +207,7 @@ export function ShareSignInActions({ from = currentAppPath(), onContinueAsGuest,
         Continue as guest
       </button>
       {onCancel && (
-        <button type="button" onClick={onCancel} className="px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary transition-colors">
+        <button type="button" autoFocus onClick={onCancel} className="px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary transition-colors">
           Cancel
         </button>
       )}
