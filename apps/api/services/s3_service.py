@@ -109,6 +109,13 @@ def _build_s3_client(config=None):
     # config to keep the baseline authoritative (a caller can still add
     # non-conflicting options like the startup timeouts).
     config = config.merge(baseline) if config is not None else baseline
+    # botocore 1.44 made "standard" the default retry mode. It gives up after three
+    # tries and about a tenth of a second, so a store that restarts for one second
+    # fails every call it receives. "legacy" keeps five tries with seconds of backoff.
+    # Merged after the baseline and on top of the caller's own dict: Config.merge
+    # replaces `retries` whole, so setting it in either baseline config would drop
+    # each caller's total_max_attempts (CreateMultipartUpload must be sent once).
+    config = config.merge(Config(retries={**(config.retries or {}), "mode": "legacy"}))
     kwargs["config"] = config
     return boto3.client("s3", **kwargs)
 

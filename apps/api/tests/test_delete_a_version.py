@@ -16,7 +16,8 @@ Postgres through the real app:
     comments, the comment export, approvals, and its project's storage figure
     with them; a restore brings it all back. A notification keeps quoting
     such a comment, which nothing here changes;
-  * two deletes racing on an asset's last two versions cannot both succeed.
+  * two deletes racing on an asset's last two versions cannot both succeed,
+    an editor's and the admin panel's included.
 """
 import threading
 import uuid
@@ -701,6 +702,7 @@ def committed_pair():
     """Asset with two ready versions and an editor, committed so a second
     connection sees them; removed afterwards."""
     from apps.api.database import engine
+    from apps.api.models.activity import ActivityLog
     from apps.api.models.asset import Asset, AssetType, AssetVersion, ProcessingStatus
     from apps.api.models.project import Project, ProjectMember, ProjectRole, ProjectType
     from apps.api.models.user import User
@@ -727,6 +729,7 @@ def committed_pair():
 
     with engine.connect() as conn:
         s = _SASession(bind=conn)
+        s.query(ActivityLog).filter(ActivityLog.user_id == ids["user"]).delete()
         s.query(AssetVersion).filter(AssetVersion.asset_id == ids["asset"]).delete()
         s.query(Asset).filter(Asset.id == ids["asset"]).delete()
         s.query(ProjectMember).filter(ProjectMember.project_id == ids["project"]).delete()
@@ -824,3 +827,238 @@ def test_a_restore_that_loses_the_race_to_the_purge_answers_404(committed_pair, 
             restorer.rollback()
             purger.close()
             restorer.close()
+
+
+def test_a_restore_asks_storage_before_it_locks_the_asset(committed_pair, monkeypatch):
+    """The check can be a HEAD against a store that never answers. Every comment
+    insert takes FOR KEY SHARE on the asset, so a lock held across the check made
+    commenting on the asset wait for storage."""
+    from sqlalchemy import text
+    from apps.api.database import engine
+    from apps.api.models.asset import AssetVersion
+    from apps.api.models.user import User
+    import apps.api.routers.assets as assets_module
+
+    _, v2 = committed_pair["versions"]
+    asked = []
+
+    with engine.connect() as conn_r, engine.connect() as conn_c:
+        restorer = _SASession(bind=conn_r)
+        try:
+            restorer.get(AssetVersion, v2).deleted_at = datetime.now(timezone.utc)
+            restorer.commit()
+
+            def asks_storage(_db, _version):
+                # NOWAIT: an error here is a comment that would be waiting.
+                conn_c.execute(
+                    text("SELECT 1 FROM assets WHERE id = :id FOR KEY SHARE NOWAIT"),
+                    {"id": committed_pair["asset"]})
+                conn_c.rollback()
+                asked.append(True)
+                return True
+
+            monkeypatch.setattr(assets_module, "version_comes_back", asks_storage)
+            restored = assets_module.restore_asset_version(
+                committed_pair["asset"], v2, db=restorer,
+                current_user=restorer.get(User, committed_pair["user"]))
+            assert asked == [True]
+            assert restored.latest_version.id == v2
+        finally:
+            restorer.rollback()
+            restorer.close()
+
+
+def test_a_restore_is_refused_when_the_asset_is_trashed_while_storage_is_asked(
+    committed_pair, monkeypatch,
+):
+    """The asset is read again under its lock, after the storage check."""
+    from fastapi import HTTPException
+    from sqlalchemy import text
+    from apps.api.database import engine
+    from apps.api.models.asset import Asset, AssetVersion
+    from apps.api.models.user import User
+    import apps.api.routers.assets as assets_module
+
+    _, v2 = committed_pair["versions"]
+    now = datetime.now(timezone.utc)
+    with engine.connect() as conn_r, engine.connect() as conn_t:
+        restorer = _SASession(bind=conn_r)
+        trasher = _SASession(bind=conn_t)
+        try:
+            restorer.get(AssetVersion, v2).deleted_at = now
+            restorer.commit()
+
+            def asset_goes_meanwhile(_db, _version):
+                # Fail, do not hang, should the restore hold the lock already.
+                trasher.execute(text("SET LOCAL lock_timeout = '2s'"))
+                trasher.get(Asset, committed_pair["asset"]).deleted_at = now
+                trasher.commit()
+                return True
+
+            monkeypatch.setattr(assets_module, "version_comes_back", asset_goes_meanwhile)
+            with pytest.raises(HTTPException) as refused:
+                assets_module.restore_asset_version(
+                    committed_pair["asset"], v2, db=restorer,
+                    current_user=restorer.get(User, committed_pair["user"]))
+            assert (refused.value.status_code, refused.value.detail) == (404, "Asset not found")
+        finally:
+            restorer.rollback()
+            trasher.rollback()
+            restorer.close()
+            trasher.close()
+
+
+def test_a_restore_refuses_a_viewer_before_it_asks_storage(client, db, w, monkeypatch):
+    import apps.api.routers.assets as assets_module
+
+    w.v2.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+    asked = []
+    monkeypatch.setattr(assets_module, "version_comes_back", lambda *_: asked.append(True))
+    assert _restore(client, w, w.v2, user=w.viewer).status_code == 403
+    assert asked == []
+
+
+# ── an editor and the admin panel at once ────────────────────────────────────
+
+def _admin_gate(session, version_ids):
+    """What `POST /admin/delete` does before it writes, for these versions."""
+    from apps.api.services import admin_panel
+
+    targets = admin_panel.resolve_targets(session, [], [], version_ids)
+    admin_panel.check_gate(session, targets, len(version_ids), None)
+    return targets
+
+
+def _live_versions(pair):
+    from apps.api.database import engine
+    from apps.api.models.asset import AssetVersion
+
+    with engine.connect() as conn:
+        return _SASession(bind=conn).query(AssetVersion).filter(
+            AssetVersion.asset_id == pair["asset"], AssetVersion.deleted_at.is_(None)).count()
+
+
+@pytest.mark.parametrize("admins_version, refusal", [
+    (0, "can only be deleted with the whole"),  # v1, the newest once v2 is gone
+    (1, "no longer exist"),                     # v2, the one the editor took
+])
+def test_an_admin_delete_waits_for_an_editors_and_then_looks_again(
+    committed_pair, admins_version, refusal,
+):
+    """Without the asset's lock the admin gate read v2 as the newest while the
+    editor's delete of it was not committed yet, and both deletes went through."""
+    from apps.api.database import engine
+    from apps.api.models.user import User
+    from apps.api.services import admin_panel
+    import apps.api.routers.assets as assets_module
+
+    _, v2 = committed_pair["versions"]
+    with engine.connect() as conn_e, engine.connect() as conn_a:
+        editor = _SASession(bind=conn_e)
+        admin = _SASession(bind=conn_a)
+        try:
+            # Not v2's newest-version gate: what is selected is an older version,
+            # or (the second case) one that stops being the newest.
+            targets = admin_panel.resolve_targets(
+                admin, [], [], [committed_pair["versions"][admins_version]])
+
+            real_commit = editor.commit
+            editor.commit = lambda: editor.flush()  # hold the editor's delete open
+            assets_module.delete_asset_version(
+                committed_pair["asset"], v2, db=editor,
+                current_user=editor.get(User, committed_pair["user"]))
+
+            outcome = []
+
+            def gate():
+                try:
+                    admin_panel.check_gate(admin, targets, 1, None)
+                    outcome.append("passed")
+                except admin_panel.DeleteGate as exc:
+                    outcome.append((exc.status_code, exc.detail))
+            racer = threading.Thread(target=gate)
+            racer.start()
+            racer.join(timeout=1.0)
+            assert racer.is_alive(), f"the admin gate did not wait for the editor: {outcome}"
+
+            real_commit()
+            racer.join(timeout=10.0)
+            [(status, detail)] = outcome
+            assert status == 409
+            assert refusal in detail
+        finally:
+            editor.rollback()
+            admin.rollback()
+            editor.close()
+            admin.close()
+    assert _live_versions(committed_pair) == 1
+
+
+def test_an_editors_delete_waits_for_an_admins_from_the_gate_on(committed_pair):
+    """The admin delete used to take the version's row first and the asset's only
+    with its log entry, the other way round from the editor's, so the two could
+    deadlock and the editor got a 500."""
+    from fastapi import HTTPException
+    from apps.api.database import engine
+    from apps.api.models.user import User
+    from apps.api.services import admin_panel
+    import apps.api.routers.assets as assets_module
+
+    v1, _ = committed_pair["versions"]
+    with engine.connect() as conn_a, engine.connect() as conn_e:
+        admin = _SASession(bind=conn_a)
+        editor = _SASession(bind=conn_e)
+        try:
+            targets = _admin_gate(admin, [v1])
+
+            outcome = []
+
+            def delete():
+                try:
+                    assets_module.delete_asset_version(
+                        committed_pair["asset"], v1, db=editor,
+                        current_user=editor.get(User, committed_pair["user"]))
+                    outcome.append(200)
+                except HTTPException as exc:
+                    outcome.append(exc.status_code)
+                    editor.rollback()
+            racer = threading.Thread(target=delete)
+            racer.start()
+            racer.join(timeout=1.0)
+            assert racer.is_alive(), f"the editor did not wait for the admin: {outcome}"
+
+            admin_panel.bulk_soft_delete(admin, targets, admin.get(User, committed_pair["user"]))
+            admin.commit()
+            racer.join(timeout=10.0)
+            assert outcome == [404]
+        finally:
+            admin.rollback()
+            editor.rollback()
+            admin.close()
+            editor.close()
+    assert _live_versions(committed_pair) == 1
+
+
+def test_the_admin_gate_lets_a_comment_through(committed_pair):
+    """Its lock is the one that still lets a comment, or anything else that names
+    the asset by foreign key, be written meanwhile."""
+    from sqlalchemy import text
+    from apps.api.database import engine
+
+    v1, _ = committed_pair["versions"]
+    with engine.connect() as conn_a, engine.connect() as conn_c:
+        admin = _SASession(bind=conn_a)
+        try:
+            _admin_gate(admin, [v1])
+            conn_c.execute(
+                text("SELECT 1 FROM assets WHERE id = :id FOR KEY SHARE NOWAIT"),
+                {"id": committed_pair["asset"]})
+            with pytest.raises(Exception, match="could not obtain lock"):
+                conn_c.execute(
+                    text("SELECT 1 FROM assets WHERE id = :id FOR UPDATE NOWAIT"),
+                    {"id": committed_pair["asset"]})
+        finally:
+            admin.rollback()
+            conn_c.rollback()
+            admin.close()
