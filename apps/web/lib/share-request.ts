@@ -193,7 +193,9 @@ export async function shareRequest<T>(
   const send = (bearer: string | null) => {
     const guest = caller.kind === 'guest' ? init.guest ?? null : null
 
-    const url = new URL(`${API_URL}/share/${encodeURIComponent(token)}${path}`)
+    // The base is for a relative API URL ("/api", the production default); an
+    // absolute one ignores it. `use-sse.ts` does the same.
+    const url = new URL(`${API_URL}/share/${encodeURIComponent(token)}${path}`, window.location.origin)
     if (init.shareSession) url.searchParams.set('share_session', init.shareSession)
     if (guest && init.method !== 'PUT') url.searchParams.set('guest_email', guest.email)
 
