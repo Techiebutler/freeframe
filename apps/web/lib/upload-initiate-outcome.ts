@@ -69,6 +69,9 @@ export function classifyInitiateError(err: unknown): InitiateOutcome {
       return holdOutcome('storage', err.retryAfter)
   }
 
+  // Whatever answered, it was not the API: it is restarting, or not reachable.
+  if (err.apiMissing) return holdOutcome('connection', err.retryAfter)
+
   const { status } = err
   // 401 (not signed in, unless a code above said otherwise), 408 and 429 are
   // about the moment, not the file. Every other 4xx is the server saying no.

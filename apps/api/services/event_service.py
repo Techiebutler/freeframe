@@ -96,6 +96,29 @@ def _format(data) -> str:
 KEEPALIVE_MAX_SECONDS = 30.0
 
 
+# Open streams, each as (its event loop, the event that ends it). A stream never
+# finishes on its own, so a server that waits for open responses before it exits
+# would wait for every browser tab.
+_open_streams: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
+_stopping = False
+
+
+def allow_streams() -> None:
+    """Undo end_streams(). Called when the application starts."""
+    global _stopping
+    _stopping = False
+
+
+def end_streams() -> None:
+    """End every open stream, and any opened from now on, because the server is
+    stopping. Safe to call from a signal handler. A client sees the connection
+    close and reconnects, as it does after any restart."""
+    global _stopping
+    _stopping = True
+    for loop, stop in list(_open_streams):
+        loop.call_soon_threadsafe(stop.set)
+
+
 def _revoked(reason: str) -> str:
     return f"event: revoked\ndata: {json.dumps({'reason': reason})}\n\n"
 
@@ -129,6 +152,8 @@ async def event_stream(
     An idle stream gets a keepalive comment every `recheck_seconds`, or every
     KEEPALIVE_MAX_SECONDS if that is shorter.
 
+    The stream also ends, without a `revoked` event, when end_streams() is called.
+
     Once a check gives a reason, the stream sends a final `revoked` event
     carrying it and ends. If the check itself fails (the database is down) the
     stream ends without one, and the client's reconnect gets a fresh decision.
@@ -141,15 +166,32 @@ async def event_stream(
     if checked_at is None:
         checked_at = loop.time()
     sent_at = loop.time()
+    stop = asyncio.Event()
+    entry = (loop, stop)
+    _open_streams.add(entry)
+    if _stopping:  # set before the line above, so end_streams() did not see this one
+        stop.set()
+    stopped = asyncio.ensure_future(stop.wait())
     try:
-        while True:
+        while not stop.is_set():
             now = loop.time()
             wake_at = min(checked_at + recheck_seconds, sent_at + keepalive_seconds)
             if expires_at is not None:
                 wake_at = min(wake_at, now + (expires_at - time.time()))
             # get_message's timeout defaults to 0, which returns at once when
             # nothing is waiting; without an explicit one the loop would not wait.
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=max(0.0, wake_at - now))
+            read = asyncio.ensure_future(
+                pubsub.get_message(ignore_subscribe_messages=True, timeout=max(0.0, wake_at - now))
+            )
+            try:
+                await asyncio.wait({read, stopped}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                if not read.done():
+                    read.cancel()
+                    await asyncio.gather(read, return_exceptions=True)
+            if read.cancelled():
+                return
+            message = read.result()
             is_event = message is not None and message.get("type") == "message"
 
             age = loop.time() - checked_at
@@ -177,5 +219,7 @@ async def event_stream(
                 yield ": keepalive\n\n"
                 sent_at = loop.time()
     finally:
+        _open_streams.discard(entry)
+        stopped.cancel()
         await pubsub.unsubscribe(_channel(project_id))
         await pubsub.aclose()

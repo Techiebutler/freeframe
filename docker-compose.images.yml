@@ -28,6 +28,8 @@ services:
     image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   email_worker:
     image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
+  webhook_worker:
+    image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   maintenance_worker:
     image: ghcr.io/techiebutler/freeframe-api:${FREEFRAME_VERSION:-1.22.1}
   beat:

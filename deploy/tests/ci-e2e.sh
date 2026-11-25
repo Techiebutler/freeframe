@@ -166,7 +166,7 @@ assert_ci_images() {
     --format '{{.Label "com.docker.compose.service"}} {{.Image}} {{.State}}')
   while read -r svc img state; do
     case $svc in
-      api | worker | email_worker | maintenance_worker | beat) want=$API_IMAGE ;;
+      api | worker | email_worker | webhook_worker | maintenance_worker | beat) want=$API_IMAGE ;;
       web) want=$WEB_IMAGE ;;
       *) continue ;;
     esac
@@ -176,11 +176,11 @@ assert_ci_images() {
       bad=1
     fi
   done <<<"$lines"
-  if ((bad || n != 6)); then
+  if ((bad || n != 7)); then
     docker ps -a --filter label=com.docker.compose.project=freeframe
-    fail "expected the 6 FreeFrame app containers running the :ci images, found $n (see above)"
+    fail "expected the 7 FreeFrame app containers running the :ci images, found $n (see above)"
   fi
-  pass "the 6 app containers run the :ci images built from this checkout"
+  pass "the 7 app containers run the :ci images built from this checkout"
 }
 
 # wait_health: FreeFrame answers through Traefik on port 80.

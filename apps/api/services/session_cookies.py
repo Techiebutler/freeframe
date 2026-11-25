@@ -33,7 +33,14 @@ def _cookie_options() -> dict:
 
 def read_refresh_token(request: Request) -> str | None:
     require_same_origin(request)
-    return request.cookies.get(HOST_COOKIE)
+    # request.cookies strips more than spaces from names, so a padded name that
+    # a browser does not treat as __Host- would be read as this cookie.
+    for header in request.headers.getlist("cookie"):
+        for part in header.split(";"):
+            name, _, value = part.strip(" \t").partition("=")
+            if name == HOST_COOKIE:
+                return value
+    return None
 
 
 def refresh_token_for_body(request: Request, response: Response, token: str) -> dict[str, str]:
