@@ -1,6 +1,6 @@
 import { isExpiringSoon } from '@/hooks/use-sse'
-import { getAccessToken, refreshAccessTokenQuietly } from '@/lib/auth'
-import { webClientHeaders } from '@/lib/auth-transport'
+import { bootstrapSession, cookieSessionNotice, getAccessToken, hasSignedInHint, refreshAccessTokenQuietly } from '@/lib/auth'
+import { usesRefreshCookie, webClientHeaders } from '@/lib/auth-transport'
 import { subjectOf } from '@/lib/jwt-subject'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -54,6 +54,9 @@ const refusedBearers = new Set<string>()
  * guest.
  */
 const guestChosenOver = new Set<string>()
+// A refused cookie can have no bearer. Bind the choice to that session notice
+// instead, so a later sign-in cannot inherit the choice.
+let guestChosenOverNotice: string | null | undefined
 
 /**
  * The person chose "Continue as guest" over the refused sign-in `error` was
@@ -63,7 +66,11 @@ const guestChosenOver = new Set<string>()
  * with a good sign-in meanwhile.
  */
 export function continueAsGuest(error: unknown): void {
-  const tokens = (error as { refusedTokens?: unknown } | null | undefined)?.refusedTokens
+  const failure = error as { refusedTokens?: unknown; refusedNotice?: string | null } | null | undefined
+  if (failure?.refusedNotice !== undefined && hasSignedInHint() && failure.refusedNotice === cookieSessionNotice()) {
+    guestChosenOverNotice = failure.refusedNotice
+  }
+  const tokens = failure?.refusedTokens
   if (!Array.isArray(tokens)) return
   for (const token of tokens) {
     if (typeof token === 'string' && refusedBearers.has(token)) guestChosenOver.add(token)
@@ -73,13 +80,14 @@ export function continueAsGuest(error: unknown): void {
 /** Whether "Continue as guest" covers the sign-in stored now. */
 export function hasChosenGuest(): boolean {
   const stored = storedAccessToken()
-  return !!stored && guestChosenOver.has(stored)
+  return stored ? guestChosenOver.has(stored) : hasSignedInHint() && guestChosenOverNotice === cookieSessionNotice()
 }
 
 /** For tests: forget refused bearers and guest choices. */
 export function resetShareRequestState(): void {
   refusedBearers.clear()
   guestChosenOver.clear()
+  guestChosenOverNotice = undefined
 }
 
 function storedAccessToken(): string | null {
@@ -102,7 +110,7 @@ function usableAccessToken(): string | null {
  * sign-in or asks them what to do (`shareRequest`).
  */
 export function hasStoredToken(): boolean {
-  return !!storedAccessToken()
+  return !!storedAccessToken() || hasSignedInHint()
 }
 
 /**
@@ -115,7 +123,7 @@ export function shareCallerKey(guest: ShareGuest | null | undefined): string {
   const usable = usableAccessToken()
   // A token with no readable subject is keyed by itself: still one account.
   if (usable) return `bearer:${subjectOf(usable) ?? usable}`
-  if (storedAccessToken() && !hasChosenGuest()) return 'lapsed'
+  if (hasStoredToken() && !hasChosenGuest()) return 'lapsed'
   return guest ? `guest:${guest.email}` : 'nobody'
 }
 
@@ -125,7 +133,7 @@ type Caller =
   /** A lapsed sign-in reading: no bearer, and not the guest either. */
   | { kind: 'nobody' }
   /** `refused` names the tokens refused, for "Continue as guest" to bind. */
-  | { kind: 'failed'; why: 'refused'; tokens: string[] }
+  | { kind: 'failed'; why: 'refused'; tokens: string[]; notice?: string | null }
   | { kind: 'failed'; why: 'transient' }
 
 /**
@@ -139,9 +147,18 @@ type Caller =
  *   stale token refused, so it is not refreshed again. Then a read goes as
  *   nobody, and a write fails.
  */
-async function resolveCaller(): Promise<Caller> {
+async function resolveCaller(restoreMissing: boolean): Promise<Caller> {
   const stored = storedAccessToken()
-  if (!stored) return { kind: 'guest' }
+  if (!stored) {
+    if (restoreMissing && usesRefreshCookie()) {
+      const marker = cookieSessionNotice()
+      const outcome = await bootstrapSession()
+      if ('token' in outcome) return { kind: 'bearer', token: outcome.token }
+      if (outcome.failed === 'transient' || marker !== cookieSessionNotice()) return { kind: 'failed', why: 'transient' }
+      if (hasSignedInHint() && !hasChosenGuest()) return { kind: 'failed', why: 'refused', tokens: [], notice: marker }
+    }
+    return hasSignedInHint() && !hasChosenGuest() ? { kind: 'nobody' } : { kind: 'guest' }
+  }
   const usable = usableAccessToken()
   if (usable) return { kind: 'bearer', token: usable }
   if (hasChosenGuest()) return { kind: 'guest' }
@@ -159,8 +176,8 @@ async function resolveCaller(): Promise<Caller> {
 }
 
 /** A refused sign-in, naming the refused tokens for `continueAsGuest`. */
-function refused(tokens: string[]): Error {
-  return Object.assign(new Error(SIGN_IN_EXPIRED), { status: 401, detail: SIGN_IN_EXPIRED, refusedTokens: tokens })
+function refused(tokens: string[], notice?: string | null): Error {
+  return Object.assign(new Error(SIGN_IN_EXPIRED), { status: 401, detail: SIGN_IN_EXPIRED, refusedTokens: tokens, refusedNotice: notice })
 }
 
 /** No answer worth acting on: try again, nothing to sign in again for. */
@@ -198,8 +215,8 @@ export async function shareRequest<T>(
 ): Promise<T> {
   const isRead = init.method === 'GET'
   const hasBody = init.method === 'PUT' || init.method === 'POST'
-  const caller = await resolveCaller()
-  if (caller.kind === 'failed' && !isRead) throw caller.why === 'refused' ? refused(caller.tokens) : unreachable()
+  const caller = await resolveCaller(!isRead)
+  if (caller.kind === 'failed' && !isRead) throw caller.why === 'refused' ? refused(caller.tokens, caller.notice) : unreachable()
 
   const send = (bearer: string | null) => {
     const guest = caller.kind === 'guest' ? init.guest ?? null : null
@@ -272,6 +289,6 @@ export async function shareRequest<T>(
  */
 export async function prepareShareWrite(): Promise<void> {
   const stored = storedAccessToken()
-  if (!stored || usableAccessToken() || hasChosenGuest() || refusedBearers.has(stored)) return
-  await resolveCaller()
+  if (usableAccessToken() || hasChosenGuest() || (stored && refusedBearers.has(stored))) return
+  await resolveCaller(true)
 }

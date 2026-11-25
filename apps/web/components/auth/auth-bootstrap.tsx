@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { bootstrapSession, refreshAccessTokenQuietly } from '@/lib/auth'
 import { usesRefreshCookie } from '@/lib/auth-transport'
-import { withBasePath } from '@/lib/base-path'
+import { currentAppPath, withBasePath } from '@/lib/base-path'
 
 /** Do not start protected requests until the browser has tried its cookie. */
 export function AuthBootstrap({ children }: { children: ReactNode }) {
@@ -16,14 +16,13 @@ export function AuthBootstrap({ children }: { children: ReactNode }) {
       return
     }
     let active = true
-    const pending = attempt ? refreshAccessTokenQuietly() : bootstrapSession()
+    const pending = attempt ? refreshAccessTokenQuietly({ skipCooldown: true }) : bootstrapSession()
     void pending.then((outcome) => {
       if (!active) return
       if ('token' in outcome) setState('ready')
       else if (outcome.failed === 'transient') setState('unavailable')
       else {
-        const { pathname, search } = window.location
-        window.location.replace(withBasePath(`/login?from=${encodeURIComponent(pathname + search)}`))
+        window.location.replace(withBasePath(`/login?from=${encodeURIComponent(currentAppPath())}`))
       }
     })
     return () => { active = false }

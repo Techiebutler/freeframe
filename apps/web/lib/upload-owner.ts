@@ -41,7 +41,7 @@ export function watchSubject(
   let prev = currentSubject()
   const onStorage = (e: StorageEvent) => {
     if (usesRefreshCookie() ? e.key !== SESSION_NOTICE_KEY : e.key !== ACCESS_TOKEN_KEY && e.key !== null) return
-    const next = usesRefreshCookie() ? null : subjectOf(e.key === null ? getAccessToken() : e.newValue)
+    const next = usesRefreshCookie() ? currentSubject() : subjectOf(e.key === null ? getAccessToken() : e.newValue)
     if (next === prev) return
     const was = prev
     prev = next

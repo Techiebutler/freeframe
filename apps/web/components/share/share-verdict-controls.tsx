@@ -4,7 +4,7 @@ import * as React from 'react'
 import useSWR, { useSWRConfig } from 'swr'
 import { VerdictControlsView } from '@/components/review/verdict-controls'
 import { signInAgain } from '@/lib/auth'
-import { withBasePath } from '@/lib/base-path'
+import { currentAppPath, withBasePath } from '@/lib/base-path'
 import {
   continueAsGuest, hasStoredToken, isSignInExpired, prepareShareWrite, shareCallerKey,
   shareRequest, unreachable, type ShareGuest,
@@ -114,8 +114,8 @@ function ShareVerdictControlsFor({
   // its message, and nothing is sent. What this does not cover: the caller
   // changing again (another tab) in the moment between this read and the write.
   const beforePress = async (): Promise<boolean | Verdict[]> => {
-    if (!hasStoredToken() && !sendAs() && !(await askWhoTheyAre())) return false
     await prepareShareWrite()
+    if (!hasStoredToken() && !sendAs() && !(await askWhoTheyAre())) return false
     if (shareCallerKey(sendAs()) === readAs) return true
     let fresh: Verdict[]
     try {
@@ -179,11 +179,11 @@ function ShareVerdictControlsFor({
   )
 }
 
-export function ShareSignInActions({ onContinueAsGuest, onCancel }: {
+export function ShareSignInActions({ from = currentAppPath(), onContinueAsGuest, onCancel }: {
+  from?: string
   onContinueAsGuest: () => void | Promise<void>
   onCancel?: () => void
 }) {
-  const from = currentAppPath()
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2">
       <a
@@ -191,7 +191,7 @@ export function ShareSignInActions({ onContinueAsGuest, onCancel }: {
         onClick={(event) => {
           event.preventDefault()
           onCancel?.()
-          signInAgain(currentAppPath())
+          signInAgain(from)
         }}
         className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-xs font-medium text-white outline-none
           hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-accent"
@@ -213,13 +213,4 @@ export function ShareSignInActions({ onContinueAsGuest, onCancel }: {
       )}
     </div>
   )
-}
-
-/** This page's path and query, without the basePath: what /login's `from` takes. */
-export function currentAppPath(): string {
-  if (typeof window === 'undefined') return '/'
-  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
-  const { pathname, search } = window.location
-  const path = basePath && pathname.startsWith(basePath) ? pathname.slice(basePath.length) || '/' : pathname
-  return `${path}${search}`
 }
