@@ -10,7 +10,6 @@
  * with a plain textarea, no timecode control and no version concept at all
  * (#117, #123).
  */
-import { getAccessToken } from '@/lib/auth'
 import * as React from 'react'
 import { ArrowLeft, ChevronDown, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
@@ -24,15 +23,12 @@ import { fetchShareDownloadOptions, handleDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
 import { ShareBrandMark } from './share-brand-mark'
 import { VERDICT_ROW_CLASS } from '@/components/review/verdict-controls'
-import { ShareVerdictControls } from './share-verdict-controls'
+import { continueAsGuest, hasStoredToken, isSignInExpired, readGuestIdentity } from '@/lib/share-request'
+import { ShareSignInActions, ShareVerdictControls } from './share-verdict-controls'
 
 /** Signed in, or a guest who has already given a name and email. */
 function hasIdentity(): boolean {
-  try {
-    return !!getAccessToken() || !!localStorage.getItem('ff_guest_identity')
-  } catch {
-    return false
-  }
+  return hasStoredToken() || !!readGuestIdentity()
 }
 
 export function ShareReviewScreen({
@@ -201,12 +197,7 @@ function ShareReviewInner({
     parentId?: string
     settle?: { resolve: () => void; reject: (e: Error) => void }
   } | null>(null)
-  React.useEffect(() => {
-    try {
-      const stored = localStorage.getItem('ff_guest_identity')
-      if (stored) setGuestIdentity(JSON.parse(stored))
-    } catch {}
-  }, [])
+  React.useEffect(() => setGuestIdentity(readGuestIdentity()), [])
 
   // A verdict asks who the guest is through the same prompt a comment does.
   // The press waits on this promise: the prompt's Continue resolves it with the
@@ -218,17 +209,36 @@ function ShareReviewInner({
     identityResolver.current = null
     resolve?.(identity)
   }, [])
-  const requestIdentity = React.useCallback(() => {
+  const requestIdentity = React.useCallback((purpose: keyof typeof PROMPT_COPY = 'verdict') => {
     // Only one prompt at a time: an older ask is answered "cancelled".
     settleIdentity(null)
     return new Promise<{ name: string; email: string } | null>((resolve) => {
       identityResolver.current = resolve
-      setPromptPurpose('verdict')
+      setPromptPurpose(purpose)
       setShowGuestPrompt(true)
     })
   }, [settleIdentity])
+
+  const signInResolver = React.useRef<((asGuest: boolean) => void) | null>(null)
+  const [showSignInPrompt, setShowSignInPrompt] = React.useState(false)
+  const settleSignIn = React.useCallback((asGuest: boolean) => {
+    const resolve = signInResolver.current
+    signInResolver.current = null
+    setShowSignInPrompt(false)
+    resolve?.(asGuest)
+  }, [])
+  const askToContinue = React.useCallback(() => new Promise<boolean>((resolve) => {
+    signInResolver.current?.(false)
+    signInResolver.current = resolve
+    setShowSignInPrompt(true)
+  }), [])
+
   // A press still waiting when the screen goes is let go, not left hanging.
-  React.useEffect(() => () => settleIdentity(null), [settleIdentity])
+  React.useEffect(() => () => {
+    settleIdentity(null)
+    signInResolver.current?.(false)
+    signInResolver.current = null
+  }, [settleIdentity])
 
   const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
     const payload: CreateCommentPayload = { body }
@@ -237,12 +247,19 @@ function ShareReviewInner({
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
     if (annotationData) payload.annotation = { drawing_data: annotationData }
-    await addComment(payload)
+    try {
+      await addComment(payload)
+    } catch (err) {
+      if (!isSignInExpired(err) || !(await askToContinue())) throw err
+      if (!readGuestIdentity() && !(await requestIdentity('comment'))) throw err
+      continueAsGuest(err)
+      await addComment(payload)
+    }
     // The optimistic append only ever shows top-level rows (CommentPanel renders
     // replies from their parent), so a reply is not on screen until the refetch.
     if (parentId) await refetchComments().catch(() => {})
     else refetchComments().catch(() => {})
-  }, [addComment, currentVersion, refetchComments])
+  }, [addComment, askToContinue, currentVersion, refetchComments, requestIdentity])
 
   const submitReply = React.useCallback(async (parentId: string, body: string) => {
     if (!hasIdentity()) {
@@ -476,6 +493,18 @@ function ShareReviewInner({
         </MobileCommentSheet>
       )}
 
+      {showSignInPrompt && (
+        <SharePrompt
+          title="Your sign-in has expired."
+          description="Sign in again or continue as a guest."
+        >
+          <ShareSignInActions
+            onContinueAsGuest={() => settleSignIn(true)}
+            onCancel={() => settleSignIn(false)}
+          />
+        </SharePrompt>
+      )}
+
       {/* Guest identity prompt */}
       {showGuestPrompt && (
         <GuestIdentityPrompt
@@ -502,46 +531,58 @@ const PROMPT_COPY = {
   verdict: { title: 'Give your verdict', body: 'Enter your name and email so the team knows who this verdict is from.' },
 } as const
 
+/** The modal frame the guest prompt has always used, shared with the sign-in prompt. */
+function SharePrompt({ title, description, children }: {
+  title: string; description: string; children: React.ReactNode
+}) {
+  const titleId = React.useId()
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-5 shadow-xl">
+        <h3 id={titleId} className="text-sm font-semibold text-text-primary mb-1">{title}</h3>
+        <p className="text-xs text-text-tertiary mb-4">{description}</p>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function GuestIdentityPrompt({ purpose = 'comment', onSave, onCancel }: { purpose?: keyof typeof PROMPT_COPY; onSave: (name: string, email: string) => void; onCancel: () => void }) {
   const [name, setName] = React.useState('')
   const [email, setEmail] = React.useState('')
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-sm rounded-xl border border-border bg-bg-secondary p-5 shadow-xl">
-        <h3 className="text-sm font-semibold text-text-primary mb-1">{PROMPT_COPY[purpose].title}</h3>
-        <p className="text-xs text-text-tertiary mb-4">{PROMPT_COPY[purpose].body}</p>
-        <div className="space-y-3">
-          <input
-            type="text"
-            placeholder="Your name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
-            autoFocus
-          />
-          <input
-            type="email"
-            placeholder="Email address"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
-          />
-        </div>
-        <div className="flex items-center justify-end gap-2 mt-4">
-          <button onClick={onCancel} className="px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary transition-colors">
-            Cancel
-          </button>
-          <button
-            disabled={!name.trim() || !email.trim()}
-            onClick={() => onSave(name.trim(), email.trim())}
-            className="px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
-          >
-            Continue
-          </button>
-        </div>
+    <SharePrompt title={PROMPT_COPY[purpose].title} description={PROMPT_COPY[purpose].body}>
+      <div className="space-y-3">
+        <input
+          type="text"
+          placeholder="Your name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+          autoFocus
+        />
+        <input
+          type="email"
+          placeholder="Email address"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] [@media(hover:hover)]:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+        />
       </div>
-    </div>
+      <div className="flex items-center justify-end gap-2 mt-4">
+        <button onClick={onCancel} className="px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary transition-colors">
+          Cancel
+        </button>
+        <button
+          disabled={!name.trim() || !email.trim()}
+          onClick={() => onSave(name.trim(), email.trim())}
+          className="px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
+        >
+          Continue
+        </button>
+      </div>
+    </SharePrompt>
   )
 }
 

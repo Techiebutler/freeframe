@@ -1,7 +1,67 @@
 import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from apps.api.models.comment import Comment
 from apps.api.models.share import SharePermission
+from apps.api.services.auth_service import create_access_token
+
+
+@pytest.mark.parametrize("caller", ["stale", "guest", "member"])
+def test_post_share_comment_identity(client, mock_db, test_user, monkeypatch, caller):
+    asset = SimpleNamespace(id=uuid.uuid4(), project_id=uuid.uuid4(), name="Still")
+    link = SimpleNamespace(id=uuid.uuid4(), asset_id=asset.id, permission=SharePermission.comment)
+    version_id = uuid.uuid4()
+    guest = SimpleNamespace(id=uuid.uuid4(), email="guest@example.com")
+    mock_db.first.return_value = SimpleNamespace(id=version_id)
+
+    def refresh(comment):
+        comment.id = uuid.uuid4()
+        comment.created_at = comment.updated_at = datetime.now(timezone.utc)
+        comment.resolved = False
+
+    mock_db.refresh.side_effect = refresh
+    monkeypatch.setattr("apps.api.middleware.auth.get_user_by_id", lambda db, user_id: test_user)
+    with patch("apps.api.routers.comments._get_asset", return_value=asset), \
+         patch("apps.api.routers.comments.validate_share_link_with_session", return_value=link), \
+         patch("apps.api.routers.comments.validate_asset_in_share"), \
+         patch("apps.api.routers.comments.resolve_guest", return_value=guest) as resolve_guest, \
+         patch("apps.api.routers.comments.event_service.publish_sync") as publish, \
+         patch("apps.api.routers.comments._build_comment_response", side_effect=lambda comment, db: comment):
+        headers = {}
+        payload = {"body": "Looks good", "version_id": str(version_id)}
+        if caller == "member":
+            headers["Authorization"] = f"Bearer {create_access_token(str(test_user.id))}"
+        else:
+            payload.update(guest_name="Guest", guest_email=guest.email)
+            if caller == "stale":
+                headers["Authorization"] = "Bearer invalid-token"
+
+        response = client.post("/share/some-token/comment", headers=headers, json=payload)
+
+    if caller == "stale":
+        assert response.status_code == 401, response.text
+        assert response.json()["detail"] == "Your sign-in has expired. Sign in again or continue as a guest."
+        resolve_guest.assert_not_called()
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
+        publish.assert_not_called()
+        return
+
+    assert response.status_code == 201, response.text
+    comment, = [call.args[0] for call in mock_db.add.call_args_list if isinstance(call.args[0], Comment)]
+    assert comment.body == "Looks good"
+    if caller == "guest":
+        resolve_guest.assert_called_once_with(mock_db, guest.email, "Guest")
+        assert comment.author_id is None
+        assert comment.guest_author_id == guest.id
+    else:
+        resolve_guest.assert_not_called()
+        assert comment.author_id == test_user.id
+        assert comment.guest_author_id is None
 
 
 @patch("apps.api.routers.comments.validate_asset_in_share")
