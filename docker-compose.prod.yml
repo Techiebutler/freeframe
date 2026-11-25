@@ -184,8 +184,6 @@ services:
       redis:
         condition: service_healthy
     init: true
-    # A stop lets the running transcode finish, for at most this long.
-    stop_grace_period: 10m
     command: sh -c "exec celery -A apps.api.tasks.celery_app worker -Q transcoding -c $${TRANSCODING_CONCURRENCY:-2} --loglevel=$${CELERY_LOGLEVEL:-info}"
     restart: unless-stopped
 
