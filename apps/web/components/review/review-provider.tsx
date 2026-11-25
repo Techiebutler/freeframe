@@ -9,10 +9,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { isExpiringSoon } from "@/hooks/use-sse";
 import { api } from "@/lib/api";
-import { getAccessToken, refreshAccessTokenQuietly } from "@/lib/auth";
-import { SERVER_UNREACHABLE } from "@/lib/share-request";
+import { readGuestIdentity, shareRequest } from "@/lib/share-request";
 import { useReviewStore } from "@/stores/review-store";
 import type { AssetResponse, AssetVersion, Comment } from "@/types";
 
@@ -323,54 +321,20 @@ export function ReviewProvider({
     async (payload: CreateCommentPayload): Promise<Comment> => {
       let comment: Comment;
       if (shareToken) {
-        const API_URL =
-          process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        let bearer: string | null = null;
         try {
-          bearer = getAccessToken();
-        } catch {}
-        // The share endpoint can accept an expired bearer as a guest instead
-        // of returning 401. Renew before sending, without leaving the share.
-        if (bearer && isExpiringSoon(bearer)) {
-          const outcome = await refreshAccessTokenQuietly();
-          if (!("token" in outcome)) {
-            throw new Error(outcome.failed === "transient"
-              ? SERVER_UNREACHABLE
-              : "Your sign-in has expired. Sign in again to post this comment.");
+          comment = await shareRequest<Comment>(shareToken, "/comment", {
+            method: "POST",
+            body: { ...payload, asset_id: assetId },
+            shareSession,
+            guest: readGuestIdentity(),
+          });
+        } catch (err) {
+          const failure = err as { status?: unknown; detail?: unknown } | null;
+          if (typeof failure?.status === "number" && typeof failure.detail !== "string") {
+            throw Object.assign(new Error("Failed to post comment"), { status: failure.status });
           }
-          bearer = outcome.token;
+          throw err;
         }
-        if (bearer) headers["Authorization"] = `Bearer ${bearer}`;
-        // Include guest identity if available (for non-authenticated users)
-        const guestFields: Record<string, string> = {};
-        try {
-          const stored = localStorage.getItem("ff_guest_identity");
-          if (stored) {
-            const guest = JSON.parse(stored);
-            guestFields.guest_name = guest.name;
-            guestFields.guest_email = guest.email;
-          }
-        } catch {}
-        const res = await fetch(`${API_URL}/share/${shareToken}/comment?_=1${shareSessionParam}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ ...payload, ...guestFields, asset_id: assetId }),
-        });
-        if (!res.ok) {
-          // Surface the server's reason (e.g. "Parent comment not found on this
-          // asset") so a failed reply can say why. A 422's `detail` is a list,
-          // and a proxy error may have no JSON body: both fall back.
-          let detail = "";
-          try {
-            const data = await res.json();
-            if (typeof data?.detail === "string") detail = data.detail;
-          } catch {}
-          throw new Error(detail || "Failed to post comment");
-        }
-        comment = await res.json();
       } else {
         comment = await api.post<Comment>(
           `/assets/${assetId}/comments`,
@@ -382,7 +346,7 @@ export function ReviewProvider({
       }
       return comment;
     },
-    [assetId],
+    [assetId, shareToken, shareSession],
   );
 
   const resolveComment = useCallback(

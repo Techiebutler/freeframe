@@ -23,6 +23,15 @@ export interface ShareGuest {
   email: string
 }
 
+export function readGuestIdentity(): ShareGuest | null {
+  try {
+    const stored = localStorage.getItem('ff_guest_identity')
+    return stored ? JSON.parse(stored) : null
+  } catch {
+    return null
+  }
+}
+
 // ─── Who a share request goes out as ────────────────────────────────────────
 //
 // Module state, so every verdict control on the page, and every version, agrees
@@ -162,7 +171,7 @@ export function unreachable(): Error {
  * One call to a share-link route, `/share/{token}{path}`.
  *
  * The bearer goes only when it is usable (`resolveCaller`). Only the guest
- * sends the guest's fields: name and email in the body of a PUT, the email
+ * sends the guest's fields: name and email in the body of a PUT or POST, the email
  * alone in the query of a GET or DELETE. A failure throws the server's string
  * `detail` (as `message` and `detail`), or "Request failed".
  *
@@ -180,13 +189,14 @@ export async function shareRequest<T>(
   token: string,
   path: string,
   init: {
-    method: 'GET' | 'PUT' | 'DELETE'
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE'
     body?: object
     shareSession?: string | null
     guest?: ShareGuest | null
   },
 ): Promise<T> {
   const isRead = init.method === 'GET'
+  const hasBody = init.method === 'PUT' || init.method === 'POST'
   const caller = await resolveCaller()
   if (caller.kind === 'failed' && !isRead) throw caller.why === 'refused' ? refused(caller.tokens) : unreachable()
 
@@ -197,13 +207,13 @@ export async function shareRequest<T>(
     // absolute one ignores it. `use-sse.ts` does the same.
     const url = new URL(`${API_URL}/share/${encodeURIComponent(token)}${path}`, window.location.origin)
     if (init.shareSession) url.searchParams.set('share_session', init.shareSession)
-    if (guest && init.method !== 'PUT') url.searchParams.set('guest_email', guest.email)
+    if (guest && !hasBody) url.searchParams.set('guest_email', guest.email)
 
     const headers: Record<string, string> = {}
     if (bearer) headers.Authorization = `Bearer ${bearer}`
 
     let body: string | undefined
-    if (init.method === 'PUT') {
+    if (hasBody) {
       headers['Content-Type'] = 'application/json'
       body = JSON.stringify({
         ...(init.body ?? {}),
