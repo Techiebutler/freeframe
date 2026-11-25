@@ -11,12 +11,13 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..middleware.auth import get_current_user, get_optional_user
+from ..middleware.auth import get_current_user, get_optional_user, optional_bearer_scheme
 from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
@@ -1205,7 +1206,23 @@ def list_share_comments(
     return _build_comment_responses_batched(asset_id, top_level, db, exclude_internal=True)
 
 
-@router.post("/share/{token}/comment", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
+def _refuse_stale_comment_sign_in(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer_scheme),
+    current_user: Optional[User] = Depends(get_optional_user),
+) -> None:
+    if credentials is not None and current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Your sign-in has expired. Sign in again or continue as a guest.",
+        )
+
+
+@router.post(
+    "/share/{token}/comment",
+    response_model=CommentResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_refuse_stale_comment_sign_in)],
+)
 def guest_comment(
     token: str,
     body: GuestCommentCreate,
