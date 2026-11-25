@@ -71,14 +71,11 @@ export default function ProfilePage() {
 
     setIsSavingPassword(true)
     try {
-      const response = await api.patch('/auth/change-password', {
+      const response = await api.patch<{ access_token: string; refresh_token?: string }>('/auth/change-password', {
         current_password: currentPassword,
         new_password: newPassword,
-      }) as { access_token: string, refresh_token:string}
-
-      if (response.access_token && response.refresh_token) {
-        setTokens(response.access_token, response.refresh_token)
-      }
+      })
+      setTokens(response.access_token, response.refresh_token)
 
       setCurrentPassword('')
       setNewPassword('')
