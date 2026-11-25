@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { withBasePath } from './lib/base-path'
 import { INTERNAL_API_URL } from './lib/server-api'
-import { HOST_REFRESH_COOKIE, LEGACY_REFRESH_COOKIE, usesRefreshCookie } from './lib/auth-transport'
+import { HOST_REFRESH_COOKIE, LEGACY_REFRESH_COOKIE } from './lib/auth-transport'
 
 const PUBLIC_ROUTES = ['/login', '/setup']
 // `/s/` holds short share links (app/s/[code]), which redirect to a public
@@ -56,10 +56,7 @@ export async function proxy(request: NextRequest) {
 
   // This is a navigation hint, not authentication. The unprefixed refresh
   // cookie is needed both for HTTP deployments and for the migration window.
-  const cookieMode = usesRefreshCookie(request.nextUrl.origin)
-  const hasSession = cookieMode
-    ? request.cookies.has(HOST_REFRESH_COOKIE) || request.cookies.has(LEGACY_REFRESH_COOKIE)
-    : request.cookies.has('ff_access_token') || request.cookies.has(LEGACY_REFRESH_COOKIE)
+  const hasSession = request.cookies.has(HOST_REFRESH_COOKIE) || request.cookies.has(LEGACY_REFRESH_COOKIE)
   const loginUrl = new URL(withBasePath('/login'), request.url)
   loginUrl.searchParams.set('from', pathname)
   const response = hasSession ? NextResponse.next() : NextResponse.redirect(loginUrl)

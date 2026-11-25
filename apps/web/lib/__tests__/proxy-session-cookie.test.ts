@@ -21,6 +21,17 @@ it('recognizes the host refresh cookie, not a JS-set access cookie', async () =>
   expect(accessOnly.headers.get('location')).toBe(`${origin}/login?from=%2Fprojects`)
 })
 
+it('accepts either refresh cookie independently of the configured API URL', async () => {
+  vi.stubEnv('NEXT_PUBLIC_API_URL', 'https://api.example.test')
+  const { proxy } = await import('../../proxy')
+  for (const cookie of ['__Host-ff_refresh_token', 'ff_refresh_token']) {
+    const response = await proxy(request('/projects', `ff_setup_done=1; ${cookie}=test`))
+    expect(response.headers.get('location')).toBeNull()
+  }
+  const accessOnly = await proxy(request('/projects', 'ff_setup_done=1; ff_access_token=legacy'))
+  expect(accessOnly.headers.get('location')).toBe(`${origin}/login?from=%2Fprojects`)
+})
+
 it('keeps short links public without asking the API about setup', async () => {
   const { proxy } = await import('../../proxy')
   const fetch = vi.fn()

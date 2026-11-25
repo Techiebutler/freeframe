@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
-import { ensureAccessToken, getAccessToken } from '@/lib/auth'
+import { ensureAccessToken, getAccessToken, getRefreshToken, setTokens } from '@/lib/auth'
 import { usesRefreshCookie } from '@/lib/auth-transport'
 import { safeInternalPath } from '@/lib/safe-redirect'
 import { LoginForm } from '@/components/auth/login-form'
@@ -29,9 +29,11 @@ export default function LoginPage() {
 
     let active = true
     async function initialize() {
-      const token = usesRefreshCookie() ? await ensureAccessToken() : getAccessToken()
+      const cookieMode = usesRefreshCookie()
+      const token = cookieMode ? await ensureAccessToken() : getAccessToken()
       if (!active) return
       if (token) {
+        if (!cookieMode) setTokens(token, getRefreshToken() ?? undefined)
         const params = new URLSearchParams(window.location.search)
         router.replace(safeInternalPath(params.get('from')))
         return

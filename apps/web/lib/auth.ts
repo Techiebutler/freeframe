@@ -16,8 +16,6 @@ function clearLegacyStorage(): void {
   localStorage.removeItem(ACCESS_TOKEN_KEY)
   localStorage.removeItem(REFRESH_TOKEN_KEY)
   document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0`
-  // The API expires the former JS refresh cookie when it migrates it. Do
-  // not write this name here: it is also the HttpOnly cookie on plain HTTP.
 }
 
 function notice(): string | null {
@@ -304,6 +302,7 @@ function refreshCookie(): Promise<RefreshOutcome> {
       const response = await fetch(`${API_URL}/auth/refresh`, {
         method: 'POST', credentials: 'same-origin',
         headers: { ...webClientHeaders(), ...(legacy ? { 'Content-Type': 'application/json' } : {}) },
+        signal: AbortSignal.timeout(10000),
         ...(legacy ? { body: JSON.stringify({ refresh_token: legacy }) } : {}),
       })
       if (movedOn()) return movedOutcome()

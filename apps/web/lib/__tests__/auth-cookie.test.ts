@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// @vitest-environment-options { "url": "https://localhost:3000/" }
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 beforeEach(() => {
@@ -31,6 +32,7 @@ it('shares a single cookie bootstrap among consumers', async () => {
   ])
   expect(fetch).toHaveBeenCalledExactlyOnceWith('/api/auth/refresh', {
     method: 'POST', headers: { 'X-FF-Client': 'web' }, credentials: 'same-origin',
+    signal: expect.any(AbortSignal),
   })
   expect(auth.getAccessToken()).toBe('new-access')
 })
