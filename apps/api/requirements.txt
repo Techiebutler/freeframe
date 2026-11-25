@@ -1,4 +1,4 @@
-fastapi==0.162.0
+fastapi==0.163.2
 # Pinned transitive: fastapi declares `starlette>=0.46.0` with no upper bound,
 # so an unpinned build drifts across starlette MAJOR versions on rebuild alone.
 # Starlette is the ASGI layer under the SSE endpoint and the BaseHTTPMiddleware
@@ -14,11 +14,11 @@ uvicorn[standard]==0.54.0
 # requirements files in apps/api and not the Dockerfiles. The dev image gets it
 # too through requirements-dev.txt; that is harmless.
 gunicorn==26.2.0
-sqlalchemy==2.1.6
+sqlalchemy==2.1.9
 alembic==1.20.1
 psycopg2-binary==2.9.13
-pydantic==2.14.2
-pydantic-settings==2.16.2
+pydantic==2.14.4
+pydantic-settings==2.16.3
 # Signs and checks every token (access, refresh, HLS). Already installed as a
 # dependency of redis; pinned here because the code now imports it directly.
 PyJWT==2.15.1
@@ -28,20 +28,20 @@ PyJWT==2.15.1
 # python-jose. Pinned to the version a fresh build resolved before the swap.
 cryptography==50.0.2
 bcrypt==4.3.0
-python-multipart==0.0.32
-boto3==1.43.122
+python-multipart==0.0.34
+boto3==1.44.5
 # Pinned transitive: boto3 allows any botocore in >=1.43.56,<1.44.0, and botocore
 # is where S3 request signing lives. Silent botocore moves have broken S3
 # compatibility here before (SigV4 presigning against non-AWS backends), so this
 # is pinned to make those changes arrive as a reviewable PR.
-botocore==1.43.122
-celery[redis]==5.6.3
+botocore==1.44.5
+celery[redis]==5.7.0
 redis==5.3.1
 httpx==0.28.1
-email-validator==2.3.0
+email-validator==2.4.0
 jinja2==3.1.6
-kombu==5.6.2
+kombu==5.7.0
 # Used by test_celery_queue_topology.py to parse the compose files. It was
 # already present transitively, but nothing declared it, so a clean rebuild
 # could have dropped it and silently skipped the queue-topology guard.
-pyyaml==6.0.3
+pyyaml==6.0.4
