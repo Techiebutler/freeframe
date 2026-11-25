@@ -49,7 +49,11 @@ def refresh_token_for_body(request: Request, response: Response, token: str) -> 
     return {}
 
 
+def expire_host_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(key=HOST_COOKIE, **_cookie_options())
+
+
 def clear_refresh_cookie(request: Request, response: Response) -> None:
     require_same_origin(request)
-    response.delete_cookie(key=HOST_COOKIE, **_cookie_options())
+    expire_host_refresh_cookie(response)
     response.delete_cookie(key=LEGACY_COOKIE, path="/")

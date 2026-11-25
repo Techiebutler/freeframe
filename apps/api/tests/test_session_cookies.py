@@ -238,6 +238,25 @@ def test_web_auth_reports_whether_password_is_needed(client, test_user, valid_re
     assert response.json()["needs_password"] is (password_hash is None)
 
 
+def test_refused_web_refresh_expires_dead_host_cookie(client):
+    response = client.post("/auth/refresh", headers={**WEB, "Cookie": f"{HOST}=invalid"})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid refresh token"
+    expired = cookies(response)
+    assert set(expired) == {HOST}
+    cookie = expired[HOST]
+    assert cookie["max-age"] == "0"
+    assert cookie["secure"] and cookie["httponly"]
+    assert cookie["path"] == "/" and not cookie["domain"]
+
+
+def test_refused_body_refresh_does_not_expire_cookie(client):
+    response = client.post("/auth/refresh", json={"refresh_token": "invalid"},
+                           headers={"Cookie": f"{HOST}=invalid"})
+    assert response.status_code == 401
+    assert "set-cookie" not in response.headers
+
+
 def test_logout_expires_both_cookies(client):
     response = client.post("/auth/logout", headers=WEB)
     assert response.status_code == 204

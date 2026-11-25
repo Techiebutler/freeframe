@@ -19,8 +19,8 @@ from ..services.auth_service import (
     get_user_by_email, get_user_by_id,
 )
 from ..services.session_cookies import (
-    clear_refresh_cookie, read_refresh_token, refresh_token_for_body,
-    require_same_origin_for_web, wants_cookie,
+    clear_refresh_cookie, expire_host_refresh_cookie, read_refresh_token,
+    refresh_token_for_body, require_same_origin_for_web, wants_cookie,
 )
 from ..services.redis_service import (
     generate_magic_code, store_magic_code, verify_magic_code as redis_verify_magic_code,
@@ -272,7 +272,13 @@ def refresh_token(request: Request, response: Response, body: RefreshRequest | N
             failure = failure or exc
         else:
             return _issue_tokens(request, response, user, needs_password=user.password_hash is None)
-    raise failure or HTTPException(status_code=401, detail="Invalid refresh token")
+    failure = failure or HTTPException(status_code=401, detail="Invalid refresh token")
+    if cookie_token is not None:
+        # The exception handler does not use headers on the injected response.
+        expired = Response()
+        expire_host_refresh_cookie(expired)
+        failure.headers = {**(failure.headers or {}), "Set-Cookie": expired.headers["set-cookie"]}
+    raise failure
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
