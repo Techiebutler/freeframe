@@ -727,14 +727,6 @@ All environment variables are documented in [`.env.example`](../.env.example). K
 | `S3_PUBLIC_ENDPOINT` | Browser-reachable base URL for presigned URLs, when it differs from `S3_ENDPOINT` | (empty = `S3_ENDPOINT`) |
 | `S3_STORAGE_CLASS` | Storage class for media (uploaded originals, every transcoder output and watermarked renders), set by the server when each object is created. Avatars, logos and posters keep the bucket default. MinIO and Silo accept only `STANDARD` and `REDUCED_REDUNDANCY`; Garage ignores it; `GLACIER` and `DEEP_ARCHIVE` are refused at startup | (empty = bucket default) |
 | `CORS_ALLOW_ORIGINS` | Extra browser origins, comma-separated, allowed by the API and (non-AWS) the bucket. Avoid `*` with credentialed requests. | (empty) |
-
-The browser refresh-cookie flow requires a same-origin API (normally
-`NEXT_PUBLIC_API_URL=/api` behind a reverse proxy). Forward `Sec-Fetch-Site`
-and `Origin` unchanged. Plain HTTP installs and clients that use a separate
-API origin must omit `X-FF-Client: web` and keep using JSON refresh tokens.
-Cookie mode accepts a JSON body token during migration. That fallback stays for
-one minor release after the web client ships, then goes with an upgrade note.
-The refresh cookie is used only on HTTPS pages.
 | `JWT_SECRET` | Auth token signing key | (required, generate with `openssl rand -hex 64`) |
 | `FRONTEND_URL` | Your FreeFrame URL (with https://) | (required) |
 | `DOMAIN` | Your domain; required with `docker-compose.https.yml`, which requests the certificate | (optional) |
@@ -754,6 +746,14 @@ The refresh cookie is used only on HTTPS pages.
 | `TRANSCODER_AUDIO_BITRATE` | AAC bitrate for the audio of video review streams, as `<n>k` between `64k` and `512k` (for example `320k` for music and final-mix review). Empty leaves ffmpeg's own choice, AAC-LC at about 128 kb/s for stereo. The value is the total for all channels, and ffmpeg's default for a surround source is already higher (about 341 kb/s for 5.1 and 469 kb/s for 7.1), so a stereo-sized value such as `320k` lowers surround quality. The codec is always AAC-LC, the one every browser plays over HLS. Applies to every rendition, so storage grows by the extra bitrate times the number of rungs. A source-copied upload whose audio is already AAC keeps its own audio untouched; non-AAC audio in a copy is encoded at this bitrate, or `192k` when it is empty. An unusable value is logged and ignored | *(empty)* |
 | `TRANSCODER_SOURCE_COPY` | Package an already browser-safe source into HLS without re-encoding, where the ladder above resolves to one rendition at the source's own size | `false` |
 | `TRANSCODER_CPU_LIMIT` | Cap the CPU one transcode takes: a core count (`6`) or a share of what the process may use (`50%`). Empty = unbounded. Covers the encoders and the filter graph, not decoding, so a heavy master can run over by roughly a quarter, and a low budget can push a long master past ffmpeg's 4-hour ceiling — see `.env.example`. Per ffmpeg process, so the machine-wide ceiling is this times `TRANSCODING_CONCURRENCY` | *(empty)* |
+
+The browser refresh-cookie flow requires a same-origin API (normally
+`NEXT_PUBLIC_API_URL=/api` behind a reverse proxy). Forward `Sec-Fetch-Site`
+and `Origin` unchanged. Plain HTTP installs and clients that use a separate
+API origin must omit `X-FF-Client: web` and keep using JSON refresh tokens.
+Cookie mode accepts a JSON body token during migration. That fallback stays for
+one minor release after the web client ships, then goes with an upgrade note.
+The refresh cookie is used only on HTTPS pages.
 
 Upload part size is set in the app rather than the environment: **Settings → Instance → Instance settings → Uploads**. Automatic (the default) keeps 10 MB parts up to ~5 GB and grows them for bigger files to about 500 parts, which keeps the storage backend's assembly at the end of an upload short. Fixed cuts every upload into one size from 5 to 512 MB, and refuses a file that would need more than 10,000 parts. A completion that takes 5 seconds or more is logged by the API with where the time went (`completing upload … took …`), which is the place to look when uploads wait at "Finalizing".
 
