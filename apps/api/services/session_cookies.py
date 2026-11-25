@@ -31,9 +31,9 @@ def _cookie_options() -> dict:
     return {"path": "/", "secure": True, "httponly": True, "samesite": "lax"}
 
 
-def read_refresh_token(request: Request, body_token: str | None) -> str | None:
+def read_refresh_token(request: Request) -> str | None:
     require_same_origin(request)
-    return request.cookies.get(HOST_COOKIE) or body_token
+    return request.cookies.get(HOST_COOKIE)
 
 
 def refresh_token_for_body(request: Request, response: Response, token: str) -> dict[str, str]:

@@ -160,6 +160,27 @@ def test_web_refresh_accepts_current_cookie_or_migrates_legacy_token(client, val
     assert cookies(response)[LEGACY]["max-age"] == "0"
 
 
+@pytest.mark.parametrize("dead_source", [None, "cookie", "body"], ids=["both-live", "dead-cookie", "dead-body"])
+def test_web_refresh_uses_first_live_credential(client, test_user, valid_refresh, dead_source):
+    from uuid import uuid4
+
+    from apps.api.models.user import User
+
+    other_user = User(id=uuid4(), status=UserStatus.active, token_version=2)
+    other_token = create_refresh_token(str(other_user.id), token_version=other_user.token_version)
+    stale_other_token = create_refresh_token(str(other_user.id), token_version=1)
+    body_token = stale_other_token if dead_source == "body" else valid_refresh
+    cookie_token = stale_other_token if dead_source == "cookie" else other_token
+    users = {test_user.id: test_user, other_user.id: other_user}
+    with patch("apps.api.routers.auth.get_user_by_id", side_effect=lambda db, user_id: users.get(user_id)):
+        response = client.post("/auth/refresh", json={"refresh_token": body_token},
+                               headers={**WEB, "Cookie": f"{HOST}={cookie_token}"})
+    assert response.status_code == 200
+    expected = other_user if dead_source == "body" else test_user
+    payload = decode_token(response.json()["access_token"])
+    assert payload and payload["sub"] == str(expected.id)
+
+
 def test_body_client_gets_body_token_even_with_an_unrelated_cookie(client, valid_refresh):
     response = client.post("/auth/refresh", json={"refresh_token": valid_refresh},
                            headers={"Cookie": f"{HOST}=invalid"})

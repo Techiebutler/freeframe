@@ -238,23 +238,41 @@ def _limit_refresh(request: Request) -> None:
     (_limit_web_refresh if wants_cookie(request) else _limit_body_refresh)(request)
 
 
-@router.post("/refresh", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(_limit_refresh)])
-def refresh_token(request: Request, response: Response, body: RefreshRequest | None = None, db: Session = Depends(get_db)):
-    token = body.refresh_token if body is not None else None
-    if wants_cookie(request):
-        token = read_refresh_token(request, token)
-    elif body is None:
-        # The body is optional only for clients that opt into cookie transport.
-        raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": "Field required", "type": "missing", "input": None}])
-    payload = decode_token(token) if token else None
+def _refresh_user(db: Session, token: str) -> User:
+    payload = decode_token(token)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    user = get_user_by_id(db, uuid.UUID(payload["sub"]))
+    try:
+        user_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid refresh token") from None
+    user = get_user_by_id(db, user_id)
     if not user or user.status == UserStatus.deactivated:
         raise HTTPException(status_code=401, detail="User not found")
     if payload.get("ver", 1) != user.token_version:
         raise HTTPException(status_code=401, detail="Session expired, please log in again")
-    return _issue_tokens(request, response, user, needs_password=user.password_hash is None)
+    return user
+
+
+@router.post("/refresh", response_model=TokenResponse, response_model_exclude_none=True, dependencies=[Depends(_limit_refresh)])
+def refresh_token(request: Request, response: Response, body: RefreshRequest | None = None, db: Session = Depends(get_db)):
+    web = wants_cookie(request)
+    if not web and body is None:
+        # The body is optional only for clients that opt into cookie transport.
+        raise HTTPException(status_code=422, detail=[{"loc": ["body"], "msg": "Field required", "type": "missing", "input": None}])
+    body_token = body.refresh_token if body is not None else None
+    cookie_token = read_refresh_token(request) if web else None
+    failure = None
+    for token in (body_token, cookie_token):
+        if not token:
+            continue
+        try:
+            user = _refresh_user(db, token)
+        except HTTPException as exc:
+            failure = failure or exc
+        else:
+            return _issue_tokens(request, response, user, needs_password=user.password_hash is None)
+    raise failure or HTTPException(status_code=401, detail="Invalid refresh token")
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
