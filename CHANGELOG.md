@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Delete and restore a version from the version switcher.** Owners and editors get a **⋯** beside each version, which opens on a click rather than on hover. For a live version it holds **Delete version**, which asks first; deleting the version on screen moves to the newest ready one and says so. Where a version cannot be deleted, its **⋯** is greyed out and its tooltip says why. Deleted versions that can still be restored stay in the list as *Deleted*, with the days left, cannot be opened, and their **⋯** holds **Restore version**; the view never changes on its own after a restore or after deleting another version. Share pages, reviewers and viewers see no **⋯**. (#419, #615 by @Lennart-Pingpong)
 
 ### Changed
-- The API and workers use redis-py 6.4, Celery 5.7 and kombu 5.7. Old and new workers can run side by side during an upgrade or a rollback.
+- The API and workers use redis-py 6.4, Celery 5.7 and kombu 5.7. Old and new workers can run side by side during an upgrade or a rollback. (#659)
 - API dependencies updated (11 packages). botocore 1.44 gives up on a failing storage call after three quick tries, so the S3 clients keep the previous retry mode and a storage restart of a second or two still goes unnoticed. (#654)
 - The production web image and Node.js-based CI checks now use Node.js 24. (#647 by @jeremy-pixelated)
 - Production Compose drops Linux capabilities and prevents privilege gain for the API, Celery services and web app. Next.js no longer sends `X-Powered-By`. (#646 by @jeremy-pixelated)
