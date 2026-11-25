@@ -32,7 +32,7 @@ export default function AppearancePage() {
   return (
     <div className="p-6 max-w-2xl">
       <div className="mb-6">
-        <h1 className="text-lg font-semibold text-text-primary">Appearance</h1>
+        <h2 className="text-lg font-semibold text-text-primary">Appearance</h2>
         <p className="text-sm text-text-tertiary mt-1">
           Customize how FreeFrame looks on your device.
         </p>
@@ -40,7 +40,7 @@ export default function AppearancePage() {
 
       {/* Theme selector */}
       <div className="space-y-3">
-        <h2 className="text-sm font-medium text-text-primary">Theme</h2>
+        <h3 className="text-sm font-medium text-text-primary">Theme</h3>
         <div className="grid grid-cols-3 gap-3">
           {themes.map((t) => {
             const Icon = t.icon

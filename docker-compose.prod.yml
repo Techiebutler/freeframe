@@ -120,6 +120,8 @@ services:
   #     "
 
   api:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     build:
       context: .
       dockerfile: apps/api/Dockerfile.prod
@@ -165,6 +167,8 @@ services:
     restart: unless-stopped
 
   worker:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     build:
       context: .
       dockerfile: apps/api/Dockerfile.prod
@@ -179,6 +183,8 @@ services:
     restart: unless-stopped
 
   email_worker:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     build:
       context: .
       dockerfile: apps/api/Dockerfile.prod
@@ -196,6 +202,8 @@ services:
   # waits) and off the email worker (a magic code queued behind a full bucket
   # listing is a login someone is waiting on).
   maintenance_worker:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     build:
       context: .
       dockerfile: apps/api/Dockerfile.prod
@@ -210,6 +218,8 @@ services:
     restart: unless-stopped
 
   beat:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     build:
       context: .
       dockerfile: apps/api/Dockerfile.prod
@@ -222,6 +232,8 @@ services:
     restart: unless-stopped
 
   web:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     build:
       context: ./apps/web
       dockerfile: Dockerfile.prod

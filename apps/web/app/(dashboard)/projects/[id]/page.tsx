@@ -243,6 +243,16 @@ export default function ProjectDetailPage() {
     return map;
   }, [assets]);
 
+  const durations = React.useMemo(() => {
+    if (!assets) return {};
+    const map: Record<string, number> = {};
+    for (const a of assets) {
+      const seconds = a.latest_version?.files?.[0]?.duration_seconds;
+      if (seconds) map[a.id] = seconds;
+    }
+    return map;
+  }, [assets]);
+
   const fileSizes = React.useMemo(() => {
     if (!assets) return {};
     const map: Record<string, number> = {};
@@ -823,6 +833,7 @@ export default function ProjectDetailPage() {
               assignees={assigneesMap}
               thumbnails={thumbnails}
               versionCounts={versionCounts}
+              durations={durations}
               authorNames={authorNames}
               fileSizes={fileSizes}
               selectedAssetId={selectedAsset?.id}
@@ -944,7 +955,7 @@ export default function ProjectDetailPage() {
                     <>
                       <Button variant="secondary" size="sm" asChild>
                         <Link
-                          href={`/projects/${projectId}/settings?tab=people`}
+                          href={`/settings/projects/${projectId}?tab=people`}
                           aria-label="Members"
                           title="Members"
                         >
@@ -953,7 +964,7 @@ export default function ProjectDetailPage() {
                       </Button>
                       <Button variant="secondary" size="sm" asChild>
                         <Link
-                          href={`/projects/${projectId}/settings`}
+                          href={`/settings/projects/${projectId}`}
                           aria-label="Project settings"
                           title="Project settings"
                         >

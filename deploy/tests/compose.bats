@@ -66,3 +66,22 @@ json_expect() {
   done
   [ "$bad" -eq 0 ]
 }
+
+@test "production app services drop Linux capabilities and cannot gain privileges" {
+  local root="$BATS_TEST_DIRNAME/../.." service
+  cp "$root/docker-compose.prod.yml" "$root/docker-compose.gpu.yml" "$BATS_TEST_TMPDIR/"
+  : > "$F"
+
+  run docker compose --env-file "$F" -f "$BATS_TEST_TMPDIR/docker-compose.prod.yml" \
+    -f "$BATS_TEST_TMPDIR/docker-compose.gpu.yml" config --format json
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+
+  for service in api worker email_worker maintenance_worker beat web; do
+    jq -e --arg svc "$service" '.services[$svc] |
+      (.cap_drop == ["ALL"]) and (.security_opt | index("no-new-privileges:true") != null)' \
+      <<< "$output" || { echo "Missing hardening on $service"; return 1; }
+  done
+
+  jq -e '.services.worker.deploy.resources.reservations.devices |
+    any(.driver == "nvidia" and (.capabilities | index("video") != null))' <<< "$output"
+}

@@ -423,7 +423,7 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
             names = ", ".join(sorted({v["asset_name"] for v in blocked}))
             raise DeleteGate(
                 409,
-                f"In this Storage tab, the newest version of {names} can only be deleted with the whole "
+                f"On this Storage page, the newest version of {names} can only be deleted with the whole "
                 "file. Select the file itself, or pick an older version.",
             )
 

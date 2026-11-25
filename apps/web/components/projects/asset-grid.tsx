@@ -45,6 +45,8 @@ interface AssetGridProps {
   assignees?: Record<string, User>
   thumbnails?: Record<string, string>
   versionCounts?: Record<string, number>
+  /** Length in seconds of each video or audio asset's latest version, by asset id. */
+  durations?: Record<string, number>
   authorNames?: Record<string, string>
   fileSizes?: Record<string, number>
   selectedAssetId?: string | null
@@ -115,6 +117,7 @@ export function AssetGrid({
   assignees = {},
   thumbnails = {},
   versionCounts = {},
+  durations = {},
   authorNames = {},
   fileSizes = {},
   selectedAssetId,
@@ -511,6 +514,7 @@ export function AssetGrid({
                 projectId={projectId}
                 versionCount={versionCounts[asset.id]}
                 commentCount={asset.comment_count}
+                duration={durations[asset.id]}
                 verdictSummary={asset.verdict_summary}
                 assignee={asset.assignee_id ? assignees[asset.assignee_id] : null}
                 authorName={authorNames[asset.created_by]}

@@ -86,18 +86,18 @@ describe('ProjectCard', () => {
 
   // Settings and deleting both live on the settings page now: no dialog over
   // the grid, and no native confirm() for the one action that cannot be undone.
-  it('opens the settings page, and its Danger tab to delete', async () => {
+  it('opens the settings page, and its Delete project row to delete', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm')
     render(<ProjectCard project={project} isOwner />)
 
     fireEvent.contextMenu(screen.getByText('Season 2'))
     await user().click(await screen.findByRole('menuitem', { name: 'Project Settings' }))
-    expect(mockPush).toHaveBeenLastCalledWith('/projects/p1/settings')
+    expect(mockPush).toHaveBeenLastCalledWith('/settings/projects/p1')
     expect(screen.queryByRole('dialog')).toBeNull()
 
     fireEvent.contextMenu(screen.getByText('Season 2'))
     await user().click(await screen.findByRole('menuitem', { name: 'Delete Project' }))
-    expect(mockPush).toHaveBeenLastCalledWith('/projects/p1/settings?tab=danger')
+    expect(mockPush).toHaveBeenLastCalledWith('/settings/projects/p1?tab=danger')
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(mockApi.delete).not.toHaveBeenCalled()
     confirmSpy.mockRestore()

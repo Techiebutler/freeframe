@@ -72,7 +72,7 @@ A live preview shows the app, the sign-in screen and an email side by side with 
 
 | Live preview of the branded app | The controls |
 |---|---|
-| ![Settings → Branding preview — a faithful mock of the app shell carrying the studio's logo, name and accent](docs/images/branding-preview.png) | ![Settings → Branding — workspace name, accent colour picker, and light and dark logo slots](docs/images/branding-settings.png) |
+| ![Settings → Instance → Branding preview: a faithful mock of the app shell carrying the studio's logo, name and accent](docs/images/branding-preview.png) | ![Settings → Instance → Branding: workspace name, accent colour picker, and light and dark logo slots](docs/images/branding-settings.png) |
 
 ## Quick Start (Development)
 

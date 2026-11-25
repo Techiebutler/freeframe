@@ -178,7 +178,7 @@ Share Link (unauthenticated access, by token)
 
 `User.is_superadmin` is the one instance-level role: the account the first-run setup creates,
 shown as **Admin** in the dashboard. It covers user administration (invite, deactivate, role
-change), instance settings and branding, the admin panel's Storage tab, where it lists every
+change), instance settings and branding, the Storage page under Settings → Instance, where it lists every
 project's files by name and size, moves them to the trash, restores them and deletes them
 permanently, **and instance-wide project access** — a superadmin may see, open, upload to and
 change every live project without being a member of it.
@@ -336,6 +336,27 @@ it by hand. Soft deletion is also not permanent: `tasks/cleanup_tasks.py` hard-d
 soft-deleted rows and reclaims their S3 objects after `SOFT_DELETE_RETENTION_DAYS`
 (default 30), and an admin can do the same earlier for chosen items from the trash
 (`POST /admin/trash/purge`).
+
+**Deleting one version** (`DELETE /assets/{asset_id}/versions/{version_id}`, editor role) is
+such a soft delete. The version, its comments and its approvals leave the version, comment and
+approval listings, share links included; a notification keeps quoting such a comment.
+`POST /assets/{asset_id}/versions/{version_id}/restore` brings them back until the retention purge
+hard-deletes them, or an admin deletes the version permanently from the trash before then. A
+version that ran (processing or ready) comes back, and a failed one only while storage still holds
+its master (one `HEAD` on the raw key, the check `_holds_a_master` draws for the reaper): a
+transcode failure can be someone's only copy of the original, while the reaper soft-deletes failed
+uploads without a file on its own, so such a row may be empty. The rule is the
+admin trash's too (`services/restore_rules.py`). `GET /assets/{asset_id}/deleted-versions` lists,
+for editors and above only, exactly the deleted versions that can still be restored and until when
+(`deleted_at` plus `SOFT_DELETE_RETENTION_DAYS`). A version cannot be deleted this way when no
+other version of the asset is ready (delete the asset instead, or wait for a transcode to finish: a
+version still processing does not play yet and can still fail), and neither can an upload in
+flight (discard it).
+A deleted version's bytes stay in the bucket until the purge reclaims them, while its project's
+own storage figure stops counting it at once.
+Version numbers come from a per-asset counter (`assets.last_version_number`), not from the
+surviving rows, so a purged version's number is never handed out again: "v2" in a comment export
+or a share URL names one cut for the life of the asset.
 
 Key entity relationships:
 

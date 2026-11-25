@@ -46,6 +46,12 @@ class Asset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The highest version number this asset has ever handed out. Numbering comes
+    # from here rather than from the version rows, so a number stays burned once
+    # the retention purge has hard-deleted its version: "v2" in a comment export
+    # or a share URL names one cut for the life of the asset. Only
+    # `services.versions.next_version_number` writes it.
+    last_version_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     __table_args__ = (
         Index("ix_assets_project_folder_deleted", "project_id", "folder_id", "deleted_at"),

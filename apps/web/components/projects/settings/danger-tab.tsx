@@ -5,16 +5,18 @@ import { useRouter } from 'next/navigation'
 import { mutate as globalMutate } from 'swr'
 import { AlertTriangle } from 'lucide-react'
 import { api } from '@/lib/api'
+import { isProjectListKey } from '@/lib/project-keys'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 /**
- * The Danger tab of project settings: deleting the project.
+ * The Delete project row at the end of General in project settings: deleting
+ * the project.
  *
  * Typing the project's name is the confirmation, so the target is explicit.
  * The copy says what really happens: the project goes from the app at once,
  * its data is purged after the instance's retention period, and until then
- * only an instance admin can bring it back, from the Admin dashboard.
+ * only an instance admin can bring it back, from Settings, Instance, Storage.
  */
 export function ProjectDangerTab({ projectId, projectName }: { projectId: string; projectName: string }) {
   const router = useRouter()
@@ -34,7 +36,7 @@ export function ProjectDangerTab({ projectId, projectName }: { projectId: string
       // Keeps the dialog open with the reason.
       throw err
     }
-    void globalMutate('/projects')
+    void globalMutate(isProjectListKey)
     router.push('/projects')
   }
 
@@ -43,7 +45,7 @@ export function ProjectDangerTab({ projectId, projectName }: { projectId: string
       <div className="flex items-start gap-3 p-5">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-status-error" />
         <div className="min-w-0 space-y-1">
-          <h2 className="text-sm font-semibold text-text-primary">Delete this project</h2>
+          <h3 className="text-sm font-semibold text-text-primary">Delete this project</h3>
           <p className="text-sm text-text-secondary">
             <span className="font-medium text-text-primary">{projectName}</span> and everything in
             it (folders, assets, versions, comments and share links) disappear for everyone right

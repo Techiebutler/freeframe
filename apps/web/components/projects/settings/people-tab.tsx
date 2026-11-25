@@ -150,7 +150,7 @@ function AddMember({
 
   return (
     <section className="rounded-xl border border-border bg-bg-secondary p-4 space-y-3">
-      <h2 className="text-sm font-semibold text-text-primary">Add a member</h2>
+      <h3 className="text-sm font-semibold text-text-primary">Add a member</h3>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-bg-tertiary px-3 h-10 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20">
           <Search className="h-4 w-4 shrink-0 text-text-tertiary" />
@@ -305,9 +305,9 @@ export function ProjectPeopleTab({ projectId }: { projectId: string }) {
       {rowError && <p role="alert" className="text-sm text-status-error">{rowError}</p>}
 
       <section className="overflow-hidden rounded-xl border border-border bg-bg-secondary">
-        <h2 className="border-b border-border px-4 py-3 text-sm font-semibold text-text-primary">
+        <h3 className="border-b border-border px-4 py-3 text-sm font-semibold text-text-primary">
           Members ({rows.length})
-        </h2>
+        </h3>
         <table className="w-full text-sm">
           <thead className="sr-only sm:not-sr-only">
             <tr className="border-b border-border bg-bg-tertiary text-left text-xs font-medium text-text-tertiary">

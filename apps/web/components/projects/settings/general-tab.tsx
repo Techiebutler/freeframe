@@ -6,6 +6,7 @@ import { Eye, ImagePlus, Loader2, Moon, Palette, Settings2, Sun, Upload, X } fro
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getGradientForProject } from '@/lib/gradient-utils'
+import { isProjectListKey } from '@/lib/project-keys'
 import { AVATAR_INPUT_TYPES, AVATAR_MAX_INPUT_BYTES } from '@/lib/avatar-image'
 import { CUSTOM_FOOTER_MAX, resolveShareLogoUrl, uploadProjectLogo } from '@/lib/project-branding'
 import { Button } from '@/components/ui/button'
@@ -291,7 +292,7 @@ export function ProjectGeneralTab({ project }: { project: Project }) {
 
     // Everything else showing this project picks up the new name and cover.
     void globalMutate(`/projects/${projectId}`)
-    void globalMutate('/projects')
+    void globalMutate(isProjectListKey)
     setStatus(failures.length ? { kind: 'failed', failures } : { kind: 'saved' })
     setSaving(false)
   }
@@ -314,7 +315,7 @@ export function ProjectGeneralTab({ project }: { project: Project }) {
         void save()
       }}
     >
-      <div className="grid gap-6 lg:grid-cols-2 items-start">
+      <div className="grid gap-6 xl:grid-cols-2 items-start">
         <ProjectCard
           projectId={projectId}
           details={details}
@@ -419,7 +420,7 @@ function CardHeading({
         <Icon className="h-4 w-4 text-accent" />
       </div>
       <div className="min-w-0">
-        <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
+        <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
         {subtitle && <p className="text-xs text-text-tertiary">{subtitle}</p>}
       </div>
     </div>

@@ -34,7 +34,10 @@ vi.mock('@/lib/api', () => ({
     delete: (...a: unknown[]) => apiDelete(...a),
   },
 }))
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useParams: () => ({ section: 'users' }),
+}))
 vi.mock('@/components/settings/instance-settings-tab', () => ({ InstanceSettingsTab: () => null }))
 vi.mock('@/components/settings/branding-tab', () => ({ BrandingTab: () => null }))
 
