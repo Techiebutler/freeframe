@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://localhost:3000/frame/projects?view=mine" }
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { row } from '@/test/upload-session'
+
+vi.mock('@/components/review/image-viewer', () => ({ ImageViewer: () => null }))
 
 const noticeKey = 'ff_session_notice'
 const guest = { name: 'Guest', email: 'guest@example.test' }
@@ -64,6 +67,9 @@ it('keeps the current upload owner and leave guard on same-account notices, but 
   const auth = await import('../auth')
   const { watchSubject } = await import('../upload-owner')
   auth.setTokens(alice)
+  const { useUploadStore } = await import('@/stores/upload-store')
+  const queued = row({ status: 'queued', ownerId: 'alice' })
+  useUploadStore.setState({ files: [queued], subject: 'alice' })
   const changed = vi.fn()
   const ended = vi.fn()
   watchSubject(changed)
@@ -73,8 +79,10 @@ it('keeps the current upload owner and leave guard on same-account notices, but 
   expect(auth.isLeaveGuardSuppressed()).toBe(false)
   expect(changed).not.toHaveBeenCalled()
   expect(ended).not.toHaveBeenCalled()
+  expect(useUploadStore.getState().files[0]).toMatchObject({ status: 'queued', ownerId: 'alice' })
   otherTab('bob')
   expect(ended).toHaveBeenCalledOnce()
+  expect(useUploadStore.getState().files[0]).toMatchObject({ status: 'failed', ownerId: 'alice' })
   expect(auth.getAccessToken()).toBeNull()
   expect(auth.isLeaveGuardSuppressed()).toBe(true)
 })
@@ -176,6 +184,47 @@ it('requires an explicit guest choice after a reload with a dead cookie and a sa
   continueAsGuest(failure)
   await expect(write()).resolves.toEqual({ id: 'c1' })
   expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({ guest_email: guest.email })
+})
+
+it.each([200, 401])('settles the cookie caller before the share composer posts a comment (refresh %i)', async (status) => {
+  if (status === 401) {
+    localStorage.setItem('ff_signed_in_hint', '1')
+    localStorage.setItem('ff_guest_identity', JSON.stringify(guest))
+  }
+  const writes = vi.fn()
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    switch (new URL(url, tab.location.origin).pathname) {
+      case '/api/auth/refresh': return status === 200 ? restored(alice) : refused()
+      case '/api/share/link/stream/a1':
+        return Response.json({ name: 'Still', asset_type: 'image', version_id: 'v1' })
+      case '/api/share/link/assets/a1/versions':
+        return Response.json([{ id: 'v1', version_number: 1, processing_status: 'ready', created_at: '' }])
+      case '/api/share/link/comments': return Response.json([])
+      case '/api/share/link/comment': {
+        const body = JSON.parse(String(init?.body))
+        writes(new Headers(init?.headers).get('Authorization'), body)
+        return Response.json({ id: 'c1', body: body.body })
+      }
+      default: return new Response(null, { status: 404 })
+    }
+  })
+  vi.stubGlobal('fetch', fetch)
+  const { ShareReviewScreen } = await import('@/components/share/share-review-screen')
+  render(<ShareReviewScreen token="link" assetId="a1" assetName="Still" permission="comment" allowDownload={false} showVersions={false} />)
+  const input = await screen.findByPlaceholderText('Leave your comment...')
+  fireEvent.change(input, { target: { value: 'Note' } })
+  fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+
+  if (status === 401) {
+    const dialog = await screen.findByRole('dialog', { name: 'Your sign-in has expired.' })
+    expect(writes).not.toHaveBeenCalled()
+    expect(within(dialog).getByRole('link', { name: 'Sign in' })).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Continue as guest' }))
+  }
+  await waitFor(() => expect(input).toHaveValue(''))
+  const payload = { asset_id: 'a1', version_id: 'v1', body: 'Note' }
+  if (status === 200) expect(writes).toHaveBeenCalledExactlyOnceWith(`Bearer ${alice}`, payload)
+  else expect(writes).toHaveBeenCalledExactlyOnceWith(null, { ...payload, guest_name: guest.name, guest_email: guest.email })
 })
 
 it('sends a refused dashboard bootstrap to login with an app-relative return path', async () => {
