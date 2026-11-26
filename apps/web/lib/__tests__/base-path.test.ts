@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it } from 'vitest'
-import { withBasePath } from '../base-path'
+import { currentAppPath, withBasePath } from '../base-path'
 
 const require = createRequire(import.meta.url)
 
@@ -26,6 +26,23 @@ describe('withBasePath', () => {
   it('prefixes app-absolute paths on a sub-path deployment', () => {
     process.env.NEXT_PUBLIC_BASE_PATH = '/freeframe'
     expect(withBasePath('/share/abc')).toBe('/freeframe/share/abc')
+  })
+})
+
+describe('currentAppPath', () => {
+  it.each([
+    ['/freeframe/projects?view=mine', '/projects?view=mine'],
+    ['/freeframe', '/'],
+    ['/freeframe-preview/projects', '/freeframe-preview/projects'],
+  ])('returns the app path for %s', (url, expected) => {
+    process.env.NEXT_PUBLIC_BASE_PATH = '/freeframe'
+    const previous = window.location.href
+    window.history.replaceState(null, '', url)
+    try {
+      expect(currentAppPath()).toBe(expected)
+    } finally {
+      window.history.replaceState(null, '', previous)
+    }
   })
 })
 

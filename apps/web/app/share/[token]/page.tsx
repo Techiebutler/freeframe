@@ -1,5 +1,7 @@
 'use client'
 
+import { ensureAccessToken } from '@/lib/auth'
+import { webClientHeaders } from '@/lib/auth-transport'
 import * as React from 'react'
 import { Lock, Loader2 } from 'lucide-react'
 import { withBasePath } from '@/lib/base-path'
@@ -60,13 +62,8 @@ async function fetchShareInfo(
   logOpen?: boolean,
 ): Promise<ShareValidateResponse> {
   // Include auth token if user is already logged in (for secure links)
-  const headers: Record<string, string> = {}
-  let accessToken: string | null = null
-  try {
-    if (typeof window !== 'undefined') {
-      accessToken = localStorage.getItem('ff_access_token')
-    }
-  } catch {}
+  const headers = webClientHeaders()
+  const accessToken = await ensureAccessToken().catch(() => null)
   if (accessToken) {
     headers['Authorization'] = `Bearer ${accessToken}`
   }

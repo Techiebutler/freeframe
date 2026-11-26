@@ -1,23 +1,85 @@
 import { withBasePath } from './base-path'
 import { subjectOf } from './jwt-subject'
+import { API_URL, usesRefreshCookie, webClientHeaders } from './auth-transport'
 
 const ACCESS_TOKEN_KEY = 'ff_access_token'
 const REFRESH_TOKEN_KEY = 'ff_refresh_token'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// The notice contains only a nonce and an account id, never a credential.
+export const SESSION_NOTICE_KEY = 'ff_session_notice'
+const SIGNED_IN_HINT_KEY = 'ff_signed_in_hint'
+let memoryAccess: string | null = null
+let sessionGeneration = 0
+let bootstrap: Promise<RefreshOutcome> | null = null
+let retryCookieRefreshAt = 0
+
+function clearLegacyStorage(): void {
+  localStorage.removeItem(ACCESS_TOKEN_KEY)
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0`
+}
+
+export function cookieSessionNotice(): string | null {
+  return localStorage.getItem(SESSION_NOTICE_KEY)
+}
+
+export function hasSignedInHint(): boolean {
+  return usesRefreshCookie() && localStorage.getItem(SIGNED_IN_HINT_KEY) === '1'
+}
+
+function sameAccountNotice(value: string | null, account: string | null): boolean {
+  if (!account || !value) return false
+  try {
+    return JSON.parse(value)?.account === account
+  } catch {
+    return false
+  }
+}
+
+function noticeChanged(previous: string | null, account: string | null): boolean {
+  const current = cookieSessionNotice()
+  return current !== previous && !sameAccountNotice(current, account)
+}
+
+function announceSessionChange(): void {
+  const nonce = String(crypto.getRandomValues(new Uint32Array(4)))
+  localStorage.setItem(SESSION_NOTICE_KEY, JSON.stringify({ nonce, account: subjectOf(memoryAccess) }))
+}
+
+// A stale refresh response can update Set-Cookie even if JS drops its access
+// token. Serialize cookie-changing requests across tabs where Web Locks are
+// supported, and in the current tab on older browsers.
+let cookieQueue: Promise<unknown> = Promise.resolve()
+export async function withCookieMutation<T>(run: () => Promise<T>): Promise<T> {
+  if (navigator.locks) return await navigator.locks.request('ff-auth-cookie', run)
+  const next = cookieQueue.then(run)
+  cookieQueue = next.catch(() => {})
+  return next
+}
 
 export function getAccessToken(): string | null {
   if (typeof window === 'undefined') return null
-  return localStorage.getItem(ACCESS_TOKEN_KEY)
+  return usesRefreshCookie() ? memoryAccess : localStorage.getItem(ACCESS_TOKEN_KEY)
 }
 
 export function getRefreshToken(): string | null {
   if (typeof window === 'undefined') return null
-  return localStorage.getItem(REFRESH_TOKEN_KEY)
+  return usesRefreshCookie() ? null : localStorage.getItem(REFRESH_TOKEN_KEY)
 }
 
-export function setTokens(access: string, refresh: string): void {
+export function setTokens(access: string, refresh?: string): void {
   if (typeof window === 'undefined') return
+  if (usesRefreshCookie()) {
+    sessionGeneration++
+    memoryAccess = access
+    retryCookieRefreshAt = 0
+    bootstrap = Promise.resolve({ token: access })
+    clearLegacyStorage()
+    localStorage.setItem(SIGNED_IN_HINT_KEY, '1')
+    announceSessionChange()
+    return
+  }
+  if (!refresh) return
   localStorage.setItem(ACCESS_TOKEN_KEY, access)
   localStorage.setItem(REFRESH_TOKEN_KEY, refresh)
   // Set cookies so the proxy can check auth on server side
@@ -80,10 +142,9 @@ export function onSessionEnded(cb: () => void): () => void {
  * navigation: the upload store saves the files it holds only in memory. A
  * listener that throws does not keep the page from leaving.
  */
-export function clearTokens(): void {
+export function clearTokens(): void | Promise<boolean> {
   if (typeof window === 'undefined') return
-  endSession()
-  window.location.href = withBasePath('/login')
+  return leaveForLogin('/login')
 }
 
 /**
@@ -97,18 +158,47 @@ export function clearTokens(): void {
  */
 export function signInAgain(from: string): void {
   if (typeof window === 'undefined') return
-  endSession()
-  window.location.href = withBasePath(`/login?from=${encodeURIComponent(from)}`)
+  leaveForLogin(`/login?from=${encodeURIComponent(from)}`)
+}
+
+function leaveForLogin(path: string): void | Promise<boolean> {
+  if (!usesRefreshCookie()) {
+    endSession()
+    window.location.href = withBasePath(path)
+    return
+  }
+  // Clear the HttpOnly cookie before navigating. If the request does not
+  // succeed, keep the current session and let the user try logging out again.
+  return withCookieMutation(async () => {
+    const response = await fetch(`${API_URL}/auth/logout`, {
+      method: 'POST', credentials: 'same-origin', headers: webClientHeaders(),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    endSession()
+    localStorage.removeItem(SIGNED_IN_HINT_KEY)
+    announceSessionChange()
+    window.location.href = withBasePath(path)
+    return true
+  }).catch(() => {
+    window.alert('Could not end your session. Please try again.')
+    return false
+  })
 }
 
 /** Everything `clearTokens` does short of leaving the page. */
 function endSession(): void {
   leaveGuardSuppressed = true
-  localStorage.removeItem(ACCESS_TOKEN_KEY)
-  localStorage.removeItem(REFRESH_TOKEN_KEY)
-  // Clear auth cookies
-  document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0`
-  document.cookie = `${REFRESH_TOKEN_KEY}=; path=/; max-age=0`
+  sessionGeneration++
+  memoryAccess = null
+  retryCookieRefreshAt = 0
+  bootstrap = null
+  clearLegacyStorage()
+  if (!usesRefreshCookie()) document.cookie = `${REFRESH_TOKEN_KEY}=; path=/; max-age=0`
+  notifySessionEnded()
+}
+
+function notifySessionEnded(): void {
   sessionEndListeners.forEach((cb) => {
     try {
       cb()
@@ -118,6 +208,35 @@ function endSession(): void {
   })
 }
 
+// Keep the bearer on same-account notices. A sign-out or account change
+// discards it and invalidates pending refreshes; a later bootstrap can then
+// restore the account that owns the shared cookie.
+if (typeof window !== 'undefined' && usesRefreshCookie()) {
+  window.addEventListener('storage', (event) => {
+    if (event.key === SESSION_NOTICE_KEY && !sameAccountNotice(event.newValue, subjectOf(memoryAccess))) endSession()
+  })
+}
+
+/** A single, quiet cookie refresh on entry, shared by all consumers. */
+export function bootstrapSession(): Promise<RefreshOutcome> {
+  const token = getAccessToken()
+  if (token) return Promise.resolve({ token })
+  if (!usesRefreshCookie()) return Promise.resolve({ failed: 'refused' })
+  if (!bootstrap) {
+    const pending = refreshAccessTokenQuietly().then((outcome) => {
+      if (bootstrap === pending && 'failed' in outcome && outcome.failed === 'transient') bootstrap = null
+      return outcome
+    })
+    bootstrap = pending
+  }
+  return bootstrap
+}
+
+export async function ensureAccessToken(): Promise<string | null> {
+  const result = await bootstrapSession()
+  return 'token' in result ? result.token : null
+}
+
 // Deduplicate concurrent refresh calls — when access token expires, multiple
 // API calls may simultaneously get 401 and try to refresh. Only one should run.
 let _refreshPromise: Promise<string | null> | null = null
@@ -125,6 +244,20 @@ let _refreshPromise: Promise<string | null> | null = null
 export async function refreshAccessToken(): Promise<string | null> {
   if (_refreshPromise) return _refreshPromise
 
+  if (usesRefreshCookie()) {
+    const generation = sessionGeneration
+    const marker = cookieSessionNotice()
+    const account = subjectOf(memoryAccess)
+    const outcome = await refreshAccessTokenQuietly()
+    if ('token' in outcome) return outcome.token
+    if (outcome.failed === 'refused' && generation === sessionGeneration && !noticeChanged(marker, account)) {
+      // A refused cookie cannot bootstrap a new login. Keep the local-only
+      // navigation independent of the network (the server has refused it).
+      endSession()
+      window.location.href = withBasePath('/login')
+    }
+    return null
+  }
   _refreshPromise = _doRefresh(true).then((outcome) => ('token' in outcome ? outcome.token : null))
   try {
     return await _refreshPromise
@@ -141,6 +274,7 @@ export async function refreshAccessToken(): Promise<string | null> {
 export type RefreshOutcome = { token: string } | { failed: 'refused' | 'transient' }
 
 let _quietRefreshPromise: Promise<RefreshOutcome> | null = null
+let quietRefreshGeneration = -1
 
 /**
  * `refreshAccessToken` for a page that must not be left: it never clears the
@@ -148,17 +282,20 @@ let _quietRefreshPromise: Promise<RefreshOutcome> | null = null
  * caller can tell "sign in again" (refused) from "try again" (transient). A
  * share page uses it, where /login would lose the review on screen.
  *
- * Its own dedup, so a page-leaving refresh never joins a quiet one (or the
- * other way round) and inherits the wrong handling of a refusal.
+ * Share in-flight requests only within the same session. A cookie mutation
+ * queued for a new session still waits for the lock.
  */
-export async function refreshAccessTokenQuietly(): Promise<RefreshOutcome> {
-  if (_quietRefreshPromise) return _quietRefreshPromise
+export async function refreshAccessTokenQuietly({ skipCooldown = false } = {}): Promise<RefreshOutcome> {
+  const cookieMode = usesRefreshCookie()
+  if (_quietRefreshPromise && (!cookieMode || quietRefreshGeneration === sessionGeneration)) return _quietRefreshPromise
 
-  _quietRefreshPromise = _doRefresh(false)
+  quietRefreshGeneration = sessionGeneration
+  const pending = cookieMode ? refreshCookie(skipCooldown) : _doRefresh(false)
+  _quietRefreshPromise = pending
   try {
-    return await _quietRefreshPromise
+    return await pending
   } finally {
-    _quietRefreshPromise = null
+    if (_quietRefreshPromise === pending) _quietRefreshPromise = null
   }
 }
 
@@ -171,12 +308,59 @@ export async function refreshAccessTokenQuietly(): Promise<RefreshOutcome> {
  * same account, another tab refreshed it or signed it in again, and its access
  * token is the answer; otherwise null, "could not refresh".
  */
-function sessionMovedOn(sentRefreshToken: string): RefreshOutcome {
+function sessionMovedOn(sentToken: string | null): RefreshOutcome {
   const access = getAccessToken()
   const sub = subjectOf(access)
-  return sub !== null && sub === subjectOf(sentRefreshToken) && access
+  return sub !== null && sub === subjectOf(sentToken) && access
     ? { token: access }
     : { failed: 'refused' }
+}
+
+function refreshCookie(skipCooldown: boolean): Promise<RefreshOutcome> {
+  if (!skipCooldown && Date.now() < retryCookieRefreshAt) return Promise.resolve({ failed: 'transient' })
+  const generation = sessionGeneration
+  const marker = cookieSessionNotice()
+  const sentAccess = memoryAccess
+  const sentSubject = subjectOf(sentAccess)
+  const movedOn = () => generation !== sessionGeneration || noticeChanged(marker, sentSubject)
+  const movedOutcome = (): RefreshOutcome => sessionMovedOn(sentAccess)
+  return withCookieMutation<RefreshOutcome>(async () => {
+    if (movedOn()) return movedOutcome()
+    // One-way transition on the first run after upgrading, including clients
+    // that have a saved refresh token but no old JS-set cookie.
+    const legacy = localStorage.getItem(REFRESH_TOKEN_KEY)
+    const transient = (): RefreshOutcome => {
+      retryCookieRefreshAt = Date.now() + 5000
+      return { failed: 'transient' }
+    }
+    try {
+      const response = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { ...webClientHeaders(), ...(legacy ? { 'Content-Type': 'application/json' } : {}) },
+        signal: AbortSignal.timeout(10000),
+        ...(legacy ? { body: JSON.stringify({ refresh_token: legacy }) } : {}),
+      })
+      if (movedOn()) return movedOutcome()
+      if (response.status === 401 || response.status === 403) {
+        clearLegacyStorage()
+        return { failed: 'refused' }
+      }
+      if (!response.ok) return transient()
+      const data = await response.json()
+      if (movedOn()) return movedOutcome()
+      if (typeof data.access_token !== 'string' || !data.access_token) return transient()
+      // Cookie changes can arrive before the tab's storage notification. A
+      // refresh of an existing bearer must not silently switch its account.
+      if (sentSubject && subjectOf(data.access_token) !== sentSubject) return { failed: 'refused' }
+      memoryAccess = data.access_token
+      retryCookieRefreshAt = 0
+      localStorage.setItem(SIGNED_IN_HINT_KEY, '1')
+      clearLegacyStorage()
+      return { token: data.access_token }
+    } catch {
+      return movedOn() ? movedOutcome() : transient()
+    }
+  })
 }
 
 /** `endsSession`: whether a refusal (or nothing to send) ends the session. */

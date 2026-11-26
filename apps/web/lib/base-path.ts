@@ -13,3 +13,13 @@ export function withBasePath(path: string): string {
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
   return `${basePath}${path}`
 }
+
+/** This page's path and query, without the basePath: what /login's `from` takes. */
+export function currentAppPath(): string {
+  if (typeof window === 'undefined') return '/'
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+  const { pathname, search } = window.location
+  const underBasePath = basePath && (pathname === basePath || pathname.startsWith(`${basePath}/`))
+  const path = underBasePath ? pathname.slice(basePath.length) || '/' : pathname
+  return `${path}${search}`
+}

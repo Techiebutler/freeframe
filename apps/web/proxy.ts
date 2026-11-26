@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { withBasePath } from './lib/base-path'
 import { INTERNAL_API_URL } from './lib/server-api'
+import { HOST_REFRESH_COOKIE, LEGACY_REFRESH_COOKIE } from './lib/auth-transport'
 
 const PUBLIC_ROUTES = ['/login', '/setup']
 // `/s/` holds short share links (app/s/[code]), which redirect to a public
@@ -32,6 +33,7 @@ export async function proxy(request: NextRequest) {
   // Check if setup is needed — redirect to /setup if no superadmin exists
   // Uses a cookie cache to avoid calling the API on every request
   const setupDone = request.cookies.get('ff_setup_done')?.value
+  let cacheSetup = false
   if (!setupDone) {
     try {
       const res = await fetch(`${INTERNAL_API_URL}/setup/status`, {
@@ -45,27 +47,26 @@ export async function proxy(request: NextRequest) {
         if (data.needs_setup) {
           return NextResponse.redirect(new URL(withBasePath('/setup'), request.url))
         }
-        // Setup is done — set cookie so we don't check again
-        const response = NextResponse.next()
-        response.cookies.set('ff_setup_done', '1', { path: '/', maxAge: 60 * 60 * 24 }) // 24 hours
-        return response
+        cacheSetup = true
       }
     } catch {
       // API unreachable — let the request through, the page will show errors
     }
   }
 
-  // Check for auth tokens
-  const accessToken = request.cookies.get('ff_access_token')?.value
-  const refreshToken = request.cookies.get('ff_refresh_token')?.value
-
-  if (!accessToken && !refreshToken) {
-    const loginUrl = new URL(withBasePath('/login'), request.url)
-    loginUrl.searchParams.set('from', pathname)
-    return NextResponse.redirect(loginUrl)
+  // This is a navigation hint, not authentication. The unprefixed refresh
+  // cookie is needed both for HTTP deployments and for the migration window.
+  const hasSession = request.cookies.has(HOST_REFRESH_COOKIE) || request.cookies.has(LEGACY_REFRESH_COOKIE)
+  const loginUrl = new URL(withBasePath('/login'), request.url)
+  loginUrl.searchParams.set('from', pathname)
+  const response = hasSession ? NextResponse.next() : NextResponse.redirect(loginUrl)
+  if (cacheSetup) {
+    response.cookies.set('ff_setup_done', '1', {
+      path: '/', maxAge: 60 * 60 * 24, httpOnly: true,
+      sameSite: 'lax', secure: request.nextUrl.protocol === 'https:',
+    })
   }
-
-  return NextResponse.next()
+  return response
 }
 
 export const config = {

@@ -23,12 +23,20 @@ import { fetchShareDownloadOptions, handleDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
 import { ShareBrandMark } from './share-brand-mark'
 import { VERDICT_ROW_CLASS } from '@/components/review/verdict-controls'
-import { continueAsGuest, hasStoredToken, isSignInExpired, readGuestIdentity } from '@/lib/share-request'
+import { bootstrapSession } from '@/lib/auth'
+import { usesRefreshCookie } from '@/lib/auth-transport'
+import { currentAppPath } from '@/lib/base-path'
+import { continueAsGuest, hasStoredToken, isSignInExpired, readGuestIdentity, unreachable } from '@/lib/share-request'
 import { ShareSignInActions, ShareVerdictControls } from './share-verdict-controls'
 
 /** Signed in, or a guest who has already given a name and email. */
-function hasIdentity(): boolean {
-  return hasStoredToken() || !!readGuestIdentity()
+async function hasIdentity(): Promise<boolean> {
+  if (hasStoredToken() || readGuestIdentity()) return true
+  if (!usesRefreshCookie()) return false
+  const outcome = await bootstrapSession()
+  if ('token' in outcome) return true
+  if (outcome.failed === 'transient') throw unreachable()
+  return hasStoredToken()
 }
 
 export function ShareReviewScreen({
@@ -198,7 +206,6 @@ function ShareReviewInner({
     settle?: { resolve: () => void; reject: (e: Error) => void }
   } | null>(null)
   React.useEffect(() => setGuestIdentity(readGuestIdentity()), [])
-  const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
   // A verdict asks who the guest is through the same prompt a comment does.
   // The press waits on this promise: the prompt's Continue resolves it with the
@@ -263,7 +270,7 @@ function ShareReviewInner({
   }, [addComment, askToContinue, currentVersion, refetchComments, requestIdentity])
 
   const submitReply = React.useCallback(async (parentId: string, body: string) => {
-    if (!hasIdentity()) {
+    if (!(await hasIdentity())) {
       // Resolved once the guest names themselves and the reply is sent; until
       // then the reply box keeps what was typed.
       return new Promise<void>((resolve, reject) => {
@@ -336,7 +343,7 @@ function ShareReviewInner({
       assetType={asset.asset_type}
       allowInternal={false}
       onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
-        if (!hasIdentity()) {
+        if (!(await hasIdentity())) {
           pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData }
           setShowGuestPrompt(true)
           return
@@ -500,6 +507,7 @@ function ShareReviewInner({
           description="Sign in again or continue as a guest."
         >
           <ShareSignInActions
+            from={currentAppPath()}
             onContinueAsGuest={() => settleSignIn(true)}
             onCancel={() => settleSignIn(false)}
           />

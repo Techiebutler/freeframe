@@ -1,3 +1,4 @@
+import { getAccessToken } from '@/lib/auth'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
@@ -31,7 +32,7 @@ function applyToDOM(theme: Theme) {
 
 async function saveToServer(theme: Theme) {
   try {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('ff_access_token') : null
+    const token = typeof window !== 'undefined' ? getAccessToken() : null
     if (!token) return
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
     await fetch(`${API_URL}/auth/me/preferences`, {
