@@ -17,7 +17,8 @@ through the real app:
     transcode and through the stuck-processing sweep; an upload still in
     flight does not, nor does an older version becoming ready;
   * deleting the version set as current ends the setting and the answer says
-    so; restoring it does not bring the setting back;
+    so; restoring it does not bring the setting back; a setting that a delete
+    has made the default as well stays;
   * the Storage page holds back the version set as current, not the newest,
     and a delete there ends the setting too, so neither restore brings it
     back; deleting the whole file there keeps it;
@@ -554,6 +555,23 @@ def test_deleting_another_version_keeps_it(client, db, w):
 
     r = _delete(client, w, w.v2)
 
+    assert r.json()["latest_version"]["id"] == str(w.v1.id)
+    assert _pin(db, w) == w.v1.id
+
+
+def test_a_setting_outlives_the_newer_version_it_was_set_against(client, db, w):
+    """Set, a setting always changes something; after a delete it need not.
+    With v1 set as current and v2 deleted, v1 is the default as well, and the
+    setting stays: restoring v2 then leaves the asset on v1, as it was set."""
+    assert _set(client, w, w.v1).status_code == 200
+
+    r = _delete(client, w, w.v2)
+    assert r.status_code == 200, r.text
+    assert r.json()["latest_version"]["id"] == str(w.v1.id)
+    assert _pin(db, w) == w.v1.id
+
+    r = _restore(client, w, w.v2)
+    assert r.status_code == 200, r.text
     assert r.json()["latest_version"]["id"] == str(w.v1.id)
     assert _pin(db, w) == w.v1.id
 

@@ -531,9 +531,12 @@ def set_current_version(
     thumbnail and comment count, the version the review page opens with,
     share links that show the latest only, downloads and the comment export
     when no version is named. Only a ready version can be set. Setting the
-    version that is current by default anyway clears the setting, so there is
-    never one that changes nothing. It ends when that version is deleted, and
-    when a newer version becomes ready.
+    version that is current by default anyway clears the setting, so at the
+    moment it is set a setting always changes something. It need not stay
+    that way: deleting the newer versions can make the set version the
+    default as well, and the setting then stays, so restoring one of them
+    leaves the asset where it was set. It ends when that version is deleted,
+    and when a newer version becomes ready.
     """
     asset = _lock_live_asset(db, asset_id, current_user)
     version = db.query(AssetVersion).filter(
