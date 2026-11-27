@@ -120,3 +120,27 @@ def newer_version_ready(db: Session, version: AssetVersion) -> None:
         .where(Asset.id == version.asset_id, Asset.current_version_id.in_(older), still_live)
         .values(current_version_id=None)
     )
+
+
+def end_current_version(db: Session, asset_ids, version_ids) -> None:
+    """End the current-version setting of these assets where it is one of these versions.
+
+    Every door that deletes a version on its own calls this, in the same
+    transaction as the delete: an editor's `DELETE /assets/{id}/versions/{id}`
+    and the Storage page's delete. A restore never sets it again, through
+    either door, because it is gone rather than merely ignored while the
+    version is in the trash. Deleting a whole asset or project leaves it, so
+    the asset comes back as it was.
+
+    The assets are named so the UPDATE goes by primary key rather than
+    scanning every asset for the column. Both callers hold those assets' row
+    locks already, taken before the versions' rows.
+    """
+    asset_ids, version_ids = list(asset_ids), list(version_ids)
+    if not version_ids:
+        return
+    db.execute(
+        update(Asset)
+        .where(Asset.id.in_(asset_ids), Asset.current_version_id.in_(version_ids))
+        .values(current_version_id=None)
+    )

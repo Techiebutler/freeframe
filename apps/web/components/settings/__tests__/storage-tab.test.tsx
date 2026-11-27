@@ -340,6 +340,23 @@ describe('the delete gate', () => {
     expect(newest).toBeChecked()
     expect(screen.queryByText(/only deletable with the whole file/)).not.toBeInTheDocument()
   })
+
+  it('holds a version set as current shut instead of the newest, and says so', async () => {
+    // The server marks the version the file shows; with v1 set as current
+    // that is v1, and v3 can go on its own.
+    const project = files()
+    project.assets[0].versions = project.assets[0].versions.map((v) => ({
+      ...v, is_latest: v.version_number === 1,
+    }))
+    serve({ project })
+    render(<StorageTab />)
+    fireEvent.click(await screen.findByRole('button', { expanded: false, name: /Big Campaign/ }))
+    fireEvent.click(await screen.findByRole('button', { expanded: false, name: /Hero Cut/ }))
+    expect(await screen.findByRole('checkbox', { name: 'Select version 1 of Hero Cut.mov' })).toBeDisabled()
+    expect(screen.getByRole('checkbox', { name: 'Select version 3 of Hero Cut.mov' })).toBeEnabled()
+    expect(screen.getByText(/· set as current, only deletable with the whole file/)).toBeInTheDocument()
+    expect(screen.queryByText(/newest, only deletable/)).not.toBeInTheDocument()
+  })
 })
 
 // ── the trash ─────────────────────────────────────────────────────────────────

@@ -30,7 +30,7 @@ from ..schemas.upload import (
 )
 from ..services.storage import choose_part_size, upload_guard_error
 from ..services.restore_rules import RESTORABLE_STATUSES, version_comes_back
-from ..services.versions import UNVIEWABLE_STATUSES, current_version, next_version_number
+from ..services.versions import UNVIEWABLE_STATUSES, current_version, end_current_version, next_version_number
 from ..services.s3_service import create_multipart_upload
 from .upload import commit_initiated_upload, storage_initiate_error
 
@@ -390,7 +390,7 @@ def delete_asset_version(
     the latest included. Deleting the version set as current ends that
     setting, and a restore does not bring it back.
     """
-    asset = _lock_live_asset(db, asset_id, current_user)
+    _lock_live_asset(db, asset_id, current_user)
     version = db.query(AssetVersion).filter(
         AssetVersion.id == version_id,
         AssetVersion.asset_id == asset_id,
@@ -426,8 +426,7 @@ def delete_asset_version(
             ),
         )
     version.deleted_at = datetime.now(timezone.utc)
-    if asset.current_version_id == version.id:
-        asset.current_version_id = None
+    end_current_version(db, [asset_id], [version.id])
     db.flush()
     latest = _version_response(db, _display_version(db, asset_id))
     db.commit()

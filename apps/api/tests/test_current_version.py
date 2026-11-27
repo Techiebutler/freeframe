@@ -18,6 +18,9 @@ through the real app:
     flight does not, nor does an older version becoming ready;
   * deleting the version set as current ends the setting and the answer says
     so; restoring it does not bring the setting back;
+  * the Storage page holds back the version set as current, not the newest,
+    and a delete there ends the setting too, so neither restore brings it
+    back; deleting the whole file there keeps it;
   * the migration adds the column with `ON DELETE SET NULL`, and goes back down.
 """
 import uuid
@@ -556,7 +559,7 @@ def test_deleting_another_version_keeps_it(client, db, w):
 
 
 def test_a_version_set_as_current_deleted_elsewhere_falls_back_and_the_purge_clears_it(client, db, w, monkeypatch):
-    """A soft delete that bypasses the endpoint (the admin trash, a script)
+    """A soft delete that bypasses both doors (a script, a hand-run UPDATE)
     leaves the setting behind: it is ignored while the row is in the trash, and
     `ON DELETE SET NULL` clears it when the purge takes the row."""
     import apps.api.tasks.cleanup_tasks as cleanup
@@ -623,6 +626,127 @@ def test_the_purge_takes_an_asset_whose_version_is_set_as_current(client, db, w,
 
     assert counts.assets == 1
     assert db.query(Asset).filter(Asset.id == asset_id).count() == 0
+
+
+# ── the Storage page ─────────────────────────────────────────────────────────
+
+def _superadmin(db):
+    from apps.api.models.user import User
+
+    u = User(email=f"admin-{uuid.uuid4().hex[:8]}@t.local", name="admin", is_superadmin=True)
+    db.add(u); db.flush(); db.refresh(u)
+    return _auth(u)
+
+
+def _panel_delete(client, admin, projects=(), assets=(), versions=()):
+    return client.post("/admin/delete", headers=admin, json={
+        "project_ids": [str(p.id) for p in projects],
+        "asset_ids": [str(a.id) for a in assets],
+        "version_ids": [str(v.id) for v in versions],
+        "confirm_count": len(projects) + len(assets) + len(versions),
+    })
+
+
+def _panel_rows(client, admin, w):
+    body = client.get(f"/admin/storage/projects/{w.project.id}", headers=admin).json()
+    [a] = [a for a in body["assets"] if a["asset_id"] == str(w.A.id)]
+    return {v["version_number"]: v["is_latest"] for v in a["versions"]}
+
+
+def test_the_storage_page_holds_back_the_version_set_as_current_rather_than_the_newest(client, db, w):
+    """With v1 set as current, taking v1 alone is what would quietly move the
+    file to another cut, and taking v2 alone changes nothing anybody sees."""
+    admin = _superadmin(db)
+    assert _panel_rows(client, admin, w) == {2: True, 1: False}
+    assert _set(client, w, w.v1).status_code == 200
+
+    assert _panel_rows(client, admin, w) == {2: False, 1: True}
+    r = _panel_delete(client, admin, versions=[w.v1])
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "On this Storage page, the version of A set as current can only be deleted with the "
+        "whole file. Select the file itself, or pick another version."
+    )
+    assert _pin(db, w) == w.v1.id
+
+    r = _panel_delete(client, admin, versions=[w.v2])
+    assert r.status_code == 200, r.text
+    assert _pin(db, w) == w.v1.id
+    assert client.get(f"/assets/{w.A.id}", headers=_auth(w.viewer)).json()["latest_version"]["id"] == str(w.v1.id)
+
+
+def test_the_storage_page_without_a_setting_holds_back_the_newest_as_on_main(client, db, w):
+    admin = _superadmin(db)
+    assert _panel_rows(client, admin, w) == {2: True, 1: False}
+
+    r = _panel_delete(client, admin, versions=[w.v2])
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "On this Storage page, the newest version of A can only be deleted with the whole "
+        "file. Select the file itself, or pick an older version."
+    )
+    assert _panel_delete(client, admin, versions=[w.v1]).status_code == 200
+
+
+def test_the_storage_page_names_both_kinds_when_a_selection_holds_both(client, db, w):
+    """One asset with a setting and one without, each with its shown version
+    picked alone: the refusal names each as what it is."""
+    admin = _superadmin(db)
+    assert _set(client, w, w.v1).status_code == 200
+
+    r = _panel_delete(client, admin, versions=[w.v1, w.b1])
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "On this Storage page, the newest version of B and the version of A set as current can "
+        "only be deleted with the whole file. Select the file itself, or pick another version."
+    )
+
+
+@pytest.mark.parametrize("ticked", ["asset", "project"])
+@pytest.mark.parametrize("door", ["storage page", "version switcher"])
+def test_a_storage_page_delete_ends_the_setting_and_no_restore_brings_it_back(client, db, w, ticked, door):
+    """Ticked with its file or project, the version set as current gets past
+    the gate. The delete ends the setting there and then, as the editor's
+    does, so bringing the file back and then the version, through either
+    door, leaves the asset on its newest version."""
+    admin = _superadmin(db)
+    assert _set(client, w, w.v1).status_code == 200
+
+    parent = {"asset": {"assets": [w.A]}, "project": {"projects": [w.project]}}[ticked]
+    r = _panel_delete(client, admin, versions=[w.v1], **parent)
+    assert r.status_code == 200, r.text
+    assert _pin(db, w) is None
+
+    restore_parent = {"asset": {"asset_ids": [str(w.A.id)]},
+                      "project": {"project_ids": [str(w.project.id)]}}[ticked]
+    r = client.post("/admin/trash/restore", headers=admin, json=restore_parent)
+    assert r.status_code == 200, r.text
+    if door == "storage page":
+        r = client.post("/admin/trash/restore", headers=admin, json={"version_ids": [str(w.v1.id)]})
+        assert r.json()["restored_versions"] == 1, r.text
+    else:
+        r = _restore(client, w, w.v1)
+        assert r.status_code == 200, r.text
+        assert r.json()["latest_version"]["id"] == str(w.v2.id)
+
+    assert _pin(db, w) is None
+    asset = client.get(f"/assets/{w.A.id}", headers=_auth(w.viewer)).json()
+    assert asset["latest_version"]["id"] == str(w.v2.id)
+
+
+def test_a_storage_page_delete_of_the_whole_file_keeps_the_setting(client, db, w):
+    """Only a version deleted on its own ends it: the file comes back as it was."""
+    admin = _superadmin(db)
+    assert _set(client, w, w.v1).status_code == 200
+
+    assert _panel_delete(client, admin, assets=[w.A]).status_code == 200
+    assert client.post("/admin/trash/restore", headers=admin,
+                       json={"asset_ids": [str(w.A.id)]}).status_code == 200
+
+    assert _pin(db, w) == w.v1.id
+    asset = client.get(f"/assets/{w.A.id}", headers=_auth(w.viewer)).json()
+    assert asset["latest_version"]["id"] == str(w.v1.id)
 
 
 # ── migration ────────────────────────────────────────────────────────────────
@@ -764,4 +888,37 @@ def test_setting_a_version_waits_for_its_delete_and_then_finds_it_gone(committed
             deleter.rollback(); setter.rollback()
             deleter.close(); setter.close()
     assert _committed_state(committed_pair) == ([2], None)
+
+
+def test_the_storage_page_waits_for_a_version_being_set_as_current_and_then_holds_it_back(committed_pair):
+    """The other order: the PUT holds the asset's lock, the Storage page's gate
+    waits for it (it takes the same lock first, #656), and then sees v1 as the
+    version the asset shows. No new lock and no new order: the PUT is one more
+    door that takes the asset's row before anything else."""
+    from apps.api.database import engine
+    from apps.api.services import admin_panel
+
+    v1, _ = committed_pair["versions"]
+    with engine.connect() as conn_p, engine.connect() as conn_a:
+        setter, admin = _open_session(conn_p), _open_session(conn_a)
+        try:
+            release = setter.commit
+            setter.commit = lambda: setter.flush()  # hold the setting open
+            assert _put_on(setter, committed_pair, v1) == 200
+            targets = admin_panel.resolve_targets(admin, [], [], [v1])
+
+            def gate():
+                try:
+                    admin_panel.check_gate(admin, targets, 1, None)
+                    return "passed"
+                except admin_panel.DeleteGate as exc:
+                    return exc.status_code, exc.detail
+
+            status, detail = _second_waits_for_first(gate, release)
+            assert status == 409
+            assert "the version of clip set as current" in detail
+        finally:
+            setter.rollback(); admin.rollback()
+            setter.close(); admin.close()
+    assert _committed_state(committed_pair) == ([1, 2], v1)
 
