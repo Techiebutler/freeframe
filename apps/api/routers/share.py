@@ -47,6 +47,7 @@ from ..services.permissions import (
 from ..services.auth_service import bcrypt_password_bytes
 from ..services.redis_service import create_share_session, delete_share_sessions
 from ..services.search import escape_like
+from ..services.versions import current_version
 from ..services.owned_keys import is_project_logo_key, sign_if_owned
 from ..services.avatar_keys import sign_avatar
 from ..services.s3_service import generate_presigned_get_url, build_download_filename
@@ -171,13 +172,14 @@ def _log_share_activity(
         db.rollback()
 
 
+def _current_ready_version(db: Session, asset_id: uuid.UUID) -> Optional[AssetVersion]:
+    """The ready version a link shows by default: the one set as current, else the newest."""
+    return current_version(db, asset_id, AssetVersion.processing_status == ProcessingStatus.ready)
+
+
 def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFile]:
-    """Get the first media file from the latest ready version of an asset."""
-    version = db.query(AssetVersion).filter(
-        AssetVersion.asset_id == asset_id,
-        AssetVersion.deleted_at.is_(None),
-        AssetVersion.processing_status == ProcessingStatus.ready,
-    ).order_by(AssetVersion.version_number.desc()).first()
+    """Get the first media file from the current ready version of an asset."""
+    version = _current_ready_version(db, asset_id)
     if not version:
         return None
     return db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
@@ -185,11 +187,7 @@ def _get_latest_media_file(db: Session, asset_id: uuid.UUID) -> Optional[MediaFi
 
 def _latest_version_comment_count(db: Session, asset_id: uuid.UUID) -> int:
     """Count public comments rendered in the asset's share-grid preview."""
-    version = db.query(AssetVersion).filter(
-        AssetVersion.asset_id == asset_id,
-        AssetVersion.deleted_at.is_(None),
-        AssetVersion.processing_status == ProcessingStatus.ready,
-    ).order_by(AssetVersion.version_number.desc()).first()
+    version = _current_ready_version(db, asset_id)
     if not version:
         return 0
 
@@ -1831,14 +1829,20 @@ def get_share_asset_versions(
     """Public endpoint — optional auth. Lists a shared asset's ready versions for the viewer.
 
     Only returns multiple versions when the share link enables "Show all versions"; otherwise
-    only the latest ready version is exposed to the guest.
+    only the latest ready version is exposed to the guest. `is_current` marks the one the
+    link opens with: the one set as current, else the newest ready one.
     """
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     asset = _get_asset(db, asset_id)
     validate_asset_in_share(db, link, asset)
 
-    return shown_versions(db, link, asset)
+    versions = shown_versions(db, link, asset)
+    current = next((v for v in versions if v.id == asset.current_version_id), versions[0] if versions else None)
+    return [
+        ShareAssetVersionItem.model_validate(v).model_copy(update={"is_current": v is current})
+        for v in versions
+    ]
 
 
 def shown_versions(db: Session, link: ShareLink, asset: Asset) -> list[AssetVersion]:
@@ -1853,7 +1857,10 @@ def shown_versions(db: Session, link: ShareLink, asset: Asset) -> list[AssetVers
     ).order_by(AssetVersion.version_number.desc()).all()
 
     if not link.show_versions:
-        # Version history hidden — expose only the latest ready version.
-        versions = versions[:1]
+        # Version history hidden — expose only the current ready version: the
+        # one set as current, else the newest. `versions` holds exactly the
+        # candidates `current_version` would choose from, newest first.
+        pinned = [v for v in versions if v.id == asset.current_version_id]
+        versions = pinned or versions[:1]
 
     return versions

@@ -14,7 +14,7 @@ import {
   assertReadable, FileUnreadableError, FILE_READ_FAILED_MESSAGE,
 } from '@/lib/upload-readable'
 import { useUploadSpeedStore } from './upload-speed-store'
-import type { AssetResponse } from '@/types'
+import type { AssetResponse, AssetVersion } from '@/types'
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB
 const HISTORY_PAGE_SIZE = 20
@@ -1817,19 +1817,25 @@ function isProcessingRowOf(f: UploadFile, assetId: string, versionId: string | u
  * those apart, and it matters, because the caller's other branch marks the
  * upload failed and asks the backend to discard it.
  *
- * Keyed on the version id rather than the status alone. `GET /assets/{id}`
- * reports `_display_version`, which skips `uploading` and `failed`, so an asset
- * whose new version did not land answers with the PREVIOUS version sitting at
- * `ready` — which would read as success for an upload that never happened.
+ * Looked up by id in the asset's version list, not read off the asset.
+ * `GET /assets/{id}` reports one version, the one the asset shows: it skips
+ * `uploading` and `failed`, so an asset whose new version did not land answers
+ * with the PREVIOUS version sitting at `ready`, and with an older version set
+ * as current it answers with that one while the new upload is processing. The
+ * first read as success for an upload that never happened until the ids were
+ * compared; the second, with the ids compared, read as one that never landed,
+ * and the row went to Interrupted and then, on Resume, to Failed for good.
  */
 async function completedVersionStatus(
   assetId: string,
   versionId: string,
   ownerId: string | undefined,
 ): Promise<'processing' | 'complete' | null> {
-  const asset = await api.get<AssetResponse>(`/assets/${assetId}`, { pinSubject: ownerId }).catch(() => null)
-  if (!asset?.latest_version || asset.latest_version.id !== versionId) return null
-  const status = mapProcessingStatus(asset.latest_version.processing_status)
+  const versions = await api.get<AssetVersion[]>(`/assets/${assetId}/versions`, { pinSubject: ownerId })
+    .catch(() => null)
+  const version = versions?.find((v) => v.id === versionId)
+  if (!version) return null
+  const status = mapProcessingStatus(version.processing_status)
   return status === 'processing' || status === 'complete' ? status : null
 }
 
@@ -3796,8 +3802,11 @@ const storeCreator: StateCreator<UploadStore, [['zustand/persist', unknown]]> = 
           // previous version sitting at `ready`. Without this the row is
           // rewritten to complete: Resume and Discard disappear, the user is
           // told the upload landed, and the parts sit in the bucket until the
-          // reaper. This is the guard `completedVersionStatus` carries for the
-          // same reason -- the second half of #273.
+          // reaper. `completedVersionStatus` looks its version up by id for the
+          // same reason -- the second half of #273. Here a version set as
+          // current can also answer for a processing upload; the row then
+          // waits, as it does for any other version, until that upload is
+          // ready and the setting ends.
           if (!f.versionId || asset.latest_version.id !== f.versionId) return f
           // An upload still running on another device reads as `uploading`
           // here, which maps to `interrupted` -- the same status the row

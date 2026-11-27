@@ -64,13 +64,27 @@ function mockUploadWithFailingCompletion(): { aborts: unknown[] } {
   return { aborts }
 }
 
-/** What `GET /assets/{id}` reports: `_display_version` and its status. */
-function mockAssetRead(versionId: string | null, processingStatus: string) {
-  vi.mocked(api.get).mockImplementation(() =>
-    Promise.resolve({
-      id: ASSET_ID,
-      latest_version: versionId ? { id: versionId, processing_status: processingStatus } : null,
-    }) as never,
+/**
+ * What `GET /assets/{id}/versions` lists: every live version and its status.
+ * The new upload is VERSION_ID, on top of a ready PREVIOUS_VERSION_ID.
+ */
+function versionList(newStatus: string | null) {
+  return [
+    ...(newStatus ? [{ id: VERSION_ID, processing_status: newStatus, is_current: false }] : []),
+    { id: PREVIOUS_VERSION_ID, processing_status: 'ready', is_current: true },
+  ]
+}
+
+/**
+ * Answers the version list, and the asset itself with the version it shows,
+ * which is never what the recovery may go by (see `mockPinnedAsset`).
+ */
+function mockVersionList(newStatus: string | null) {
+  vi.mocked(api.get).mockImplementation((path: string) =>
+    Promise.resolve(path.endsWith('/versions')
+      ? versionList(newStatus)
+      : { id: ASSET_ID, latest_version: { id: PREVIOUS_VERSION_ID, processing_status: 'ready' } },
+    ) as never,
   )
 }
 
@@ -92,7 +106,7 @@ describe('an upload whose completion request threw', () => {
 
   it('is not reported as failed when the version already moved on', async () => {
     const { aborts } = mockUploadWithFailingCompletion()
-    mockAssetRead(VERSION_ID, 'processing')
+    mockVersionList('processing')
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
@@ -105,7 +119,7 @@ describe('an upload whose completion request threw', () => {
 
   it('reports a version that finished transcoding as complete', async () => {
     const { aborts } = mockUploadWithFailingCompletion()
-    mockAssetRead(VERSION_ID, 'ready')
+    mockVersionList('ready')
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
@@ -114,13 +128,13 @@ describe('an upload whose completion request threw', () => {
     expect(aborts).toEqual([])
   })
 
-  it('is interrupted, not failed, when the asset reports a different version', async () => {
-    // The trap: GET /assets/{id} returns `_display_version`, which excludes
-    // `uploading` and `failed`. On a version upload whose completion genuinely
-    // never landed, it answers with the PREVIOUS version, sitting at `ready`.
-    // Keying on status alone would call that a success.
+  it('is interrupted, not failed, when the version is still uploading', async () => {
+    // The trap: on a version upload whose completion genuinely never landed,
+    // the asset still has its PREVIOUS version sitting at `ready`, and
+    // `GET /assets/{id}` answers with that one. Keying on status alone would
+    // call that a success; the version is looked up by its own id.
     const { aborts } = mockUploadWithFailingCompletion()
-    mockAssetRead(PREVIOUS_VERSION_ID, 'ready')
+    mockVersionList('uploading')
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
@@ -129,14 +143,30 @@ describe('an upload whose completion request threw', () => {
     expect(aborts).toEqual([])
   })
 
-  it('is interrupted when the asset has no version to report', async () => {
+  it('is interrupted when the version is not listed at all', async () => {
     const { aborts } = mockUploadWithFailingCompletion()
-    mockAssetRead(null, '')
+    mockVersionList(null)
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
 
     expect(rowOf(id).status).toBe('interrupted')
+    expect(aborts).toEqual([])
+  })
+
+  it('is processing on an asset whose older version is set as current', async () => {
+    // With v1 set as current, `GET /assets/{id}` answers with v1 while the new
+    // upload transcodes. Compared with that, the completion read as never
+    // landed: the row went to Interrupted, a Resume got a 409, and the row
+    // turned Failed for good on a file that was transcoding fine.
+    const { aborts } = mockUploadWithFailingCompletion()
+    mockVersionList('processing')
+
+    const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
+    await settled(id)
+
+    expect(rowOf(id).status).toBe('processing')
+    expect(api.get).toHaveBeenCalledWith(`/assets/${ASSET_ID}/versions`, { pinSubject: 'u1' })
     expect(aborts).toEqual([])
   })
 
@@ -155,7 +185,7 @@ describe('an upload whose completion request threw', () => {
     // Without this the row is a dead end: the resume path keys off the version,
     // and the upload id and key it needs are looked up from it server-side.
     mockUploadWithFailingCompletion()
-    mockAssetRead(null, '')
+    mockVersionList(null)
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
     await settled(id)
@@ -213,7 +243,7 @@ describe('races during the recovery read', () => {
     useUploadStore.getState().cancelUpload(id)
     expect(rowOf(id).status).toBe('cancelled')
 
-    release({ id: ASSET_ID, latest_version: { id: VERSION_ID, processing_status: 'processing' } })
+    release(versionList('processing'))
     // Settle fully rather than waiting for the status to move: the whole point is
     // that it must NOT move, so a helper that returns as soon as it leaves
     // `uploading` would pass here without the recovery write ever being attempted.
@@ -250,10 +280,7 @@ describe('races during the recovery read', () => {
           held_part_numbers: [],
         }) as never
       }
-      return Promise.resolve({
-        id: ASSET_ID,
-        latest_version: { id: PREVIOUS_VERSION_ID, processing_status: 'ready' },
-      }) as never
+      return Promise.resolve(versionList('uploading')) as never
     })
     // The retried completion is the one that succeeds; the first still throws.
     let completions = 0
@@ -277,10 +304,7 @@ describe('races during the recovery read', () => {
       if (path.endsWith('/parts')) {
         return Promise.reject(new Error('Failed to fetch')) as never
       }
-      return Promise.resolve({
-        id: ASSET_ID,
-        latest_version: { id: PREVIOUS_VERSION_ID, processing_status: 'ready' },
-      }) as never
+      return Promise.resolve(versionList('uploading')) as never
     })
 
     const id = useUploadStore.getState().startUpload(makeFile(), 'project-1', 'clip')!
@@ -355,7 +379,7 @@ describe('a completion that did not get through', () => {
     vi.useFakeTimers()
     useUploadStore.setState({ files: [] })
     installXhrFake(() => ok('"etag-1"'))
-    mockAssetRead(PREVIOUS_VERSION_ID, 'ready')
+    mockVersionList('uploading')
   })
 
   afterEach(() => {
@@ -472,10 +496,7 @@ describe('a completion that did not get through', () => {
           held_part_numbers: [],
         }) as never
       }
-      return Promise.resolve({
-        id: ASSET_ID,
-        latest_version: { id: PREVIOUS_VERSION_ID, processing_status: 'ready' },
-      }) as never
+      return Promise.resolve(versionList('uploading')) as never
     })
     useUploadStore.setState({
       files: [{

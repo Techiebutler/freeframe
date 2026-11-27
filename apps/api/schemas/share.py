@@ -244,6 +244,8 @@ class ShareAssetVersionItem(BaseModel):
     version_number: int
     processing_status: str
     created_at: datetime
+    # The version the link opens with: the one set as current, else the newest.
+    is_current: bool = False
     model_config = {"from_attributes": True}
 
 

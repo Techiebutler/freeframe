@@ -263,8 +263,9 @@ def admin_delete(
     The confirmation gate is enforced here, not in the browser:
 
     * `409` when part of the selection is already gone, when `confirm_count`
-      disagrees with what the server resolved, or when an asset's newest version
-      was picked without the asset itself. A bulk delete that silently covers a
+      disagrees with what the server resolved, or when the version an asset
+      shows (its newest, or the one set as current) was picked without the
+      asset itself. A bulk delete that silently covers a
       different set than was confirmed is the failure this prevents.
     * `428` when the selection is past a threshold (more than one project, or
       more than 10 GB) and the confirmation phrase was not typed.

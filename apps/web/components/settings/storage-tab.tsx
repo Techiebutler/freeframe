@@ -193,11 +193,15 @@ function VersionRows({
             {expanded && (
               <ul className="bg-bg-tertiary/40">
                 {asset.versions.map((v) => {
-                  // The newest version only goes with the whole file. Ticking it
-                  // on its own would quietly demote the file to an older cut, so
+                  // The version the file shows only goes with the whole file:
+                  // the newest, or the one an editor set as current. Ticking it
+                  // on its own would quietly move the file to another cut, so
                   // the box is held shut until the file itself is ticked, and
                   // the row says why rather than failing at the server.
                   const locked = v.is_latest && !assetChosen;
+                  // Newest first, so a marked row below the top one is a
+                  // version set as current.
+                  const setAsCurrent = v.is_latest && v !== asset.versions[0];
                   return (
                     <li
                       key={v.version_id}
@@ -214,7 +218,9 @@ function VersionRows({
                         {locked && (
                           <span className="text-text-tertiary">
                             {" "}
-                            · newest, only deletable with the whole file
+                            {setAsCurrent
+                              ? "· set as current, only deletable with the whole file"
+                              : "· newest, only deletable with the whole file"}
                           </span>
                         )}
                       </span>

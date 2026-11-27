@@ -41,17 +41,10 @@ def apply_watermark(
         if not asset:
             return
 
-        # Find the first media file for this asset (via latest version)
-        from ..models.asset import AssetVersion
-        latest_version = (
-            db.query(AssetVersion)
-            .filter(
-                AssetVersion.asset_id == asset.id,
-                AssetVersion.deleted_at.is_(None),
-            )
-            .order_by(AssetVersion.version_number.desc())
-            .first()
-        )
+        # Find the first media file for this asset (via its current version:
+        # the one set as current, else the newest)
+        from ..services.versions import current_version
+        latest_version = current_version(db, asset.id)
         if not latest_version:
             return
 

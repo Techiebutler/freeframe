@@ -357,6 +357,15 @@ own storage figure stops counting it at once.
 Version numbers come from a per-asset counter (`assets.last_version_number`), not from the
 surviving rows, so a purged version's number is never handed out again: "v2" in a comment export
 or a share URL names one cut for the life of the asset.
+**The current version** is the one an editor set with `PUT /assets/{asset_id}/current-version`
+(`assets.current_version_id`, ready versions only), else the newest; everything that asks for an
+asset's latest version (grid, review page, share links that show the latest, downloads, the
+comment export) resolves it through `services.versions.current_version`. Deleting that version
+on its own ends the setting, from the version switcher or the Storage page alike
+(`services.versions.end_current_version`), and no restore brings it back; deleting the whole asset
+or project keeps it. A newer version becoming ready ends it too. The Storage page refuses to delete
+the version an asset shows on its own, and with a version set as current that is the one it holds
+back rather than the newest.
 
 Key entity relationships:
 

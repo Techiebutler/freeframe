@@ -193,6 +193,18 @@ describe('Delete version on the review page', () => {
     expect(await screen.findByText('v3 deleted — now showing v2')).toBeInTheDocument()
   })
 
+  it('says so once a version is set as current', async () => {
+    member.role = 'editor'
+    renderPage()
+
+    const last = switcherProps[switcherProps.length - 1]
+    act(() => {
+      ;(last.onCurrentVersionSet as (v: unknown) => void)({ id: 'v2', version_number: 2 })
+    })
+
+    expect(await screen.findByText('v2 is now the current version')).toBeInTheDocument()
+  })
+
   it('leaves the arrow keys to an open menu instead of going to the next asset', () => {
     member.role = 'editor'
     assetsByFolder.root = [{ id: 'a1', name: 'a', created_at: '' }, asset, { id: 'a3', name: 'c', created_at: '' }]

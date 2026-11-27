@@ -21,7 +21,7 @@ from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import Project
 from ..models.user import User
 from . import storage as storage_service
-from .versions import UNVIEWABLE_STATUSES
+from .versions import UNVIEWABLE_STATUSES, end_current_version
 from .activity_service import log_activity
 from .restore_rules import restore_asset_row, restore_version_row
 
@@ -187,8 +187,9 @@ def storage_asset_rows(db: Session, project_id: uuid.UUID) -> list[dict]:
     Two levels and no more: everything under a version (renditions, HLS
     segments, the poster) is machine output nobody picks off a list. A row's
     size is everything it costs, transcode output included, which is what gets
-    freed when it is deleted. `is_latest` marks the newest live version, which
-    cannot be deleted on its own; see `check_gate`.
+    freed when it is deleted. `is_latest` marks the version the file shows,
+    which cannot be deleted on its own: the one set as current, else the
+    newest (`shown_versions`, as `check_gate` reads it).
     """
     rows = (
         storage_service.live_media(
@@ -220,12 +221,14 @@ def storage_asset_rows(db: Session, project_id: uuid.UUID) -> list[dict]:
         })
 
     out = list(assets.values())
+    shown = latest_version_ids(db, [a["asset_id"] for a in out])
     for asset in out:
-        # Newest by version number, not by size: "latest" is which cut is
-        # current, and sorting by bytes would crown whichever transcoded largest.
+        # Newest first by version number, not by size, and "latest" is which
+        # cut is current: sorting by bytes would crown whichever transcoded
+        # largest.
         asset["versions"].sort(key=lambda v: v["version_number"], reverse=True)
-        if asset["versions"]:
-            asset["versions"][0]["is_latest"] = True
+        for v in asset["versions"]:
+            v["is_latest"] = v["version_id"] == shown.get(asset["asset_id"])
     out.sort(key=lambda r: r["total_bytes"], reverse=True)
     return out
 
@@ -324,36 +327,53 @@ def selection_bytes(db: Session, project_ids: list, asset_ids: list, version_ids
 
 
 def latest_version_ids(db: Session, asset_ids: list) -> dict:
-    """The newest *showable* live version of each of these assets, by number.
+    """The version each of these assets shows, by asset: see `shown_versions`."""
+    return {asset_id: version_id for asset_id, (version_id, _) in shown_versions(db, asset_ids).items()}
 
-    Same rule as `_display_version` in `routers/assets`: a `failed` or
-    `uploading` version is the newest by number but not the one anybody sees,
-    so with v1 ready, v2 ready and v3 failed the version this protects is v2.
-    Counting v3 let a hand-made request take v2 on its own and quietly demote
-    the file to v1, which is the whole harm the gate is about. Those two
-    statuses are also outside `committed_media`, so the tab never lists them
-    and the browser and the server read the same list.
+
+def shown_versions(db: Session, asset_ids: list) -> dict:
+    """The version each of these assets shows, and whether it is set as current.
+
+    Same rule as `_display_version` in `routers/assets`: the version an editor
+    set as current while it is live and showable, else the newest *showable*
+    live version by number. A `failed` or `uploading` version is the newest by
+    number but not the one anybody sees, so with v1 ready, v2 ready and v3
+    failed the version this protects is v2. Counting v3 let a hand-made
+    request take v2 on its own and quietly demote the file to v1, which is the
+    whole harm the gate is about; with v1 set as current, v1 is the one that
+    would go, and v2 can. Those two statuses are also outside
+    `committed_media`, so the tab never lists them and the browser and the
+    server read the same list.
+
+    The set version rides in the same query as a flag on its row, which sorts
+    above any number.
     """
     if not asset_ids:
         return {}
     rows = (
-        db.query(AssetVersion.asset_id, AssetVersion.id, AssetVersion.version_number)
+        db.query(
+            AssetVersion.asset_id, AssetVersion.id, AssetVersion.version_number,
+            func.coalesce(AssetVersion.id == Asset.current_version_id, False),
+        )
         .filter(
+            Asset.id == AssetVersion.asset_id,
             AssetVersion.asset_id.in_(asset_ids),
             AssetVersion.deleted_at.is_(None),
             AssetVersion.processing_status.notin_(UNVIEWABLE_STATUSES),
         )
         .all()
     )
-    newest: dict = {}
-    for asset_id, version_id, number in rows:
-        current = newest.get(asset_id)
-        if current is None or number > current[1]:
-            newest[asset_id] = (version_id, number)
+    shown: dict = {}
+    for asset_id, version_id, number, pinned in rows:
+        rank = (bool(pinned), number)
+        current = shown.get(asset_id)
+        if current is None or rank > current[1]:
+            shown[asset_id] = (version_id, rank)
     # `_display_version` falls back to the newest live row if none is viewable.
     # Such an asset still needs the whole-file gate, including its only failed
-    # or unfinished version.
-    fallback_ids = set(asset_ids) - newest.keys()
+    # or unfinished version. Nothing there can be set as current: only a ready
+    # version can.
+    fallback_ids = set(asset_ids) - shown.keys()
     if fallback_ids:
         fallback = (
             db.query(AssetVersion.asset_id, AssetVersion.id, AssetVersion.version_number)
@@ -361,10 +381,11 @@ def latest_version_ids(db: Session, asset_ids: list) -> dict:
             .all()
         )
         for asset_id, version_id, number in fallback:
-            current = newest.get(asset_id)
-            if current is None or number > current[1]:
-                newest[asset_id] = (version_id, number)
-    return {asset_id: version_id for asset_id, (version_id, _) in newest.items()}
+            rank = (False, number)
+            current = shown.get(asset_id)
+            if current is None or rank > current[1]:
+                shown[asset_id] = (version_id, rank)
+    return {asset_id: (version_id, rank[0]) for asset_id, (version_id, rank) in shown.items()}
 
 
 def _items(n: int) -> str:
@@ -395,8 +416,9 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
     2. The confirmed count matches the resolved count. The part the UI cannot be
        trusted with: without it a hand-made request deletes a different number
        of things than the dialog named.
-    3. No asset's newest live version is taken alone, which would silently
-       demote the asset to an older cut while reporting a tidy reclaim. Decided
+    3. No asset's shown version (the newest live one, or the one set as
+       current) is taken alone, which would silently move the asset to another
+       cut while reporting a tidy reclaim. Decided
        under the assets' row locks, which the caller's commit releases.
     4. Past a threshold the phrase was typed, enforced here and not only in the
        dialog, because a gate living in the browser is a suggestion.
@@ -438,14 +460,27 @@ def check_gate(db: Session, targets: dict, confirm_count: int, confirm_text: str
         ).count()
         if still_live != len(versions):
             raise _no_longer_exist(len(versions) - still_live)
-        newest = latest_version_ids(db, [v["asset_id"] for v in at_risk])
-        blocked = [v for v in at_risk if newest.get(v["asset_id"]) == v["id"]]
+        shown = shown_versions(db, [v["asset_id"] for v in at_risk])
+        blocked = [v for v in at_risk if shown.get(v["asset_id"], (None,))[0] == v["id"]]
         if blocked:
-            names = ", ".join(sorted({v["asset_name"] for v in blocked}))
+            def names(pinned: bool) -> str:
+                return ", ".join(sorted(
+                    {v["asset_name"] for v in blocked if shown[v["asset_id"]][1] is pinned}
+                ))
+            if not names(True):
+                raise DeleteGate(
+                    409,
+                    f"On this Storage page, the newest version of {names(False)} can only be deleted with the whole "
+                    "file. Select the file itself, or pick an older version.",
+                )
+            which = " and ".join(part for part in (
+                names(False) and f"the newest version of {names(False)}",
+                f"the version of {names(True)} set as current",
+            ) if part)
             raise DeleteGate(
                 409,
-                f"On this Storage page, the newest version of {names} can only be deleted with the whole "
-                "file. Select the file itself, or pick an older version.",
+                f"On this Storage page, {which} can only be deleted with the whole file. "
+                "Select the file itself, or pick another version.",
             )
 
     if needs_typed_confirmation(len(targets["projects"]), targets["bytes"]):
@@ -472,6 +507,10 @@ def bulk_soft_delete(db: Session, targets: dict, actor: User) -> dict:
             db.query(model).filter(
                 model.id.in_(ids), model.deleted_at.is_(None)
             ).update({"deleted_at": now}, synchronize_session="fetch")
+    # A version deleted here ends its asset's current-version setting, as the
+    # editor's delete does, so no restore brings it back. Also when the file
+    # or project is ticked with it, where `check_gate` let it through.
+    end_current_version(db, {v["asset_id"] for v in targets.get("versions", [])}, version_ids)
 
     days = retention_days()
     payload = {
