@@ -77,6 +77,20 @@ export function deleteVersionBlocker(version: AssetVersion, versions: AssetVersi
   return others.length > 0 ? 'Asset needs at least 1 playable version.' : 'Asset needs at least 1 version.'
 }
 
+/**
+ * The version an editor set as current, when that setting is in effect, else
+ * null. The server marks `is_current` on the version share links and the
+ * review page open with, which without a setting is the newest ready one, so
+ * the two differ exactly when a setting changes something.
+ */
+export function versionSetAsCurrent(versions: AssetVersion[]): AssetVersion | null {
+  const current = versions.find((v) => v.is_current)
+  const newestReady = versions
+    .filter((v) => v.processing_status === 'ready')
+    .sort((a, b) => b.version_number - a.version_number)[0]
+  return current && current.id !== newestReady?.id ? current : null
+}
+
 interface VersionSwitcherProps {
   versions: AssetVersion[]
   className?: string
@@ -235,6 +249,7 @@ export function VersionSwitcher({
     ...shownDeleted.map((version): Row => ({ kind: 'deleted', version })),
   ].sort((a, b) => a.version.version_number - b.version.version_number)
   const hasMenu = rows.length > 1
+  const pinnedVersion = versionSetAsCurrent(sorted)
 
   return (
     <div className={cn('flex items-center gap-1.5', className)}>
@@ -312,8 +327,10 @@ export function VersionSwitcher({
                   version.processing_status === 'processing'
                 const blocker = canDelete ? deleteVersionBlocker(version, sorted) : null
                 // Only a ready version can be the current one, and the current
-                // one has nothing to be set to.
-                const isCurrent = row.version.is_current === true
+                // one has nothing to be set to. Labelled only while a setting
+                // is in effect: without one, the current version is simply the
+                // newest ready one, and a label on it would say nothing.
+                const isCurrent = pinnedVersion?.id === version.id
                 const settable = version.processing_status === 'ready' && row.version.is_current === false
                 return (
                   <div key={version.id} data-testid={`version-row-v${version.version_number}`} className="flex items-center gap-0.5 mx-1">
@@ -506,8 +523,8 @@ function deleteDescription(target: AssetVersion | null, sorted: AssetVersion[]):
   const newestFirst = [...sorted].reverse()
   const isReady = (v: AssetVersion) => v.processing_status === 'ready'
   const isShowable = (v: AssetVersion) => isReady(v) || v.processing_status === 'processing'
-  const newestReady = newestFirst.find(isReady)
-  const shared = sorted.find((v) => v.is_current) ?? newestReady
+  const pinned = versionSetAsCurrent(sorted)
+  const shared = pinned ?? newestFirst.find(isReady)
   if (shared?.id !== target.id) return base
   const nextShared = newestFirst.find((v) => v.id !== target.id && isReady(v))
   if (!nextShared) return base
@@ -517,7 +534,7 @@ function deleteDescription(target: AssetVersion | null, sorted: AssetVersion[]):
   }
   // A newer version is still processing. The app's latest is on it already,
   // unless the target is set as current and holds the app's latest too.
-  return shared.id !== newestReady?.id && nextLatest
+  return pinned && nextLatest
     ? `${base} v${nextLatest.version_number} becomes the latest version, and share links that show the latest move to v${nextShared.version_number}.`
     : `${base} Share links that show the latest version move to v${nextShared.version_number}.`
 }

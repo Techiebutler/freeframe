@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useReviewStore } from '@/stores/review-store'
 import { ReviewProvider, useReview } from '../review-provider'
+import { versionSetAsCurrent } from '../version-switcher'
 
 // A share link showing all versions lists them newest first, but streams the
 // current one first, which an editor may have set to an older version. The
@@ -20,8 +21,8 @@ beforeEach(() => {
     }
     if (url.includes('/share/tok/assets/a1/versions')) {
       return respond([
-        { id: 'v-2', version_number: 2, processing_status: 'ready', created_at: '' },
-        { id: 'v-1', version_number: 1, processing_status: 'ready', created_at: '' },
+        { id: 'v-2', version_number: 2, processing_status: 'ready', created_at: '', is_current: false },
+        { id: 'v-1', version_number: 1, processing_status: 'ready', created_at: '', is_current: true },
       ])
     }
     return respond([])
@@ -42,5 +43,17 @@ describe('ReviewProvider on a share link', () => {
     await waitFor(() => expect(result.current.versions).toHaveLength(2))
 
     expect(useReviewStore.getState().currentVersion?.id).toBe('v-1')
+  })
+
+  it('keeps which version the link opens with, for the guest\'s version switcher', async () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <ReviewProvider assetId="a1" shareToken="tok">{children}</ReviewProvider>
+    )
+    const { result } = renderHook(() => useReview(), { wrapper })
+    await waitFor(() => expect(result.current.versions).toHaveLength(2))
+
+    expect(result.current.versions.map((v) => [v.id, v.is_current])).toEqual([
+      ['v-2', false], ['v-1', true]])
+    expect(versionSetAsCurrent(result.current.versions)?.id).toBe('v-1')
   })
 })

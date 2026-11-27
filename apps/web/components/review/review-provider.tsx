@@ -206,6 +206,8 @@ export function ReviewProvider({
             asset_id: assetId,
             version_number: v.version_number,
             processing_status: v.processing_status,
+            // Which one the link opens with, so the switcher can say so.
+            is_current: v.is_current,
             created_by: "",
             created_at: v.created_at,
             deleted_at: null,

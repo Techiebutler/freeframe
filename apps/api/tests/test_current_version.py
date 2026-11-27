@@ -332,12 +332,23 @@ def test_a_share_link_showing_all_versions_still_lists_them_all(client, w):
     token = w.all_versions.token
     assert _set(client, w, w.v1).status_code == 200
 
-    assert _ids(client.get(f"/share/{token}/assets/{w.A.id}/versions").json()) == [
-        str(w.v2.id), str(w.v1.id)]
+    rows = client.get(f"/share/{token}/assets/{w.A.id}/versions").json()
+    assert _ids(rows) == [str(w.v2.id), str(w.v1.id)]
+    assert [r["is_current"] for r in rows] == [False, True], "the guest's switcher can say which"
     # It opens on the current one, and a version asked for by id still plays.
     assert client.get(f"/share/{token}/stream/{w.A.id}").json()["version_id"] == str(w.v1.id)
     asked = client.get(f"/share/{token}/stream/{w.A.id}?version_id={w.v2.id}").json()
     assert asked["version_id"] == str(w.v2.id)
+
+
+def test_a_share_link_marks_the_newest_ready_version_current_when_none_is_set(client, db, w):
+    from apps.api.models.asset import ProcessingStatus
+
+    _add_version(db, w, 3, ProcessingStatus.processing)
+    for link, expected in ((w.all_versions, [True, False]), (w.latest_only, [True])):
+        rows = client.get(f"/share/{link.token}/assets/{w.A.id}/versions").json()
+        assert [r["version_number"] for r in rows] == [2, 1][:len(expected)]
+        assert [r["is_current"] for r in rows] == expected
 
 
 def test_a_guest_comment_without_a_version_lands_on_the_version_set_as_current(client, db, w):

@@ -486,7 +486,7 @@ describe('VersionSwitcher set as current version', () => {
     deletedList([])
   })
 
-  /** v1 and v2 ready, v3 processing, v4 failed; v2 is the current one. */
+  /** v1 and v2 ready, v3 processing, v4 failed; v2, the newest ready, is current. */
   function three() {
     const v1 = makeVersion({ version_number: 1, is_current: false })
     const v2 = makeVersion({ version_number: 2, is_current: true })
@@ -495,17 +495,34 @@ describe('VersionSwitcher set as current version', () => {
     return [v1, v2, v3, v4]
   }
 
-  it('labels the current version, also for someone who may not change it', async () => {
+  /** `three()` with v1 set as current. */
+  function pinnedOnV1() {
+    return three().map((v) => ({ ...v, is_current: v.version_number === 1 }))
+  }
+
+  it('labels the version set as current, also for someone who may not change it', async () => {
+    const versions = pinnedOnV1()
+    useReviewStore.getState().setCurrentVersion(versions[1])
+    render(<VersionSwitcher versions={versions} />)
+
+    await openMenu()
+
+    expect(within(screen.getByTestId('version-row-v1')).getByText('Current')).toBeInTheDocument()
+    for (const n of [2, 3, 4]) {
+      expect(within(screen.getByTestId(`version-row-v${n}`)).queryByText('Current')).toBeNull()
+    }
+  })
+
+  it('labels nothing while no version is set as current', async () => {
+    // The server marks the newest ready version current then; that is the
+    // default, and a label on it would read as a setting nobody made.
     const versions = three()
     useReviewStore.getState().setCurrentVersion(versions[0])
     render(<VersionSwitcher versions={versions} />)
 
     await openMenu()
 
-    expect(within(screen.getByTestId('version-row-v2')).getByText('Current')).toBeInTheDocument()
-    for (const n of [1, 3, 4]) {
-      expect(within(screen.getByTestId(`version-row-v${n}`)).queryByText('Current')).toBeNull()
-    }
+    expect(screen.queryByText('Current')).toBeNull()
   })
 
   it('offers it behind the ⋯ of a ready version that is not current, and nowhere else', async () => {

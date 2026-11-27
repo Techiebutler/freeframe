@@ -1829,14 +1829,20 @@ def get_share_asset_versions(
     """Public endpoint — optional auth. Lists a shared asset's ready versions for the viewer.
 
     Only returns multiple versions when the share link enables "Show all versions"; otherwise
-    only the latest ready version is exposed to the guest.
+    only the latest ready version is exposed to the guest. `is_current` marks the one the
+    link opens with: the one set as current, else the newest ready one.
     """
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
 
     asset = _get_asset(db, asset_id)
     validate_asset_in_share(db, link, asset)
 
-    return shown_versions(db, link, asset)
+    versions = shown_versions(db, link, asset)
+    current = next((v for v in versions if v.id == asset.current_version_id), versions[0] if versions else None)
+    return [
+        ShareAssetVersionItem.model_validate(v).model_copy(update={"is_current": v is current})
+        for v in versions
+    ]
 
 
 def shown_versions(db: Session, link: ShareLink, asset: Asset) -> list[AssetVersion]:
