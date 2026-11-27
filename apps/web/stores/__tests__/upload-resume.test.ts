@@ -91,6 +91,14 @@ function rowOf(id: string) {
 }
 
 /** The part number a presigned URL names, so a PUT mock can tell parts apart. */
+/** What `GET /assets/{id}/versions` lists: this upload, on top of a ready older version. */
+function versionsWith(status: string) {
+  return [
+    { id: VERSION_ID, processing_status: status },
+    { id: 'an-older-version', processing_status: 'ready' },
+  ]
+}
+
 function mockPresignPerPart() {
   return vi.mocked(api.post).mockImplementation((path: string, body?: unknown) => {
     if (path === '/upload/presign-part') {
@@ -348,10 +356,7 @@ describe('resumeUpload', () => {
       if (String(path).startsWith('/upload/')) {
         return Promise.reject(new ApiError(409, 'This upload is already ready.'))
       }
-      return Promise.resolve({
-        id: ASSET_ID,
-        latest_version: { id: VERSION_ID, processing_status: 'ready' },
-      }) as never
+      return Promise.resolve(versionsWith('ready')) as never
     })
 
     useUploadStore.getState().resumeUpload('row-1', makeFile())
@@ -360,16 +365,32 @@ describe('resumeUpload', () => {
     expect(rowOf('row-1').progress).toBe(100)
   })
 
+  it('reports a landed upload as landed on an asset whose older version is set as current', async () => {
+    // The asset answers with the version set as current, an older ready one;
+    // the version list still has this upload, transcoding.
+    vi.mocked(api.get).mockImplementation((path: string) => {
+      if (String(path).startsWith('/upload/')) {
+        return Promise.reject(new ApiError(409, 'This upload is already processing.'))
+      }
+      if (String(path).endsWith('/versions')) return Promise.resolve(versionsWith('processing')) as never
+      return Promise.resolve({
+        id: ASSET_ID,
+        latest_version: { id: 'an-older-version', processing_status: 'ready' },
+      }) as never
+    })
+
+    useUploadStore.getState().resumeUpload('row-1', makeFile())
+
+    await vi.waitFor(() => expect(rowOf('row-1').status).toBe('processing'))
+  })
+
   it('is still failed when the version really did fail', async () => {
     // The refusal is only worth a second question, not the benefit of the doubt.
     vi.mocked(api.get).mockImplementation((path: string) => {
       if (String(path).startsWith('/upload/')) {
         return Promise.reject(new ApiError(409, 'This upload is already failed.'))
       }
-      return Promise.resolve({
-        id: ASSET_ID,
-        latest_version: { id: VERSION_ID, processing_status: 'failed' },
-      }) as never
+      return Promise.resolve(versionsWith('failed')) as never
     })
 
     useUploadStore.getState().resumeUpload('row-1', makeFile())

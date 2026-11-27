@@ -777,7 +777,7 @@ describe('a resume', () => {
       return Promise.resolve({})
     }) as never)
     vi.mocked(api.get).mockImplementation(((path: string) => {
-      if (path.startsWith('/assets/')) return Promise.resolve({ id: 'a1', latest_version: null })
+      if (path.startsWith('/assets/')) return Promise.resolve([])
       return new Promise((resolve) => {
         answerParts = resolve
       })
@@ -792,7 +792,7 @@ describe('a resume', () => {
     useUploadStore.getState().resumeUpload(a, small('a.jpg'))
     await settle()
     expect(rowOf(a).queuedResume).toBeUndefined()
-    expect(api.get).toHaveBeenCalledTimes(2) // the asset read and the run's own /parts
+    expect(api.get).toHaveBeenCalledTimes(2) // the version list and the run's own /parts
 
     answerParts({ state: 'resumable' })
     await settle()
