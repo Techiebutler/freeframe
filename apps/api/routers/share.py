@@ -53,7 +53,7 @@ from ..services.s3_service import generate_presigned_get_url, build_download_fil
 from ..schemas.asset import DownloadOption
 from ..services.downloads import (
     describe_choices, download_choices, download_filename, may_download_original,
-    original_allowed_for_download, pick_or_refuse,
+    original_allowed_for_download, pick_or_refuse, version_in_name,
 )
 from ..services.crypto_service import encrypt_password, decrypt_password
 from .hls_proxy import create_hls_token
@@ -1758,7 +1758,13 @@ def get_share_stream_url(
             prefer_original=prefer_original,
         )
         url = generate_presigned_get_url(
-            choice.s3_key, download_filename=download_filename(asset, media_file, choice),
+            choice.s3_key,
+            download_filename=download_filename(
+                asset, media_file, choice,
+                # Only the versions the link shows, so a link that hides the
+                # history does not give it away in a file name.
+                version_in_name(shown_versions(db, link, asset), media_file.version_id),
+            ),
         )
     elif asset.asset_type == AssetType.video and media_file.s3_key_processed:
         # Route through /stream/hls so S3 can stay private (#51)

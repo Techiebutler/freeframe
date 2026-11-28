@@ -21,7 +21,7 @@ from ..services.s3_service import generate_presigned_get_url, build_download_fil
 from ..services.verdicts import verdict_summaries
 from ..services.downloads import (
     describe_choices, download_choices, download_filename, may_download_original,
-    original_allowed_for_download, pick_or_refuse,
+    original_allowed_for_download, pick_or_refuse, ready_versions, version_in_name,
 )
 from .hls_proxy import create_hls_token
 from ..schemas.upload import (
@@ -605,7 +605,11 @@ def get_stream_url(
             prefer_original=prefer_original,
         )
         url = generate_presigned_get_url(
-            choice.s3_key, download_filename=download_filename(asset, media_file, choice),
+            choice.s3_key,
+            download_filename=download_filename(
+                asset, media_file, choice,
+                version_in_name(ready_versions(db, asset.id), media_file.version_id),
+            ),
         )
     elif asset.asset_type == AssetType.video and media_file.s3_key_processed:
         # Route through the HLS proxy so the master playlist, variant

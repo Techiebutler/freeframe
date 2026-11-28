@@ -137,6 +137,11 @@ function ShareReviewInner({
   const showsVerdicts =
     permission === 'approve' && !!asset && versionReady && currentVersion?.asset_id === asset.id
   const showsVerdictRow = showsVerdicts && !verdictsInTopBar
+  // Download serves the version on screen. Left out, the server serves the
+  // latest ready one, which is all a link that hides the history shows, and
+  // what the folder viewer shows before the store has this asset's version.
+  const downloadVersionId =
+    showVersions && !!asset && currentVersion?.asset_id === asset.id ? currentVersion.id : undefined
   const [sheetState, setSheetState] = React.useState<SheetState>('peek')
   const [sheetHeight, setSheetHeight] = React.useState(PEEK_PX)
   // One expression for the top-bar toggle's icon and its label, so the two
@@ -392,8 +397,8 @@ function ShareReviewInner({
           )}
           {allowDownload && (
             <DownloadMenu
-              load={() => fetchShareDownloadOptions(token, asset.id, shareSession)}
-              onPick={(rendition) => handleDownload(token, asset.id, shareSession, rendition)}
+              load={() => fetchShareDownloadOptions(token, asset.id, shareSession, downloadVersionId)}
+              onPick={(rendition) => handleDownload(token, asset.id, shareSession, rendition, downloadVersionId)}
             >
               <button aria-label="Download" className="flex items-center gap-1.5 h-7 px-2 sm:px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors">
                 <Download className="h-3 w-3" /> <span className="hidden sm:inline">Download</span>
