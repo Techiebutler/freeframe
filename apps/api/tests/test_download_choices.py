@@ -701,3 +701,132 @@ def test_the_share_list_is_rate_limited(mock_validate, mock_get_asset, client, m
 
     assert response.status_code == 429
     mock_validate.assert_not_called()
+
+
+# ─────────────────────────────────── which version a download is
+#
+# Every version of an asset downloaded under the asset's name alone, so two cuts
+# of one asset saved as `Name.mp4` and `Name (1).mp4` (#671). Where the caller
+# can pick between versions, the name now says which one it is.
+
+def _versions(*numbers):
+    return [SimpleNamespace(id=uuid.uuid4(), version_number=n) for n in numbers]
+
+
+def test_a_version_is_named_only_when_there_is_another_to_tell_it_from():
+    only = _versions(1)
+    assert downloads.version_in_name(only, only[0].id) is None
+
+    two = _versions(1, 3)
+    assert downloads.version_in_name(two, two[0].id) == 1
+    assert downloads.version_in_name(two, two[1].id) == 3
+    # Not among the versions the caller can see: nothing to say about it.
+    assert downloads.version_in_name(two, uuid.uuid4()) is None
+
+
+def test_the_version_goes_in_front_of_the_extension():
+    mf = _media_file()
+    asset = SimpleNamespace(name="Hero Spot", asset_type=AssetType.video)
+    original, transcode = downloads.download_choices(AssetType.video, mf, allow_original=True)
+
+    assert downloads.download_filename(asset, mf, original, 1) == "Hero Spot v1.mov"
+    assert downloads.download_filename(asset, mf, transcode, 2) == "Hero Spot v2.mp4"
+
+
+def test_the_version_goes_in_front_of_the_rung_too():
+    mf = _media_file(s3_key_raw="raw/p/a/v/original.mp4", original_filename="Portrait.mp4")
+    asset = SimpleNamespace(name="Portrait", asset_type=AssetType.video)
+    transcode = downloads.download_choices(AssetType.video, mf, allow_original=True)[1]
+    master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=720x1280\n0/playlist.m3u8\n"
+
+    with patch.object(downloads, "get_s3_client", return_value=_s3_with_master(master)):
+        assert downloads.download_filename(asset, mf, transcode, 2) == "Portrait v2 (720p).mp4"
+
+
+def test_a_name_without_an_extension_is_not_split_at_its_last_dot():
+    # Nothing on either key says what the file is, so the name stays whole and
+    # the version goes after all of it, not in front of a ".5".
+    mf = _media_file(s3_key_raw="raw/p/a/v/original", original_filename=None)
+    asset = SimpleNamespace(name="Scene 2.5", asset_type=AssetType.video)
+    original = downloads.download_choices(AssetType.video, mf, allow_original=True)[0]
+
+    assert downloads.download_filename(asset, mf, original, 2) == "Scene 2.5 v2"
+
+
+@patch("apps.api.routers.assets.generate_presigned_get_url", return_value="https://s3/x")
+@patch("apps.api.routers.assets.require_asset_access")
+def test_a_download_of_one_of_several_versions_carries_its_number(
+    mock_require_access, mock_presign, client, mock_db, auth_headers, member,
+):
+    media_file = _media_file()
+    asset = _video_asset(mock_db, media_file)
+    # The asset's ready versions, as ready_versions reads them.
+    mock_db.all.return_value = [
+        SimpleNamespace(id=media_file.version_id, version_number=1),
+        SimpleNamespace(id=uuid.uuid4(), version_number=2),
+    ]
+
+    response = client.get(
+        f"/assets/{asset.id}/stream?download=true&rendition=original"
+        f"&version_id={media_file.version_id}",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert mock_presign.call_args.kwargs["download_filename"] == "Hero Spot v1.mov"
+
+
+def _share_download(mock_validate, mock_get_asset, mock_get_latest_media_file,
+                    mock_presign, client, mock_db, *, show_versions):
+    link = _share_link()
+    link.show_versions = show_versions
+    mock_validate.return_value = link
+    asset = _share_asset()
+    mock_get_asset.return_value = asset
+    media_file = _media_file(duration_seconds=12.0)
+    mock_get_latest_media_file.return_value = media_file
+    mock_presign.return_value = "https://s3.example.com/download.mp4?sig=x"
+    # The ready versions, newest first, as shown_versions reads them.
+    mock_db.order_by.return_value = mock_db
+    mock_db.all.return_value = [
+        SimpleNamespace(id=media_file.version_id, version_number=3),
+        SimpleNamespace(id=uuid.uuid4(), version_number=1),
+    ]
+
+    response = client.get(f"/share/some-token/stream/{asset.id}?download=true")
+
+    assert response.status_code == 200, response.text
+    return mock_presign.call_args_list[0].kwargs["download_filename"]
+
+
+@patch("apps.api.routers.share._log_share_activity")
+@patch("apps.api.routers.share.generate_presigned_get_url")
+@patch("apps.api.routers.share._get_latest_media_file")
+@patch("apps.api.routers.share._get_asset")
+@patch("apps.api.routers.share.validate_asset_in_share")
+@patch("apps.api.routers.share.validate_share_link_with_session")
+def test_a_share_link_that_shows_versions_names_the_version(
+    mock_validate, mock_validate_in_share, mock_get_asset,
+    mock_get_latest_media_file, mock_presign, mock_log_activity,
+    client, mock_db,
+):
+    name = _share_download(mock_validate, mock_get_asset, mock_get_latest_media_file,
+                           mock_presign, client, mock_db, show_versions=True)
+    assert name == "Hero Spot v3.mp4"
+
+
+@patch("apps.api.routers.share._log_share_activity")
+@patch("apps.api.routers.share.generate_presigned_get_url")
+@patch("apps.api.routers.share._get_latest_media_file")
+@patch("apps.api.routers.share._get_asset")
+@patch("apps.api.routers.share.validate_asset_in_share")
+@patch("apps.api.routers.share.validate_share_link_with_session")
+def test_a_share_link_that_hides_versions_keeps_the_plain_name(
+    mock_validate, mock_validate_in_share, mock_get_asset,
+    mock_get_latest_media_file, mock_presign, mock_log_activity,
+    client, mock_db,
+):
+    # The guest sees one version, so a "v3" would tell them of the others.
+    name = _share_download(mock_validate, mock_get_asset, mock_get_latest_media_file,
+                           mock_presign, client, mock_db, show_versions=False)
+    assert name == "Hero Spot.mp4"

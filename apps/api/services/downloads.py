@@ -18,14 +18,15 @@ original when the version has no transcode file at all.
 """
 import os
 import re
+import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models.asset import Asset, AssetType, MediaFile
+from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.user import User
 from .permissions import get_project_member
 from .s3_service import build_download_filename, get_s3_client, head_object_size
@@ -216,17 +217,58 @@ def _transcode_label(asset_type: AssetType, media_file: MediaFile) -> str:
     return "transcode"
 
 
-def download_filename(asset: Asset, media_file: MediaFile, choice: DownloadChoice) -> str:
+def ready_versions(db: Session, asset_id: uuid.UUID) -> list:
+    """The id and number of each version of an asset that can be downloaded:
+    the live, ready ones, which is what a signed-in caller can pick from."""
+    return db.query(AssetVersion.id, AssetVersion.version_number).filter(
+        AssetVersion.asset_id == asset_id,
+        AssetVersion.deleted_at.is_(None),
+        AssetVersion.processing_status == ProcessingStatus.ready,
+    ).all()
+
+
+def version_in_name(versions: Sequence, version_id: Optional[uuid.UUID]) -> Optional[int]:
+    """The version number a download's name carries, or None for the plain name.
+
+    `versions` are the ones the caller can pick from. With more than one, two
+    downloads of one asset would otherwise save as `Name.mp4` and
+    `Name (1).mp4`, with nothing to say which cut is which. With one there is
+    nothing to tell apart, and a share link that hides the version history
+    passes only its latest, so its name gives away no history either.
+    """
+    if len(versions) < 2:
+        return None
+    return next((v.version_number for v in versions if v.id == version_id), None)
+
+
+def download_filename(
+    asset: Asset,
+    media_file: MediaFile,
+    choice: DownloadChoice,
+    version_number: Optional[int] = None,
+) -> str:
     """The name a download is saved as.
 
-    When the transcode has the original's extension (an MP4 upload and its MP4
-    rung), the two would save under the same name, so the transcode says what
-    it is: `Portrait (720p).mp4`.
+    With a `version_number` (see version_in_name) the name says which version
+    it is: `Portrait v2.mp4`. When the transcode has the original's extension
+    (an MP4 upload and its MP4 rung), the two would save under the same name,
+    so the transcode says what it is: `Portrait (720p).mp4`.
     """
     name = build_download_filename(asset.name, choice.s3_key, media_file.original_filename)
+    # The extension build_download_filename gave the name, if any, so the
+    # suffixes go in front of it. Not os.path.splitext(name): a name with no
+    # extension of its own ("Scene 2.5") would be split at its last dot.
+    ext = (
+        os.path.splitext(choice.s3_key or "")[1]
+        or os.path.splitext(media_file.original_filename or "")[1]
+    )
+    if not (ext and name.lower().endswith(ext.lower())):
+        ext = ""
+    stem = name[:len(name) - len(ext)]
+    if version_number is not None:
+        stem = f"{stem} v{version_number}"
     if choice.id == TRANSCODE and _format_of(choice.s3_key) == (
         _format_of(media_file.s3_key_raw) or _format_of(media_file.original_filename)
     ):
-        stem, ext = os.path.splitext(name)
-        name = f"{stem} ({_transcode_label(asset.asset_type, media_file)}){ext}"
-    return name
+        stem = f"{stem} ({_transcode_label(asset.asset_type, media_file)})"
+    return f"{stem}{ext}"
